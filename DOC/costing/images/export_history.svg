@@ -1,0 +1,15 @@
+<svg width="1200" height="675" viewBox="0 0 1200 675" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="675" fill="#f0fdfa" />
+  <rect x="60" y="60" width="1080" height="120" rx="12" fill="#ccfbf1" stroke="#14b8a6" stroke-width="3" />
+  <text x="80" y="130" font-family="Inter,Arial" font-size="44" fill="#0f766e">导出历史 & Trace 时间轴</text>
+  <g font-family="Inter,Arial" font-size="30" fill="#115e59">
+    <text x="120" y="230">1. Scenario Builder 左侧新增“导出历史”时间轴</text>
+    <text x="120" y="290">2. 数据源：GET /audit?target_type=scenario + trace_id 过滤</text>
+    <text x="120" y="350">3. 列表包含导出人、时间、格式、executor_reference、trace_id</text>
+    <text x="120" y="410">4. 支持按 trace / 备注搜索并分页查看历史</text>
+    <text x="120" y="470">5. 可直接复制 trace_id 或跳转到审计详情</text>
+  </g>
+  <rect x="80" y="500" width="1040" height="120" rx="16" fill="#99f6e4" stroke="#2dd4bf" stroke-width="2" />
+  <text x="110" y="560" font-family="Inter,Arial" font-size="28" fill="#0f172a">前端：ScenarioBuilder Export History Timeline</text>
+  <text x="110" y="600" font-family="Inter,Arial" font-size="28" fill="#0f172a">后端：audit_logs（scenario_export + trace_id）</text>
+</svg>

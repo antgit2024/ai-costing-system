@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily YiDa Materials Sync (02:30)
+
+[Timer]
+OnCalendar=*-*-* 02:30
+Persistent=true
+Unit=yida-material-sync.service
+
+[Install]
+WantedBy=timers.target
+

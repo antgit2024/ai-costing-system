@@ -1,0 +1,32 @@
+{
+  "app_key": "dingyu3knj1chgjdlqhv",
+  "app_secret": "rl7E1li2tehbCb0NHcBF4pWOg7XmpqW3C0-N-17VvQdbmh6PM986zpogTCi7FvjB",
+  "system_token": "TH866OD15OL40Y1ADOZO17K4VRR53RUXQQ29LV5",
+  "app_type": "APP_Z2UDZOCIAGBS51HPDCPE",
+  "user_id": "manager6133",
+  "form_uuid": "FORM-PROCESS-PLACEHOLDER",
+  "mock_data_path": "backend/config/yida_processes_mock_data.json",
+  "page_size": 50,
+  "field_mapping": {
+    "process_code": { "label": "工序代码", "id": "<textField_process_code>" },
+    "process_name": { "label": "工序名称", "id": "<textField_process_name>" },
+    "module_code": { "label": "工序模块编号", "id": "<textField_module_code>" },
+    "module_name": { "label": "工序模块名称", "id": "<textField_module_name>" },
+    "model_code": { "label": "产品模型编号", "id": "<textField_model_code>" },
+    "model_name": { "label": "产品模型名称", "id": "<textField_model_name>" },
+    "team": { "label": "班组", "id": "<textField_team>" },
+    "unit": { "label": "计价单位", "id": "<textField_unit>" },
+    "hourly_rate": { "label": "计时工资/每小时", "id": "<numberField_hourly_rate>" },
+    "piece_rate": { "label": "计件工价", "id": "<numberField_piece_rate>" },
+    "fixed_time_minutes": { "label": "固定工时(分钟)", "id": "<numberField_fixed_minutes>" },
+    "base_minutes": { "label": "本品用时(分钟)", "id": "<numberField_base_minutes>" },
+    "square_minutes": { "label": "平方用时(分钟)", "id": "<numberField_square_minutes>" },
+    "calculation_method": { "label": "计算方式", "id": "<selectField_calc_method>" },
+    "sequence_order": { "label": "工序顺序", "id": "<numberField_sequence>" },
+    "status": { "label": "启用状态", "id": "<radioField_status>" },
+    "is_active": { "label": "启用标记", "id": "<radioField_is_active>" },
+    "description": { "label": "工序标准说明", "id": "<textareaField_description>" },
+    "metadata_json": { "label": "其他字段(JSON)", "id": "" }
+  }
+}
+

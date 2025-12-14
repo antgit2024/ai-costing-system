@@ -1,0 +1,15 @@
+<svg width="1200" height="675" viewBox="0 0 1200 675" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="675" fill="#f8fafc" />
+  <rect x="40" y="40" width="1120" height="120" fill="none" stroke="#2563eb" stroke-width="4" rx="8" />
+  <text x="60" y="110" font-family="Inter,Arial" font-size="42" fill="#1f2937">场景导出步骤</text>
+  <g font-family="Inter,Arial" font-size="30" fill="#334155">
+    <text x="120" y="210">1. 场景列表中勾选 Approved baseline</text>
+    <text x="120" y="270">2. 在 form 中选择导出格式 (Excel/CSV)</text>
+    <text x="120" y="330">3. 输入 requested_by、comment 并提交</text>
+    <text x="120" y="390">4. Planner Job Drawer 查看 export job 状态</text>
+    <text x="120" y="450">5. 下载 executor_reference 生成的文件</text>
+  </g>
+  <rect x="80" y="500" width="1040" height="120" fill="#dbeafe" stroke="#60a5fa" stroke-width="2" rx="12" />
+  <text x="110" y="560" font-family="Inter,Arial" font-size="28" fill="#1d4ed8">前端路径：ScenarioBuilderPage → exportScenario()</text>
+  <text x="110" y="600" font-family="Inter,Arial" font-size="28" fill="#1d4ed8">后端 API：POST /api/planner/scenarios/{id}/export</text>
+</svg>

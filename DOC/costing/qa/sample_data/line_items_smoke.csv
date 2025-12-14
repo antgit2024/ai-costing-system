@@ -1,0 +1,20 @@
+package_id,type,reference_code,description,unit_of_measure,quantity,unit_cost_estimate,currency,supplier_id,status,metadata
+PKG-MAT-001,material,MAT-AL-01,铝型材外框,M,1200,38.50,CNY,SUP-ALPHA-01,draft,{"lead_time_days":18}
+PKG-LABOR-001,labor,LAB-ASM-01,装配工时,H,420,95,CNY,SUP-LABOR-02,in_review,{"shift":"A"}
+PKG-LOG-001,logistics,LOG-SEA-01,海运整柜,EA,3,12500,USD,SUP-FWD-03,quoted,{"incoterm":"FOB"}
+PKG-SVC-001,service,SVC-QC-01,第三方质检,EA,6,1800,CNY,SUP-QC-01,need_quote,{"scope":"PRE-SHIP"}
+PKG-MAT-001,material,MAT-PCB-02,定制 PCB 板,EA,500,12.3,USD,SUP-PCB-05,draft,{"layer":8}
+PKG-MAT-001,material,MAT-SUB-03,注塑件,EA,8000,4.25,CNY,SUP-MOLD-06,locked,{"cavity":2}
+
+
+
+
+
+
+
+
+
+
+
+
+

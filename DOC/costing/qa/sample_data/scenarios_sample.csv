@@ -1,0 +1,4 @@
+scenario_id,initiative_id,code,name,status,baseline_flag,assumption_set_id,total_cost,notes
+SCN-BL-2025A,INIT-NEO-2025,BL-2025A,2025 Launch Baseline,approved,true,ASM-SET-01,18500000,Approved baseline for Q1 build
+SCN-ALT-2025B,INIT-NEO-2025,ALT-2025B,Volume +15% Draft,draft,false,ASM-SET-02,19850000,"Higher demand + FX buffer"
+SCN-SUP-REDUCE,INIT-NEO-2025,SUP-REDUCE,Supplier Cost Down,in_review,false,ASM-SET-03,17750000,"Pending supplier negotiation"

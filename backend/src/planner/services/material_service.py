@@ -1,0 +1,79 @@
+from __future__ import annotations
+
+from typing import Iterable, Optional, Sequence, Tuple
+
+from sqlalchemy import or_
+from sqlalchemy.orm import Query, Session
+
+from .. import models
+
+
+class MaterialFilters:
+    def __init__(
+        self,
+        *,
+        search: Optional[str] = None,
+        material_type: Optional[str] = None,
+        category: Optional[str] = None,
+        status: Optional[str] = None,
+        is_active: Optional[bool] = None,
+    ):
+        self.search = search
+        self.material_type = material_type
+        self.category = category
+        self.status = status
+        self.is_active = is_active
+
+
+def apply_material_filters(query: Query, filters: MaterialFilters) -> Query:
+    query = query.filter(models.Material.is_archived.is_(False))
+    if filters.search:
+        pattern = f"%{filters.search.strip()}%"
+        query = query.filter(
+            or_(
+                models.Material.material_code.ilike(pattern),
+                models.Material.material_name.ilike(pattern),
+            )
+        )
+    if filters.material_type:
+        query = query.filter(models.Material.material_type == filters.material_type)
+    if filters.category:
+        query = query.filter(models.Material.category == filters.category)
+    if filters.status:
+        query = query.filter(models.Material.status == filters.status)
+    if filters.is_active is not None:
+        query = query.filter(models.Material.is_active == filters.is_active)
+    return query
+
+
+def list_materials(
+    db: Session,
+    *,
+    filters: MaterialFilters,
+    page: int,
+    page_size: int,
+) -> Tuple[int, Sequence[models.Material]]:
+    query = apply_material_filters(db.query(models.Material), filters)
+    total = query.count()
+    items = (
+        query.order_by(models.Material.updated_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    return total, items
+
+
+def fetch_materials_for_export(
+    db: Session,
+    *,
+    filters: MaterialFilters,
+    limit: Optional[int] = None,
+) -> Iterable[models.Material]:
+    query = apply_material_filters(db.query(models.Material), filters).order_by(
+        models.Material.material_code.asc()
+    )
+    if limit:
+        query = query.limit(limit)
+    return query.all()
+

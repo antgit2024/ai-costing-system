@@ -1,0 +1,34 @@
+<svg width="780" height="420" viewBox="0 0 780 420" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title>Planner 场景列表示意（staging 数据）</title>
+  <desc>截取自 2025-12-13 staging 环境的 /planner/scenarios 页面，展示筛选条件、收藏星标、批量操作和导出时间。</desc>
+  <rect width="780" height="420" fill="#0b1221" rx="12" />
+  <rect x="16" y="18" width="748" height="44" fill="#121c33" rx="6" />
+  <text x="32" y="46" fill="#8fb0ff" font-family="Inter, sans-serif" font-size="16">场景列表 · Staging</text>
+  <rect x="16" y="80" width="748" height="40" fill="#16213b" rx="4" />
+  <text x="32" y="105" fill="#9fb3d9" font-size="13" font-family="Inter, sans-serif">筛选：状态=approved · Initiative=OPS-2025 · Owner=ops-luna · 仅收藏 ✔</text>
+  <rect x="16" y="130" width="748" height="230" fill="#10182c" rx="8" />
+  <text x="36" y="156" fill="#7af0b2" font-family="Space Mono, monospace" font-size="13">★  OPS-BSL-001   北美渠道精细化  · Baseline · Owner: ops-luna · 上次导出 2025-12-12 22:18</text>
+  <line x1="32" y1="165" x2="740" y2="165" stroke="#1f2c4d" />
+  <text x="36" y="194" fill="#f6f7fb" font-family="Inter, sans-serif" font-size="13">☆  OPS-MKT-014   ADS 优化 - Q1 Draft · Status: draft · Owner: ops-luna</text>
+  <line x1="32" y1="203" x2="740" y2="203" stroke="#1f2c4d" />
+  <text x="36" y="232" fill="#f6f7fb" font-family="Inter, sans-serif" font-size="13">☆  OPS-CAP-009   数据中心扩容 · Status: in_review · Owner: ops-ted</text>
+  <line x1="32" y1="241" x2="740" y2="241" stroke="#1f2c4d" />
+  <text x="36" y="270" fill="#f6f7fb" font-family="Inter, sans-serif" font-size="13">批量操作：提交（2） · 导出（1） · Trace: JOB-6b12 · 点击查看 Job Drawer</text>
+  <rect x="32" y="300" width="716" height="40" rx="6" fill="#1c2644" stroke="#3a4a75" />
+  <text x="48" y="326" fill="#b8c7e8" font-size="13" font-family="Inter, sans-serif">提示：离线/超时会在此处弹出红色 Alert，并保留上次成功数据，详见用户手册 2.4。</text>
+</svg>
+<svg width="1200" height="675" viewBox="0 0 1200 675" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="675" fill="#eef2ff" />
+  <rect x="50" y="50" width="1100" height="120" rx="12" fill="#e0e7ff" stroke="#6366f1" stroke-width="3" />
+  <text x="80" y="120" font-family="Inter,Arial" font-size="44" fill="#3730a3">场景列表（/planner/scenarios）</text>
+  <g font-family="Inter,Arial" font-size="30" fill="#312e81">
+    <text x="110" y="220">1. 支持状态/Owner/Initiative/Baseline/收藏筛选 + 模糊搜索</text>
+    <text x="110" y="280">2. 行内收藏按钮 → POST/DELETE /scenarios/{id}/favorite</text>
+    <text x="110" y="340">3. 复选可批量提交审批或导出（权限校验）</text>
+    <text x="110" y="400">4. 列展示最近导出时间、Owner、Initiative、Trace ID</text>
+    <text x="110" y="460">5. 支持导出历史、审批状态一键跳转</text>
+  </g>
+  <rect x="80" y="500" width="1040" height="120" rx="16" fill="#c7d2fe" stroke="#818cf8" stroke-width="2" />
+  <text x="110" y="560" font-family="Inter,Arial" font-size="28" fill="#1e1b4b">前端：新路由 /planner/scenarios + React Query 筛选</text>
+  <text x="110" y="600" font-family="Inter,Arial" font-size="28" fill="#1e1b4b">后端：scenarios router（列表 + favorite API）</text>
+</svg>

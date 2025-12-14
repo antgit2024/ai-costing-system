@@ -1,0 +1,33 @@
+{
+  "app_key": "dingyu3knj1chgjdlqhv",
+  "app_secret": "rl7E1li2tehbCb0NHcBF4pWOg7XmpqW3C0-N-17VvQdbmh6PM986zpogTCi7FvjB",
+  "system_token": "TH866OD15OL40Y1ADOZO17K4VRR53RUXQQ29LV5",
+  "app_type": "APP_Z2UDZOCIAGBS51HPDCPE",
+  "user_id": "manager6133",
+  "form_uuid": "FORM-0X966971PURFOJA97LNHJBBLKUK1234Z6COOLZ",
+  "page_size": 50,
+  "field_mapping": {
+    "material_code": { "label": "货品编号（唯一键）", "id": "textField_t8mr6sp" },
+    "material_name": { "label": "货品名称", "id": "textField_n5t5vhf" },
+    "material_type": { "label": "物料类型（主料/辅料）", "id": "radioField_lxmp8bgd" },
+    "category": { "label": "分类", "id": "<textField_jacd537>" },
+    "model_category": { "label": "模型类目", "id": "radioField_loo2c67p" },
+    "unit": { "label": "BOM单位", "id": "<selectField_looc8l2j>" },
+    "unit_price": { "label": "采购单价 / 固定成本价", "id": "numberField_lxmosz1s" },
+    "bom_unit_price": { "label": "BOM单价", "id": "numberField_m3pgyx4w" },
+    "cost_formula": { "label": "成本计算公式", "id": "textField_m3pgyx4d" },
+    "currency": { "label": "币种", "id": "" },
+    "purchase_unit": { "label": "采购单位", "id": "<selectField_lxo1y6ac>" },
+    "inventory_unit": { "label": "盘点单位", "id": "<textField_m3pgyx4t>" },
+    "supplier_code": { "label": "供应商编码", "id": "<textField_lxr4il7o>" },
+    "supplier_name": { "label": "供应商名称", "id": "<textField_lxmo633k>" },
+    "status": { "label": "状态（启用/禁用）", "id": "<radioField_lnk335sn>" },
+    "is_active": { "label": "启用标记", "id": "<radioField_lxo4jeon>" },
+    "source_created_at": { "label": "创建时间", "id": "" },
+    "source_updated_at": { "label": "修改时间", "id": "" },
+    "usage_scope": { "label": "使用范围", "id": "<textareaField_lxo4jeom>" },
+    "bom_notes": { "label": "BOM备注/说明", "id": "<selectField_lpuuhhor>" },
+    "metadata_json": { "label": "其他字段(JSON)", "id": "" }
+  }
+}
+

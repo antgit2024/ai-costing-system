@@ -1,0 +1,49 @@
+[
+  {
+    "formInstanceId": "PROC-0001",
+    "formData": {
+      "<textField_process_code>": "PROC-CUT",
+      "<textField_process_name>": "材料分切",
+      "<textField_module_code>": "MOD-CUT",
+      "<textField_module_name>": "裁切工段",
+      "<textField_model_code>": "MODEL-POSTER-A1",
+      "<textField_model_name>": "A1 海报灯箱",
+      "<textField_team>": "下料组",
+      "<textField_unit>": "次",
+      "<numberField_hourly_rate>": "65.00",
+      "<numberField_piece_rate>": "5.50",
+      "<numberField_fixed_minutes>": "8",
+      "<numberField_base_minutes>": "6",
+      "<numberField_square_minutes>": "2",
+      "<selectField_calc_method>": "area",
+      "<numberField_sequence>": "10",
+      "<radioField_status>": "active",
+      "<radioField_is_active>": "true",
+      "<textareaField_description>": "标准材料分切，含安全检查"
+    }
+  },
+  {
+    "formInstanceId": "PROC-0002",
+    "formData": {
+      "<textField_process_code>": "PROC-PRINT",
+      "<textField_process_name>": "数码印刷",
+      "<textField_module_code>": "MOD-PRINT",
+      "<textField_module_name>": "印刷工段",
+      "<textField_model_code>": "MODEL-POSTER-A1",
+      "<textField_model_name>": "A1 海报灯箱",
+      "<textField_team>": "印刷组",
+      "<textField_unit>": "㎡",
+      "<numberField_hourly_rate>": "80.00",
+      "<numberField_piece_rate>": "12.00",
+      "<numberField_fixed_minutes>": "5",
+      "<numberField_base_minutes>": "4",
+      "<numberField_square_minutes>": "1.2",
+      "<selectField_calc_method>": "area",
+      "<numberField_sequence>": "20",
+      "<radioField_status>": "active",
+      "<radioField_is_active>": "true",
+      "<textareaField_description>": "UV 数码印刷，含色彩校对"
+    }
+  }
+]
+

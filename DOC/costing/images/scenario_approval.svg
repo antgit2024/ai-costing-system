@@ -1,0 +1,15 @@
+<svg width="1200" height="675" viewBox="0 0 1200 675" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="675" fill="#ecfccb" />
+  <rect x="60" y="60" width="1080" height="120" rx="12" fill="#d9f99d" stroke="#65a30d" stroke-width="3" />
+  <text x="80" y="130" font-family="Inter,Arial" font-size="44" fill="#365314">审批流（Submit / Approve / Reject）</text>
+  <g font-family="Inter,Arial" font-size="30" fill="#3f6212">
+    <text x="120" y="230">1. 在审批表单选择场景、操作者、角色、备注</text>
+    <text x="120" y="290">2. 点击提交/批准/驳回 → 调用 /approvals/*</text>
+    <text x="120" y="350">3. 批准时可选择是否设为 Baseline</text>
+    <text x="120" y="410">4. 成功后场景卡片状态同步更新</text>
+    <text x="120" y="470">5. AuditLogDrawer 记录全部审批动作和评论</text>
+  </g>
+  <rect x="80" y="500" width="1040" height="120" rx="16" fill="#bef264" stroke="#65a30d" stroke-width="2" />
+  <text x="110" y="560" font-family="Inter,Arial" font-size="28" fill="#1a2e05">前端：ScenarioBuilderPage → handleApprovalAction()</text>
+  <text x="110" y="600" font-family="Inter,Arial" font-size="28" fill="#1a2e05">后端：approvals router + audit_service + approval_records</text>
+</svg>

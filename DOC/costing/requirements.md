@@ -122,6 +122,16 @@ High-level workflow:
 `attachments`
 - `id`, `target_type`, `target_id`, `file_name`, `file_url`, `mime_type`,
   `uploader_id`, `uploaded_at`, `category` (BOM/quote/spec).
+`scenario_favorites`
+- `id`, `scenario_id`, `user_id`, `created_at`（用于 Planner 场景列表收藏与筛选）。
+`benchmark_favorites`
+- `id`, `benchmark_key`, `user_id`, `payload`, `created_at`（存储 AI Benchmark 收藏及其参数）。
+`planner_executor_callbacks`
+- `id`, `scenario_id`, `callback_url`, `signature`, `status`, `payload`, `trace_id`,
+  `created_at`, `updated_at`（追踪外部执行器回调签名与状态）。
+`audit_logs`
+- `id`, `target_type`, `target_id`, `action`, `actor_id`, `payload`, `trace_id`,
+  `created_at`（Phase3.5 起要求所有审批/导出/回调等操作保留 trace）。
 
 ### Integration Notes
 - All monetary fields stored in native currency plus normalized base currency
@@ -136,10 +146,17 @@ High-level workflow:
 - `/api/planner/packages`: CRUD, supports tree queries.
 - `/api/planner/line-items`: CRUD, bulk import (CSV/XLSX), supplier binding.
 - `/api/planner/assumptions`: versioned parameters (GET latest, POST new).
-- `/api/planner/scenarios`: create from baseline, diff vs other scenarios,
-  mark approved, trigger export job.
+- `/api/planner/scenarios`: 列表分页 + filters（initiative/status/baseline/favorite/search）、
+  收藏 `POST/DELETE /scenarios/{id}/favorite`、create from baseline、diff vs other
+  scenarios、export job + executor callback。
 - `/api/planner/approvals`: workflow transitions + comment log.
 - `/api/planner/uploads`: signed URL issuance for attachments.
+- `/api/planner/benchmarks/suggest`: 代理外部 Benchmark 服务并支持缓存；
+  `/api/planner/benchmarks/favorites` 负责收藏同步。
+- `/api/planner/executor/callback`: 执行器回调入口，附 HMAC 签名校验与 trace。
+- Benchmark Provider 必须具备降级策略：`BENCHMARK_FAIL_OPEN=true` 时请求失败会
+  自动返回 fallback/缓存数据；若需完全切换至 mock，可设置
+  `PLANNER_FEATURE_FLAG_MOCK_INTEGRATIONS=true`。
 
 Backend service boundaries:
 1. **Planner Service** (new FastAPI app or module) – owns tables above.
@@ -308,6 +325,14 @@ reviews.
 - **Phase 3 – 集成与增强（约 1 周）**
   - 完成与成本执行服务的导出/同步；AI 基准提示 UI（对接占位接口）；审计日志与附件查看器。
   - 视情况安排后续 Phase（如协作功能、任务指派等）。
+- **Phase 3.5 – 生产级集成（约 1.5 周）**
+  - 后端：替换执行器 mock，接入真实 HTTP/gRPC 客户端，补充重试/trace/失败队列/监控；AI Benchmark 对接真实服务并持久化收藏；通知钩子对接消息总线。
+  - 前端：新增基于 `/api/planner/scenarios` 的场景列表与收藏，持久化 AI 建议，展示导出历史与分页审计日志；继续懒加载 Job/Audit Drawer 并输出 bundle 报告。
+  - 文档/QA：更新截图与操作手册，记录集成回滚方案；准备包含执行器回调与 AI 建议的回归数据集，扩充 QA 检查清单。
+- **Phase 4 – 上线前冲刺（约 1 周）**
+  - 后端：完善环境配置样例、Prometheus/Grafana 监控、压测与回滚剧本，打通 trace→audit→job→log 一键定位。
+  - 前端：优化 bundle（目标 main < 400kB）、完成真实数据 UAT、提供 trace/job 可复制信息、更新生产环境 `.env` 与截图。
+  - Docs/QA：发布运行手册、上线 checklist、回归脚本与结果；同步 incident/rollback 文档。
 - **角色分工**
   - Planner：持续维护需求与节奏。
   - Backend Executor：DB 迁移、API、外部集成。
@@ -319,7 +344,8 @@ reviews.
 2. **用户身份**：沿用现有 SSO/Auth 与角色体系，如需细化到项目层面的 ACL 另行评估。
 3. **附件存储**：启用独立的对象存储空间（不可复用 ai-material-system Bucket），需定义访问控制与生命周期策略。
 4. **AI 助手数据**：业务方可提供基准数据，Planner 需确认数据格式、入库方式、更新节奏。
-5. **性能边界**：按大批量设计（>20k 行项目），列表必须服务端分页/筛选，导入和计算流程走异步队列，并考虑分层缓存。
+5. **性能边界**：按大批量设计（>20k 行项目），列表必须服务端分页/筛选，导入和计算流程走异步队列，并考虑分层缓存；Phase 3.5
+   起 executor/benchmark 调用需要 trace_id、Prometheus metrics 以及 Kafka/RabbitMQ 事件，方便观测与快速降级。
 
 ### 8. 研发分支策略
 - `feature/costing-planner`：聚焦需求和架构规划、数据库设计、任务拆解。
@@ -331,6 +357,18 @@ reviews.
 > `feature/costing-backend/scenario-engine`。
 
 > 如需进一步把英文段落逐条翻译成中文，可在以上详版基础上继续扩展；若有特定章节需要增删，请直接指出。
+
+---
+
+## 11. 产品模型主线要点（2025-12-14）
+
+1. **工艺模块**：坚持“三层架构”，工序作为“物料 + 人工”的最小复用单元，产品模型仅引用工序并按条件进行替换/添加，避免散落配置。
+2. **虚拟物料/管理费**：允许在工序中配置虚拟物料以计提管理费、能耗等费用，但必须记录在 `process_materials`，便于审计与统计。
+3. **标准尺寸 vs 实际尺寸**：所有模型以 1m × 1m 标准尺寸维护单价/耗损；实际订单按面积/周长比例放大或缩小，超过阈值时自动替换厚板、龙骨等物料。
+4. **变体规则**：仅处理工序内部“物料替换/添加”场景；触发条件限定为 SKU 特征匹配、面积阈值、周长阈值。若工序差异本质不同，应新建独立模型。
+5. **SKU 绑定策略**：新品上架时执行一次标准化（AI 解析 + 运营确认），之后只依据 `SKU ID` 绑定模型，运营可自由修改标题。
+6. **数据来源**：物料、工序、模型、规则等核心数据以本地数据库为准；宜搭/表单（见 `DOC/基础表单/*.pdf/.xlsx`）作为只读源，通过同步服务导入并校验字段。
+7. **Phase0 样本与验收**：按 `DOC/costing/phase0_sample_data.md` 的模板导入样本物料/工序/模型，完成字段映射与计算导出验证后，再扩展至大规模数据。
 
 
 

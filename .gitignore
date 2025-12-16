@@ -1,0 +1,27 @@
+# Local virtual environments (do not delete actual folders, just ignore)
+backend/.venv/
+backend/venv/
+
+# Python cache files that often appear alongside venv artifacts
+**/*.pyc
+**/__pycache__/
+
+# Python tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+
+# Local databases / runtime artifacts (never commit)
+**/*.db
+**/*.sqlite
+**/*.sqlite3
+
+
+
+
+
+
+
+

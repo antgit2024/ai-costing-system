@@ -5,7 +5,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 DIST_DIR="${PROJECT_ROOT}/dist"
-TARGET_DIR="${PLANNER_STATIC_DIR:-/srv/www/ai-costing-system/planner}"
+# 默认对齐生产 Nginx 的 root（/var/www/html/ai-costing/dist），也可通过
+# PLANNER_STATIC_DIR 覆盖
+TARGET_DIR="${PLANNER_STATIC_DIR:-/var/www/html/ai-costing/dist}"
 
 if [[ ! -d "${DIST_DIR}" ]]; then
   echo "[deploy] dist 目录不存在，请先运行 npm run build" >&2
@@ -29,6 +31,8 @@ else
 fi
 
 echo "[deploy] 完成，静态资源已更新至 ${TARGET_DIR}"
+
+
 
 
 

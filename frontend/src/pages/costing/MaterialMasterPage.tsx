@@ -1,24 +1,32 @@
 import CloudSyncOutlined from '@ant-design/icons/lib/icons/CloudSyncOutlined'
+import CopyOutlined from '@ant-design/icons/lib/icons/CopyOutlined'
 import DownloadOutlined from '@ant-design/icons/lib/icons/DownloadOutlined'
+import EditOutlined from '@ant-design/icons/lib/icons/EditOutlined'
 import FileSearchOutlined from '@ant-design/icons/lib/icons/FileSearchOutlined'
 import HistoryOutlined from '@ant-design/icons/lib/icons/HistoryOutlined'
+import QuestionCircleOutlined from '@ant-design/icons/lib/icons/QuestionCircleOutlined'
 import ReloadOutlined from '@ant-design/icons/lib/icons/ReloadOutlined'
 import {
+  Alert,
   Badge,
   Button,
   Card,
   Col,
+  Descriptions,
   Drawer,
   Empty,
   Form,
   Input,
+  InputNumber,
+  Image,
   Modal,
   Row,
   Select,
   Space,
-  Statistic,
+  Spin,
   Switch,
   Table,
+  Tabs,
   Tag,
   Tooltip,
   Typography,
@@ -26,45 +34,276 @@ import {
 } from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 import dayjs from 'dayjs'
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
+import { MATERIAL_CATEGORIES } from '@/constants/materialCategories'
 import {
   exportMaterials,
   fetchMaterialSyncLogs,
   fetchMaterials,
+  fetchMaterialVirtualLinks,
   triggerMaterialSync,
-  updateMaterialStatus,
+  updateMaterial,
 } from '@/services/planner'
 import type {
+  CalculationMethod,
   Material,
   MaterialListResponse,
+  MaterialStatusUpdatePayload,
   MaterialSyncLog,
   MaterialSyncLogResponse,
+  VirtualMaterialReference,
 } from '@/types/planner'
+import { MATERIAL_STATUS_OPTIONS } from '@/constants/planner'
 import {
-  MATERIAL_STATUS_OPTIONS,
-  MATERIAL_TYPE_OPTIONS,
-} from '@/constants/planner'
+  CALCULATION_METHOD_OPTIONS,
+  getCalculationMethodLabel,
+  getDefaultUnitByCalculationMethod,
+} from '@/constants/calculationMethods'
+import { isAxiosError } from 'axios'
+import GuideDrawer from '@/components/common/GuideDrawer'
+import materialsGuide from '@/guides/materials_guide.md?raw'
 
 const { Title, Text } = Typography
+const { PreviewGroup } = Image
+
+const BOM_TRUE_TOKENS = new Set(['1', 'true', 'yes', 'y', '启用', '激活', 'active', '是'])
+
+const BOM_UNIT_OPTIONS = [
+  { label: '平米', value: '平米' },
+  { label: '米', value: '米' },
+  { label: '个', value: '个' },
+]
+
+const BOM_UNIT_LABEL_MAP: Record<string, string> = {
+  平米: '平米',
+  '㎡': '平米',
+  平方: '平米',
+  平方米: '平米',
+  'm²': '平米',
+  M2: '平米',
+  m2: '平米',
+  米: '米',
+  m: '米',
+  M: '米',
+  个: '个',
+}
+
+const normalizeBomUnit = (value?: string | null): string | undefined => {
+  if (!value) {
+    return undefined
+  }
+  const v = String(value).trim()
+  if (['平米', '㎡', '平方', '平方米', 'm²', 'M2', 'm2'].includes(v)) return '平米'
+  if (['米', 'm', 'M'].includes(v)) return '米'
+  if (v === '个') return '个'
+  if (v === '套') return '套'
+  return v
+}
+
+const getBomUnitLabel = (value?: string | null): string | undefined => {
+  const normalized = normalizeBomUnit(value)
+  if (!normalized) {
+    return undefined
+  }
+  return BOM_UNIT_LABEL_MAP[normalized] ?? normalized
+}
+
+const formatDecimalDisplay = (value?: string | number, fractionDigits = 2): string => {
+  const num = Number(value)
+  if (!Number.isFinite(num)) {
+    return '-'
+  }
+  return Number(num.toFixed(fractionDigits)).toString()
+}
+
+const parseDecimal = (value?: string | number | null): number | undefined => {
+  if (value === undefined || value === null) {
+    return undefined
+  }
+  const num = Number(value)
+  return Number.isFinite(num) ? num : undefined
+}
+
+const toFiniteNumber = (value: unknown): number | undefined => {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value
+  }
+  return undefined
+}
+
+const isBomMaterial = (record: Material): boolean => {
+  const metadata = (record.metadata_json ?? {}) as {
+    raw_form_data?: Record<string, unknown>
+    [key: string]: unknown
+  }
+  const rawForm = metadata.raw_form_data ?? {}
+  const rawValue = rawForm?.['radioField_lxo4jeon'] ?? metadata?.bom_material_flag
+
+  if (typeof rawValue === 'boolean') {
+    return rawValue
+  }
+
+  if (rawValue === undefined || rawValue === null) {
+    return false
+  }
+
+  const normalized = String(rawValue).trim().toLowerCase()
+  if (!normalized) {
+    return false
+  }
+
+  if (BOM_TRUE_TOKENS.has(normalized)) {
+    return true
+  }
+
+  // 中文“是”不会被 toLowerCase 影响，再额外判一次
+  return rawValue === '是'
+}
 
 const defaultFilters = {
   search: undefined as string | undefined,
-  material_type: undefined as string | undefined,
+  category: undefined as string | undefined,
   status: undefined as string | undefined,
-  is_active: undefined as boolean | undefined,
+  is_active: true as boolean | undefined,
+  is_bom_material: true as boolean | undefined,
 }
+
+const getBomUnitPrice = (record: Material): number | undefined => {
+  const value = (record.metadata_json as Record<string, unknown> | undefined)?.['bom_unit_price']
+  if (typeof value === 'number') {
+    return value
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value)
+    return Number.isNaN(parsed) ? undefined : parsed
+  }
+  return undefined
+}
+
+const deriveBomUnitPrice = (record: Material): number | undefined => {
+  const metadataPrice = getBomUnitPrice(record)
+  if (metadataPrice !== undefined) {
+    return metadataPrice
+  }
+  if (record.unit_price === undefined || record.unit_price === null) {
+    return undefined
+  }
+  const conversion = parseDecimal(record.conversion_purchase_to_bom)
+  if (!conversion || conversion <= 0) {
+    return undefined
+  }
+  return Number(record.unit_price) / conversion
+}
+
+const getBomDisplayValue = (record: Material) =>
+  typeof record.is_bom_material === 'boolean' ? record.is_bom_material : isBomMaterial(record)
+
+const getErrorMessage = (error: unknown): string => {
+  if (isAxiosError(error)) {
+    const detail = error.response?.data?.detail
+    if (typeof detail === 'string') {
+      return detail
+    }
+    if (Array.isArray(detail)) {
+      return detail
+        .map((item) => (typeof item?.msg === 'string' ? item.msg : JSON.stringify(item)))
+        .join('; ')
+    }
+  }
+  return (error as Error)?.message || '操作失败'
+}
+
+const toFullUrl = (url?: string) => {
+  if (!url) {
+    return ''
+  }
+  if (/^https?:\/\//i.test(url)) {
+    return url
+  }
+  return url
+}
+
+const getImageUrls = (record: Material): string[] => {
+  if (Array.isArray(record.images)) {
+    return record.images.filter((item) => typeof item === 'string' && item.trim())
+  }
+  return []
+}
+
+const getFormValue = (record: Material, key: string): string => {
+  const metadata = (record.metadata_json ?? {}) as {
+    raw_form_data?: Record<string, unknown>
+    [k: string]: unknown
+  }
+  const raw = metadata.raw_form_data ?? {}
+  const value = raw?.[key] ?? metadata?.[key]
+  if (typeof value === 'string') {
+    return value
+  }
+  if (typeof value === 'number') {
+    return String(value)
+  }
+  return ''
+}
+
+const getMaterialTypeLabel = (record: Material): string => {
+  const fromForm = getFormValue(record, 'radioField_lxmp8bgd')
+  if (fromForm) {
+    return fromForm
+  }
+  switch (record.material_type) {
+    case 'virtual':
+      return '虚拟物料'
+    case 'component':
+      return '部件/组件'
+    case 'raw':
+      return '主料'
+    default:
+      return record.material_type || '-'
+  }
+}
+
+interface CostFormValues {
+  is_bom_material?: boolean
+  bom_unit?: string
+  conversion_purchase_to_bom?: number
+  inventory_unit?: string
+  conversion_bom_to_inventory?: number
+  calculation_method?: CalculationMethod
+  local_description?: string
+  fixed_quantity_alpha?: number
+  coverage_ratio?: number
+  default_loss_rate?: number
+}
+
+const positiveNumberRule = (message: string) => ({
+  validator: (_: unknown, value: number | null | undefined) => {
+    if (value && value > 0) {
+      return Promise.resolve()
+    }
+    return Promise.reject(new Error(message))
+  },
+})
 
 const MaterialMasterPage = () => {
   const queryClient = useQueryClient()
   const [filtersForm] = Form.useForm()
+  const [costForm] = Form.useForm()
+  const lastSubmittedCostValuesRef = useRef<CostFormValues | null>(null)
   const [filters, setFilters] = useState(defaultFilters)
   const [pagination, setPagination] = useState({ current: 1, pageSize: 20 })
   const [syncDrawerOpen, setSyncDrawerOpen] = useState(false)
   const [syncPagination, setSyncPagination] = useState({ page: 1, pageSize: 10 })
   const [exporting, setExporting] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const [detailDrawerOpen, setDetailDrawerOpen] = useState(false)
+  const [guideOpen, setGuideOpen] = useState(false)
+  const [editingMaterial, setEditingMaterial] = useState<Material | null>(null)
+  const watchedBomUnit = Form.useWatch('bom_unit', costForm)
+  const watchedInventoryUnit = Form.useWatch('inventory_unit', costForm)
+  const watchedConversionPurchaseToBom = Form.useWatch('conversion_purchase_to_bom', costForm)
 
   const materialsQuery = useQuery<MaterialListResponse>({
     queryKey: ['materials', filters, pagination],
@@ -77,9 +316,33 @@ const MaterialMasterPage = () => {
     placeholderData: keepPreviousData,
   })
 
+  const materialVirtualLinksQuery = useQuery<VirtualMaterialReference[]>({
+    queryKey: ['material-virtual-links', editingMaterial?.id],
+    queryFn: () => fetchMaterialVirtualLinks(editingMaterial!.id),
+    enabled: detailDrawerOpen && !!editingMaterial?.id,
+  })
+
   const materials = materialsQuery.data?.items ?? []
   const totalCount = materialsQuery.data?.total ?? 0
-  const activeOnPage = useMemo(() => materials.filter((item) => item.is_active).length, [materials])
+  const backendCategories = materialsQuery.data?.categories
+  const categoryOptions = useMemo(() => {
+    const seen = new Set<string>()
+    const options: { label: string; value: string }[] = []
+    const append = (raw?: string | null) => {
+      const value = raw?.trim()
+      if (!value || seen.has(value)) {
+        return
+      }
+      seen.add(value)
+      options.push({ label: value, value })
+    }
+    MATERIAL_CATEGORIES.forEach((value) => append(value))
+    ;(backendCategories ?? []).forEach((value) => append(value))
+    materials.forEach((item) => {
+      append(getFormValue(item, 'textField_jacd537') || item.category)
+    })
+    return options
+  }, [backendCategories, materials])
 
   const syncLogsQuery = useQuery<MaterialSyncLogResponse>({
     queryKey: ['material-sync-logs', syncDrawerOpen, syncPagination],
@@ -94,14 +357,75 @@ const MaterialMasterPage = () => {
 
   const statusMutation = useMutation<Material, Error, { id: string; active: boolean }>({
     mutationFn: ({ id, active }: { id: string; active: boolean }) =>
-      updateMaterialStatus(id, { is_active: active, status: active ? 'active' : 'inactive' }),
+      updateMaterial(id, { is_active: active, status: active ? 'active' : 'inactive' }),
     onSuccess: (_, variables) => {
       message.success(`物料已${variables.active ? '启用' : '停用'}`)
       queryClient.invalidateQueries({ queryKey: ['materials'] })
     },
     onError: (error: unknown) => {
-      const err = error as Error
-      message.error(err.message || '更新状态失败')
+      message.error(getErrorMessage(error) || '更新状态失败')
+    },
+  })
+
+  const bomMutation = useMutation<
+    Material,
+    Error,
+    { id: string; bom: boolean; origin: 'list' | 'drawer' }
+  >({
+    mutationFn: ({ id, bom }) => updateMaterial(id, { is_bom_material: bom }),
+    onSuccess: (updated, variables) => {
+      message.success('BOM 标记已更新')
+      queryClient.invalidateQueries({ queryKey: ['materials'] })
+      setEditingMaterial((prev) => (prev?.id === updated.id ? updated : prev))
+      if (variables.origin === 'drawer') {
+        costForm.setFieldsValue({ is_bom_material: updated.is_bom_material })
+      }
+    },
+    onError: (error, variables) => {
+      message.error(getErrorMessage(error))
+      if (variables.origin === 'drawer' && editingMaterial) {
+        costForm.setFieldsValue({ is_bom_material: getBomDisplayValue(editingMaterial) })
+      }
+    },
+  })
+
+  const detailMutation = useMutation<
+    Material,
+    Error,
+    { id: string; payload: MaterialStatusUpdatePayload }
+  >({
+    mutationFn: ({ id, payload }) => updateMaterial(id, payload),
+    onSuccess: (updated) => {
+      message.success('成本参数已保存')
+      queryClient.invalidateQueries({ queryKey: ['materials'] })
+      setEditingMaterial(updated)
+      const fallback = lastSubmittedCostValuesRef.current
+      const updatedMetadata = (updated.metadata_json as Record<string, any>) ?? {}
+      costForm.setFieldsValue({
+        is_bom_material: getBomDisplayValue(updated),
+        bom_unit:
+          normalizeBomUnit(updated.unit) ??
+          fallback?.bom_unit ??
+          BOM_UNIT_OPTIONS[0].value,
+        conversion_purchase_to_bom:
+          parseDecimal(updated.conversion_purchase_to_bom) ??
+          fallback?.conversion_purchase_to_bom ??
+          1,
+        inventory_unit: updated.inventory_unit ?? fallback?.inventory_unit,
+        conversion_bom_to_inventory:
+          parseDecimal(updated.conversion_bom_to_inventory) ??
+          fallback?.conversion_bom_to_inventory ??
+          1,
+        calculation_method: updated.calculation_method ?? fallback?.calculation_method,
+        local_description:
+          (updatedMetadata.local_description as string) ??
+          fallback?.local_description ??
+          '',
+      })
+      lastSubmittedCostValuesRef.current = null
+    },
+    onError: (error) => {
+      message.error(getErrorMessage(error))
     },
   })
 
@@ -109,9 +433,10 @@ const MaterialMasterPage = () => {
     const values = filtersForm.getFieldsValue()
     setFilters({
       search: values.search?.trim() || undefined,
-      material_type: values.material_type || undefined,
+      category: values.category || undefined,
       status: values.status || undefined,
       is_active: values.onlyActive ? true : undefined,
+      is_bom_material: values.onlyBom ? true : undefined,
     })
     setPagination((prev) => ({ ...prev, current: 1 }))
   }
@@ -143,6 +468,128 @@ const MaterialMasterPage = () => {
       return `${value}`
     }
   }, [])
+
+  const openMaterialDrawer = (record: Material) => {
+    setEditingMaterial(record)
+    setDetailDrawerOpen(true)
+    const metadata = (record.metadata_json as Record<string, any>) ?? {}
+    const costingDefaults = (metadata.costing_defaults ?? {}) as Record<string, any>
+    costForm.setFieldsValue({
+      is_bom_material: getBomDisplayValue(record),
+      bom_unit: normalizeBomUnit(record.unit) ?? BOM_UNIT_OPTIONS[0].value,
+      conversion_purchase_to_bom: parseDecimal(record.conversion_purchase_to_bom),
+      inventory_unit: record.inventory_unit,
+      conversion_bom_to_inventory: parseDecimal(record.conversion_bom_to_inventory),
+      calculation_method: record.calculation_method,
+      local_description: (metadata.local_description as string) ?? '',
+      fixed_quantity_alpha:
+        typeof costingDefaults.fixed_quantity_alpha === 'number'
+          ? costingDefaults.fixed_quantity_alpha
+          : parseDecimal(costingDefaults.fixed_quantity_alpha),
+      coverage_ratio:
+        typeof costingDefaults.coverage_ratio === 'number'
+          ? costingDefaults.coverage_ratio
+          : parseDecimal(costingDefaults.coverage_ratio),
+      default_loss_rate:
+        typeof costingDefaults.loss_rate === 'number'
+          ? costingDefaults.loss_rate
+          : parseDecimal(costingDefaults.loss_rate),
+    })
+  }
+
+  const closeMaterialDrawer = () => {
+    setDetailDrawerOpen(false)
+    setGuideOpen(false)
+    setEditingMaterial(null)
+    costForm.resetFields()
+  }
+
+  const handleCostFormSubmit = (values: CostFormValues) => {
+    if (!editingMaterial) return
+    lastSubmittedCostValuesRef.current = values
+    const conversionPurchase = toFiniteNumber(values.conversion_purchase_to_bom)
+    const conversionInventory = toFiniteNumber(values.conversion_bom_to_inventory)
+    const purchaseUnitPrice = toFiniteNumber(editingMaterial.unit_price)
+    const nextIsBom =
+      typeof values.is_bom_material === 'boolean'
+        ? values.is_bom_material
+        : getBomDisplayValue(editingMaterial)
+    const payload: MaterialStatusUpdatePayload = {
+      is_bom_material: nextIsBom,
+      conversion_purchase_to_bom: conversionPurchase,
+      conversion_bom_to_inventory: conversionInventory,
+      unit: values.bom_unit || normalizeBomUnit(editingMaterial.unit),
+      metadata_json: {
+        local_description: values.local_description?.trim()
+          ? values.local_description.trim()
+          : null,
+        costing_defaults: {
+          fixed_quantity_alpha: toFiniteNumber(values.fixed_quantity_alpha) ?? null,
+          coverage_ratio: toFiniteNumber(values.coverage_ratio) ?? null,
+          loss_rate: toFiniteNumber(values.default_loss_rate) ?? null,
+        },
+      },
+    }
+    if (values.calculation_method) {
+      payload.calculation_method = values.calculation_method
+    }
+    let bomUnitPricePayload: number | undefined
+    if (purchaseUnitPrice !== undefined && conversionPurchase && conversionPurchase > 0) {
+      bomUnitPricePayload = Number(purchaseUnitPrice / conversionPurchase)
+    } else {
+      bomUnitPricePayload = getBomUnitPrice(editingMaterial)
+    }
+    if (bomUnitPricePayload !== undefined) {
+      payload.bom_unit_price = Number(bomUnitPricePayload)
+    }
+    if (values.inventory_unit && values.inventory_unit !== editingMaterial.inventory_unit) {
+      payload.inventory_unit = values.inventory_unit
+    }
+    detailMutation.mutate({
+      id: editingMaterial.id,
+      payload,
+    })
+  }
+
+  const handleCopyLink = (url: string) => {
+    let full = toFullUrl(url)
+    if (!full) {
+      return
+    }
+    if (!/^https?:\/\//i.test(full)) {
+      if (typeof window !== 'undefined' && window.location) {
+        full = `${window.location.origin}${full}`
+      }
+    }
+
+    if (typeof navigator !== 'undefined' && navigator?.clipboard?.writeText) {
+      navigator.clipboard
+        .writeText(full)
+        .then(() => message.success('链接已复制'))
+        .catch(() => message.error('复制失败，请手动复制'))
+      return
+    }
+    if (typeof document === 'undefined') {
+      message.warning('当前环境不支持复制')
+      return
+    }
+    const textarea = document.createElement('textarea')
+    textarea.value = full
+    textarea.style.position = 'fixed'
+    textarea.style.top = '-9999px'
+    document.body.appendChild(textarea)
+    textarea.focus()
+    textarea.select()
+    try {
+      document.execCommand('copy')
+      message.success('链接已复制')
+    } catch (error) {
+      console.error(error)
+      message.error('复制失败，请手动复制')
+    } finally {
+      document.body.removeChild(textarea)
+    }
+  }
 
   const handleExport = async () => {
     setExporting(true)
@@ -191,6 +638,27 @@ const MaterialMasterPage = () => {
 
   const materialColumns: ColumnsType<Material> = [
     {
+      title: '图片',
+      key: 'images',
+      width: 120,
+      render: (_, record) => {
+        const imageUrls = getImageUrls(record)
+        if (!imageUrls.length) {
+          return <Text type="secondary">-</Text>
+        }
+        const first = toFullUrl(imageUrls[0])
+        return (
+          <Image
+            width={64}
+            height={64}
+            src={first}
+            style={{ objectFit: 'cover', borderRadius: 6 }}
+            preview={{ mask: '预览' }}
+          />
+        )
+      },
+    },
+    {
       title: '物料编码',
       dataIndex: 'material_code',
       key: 'material_code',
@@ -205,94 +673,151 @@ const MaterialMasterPage = () => {
       title: '名称',
       dataIndex: 'material_name',
       key: 'material_name',
-      render: (text: string, record) => (
-        <Space direction="vertical" size={0}>
-          <Text strong>{text}</Text>
-          <Text type="secondary">
-            {record.material_type === 'virtual' ? '虚拟物料' : '原材料'}
-            {record.category ? ` · ${record.category}` : ''}
-          </Text>
-        </Space>
-      ),
+      render: (text: string, record) => {
+        const typeLabel = getMaterialTypeLabel(record)
+        return (
+          <Space direction="vertical" size={0}>
+            <Text strong>{text}</Text>
+            <Text type="secondary">
+              {typeLabel}
+              {record.category ? ` · ${record.category}` : ''}
+            </Text>
+          </Space>
+        )
+      },
     },
     {
-      title: '单位 / 单价',
+      title: '采购单价/单位',
       key: 'unit_price',
-      width: 160,
-      render: (_, record) => (
-        <Space direction="vertical" size={0}>
-          <Text>{record.unit || '-'}</Text>
-          <Text type="secondary">{formatCurrency(record.unit_price, record.currency)}</Text>
-        </Space>
-      ),
-    },
-    {
-      title: '供应商',
-      key: 'supplier',
-      width: 200,
-      render: (_, record) => (
-        <Space direction="vertical" size={0}>
-          <Text>{record.supplier_name || '-'}</Text>
-          <Text type="secondary">{record.supplier_code || ''}</Text>
-        </Space>
-      ),
-    },
-    {
-      title: '状态',
-      dataIndex: 'status',
-      key: 'status',
-      width: 120,
-      render: (_, record) => (
-        <Tag color={record.is_active ? 'green' : 'red'}>
-          {record.is_active ? '启用' : '停用'}
-        </Tag>
-      ),
-    },
-    {
-      title: '最后更新',
-      dataIndex: 'updated_at',
-      key: 'updated_at',
       width: 180,
-      render: (value: string) => dayjs(value).format('YYYY-MM-DD HH:mm'),
+      render: (_, record) => (
+        <Space direction="vertical" size={0}>
+          <Text>{formatCurrency(record.unit_price, record.currency)}</Text>
+          <Text type="secondary">{record.purchase_unit || record.unit || '-'}</Text>
+        </Space>
+      ),
     },
     {
-      title: '操作',
-      key: 'actions',
+      title: 'BOM单价/单位',
+      key: 'bom_unit_price',
+      width: 180,
+      render: (_, record) => {
+        const bomPrice = deriveBomUnitPrice(record)
+        const bomUnitText = getBomUnitLabel(record.unit) ?? record.unit ?? '-'
+        return (
+          <Space direction="vertical" size={0}>
+            <Text>{formatCurrency(bomPrice, record.currency)}</Text>
+            <Text type="secondary">{bomUnitText}</Text>
+          </Space>
+        )
+      },
+    },
+    {
+      title: '计算方式',
+      dataIndex: 'calculation_method',
+      key: 'calculation_method',
       width: 140,
-      render: (_, record) => (
-        <Space>
+      render: (value: string) => <Tag>{getCalculationMethodLabel(value)}</Tag>,
+    },
+    {
+      title: 'BOM',
+      dataIndex: 'bom_material',
+      key: 'bom_material',
+      width: 160,
+      render: (_, record) => {
+        const hasLocalFlag = typeof record.is_bom_material === 'boolean'
+        const value = getBomDisplayValue(record)
+        const isUpdating = bomMutation.isPending && bomMutation.variables?.id === record.id
+        const switchNode = (
+          <Switch
+            size="small"
+            checked={value}
+            disabled={!hasLocalFlag || isUpdating}
+            loading={isUpdating}
+            onChange={(checked) =>
+              bomMutation.mutate({ id: record.id, bom: checked, origin: 'list' })
+            }
+          />
+        )
+
+        if (hasLocalFlag) {
+          return (
+            <Space>
+              {switchNode}
+              <Tag color={value ? 'blue' : undefined}>{value ? '是' : '否'}</Tag>
+            </Space>
+          )
+        }
+
+        return (
+          <Space>
+            <Tooltip title="标记来自宜搭，需在编辑抽屉中开启本地开关">
+              <span>{switchNode}</span>
+            </Tooltip>
+            <Tag>仅来自宜搭</Tag>
+          </Space>
+        )
+      },
+    },
+    {
+      title: '启用',
+      dataIndex: 'is_active',
+      key: 'is_active',
+      width: 140,
+      render: (_, record) => {
+        const isToggling =
+          statusMutation.isPending && statusMutation.variables?.id === record.id
+        return (
           <Switch
             size="small"
             checkedChildren="启用"
             unCheckedChildren="停用"
             checked={record.is_active}
-            loading={statusMutation.isPending && statusMutation.variables?.id === record.id}
+            loading={isToggling}
             onChange={(checked) => statusMutation.mutate({ id: record.id, active: checked })}
           />
-          <Tooltip title="查看源数据">
-            <Button
-              type="link"
-              icon={<FileSearchOutlined />}
-              onClick={() => {
-                Modal.info({
-                  title: `物料详情 - ${record.material_name}`,
-                  width: 640,
-                  content: (
-                    <pre
-                      style={{
-                        maxHeight: 360,
-                        overflow: 'auto',
-                        background: '#f7f7f7',
-                        padding: 12,
-                      }}
-                    >
-                      {JSON.stringify(record.metadata_json ?? {}, null, 2)}
-                    </pre>
-                  ),
-                })
-              }}
-            />
-          </Tooltip>
+        )
+      },
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 200,
+      render: (_, record) => (
+        <Space size={4} wrap>
+          <Button
+            type="link"
+            size="small"
+            icon={<FileSearchOutlined />}
+            onClick={() => {
+              Modal.info({
+                title: `物料详情 - ${record.material_name}`,
+                width: 640,
+                content: (
+                  <pre
+                    style={{
+                      maxHeight: 360,
+                      overflow: 'auto',
+                      background: '#f7f7f7',
+                      padding: 12,
+                    }}
+                  >
+                    {JSON.stringify(record.metadata_json ?? {}, null, 2)}
+                  </pre>
+                ),
+              })
+            }}
+          >
+            查看来源
+          </Button>
+          <Button
+            type="link"
+            size="small"
+            icon={<EditOutlined />}
+            onClick={() => openMaterialDrawer(record)}
+          >
+            编辑
+          </Button>
         </Space>
       ),
     },
@@ -352,6 +877,311 @@ const MaterialMasterPage = () => {
     },
   ]
 
+  const renderMaterialDrawerTabs = () => {
+    if (!editingMaterial) {
+      return null
+    }
+    const virtualLinks = materialVirtualLinksQuery.data ?? []
+    const imageUrls = getImageUrls(editingMaterial)
+    const purchaseUnitLabel = editingMaterial.purchase_unit || '-'
+    const normalizedBomUnitValue =
+      watchedBomUnit || normalizeBomUnit(editingMaterial.unit) || '㎡'
+    const bomUnitLabel =
+      getBomUnitLabel(normalizedBomUnitValue) ?? normalizedBomUnitValue ?? '平米'
+    const inventoryUnitLocked = Boolean(
+      ((editingMaterial.metadata_json ?? {}) as {
+        inventory_unit_from_yida?: boolean
+      })?.inventory_unit_from_yida,
+    )
+    const inventoryUnitValue =
+      watchedInventoryUnit ?? editingMaterial.inventory_unit ?? ''
+    const inventoryUnitDisplay = inventoryUnitValue || '库存单位'
+    const livePurchaseToBom =
+      toFiniteNumber(watchedConversionPurchaseToBom) ??
+      parseDecimal(editingMaterial.conversion_purchase_to_bom)
+    const liveBomUnitPrice =
+      editingMaterial.unit_price && livePurchaseToBom
+        ? Number(editingMaterial.unit_price) / livePurchaseToBom
+        : deriveBomUnitPrice(editingMaterial)
+    const purchaseSpec = getFormValue(editingMaterial, 'textField_lxo1y6ab')
+    const costFormula = getFormValue(editingMaterial, 'textField_m3pgyx4d')
+
+    return (
+      <Tabs
+        defaultActiveKey="basic"
+        items={[
+          {
+            key: 'basic',
+            label: '基础信息',
+            children: (
+              <Descriptions column={1} bordered size="small">
+                <Descriptions.Item label="物料编码">
+                  <Text code>{editingMaterial.material_code}</Text>
+                </Descriptions.Item>
+                <Descriptions.Item label="物料名称">{editingMaterial.material_name}</Descriptions.Item>
+                <Descriptions.Item label="物料类型">
+                  {getMaterialTypeLabel(editingMaterial)}
+                </Descriptions.Item>
+                <Descriptions.Item label="计算方式">
+                  {getCalculationMethodLabel(editingMaterial.calculation_method)}
+                </Descriptions.Item>
+                <Descriptions.Item label="采购单价/单位">
+                  {formatCurrency(editingMaterial.unit_price, editingMaterial.currency)} /{' '}
+                  {purchaseUnitLabel}
+                </Descriptions.Item>
+                <Descriptions.Item label="BOM单价/单位">
+                  {formatCurrency(deriveBomUnitPrice(editingMaterial), editingMaterial.currency)} /{' '}
+                  {getBomUnitLabel(editingMaterial.unit) ?? editingMaterial.unit ?? '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="备注">{editingMaterial.bom_notes || '-'}</Descriptions.Item>
+                <Descriptions.Item label="最近同步">
+                  {dayjs(editingMaterial.updated_at).format('YYYY-MM-DD HH:mm')}
+                </Descriptions.Item>
+                <Descriptions.Item label="虚拟物料引用">
+                  {materialVirtualLinksQuery.isLoading ? (
+                    <Spin size="small" />
+                  ) : virtualLinks.length ? (
+                    <Space direction="vertical" size={4}>
+                      {virtualLinks.map((link) => (
+                        <Tag key={link.virtual_material_id}>
+                          {link.virtual_code} · {link.virtual_name}{' '}
+                          <Text type="secondary">
+                            （配比 {formatDecimalDisplay(link.quantity_ratio)}，损耗{' '}
+                            {formatDecimalDisplay(link.loss_rate)}%）
+                          </Text>
+                        </Tag>
+                      ))}
+                    </Space>
+                  ) : (
+                    <Text type="secondary">暂无引用</Text>
+                  )}
+                </Descriptions.Item>
+              </Descriptions>
+            ),
+          },
+          {
+            key: 'cost',
+            label: '成本参数',
+            children: (
+              <Form layout="vertical" form={costForm} onFinish={handleCostFormSubmit}>
+                <Form.Item
+                  label="BOM单价/单位"
+                  extra="= 采购单价 ÷ 采购→BOM 换算，实时推算，仅供本地核对"
+                >
+                  <Input
+                    disabled
+                    value={`${formatCurrency(liveBomUnitPrice, editingMaterial.currency)} / ${
+                      bomUnitLabel || '-'
+                    }`}
+                  />
+                </Form.Item>
+                <Form.Item
+                  label="计算方式"
+                  name="calculation_method"
+                  rules={[{ required: true, message: '请选择计算方式' }]}
+                  extra="影响模型引用时的默认度量单位，切换后将同步推荐的 BOM 单位"
+                >
+                  <Select
+                    placeholder="请选择计算方式"
+                    options={CALCULATION_METHOD_OPTIONS.map((item) => ({
+                      label: item.label,
+                      value: item.value,
+                    }))}
+                    onChange={(value) => {
+                      const defaultUnit = getDefaultUnitByCalculationMethod(value)
+                      if (defaultUnit) {
+                        costForm.setFieldsValue({ bom_unit: defaultUnit })
+                      }
+                    }}
+                  />
+                </Form.Item>
+                {(purchaseSpec || costFormula) && (
+                  <div style={{ marginBottom: 8 }}>
+                    {purchaseSpec && (
+                      <Form.Item label="采购规格（只读）" style={{ marginBottom: 8 }}>
+                        <Input.TextArea value={purchaseSpec} autoSize disabled />
+                      </Form.Item>
+                    )}
+                    {costFormula && (
+                      <Form.Item label="成本计算公式（只读）" style={{ marginBottom: 8 }}>
+                        <Input.TextArea value={costFormula} autoSize disabled />
+                      </Form.Item>
+                    )}
+                  </div>
+                )}
+                <Row gutter={16}>
+                  <Col xs={24} md={12}>
+                    <Form.Item label="采购单位">
+                      <Input value={purchaseUnitLabel} disabled />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={12}>
+                    <Form.Item
+                      label="BOM 单位"
+                      name="bom_unit"
+                      rules={[{ required: true, message: '请选择 BOM 单位' }]}
+                    >
+                      <Select options={BOM_UNIT_OPTIONS} placeholder="请选择 BOM 单位" />
+                    </Form.Item>
+                  </Col>
+                </Row>
+                <Row gutter={16}>
+                  <Col xs={24} md={12}>
+                    <Form.Item
+                      label={`采购→BOM 换算（1 ${purchaseUnitLabel} = ? ${bomUnitLabel}）`}
+                      name="conversion_purchase_to_bom"
+                      rules={[
+                        { required: true, message: '请输入采购→BOM 换算系数' },
+                        positiveNumberRule('换算系数必须大于 0'),
+                      ]}
+                    >
+                      <InputNumber min={0.000001} step={0.0001} style={{ width: '100%' }} />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={12}>
+                    <Form.Item
+                      label="库存单位"
+                      name="inventory_unit"
+                      rules={
+                        inventoryUnitLocked
+                          ? []
+                          : [{ required: true, message: '请输入库存单位（如 件/箱/套）' }]
+                      }
+                    >
+                      <Input
+                        disabled={inventoryUnitLocked}
+                        placeholder={
+                          inventoryUnitLocked
+                            ? '来自宜搭，仅做参考'
+                            : '例如 件 / 箱 / 套'
+                        }
+                      />
+                    </Form.Item>
+                  </Col>
+                </Row>
+                <Form.Item
+                  label={`BOM→库存换算（1 ${bomUnitLabel} = ? ${inventoryUnitDisplay}）`}
+                  name="conversion_bom_to_inventory"
+                  rules={[
+                    { required: true, message: '请输入 BOM→库存 换算系数' },
+                    positiveNumberRule('换算系数必须大于 0'),
+                  ]}
+                >
+                  <InputNumber min={0.000001} step={0.0001} style={{ width: '100%' }} />
+                </Form.Item>
+                <Form.Item label="是否 BOM 物料" name="is_bom_material" valuePropName="checked">
+                  <Switch />
+                </Form.Item>
+                <Alert
+                  type="info"
+                  showIcon
+                  style={{ marginBottom: 16, padding: '8px 12px' }}
+                  message="说明"
+                  description="BOM 单位仅限 平米/米/个；开关与换算系数只影响本地成本与库存单价的推算，不会回写宜搭。调整后请重新导出成本表核对。"
+                />
+                <Form.Item
+                  label="本地描述"
+                  name="local_description"
+                  extra="仅在本系统内可见，同时在虚拟物料绑定的物料详情中同步展示。"
+                >
+                  <Input.TextArea
+                    rows={3}
+                    placeholder="记录该物料的本地补充说明，如物性、注意事项等"
+                  />
+                </Form.Item>
+                <Card
+                  size="small"
+                  title="成本默认参数（用于产品模型自动带入）"
+                  style={{ marginBottom: 16 }}
+                >
+                  <Row gutter={16}>
+                    <Col xs={24} md={8}>
+                      <Form.Item
+                        label="固定用量 α"
+                        name="fixed_quantity_alpha"
+                        extra="起步耗材/边料等（不随尺寸变化）。默认 0"
+                      >
+                        <InputNumber min={0} step={0.0001} style={{ width: '100%' }} />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} md={8}>
+                      <Form.Item
+                        label="覆盖率 r (0~1)"
+                        name="coverage_ratio"
+                        extra="局部材料占比/走线占比。默认 1"
+                      >
+                        <InputNumber min={0} max={1} step={0.01} style={{ width: '100%' }} />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} md={8}>
+                      <Form.Item
+                        label="默认损耗%"
+                        name="default_loss_rate"
+                        extra="模型引用该物料时建议的损耗%（可被模型覆盖）"
+                      >
+                        <InputNumber min={0} max={100} step={0.1} style={{ width: '100%' }} />
+                      </Form.Item>
+                    </Col>
+                  </Row>
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="说明"
+                    description="这些参数会写入 metadata_json.costing_defaults。产品模型中选择/替换该物料时，会自动带入 α/覆盖率/损耗（若模型行仍处于默认值）。"
+                  />
+                </Card>
+                <Form.Item>
+                  <Space>
+                    <Button type="primary" htmlType="submit" loading={detailMutation.isPending}>
+                      保存
+                    </Button>
+                    <Button icon={<QuestionCircleOutlined />} onClick={() => setGuideOpen(true)}>
+                      新建指南
+                    </Button>
+                    <Button onClick={closeMaterialDrawer}>取消</Button>
+                  </Space>
+                </Form.Item>
+              </Form>
+            ),
+          },
+          {
+            key: 'images',
+            label: '图片/附件',
+            children: imageUrls.length ? (
+              <PreviewGroup>
+                <Space size={16} wrap>
+                  {imageUrls.map((img) => {
+                    const full = toFullUrl(img)
+                    return (
+                      <div key={img} style={{ textAlign: 'center' }}>
+                        <Image
+                          width={150}
+                          height={150}
+                          src={full}
+                          style={{ objectFit: 'cover', borderRadius: 8 }}
+                        />
+                        <Button
+                          size="small"
+                          type="link"
+                          icon={<CopyOutlined />}
+                          onClick={() => handleCopyLink(img)}
+                        >
+                          复制链接
+                        </Button>
+                      </div>
+                    )
+                  })}
+                </Space>
+              </PreviewGroup>
+            ) : (
+              <Empty description="暂无图片" />
+            ),
+          },
+        ]}
+      />
+    )
+  }
+
   return (
     <Space direction="vertical" size={24} style={{ width: '100%' }}>
       <div>
@@ -364,30 +1194,29 @@ const MaterialMasterPage = () => {
       </div>
 
       <Row gutter={[24, 24]}>
-        <Col xs={24} xl={7}>
-          <Card title="当前概览" bordered={false}>
-            <Row gutter={16}>
-              <Col span={12}>
-                <Statistic title="物料总数" value={totalCount} />
-              </Col>
-              <Col span={12}>
-                <Statistic title="本页启用" value={activeOnPage} />
-              </Col>
-            </Row>
-            <Button
-              icon={<HistoryOutlined />}
-              block
-              style={{ marginTop: 16 }}
-              onClick={() => setSyncDrawerOpen(true)}
-            >
-              查看同步日志
-            </Button>
+        <Col xs={24} xl={7} style={{ display: 'flex' }}>
+          <Card
+            title="当前概览"
+            bordered={false}
+            style={{ flex: 1, minHeight: '100%' }}
+            bodyStyle={{
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'center',
+              gap: 12,
+            }}
+          >
+            <Text strong style={{ fontSize: 16 }}>
+              物料总数：{totalCount}
+            </Text>
+            <Text type="secondary">统计所有同步的物料数量</Text>
           </Card>
         </Col>
-        <Col xs={24} xl={17}>
+        <Col xs={24} xl={17} style={{ display: 'flex' }}>
           <Card
             title="筛选"
             bordered={false}
+            style={{ flex: 1 }}
             extra={
               <Space>
                 <Button icon={<ReloadOutlined />} onClick={() => materialsQuery.refetch()}>
@@ -399,6 +1228,9 @@ const MaterialMasterPage = () => {
                   onClick={confirmSyncMaterials}
                 >
                   同步宜搭
+                </Button>
+                <Button icon={<HistoryOutlined />} onClick={() => setSyncDrawerOpen(true)}>
+                  同步日志
                 </Button>
                 <Button
                   type="primary"
@@ -414,7 +1246,7 @@ const MaterialMasterPage = () => {
             <Form
               form={filtersForm}
               layout="inline"
-              initialValues={{ onlyActive: false }}
+              initialValues={{ onlyActive: true, onlyBom: true }}
               onFinish={handleFilterSubmit}
             >
               <Form.Item name="search" label="关键词">
@@ -425,12 +1257,14 @@ const MaterialMasterPage = () => {
                   style={{ width: 220 }}
                 />
               </Form.Item>
-              <Form.Item name="material_type" label="物料类型">
+              <Form.Item name="category" label="分类">
                 <Select
                   allowClear
                   placeholder="全部"
-                  options={MATERIAL_TYPE_OPTIONS}
+                  options={categoryOptions}
                   style={{ width: 160 }}
+                  showSearch
+                  optionFilterProp="label"
                 />
               </Form.Item>
               <Form.Item name="status" label="状态">
@@ -442,6 +1276,9 @@ const MaterialMasterPage = () => {
                 />
               </Form.Item>
               <Form.Item name="onlyActive" valuePropName="checked" label="仅启用">
+                <Switch />
+              </Form.Item>
+              <Form.Item name="onlyBom" valuePropName="checked" label="仅 BOM 物料">
                 <Switch />
               </Form.Item>
               <Form.Item>
@@ -473,6 +1310,24 @@ const MaterialMasterPage = () => {
           onChange={handleTableChange}
         />
       </Card>
+
+      <Drawer
+        title={editingMaterial ? `物料详情 - ${editingMaterial.material_name}` : '物料详情'}
+        width={720}
+        open={detailDrawerOpen}
+        destroyOnClose
+        onClose={closeMaterialDrawer}
+      >
+        {editingMaterial && renderMaterialDrawerTabs()}
+      </Drawer>
+
+      <GuideDrawer
+        open={guideOpen}
+        onClose={() => setGuideOpen(false)}
+        title="真实物料（物料主数据）新建指南"
+        content={materialsGuide}
+        tip="提示：这是“真实物料/物料主数据”面板的新建/维护指南（Markdown）。需要调整内容，直接修改对应指南文档并重新部署即可。"
+      />
 
       <Drawer
         title="物料同步日志"

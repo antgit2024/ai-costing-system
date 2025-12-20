@@ -1,0 +1,222 @@
+import {
+  Alert,
+  Button,
+  Drawer,
+  Form,
+  Input,
+  InputNumber,
+  Select,
+  Space,
+  Spin,
+  Switch,
+  Typography,
+  message,
+} from 'antd'
+import { useEffect, useMemo } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+
+import { fetchMaterial, updateMaterial } from '@/services/planner'
+import { MATERIAL_STATUS_OPTIONS } from '@/constants/planner'
+import { BOM_UNIT_SELECT_OPTIONS } from '@/constants/calculationMethods'
+import type { Material, MaterialStatusUpdatePayload } from '@/types/planner'
+
+const { Text } = Typography
+
+interface MaterialDrawerProps {
+  materialId: string | null
+  open: boolean
+  onClose: () => void
+  onUpdated?: () => void
+}
+
+const MaterialDrawer = ({ materialId, open, onClose, onUpdated }: MaterialDrawerProps) => {
+  const [form] = Form.useForm()
+  const queryClient = useQueryClient()
+  const materialQuery = useQuery({
+    queryKey: ['material', materialId],
+    queryFn: () => fetchMaterial(materialId as string),
+    enabled: open && !!materialId,
+  })
+  const materialData = materialQuery.data as Material | undefined
+  const conversionPurchaseValue = Form.useWatch('conversion_purchase_to_bom', form)
+  const bomUnitValue = Form.useWatch('unit', form)
+
+  const formatCurrency = (value?: number, currency?: string) => {
+    if (value === undefined || value === null) return '-'
+    try {
+      return new Intl.NumberFormat('zh-CN', {
+        style: 'currency',
+        currency: currency || 'CNY',
+        minimumFractionDigits: 2,
+      }).format(Number(value))
+    } catch {
+      return `${value}`
+    }
+  }
+  const materialMetadata = (materialData?.metadata_json as Record<string, any>) ?? {}
+  const rawFormData = (materialMetadata.raw_form_data as Record<string, any>) ?? {}
+  const purchaseSpec =
+    rawFormData?.textField_lxo1y6ab ?? materialMetadata?.textField_lxo1y6ab ?? ''
+  const purchaseUnitPrice = materialData?.unit_price !== undefined ? Number(materialData.unit_price) : undefined
+  const computedBomUnitPrice = useMemo(() => {
+    if (purchaseUnitPrice === undefined) {
+      return undefined
+    }
+    const conversion = Number(conversionPurchaseValue || 0)
+    if (!conversion) {
+      return undefined
+    }
+    return purchaseUnitPrice / conversion
+  }, [purchaseUnitPrice, conversionPurchaseValue])
+  const bomUnitDisplay =
+    bomUnitValue || materialData?.unit || materialData?.purchase_unit || '-'
+
+  useEffect(() => {
+    if (materialQuery.data) {
+      const data = materialQuery.data as Material
+      const metadata = (data.metadata_json as Record<string, any>) ?? {}
+      form.setFieldsValue({
+        is_bom_material: typeof data.is_bom_material === 'boolean' ? data.is_bom_material : false,
+        unit: data.unit,
+        inventory_unit: data.inventory_unit,
+        conversion_purchase_to_bom: Number(data.conversion_purchase_to_bom) || 1,
+        conversion_bom_to_inventory: Number(data.conversion_bom_to_inventory) || 1,
+        status: data.status,
+        local_description: (metadata.local_description as string) ?? '',
+      })
+    }
+  }, [materialQuery.data, form])
+
+  const mutation = useMutation({
+    mutationFn: (payload: MaterialStatusUpdatePayload) =>
+      updateMaterial(materialId as string, payload),
+    onSuccess: () => {
+      message.success('物料已保存')
+      queryClient.invalidateQueries({ queryKey: ['material', materialId] })
+      queryClient.invalidateQueries({ queryKey: ['materials'] })
+      onUpdated?.()
+      onClose()
+    },
+    onError: (error) => {
+      message.error((error as Error).message || '保存失败')
+    },
+  })
+
+  const handleSave = async () => {
+    const values = await form.validateFields()
+    const payload: MaterialStatusUpdatePayload = {
+      is_bom_material: values.is_bom_material,
+      unit: values.unit,
+      inventory_unit: values.inventory_unit,
+      conversion_purchase_to_bom: values.conversion_purchase_to_bom,
+      conversion_bom_to_inventory: values.conversion_bom_to_inventory,
+      status: values.status,
+    }
+    if (computedBomUnitPrice !== undefined && Number.isFinite(computedBomUnitPrice)) {
+      payload.bom_unit_price = Number(Number(computedBomUnitPrice).toFixed(4))
+    }
+    const localDescription = (values.local_description ?? '').trim()
+    payload.metadata_json = {
+      local_description: localDescription || null,
+    }
+    mutation.mutate(payload)
+  }
+
+  const drawerTitle = useMemo(() => {
+    if (!materialQuery.data) return '物料详情'
+    return `物料详情 - ${materialQuery.data.material_name}`
+  }, [materialQuery.data])
+
+  return (
+    <Drawer title={drawerTitle} width={520} open={open} onClose={onClose} destroyOnClose>
+      {materialQuery.isLoading ? (
+        <div style={{ textAlign: 'center', padding: 48 }}>
+          <Spin />
+        </div>
+      ) : (
+        <Form layout="vertical" form={form}>
+          <Form.Item label="BOM 物料" name="is_bom_material" valuePropName="checked">
+            <Switch />
+          </Form.Item>
+          {materialData && (
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message={
+                <Space direction="vertical" size={0}>
+                  <Text>
+                    采购单价/单位：
+                    <Text strong>
+                      {formatCurrency(materialData.unit_price, materialData.currency)} /{' '}
+                      {materialData.purchase_unit || materialData.unit || '-'}
+                    </Text>
+                  </Text>
+                  {purchaseSpec && (
+                    <Text>
+                      采购规格：<Text strong>{purchaseSpec}</Text>
+                    </Text>
+                  )}
+                </Space>
+              }
+            />
+          )}
+          <Form.Item label="本地描述" name="local_description">
+            <Input.TextArea rows={3} placeholder="记录本地说明，仅在本系统内可见" />
+          </Form.Item>
+          <Form.Item label="BOM 单价/单位">
+            <div style={{ lineHeight: 1.6 }}>
+              <Text strong>{formatCurrency(computedBomUnitPrice, materialData?.currency)}</Text>
+              <Text type="secondary" style={{ marginLeft: 8 }}>
+                / {bomUnitDisplay}
+              </Text>
+              <div>
+                <Text type="secondary">根据采购单价与换算系数实时计算，用于绑定虚拟物料</Text>
+              </div>
+            </div>
+          </Form.Item>
+          <Form.Item label="BOM 单位" name="unit" rules={[{ required: true, message: '请选择单位' }]}>
+            <Select options={BOM_UNIT_SELECT_OPTIONS} />
+          </Form.Item>
+          <Form.Item
+            label="采购→BOM 换算"
+            name="conversion_purchase_to_bom"
+            rules={[
+              { required: true, message: '请输入转换系数' },
+              { type: 'number', min: 0.00001, message: '需大于 0' },
+            ]}
+          >
+            <InputNumber min={0.00001} step={0.0001} style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item label="库存单位" name="inventory_unit" rules={[{ required: true, message: '请输入库存单位' }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item
+            label="BOM→库存 换算"
+            name="conversion_bom_to_inventory"
+            rules={[
+              { required: true, message: '请输入转换系数' },
+              { type: 'number', min: 0.00001, message: '需大于 0' },
+            ]}
+          >
+            <InputNumber min={0.00001} step={0.0001} style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item label="状态" name="status" rules={[{ required: true }]}>
+            <Select options={MATERIAL_STATUS_OPTIONS} />
+          </Form.Item>
+          <Form.Item>
+            <Space>
+              <Button onClick={onClose}>取消</Button>
+              <Button type="primary" loading={mutation.isPending} onClick={handleSave}>
+                保存
+              </Button>
+            </Space>
+          </Form.Item>
+        </Form>
+      )}
+    </Drawer>
+  )
+}
+
+export default MaterialDrawer
+

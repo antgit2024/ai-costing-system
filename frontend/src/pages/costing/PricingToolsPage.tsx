@@ -37,3 +37,39 @@ const PricingToolsPage = () => {
 export default PricingToolsPage
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

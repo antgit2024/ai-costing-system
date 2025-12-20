@@ -1,0 +1,37 @@
+.costing-models-drawer {
+  /* drawer-scoped typography */
+  font-size: 12px;
+}
+
+/* Tabs should NOT be smaller than table text (drawer only) */
+.costing-models-drawer .ant-tabs-tab {
+  font-size: 14px;
+}
+
+/* Table typography (drawer only) */
+.costing-models-drawer .ant-table {
+  font-size: 12px;
+}
+.costing-models-drawer .ant-table-thead > tr > th {
+  font-size: 12px;
+  font-weight: 600;
+}
+.costing-models-drawer .ant-table-tbody > tr > td {
+  font-size: 12px;
+  font-weight: 400;
+}
+
+/* Inputs / selects inside this drawer should match table body size */
+.costing-models-drawer .ant-input,
+.costing-models-drawer .ant-input-number-input,
+.costing-models-drawer .ant-select-selector,
+.costing-models-drawer .ant-select-selection-item,
+.costing-models-drawer .ant-select-selection-placeholder {
+  font-size: 12px;
+}
+
+/* Small icon buttons in table shouldn't visually jump larger */
+.costing-models-drawer .ant-table .ant-btn {
+  font-size: 12px;
+}
+

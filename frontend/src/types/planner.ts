@@ -200,6 +200,8 @@ export interface ScenarioDiffResponse {
   total: number
 }
 
+export type CalculationMethod = 'area' | 'perimeter' | 'count' | 'width' | 'height'
+
 export interface ScenarioListItem extends ScenarioSummary {
   owner_id: string
 }
@@ -336,7 +338,10 @@ export interface Material {
   material_type: string
   category?: string | null
   model_category?: string | null
+  calculation_method: CalculationMethod
   unit?: string | null
+  purchase_unit?: string | null
+  inventory_unit?: string | null
   unit_price?: number
   currency: string
   supplier_code?: string | null
@@ -344,6 +349,10 @@ export interface Material {
   usage_scope?: string | null
   is_active: boolean
   status: string
+  is_bom_material?: boolean
+  conversion_purchase_to_bom?: string | number
+  conversion_bom_to_inventory?: string | number
+  images?: string[]
   bom_notes?: string | null
   source_created_at?: string | null
   source_updated_at?: string | null
@@ -351,7 +360,9 @@ export interface Material {
   metadata_json?: Record<string, unknown>
 }
 
-export interface MaterialListResponse extends PaginatedResponse<Material> {}
+export interface MaterialListResponse extends PaginatedResponse<Material> {
+  categories: string[]
+}
 
 export interface MaterialQueryParams extends Record<string, string | number | boolean | undefined> {
   page?: number
@@ -361,11 +372,20 @@ export interface MaterialQueryParams extends Record<string, string | number | bo
   material_type?: string
   status?: string
   is_active?: boolean
+  is_bom_material?: boolean
 }
 
 export interface MaterialStatusUpdatePayload {
   is_active?: boolean
   status?: string
+  is_bom_material?: boolean
+  unit?: string
+  inventory_unit?: string
+  conversion_purchase_to_bom?: number
+  conversion_bom_to_inventory?: number
+  bom_unit_price?: number
+  calculation_method?: CalculationMethod
+  metadata_json?: Record<string, unknown>
 }
 
 export interface MaterialExportResponse {
@@ -392,4 +412,699 @@ export interface MaterialSyncLog {
 }
 
 export interface MaterialSyncLogResponse extends PaginatedResponse<MaterialSyncLog> {}
+
+export interface VirtualMaterialBinding {
+  material_id: string
+  material_code: string
+  material_name: string
+  unit?: string | null
+  purchase_unit_price?: string | number
+  purchase_unit?: string | null
+  bom_unit_price?: string | number
+  bom_unit?: string | null
+  currency?: string
+  quantity_ratio: string | number
+  loss_rate: string | number
+  binding_type?: 'ratio' | 'quantity'
+  image_url?: string | null
+  status?: string | null
+  is_active?: boolean
+}
+
+export interface VirtualMaterial {
+  id: string
+  virtual_code: string
+  name: string
+  virtual_kind?: 'recipe' | 'kit' | 'placeholder'
+  description?: string | null
+  category?: string | null
+  unit?: string | null
+  bom_unit_price?: string | number
+  currency?: string
+  status: string
+  version: number
+  notes?: string | null
+  metadata_json?: Record<string, unknown>
+  created_at: string
+  updated_at: string
+  bindings: VirtualMaterialBinding[]
+}
+
+export interface VirtualMaterialListResponse extends PaginatedResponse<VirtualMaterial> {}
+
+export interface VirtualMaterialQueryParams extends Record<string, string | number | undefined> {
+  search?: string
+  status?: string
+  category?: string
+  page?: number
+  page_size?: number
+}
+
+export interface VirtualMaterialCreatePayload {
+  virtual_code: string
+  name: string
+  virtual_kind?: 'recipe' | 'kit' | 'placeholder'
+  description?: string
+  category?: string
+  unit?: string
+  status?: string
+  metadata_json?: Record<string, unknown>
+}
+
+export interface VirtualMaterialUpdatePayload {
+  name?: string
+  virtual_kind?: 'recipe' | 'kit' | 'placeholder'
+  description?: string
+  category?: string
+  unit?: string
+  status?: string
+  metadata_json?: Record<string, unknown>
+}
+
+export interface VirtualMaterialBindingInput {
+  material_id: string
+  quantity_ratio: number
+  loss_rate?: number
+  binding_type?: 'ratio' | 'quantity'
+}
+
+export interface VirtualMaterialBindingRequest {
+  bindings: VirtualMaterialBindingInput[]
+}
+
+export interface VirtualMaterialReference {
+  virtual_material_id: string
+  virtual_code: string
+  virtual_name: string
+  status: string
+  quantity_ratio: string | number
+  loss_rate: string | number
+}
+
+export interface VirtualMaterialInventoryRequest {
+  quantity: number
+  calculation_method?: CalculationMethod
+  usage_context?: string
+}
+
+export interface VirtualMaterialInventoryItem {
+  material_id: string
+  material_code: string
+  material_name: string
+  unit?: string | null
+  quantity_ratio: string | number
+  loss_rate: string | number
+  required_quantity: string | number
+}
+
+export interface VirtualMaterialInventoryResponse {
+  virtual_material_id: string
+  virtual_code: string
+  virtual_name: string
+  requested_quantity: string | number
+  calculation_method?: CalculationMethod
+  usage_context?: string
+  items: VirtualMaterialInventoryItem[]
+}
+
+export type MaterialReferenceKind = 'real' | 'bom' | 'virtual'
+
+export type LaborPricingMethod = 'fixed' | 'count' | 'area' | 'perimeter' | 'width' | 'height'
+
+export interface ProcessModuleMaterialInput {
+  material_kind?: MaterialReferenceKind
+  material_ref_id?: string | null
+  material_code?: string | null
+  material_name?: string | null
+  unit_of_measure?: string | null
+  calculation_method?: CalculationMethod
+  quantity: number
+  loss_rate?: number
+  sequence_order?: number
+  material_category?: string | null
+  selection_notes?: string | null
+  loss_notes?: string | null
+  metadata_json?: Record<string, unknown>
+}
+
+export interface ProcessModuleStepInput {
+  sequence_order?: number
+  team_name?: string | null
+  pricing_method?: LaborPricingMethod
+  work_minutes?: number
+  unit_of_measure?: string | null
+  description?: string | null
+  notes?: string | null
+  process_id?: string | null
+  metadata_json?: Record<string, unknown>
+}
+
+export interface ProcessModuleMaterial extends ProcessModuleMaterialInput {
+  id: string
+}
+
+export interface ProcessModuleStep extends ProcessModuleStepInput {
+  id: string
+  process?: ProcessReference | null
+}
+
+export interface ProcessModuleSummary {
+  id: string
+  module_code: string
+  module_name: string
+  description?: string | null
+  category?: string | null
+  status: string
+  version: number
+  tags: string[]
+  metadata_json?: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export interface ProcessModuleDetail extends ProcessModuleSummary {
+  materials: ProcessModuleMaterial[]
+  steps: ProcessModuleStep[]
+}
+
+export interface ProcessModuleQueryParams extends Record<string, string | number | undefined> {
+  search?: string
+  status?: string
+  page?: number
+  page_size?: number
+}
+
+export interface ProcessModuleCreatePayload {
+  module_code: string
+  module_name: string
+  description?: string
+  category?: string
+  status?: string
+  tags?: string[]
+  metadata_json?: Record<string, unknown>
+  materials?: ProcessModuleMaterialInput[]
+  steps?: ProcessModuleStepInput[]
+  operator_id?: string
+}
+
+export interface ProcessModuleUpdatePayload {
+  module_name?: string
+  description?: string
+  category?: string
+  status?: string
+  tags?: string[]
+  metadata_json?: Record<string, unknown>
+  materials?: ProcessModuleMaterialInput[]
+  steps?: ProcessModuleStepInput[]
+  operator_id?: string
+}
+
+export interface ProcessModuleCopyPayload {
+  module_code: string
+  module_name: string
+  status?: string
+  operator_id?: string
+}
+
+export interface ProcessModuleListResponse extends PaginatedResponse<ProcessModuleSummary> {}
+
+export interface ProcessModuleReferenceResponse {
+  total: number
+  items: ProcessModuleDetail[]
+}
+
+export interface ProductModelModuleLink {
+  id: string
+  module_id: string
+  sequence_order?: number
+  notes?: string | null
+  metadata_json?: Record<string, unknown>
+  module?: Partial<ProcessModuleSummary> | null
+}
+
+export interface ProductModel {
+  id: string
+  model_code: string
+  model_name: string
+  description?: string | null
+  category?: string | null
+  calc_mode?: string
+  fixed_price?: string | number | null
+  standard_width_mm?: string | number | null
+  standard_height_mm?: string | number | null
+  unit_of_measure?: string | null
+  status: string
+  tags: string[]
+  metadata_json?: Record<string, unknown>
+  created_at: string
+  updated_at: string
+  modules: ProductModelModuleLink[]
+  materials?: any[]
+  processes?: any[]
+  // version stats (optional; backend may include for list pages)
+  sample_version_count?: number
+  standard_version_count?: number
+  current_published_standard_version_id?: string | null
+  current_published_standard_version_label?: string | null
+}
+
+export interface ProductModelQueryParams extends Record<string, string | number | undefined> {
+  search?: string
+  status?: string
+  page?: number
+  page_size?: number
+}
+
+export interface ProductModelListResponse extends PaginatedResponse<ProductModel> {}
+
+export interface ProductModelCreatePayload {
+  model_code?: string
+  model_name: string
+  description?: string
+  category?: string
+  calc_mode?: 'ratio' | 'fixed' | 'independent'
+  fixed_price?: number
+  status?: string
+  tags?: string[]
+  standard_width_mm?: number
+  standard_height_mm?: number
+  unit_of_measure?: string
+  metadata_json?: Record<string, unknown>
+  modules?: Array<{
+    module_id: string
+    sequence_order?: number
+    notes?: string
+    metadata_json?: Record<string, unknown>
+  }>
+}
+
+export interface ProductModelUpdatePayload {
+  model_name?: string
+  description?: string
+  category?: string
+  calc_mode?: 'ratio' | 'fixed' | 'independent'
+  fixed_price?: number
+  status?: string
+  tags?: string[]
+  standard_width_mm?: number
+  standard_height_mm?: number
+  unit_of_measure?: string
+  metadata_json?: Record<string, unknown>
+  modules?: Array<{
+    module_id: string
+    sequence_order?: number
+    notes?: string
+    metadata_json?: Record<string, unknown>
+  }>
+}
+
+export interface ProductModelPlaceholder {
+  virtual_material_id: string
+  virtual_code: string
+  name: string
+  unit?: string | null
+  placeholder_symbol?: string | null
+  constraint_category?: string | null
+}
+
+export interface ProductModelPreviewRequest {
+  width_mm: number
+  height_mm: number
+  quantity: number
+  sku_hint?: string
+}
+
+export interface RandomCodeGenerateRequest {
+  kind: 'product_model'
+  length?: number
+}
+
+export interface RandomCodeGenerateResponse {
+  code: string
+}
+
+export interface ProductModelSampleSpec {
+  width_mm: number
+  height_mm: number
+  quantity: number
+  unit_label: string
+}
+
+export interface ProductModelMaterialLineInput {
+  id?: string
+  source_module_id?: string
+  source_module_code?: string
+  source_module_name?: string
+  material_kind: MaterialReferenceKind
+  material_ref_id: string
+  material_code?: string
+  material_name?: string
+  calculation_method: CalculationMethod
+  sample_used_quantity?: number
+  standard_used_quantity?: number
+  fixed_quantity?: number
+  coverage_ratio?: number
+  base_quantity?: number
+  loss_rate: number
+  notes?: string
+  metadata_json?: Record<string, unknown>
+}
+
+export interface ProductModelProcessLineInput {
+  id?: string
+  source_module_id?: string
+  source_module_code?: string
+  source_module_name?: string
+  process_id: string
+  process_code?: string
+  process_name?: string
+  team_name?: string
+  pricing_method: LaborPricingMethod
+  sample_minutes?: number
+  standard_minutes?: number
+  base_minutes: number
+  unit_minutes: number
+  rate_per_minute?: number
+  piece_rate?: number
+  cost_type?: 'time' | 'piece'
+  notes?: string
+  metadata_json?: Record<string, unknown>
+}
+
+export interface ProductModelLinesResponse {
+  sample: ProductModelSampleSpec
+  standard: ProductModelSampleSpec
+  materials: ProductModelMaterialLineInput[]
+  processes: ProductModelProcessLineInput[]
+}
+
+export interface ProductModelSyncFromModulesRequest {
+  keep_overrides?: boolean
+}
+
+export interface ProductModelLinesUpdateRequest extends ProductModelLinesResponse {}
+
+export interface ProductModelPreviewMaterialLine {
+  module_id?: string | null
+  module_code?: string | null
+  module_name?: string | null
+  source_kind: 'real' | 'bom' | 'virtual' | 'placeholder'
+  source_ref_id?: string | null
+  resolved_kind?: 'real' | 'bom' | 'virtual' | null
+  resolved_ref_id?: string | null
+  material_id?: string | null
+  material_code?: string | null
+  material_name?: string | null
+  category?: string | null
+  calculation_method: CalculationMethod
+  base_quantity: string | number
+  loss_rate: string | number
+  used_quantity: string | number
+  unit?: string | null
+  bom_unit_price?: string | number | null
+  total_cost?: string | number | null
+  warnings: string[]
+}
+
+export interface ProductModelPreviewLaborLine {
+  module_id?: string | null
+  module_code?: string | null
+  module_name?: string | null
+  process_id?: string | null
+  process_code?: string | null
+  process_name?: string | null
+  team_name?: string | null
+  pricing_method: LaborPricingMethod
+  measure_quantity: string | number
+  cost_type?: 'time' | 'piece' | null
+  base_minutes: string | number
+  unit_minutes: string | number
+  rate_per_minute?: string | number | null
+  piece_rate?: string | number | null
+  total_minutes?: string | number | null
+  total_cost?: string | number | null
+  warnings: string[]
+}
+
+export interface ProductModelPreviewResponse {
+  width_mm: string | number
+  height_mm: string | number
+  quantity: string | number
+  material_lines: ProductModelPreviewMaterialLine[]
+  labor_lines: ProductModelPreviewLaborLine[]
+  totals: Record<string, string | number>
+  errors: string[]
+}
+
+export type ProductModelVersionKind = 'sample' | 'standard'
+export type ProductModelVersionStatus = 'draft' | 'published' | 'archived'
+
+export interface ProductModelVersionCreatePayload {
+  version_kind: ProductModelVersionKind
+  metadata_json?: Record<string, unknown>
+}
+
+export interface ProductModelVersionRead {
+  id: string
+  model_id: string
+  version_kind: ProductModelVersionKind | string
+  version_status: ProductModelVersionStatus | string
+  version_label?: string | null
+  published_at?: string | null
+  published_by?: string | null
+  metadata_json?: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export interface ProductModelVersionListItem {
+  model_id: string
+  model_code: string
+  model_name: string
+  model_status: string
+  version_id: string
+  version_kind: ProductModelVersionKind | string
+  version_status: ProductModelVersionStatus | string
+  version_label?: string | null
+  created_at: string
+  updated_at: string
+  published_at?: string | null
+}
+
+export interface PaginatedProductModelVersionResponse extends PaginatedResponse<ProductModelVersionListItem> {}
+
+export interface ProductModelVersionPublishPayload {
+  published_by?: string
+  note?: string
+}
+
+export interface SkuModelVersionMappingCreatePayload {
+  sku_code: string
+  model_version_id: string
+  source_system?: string
+  is_active?: boolean
+  metadata_json?: Record<string, unknown>
+}
+
+export interface SkuModelVersionMappingRead extends SkuModelVersionMappingCreatePayload {
+  id: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ProductModelSkuPreviewRequest {
+  sku_code: string
+  width_mm?: number
+  height_mm?: number
+  quantity?: number
+}
+
+export interface ProductModelSkuPreviewResponse extends ProductModelPreviewResponse {
+  sku_code: string
+  model_id: string
+  model_code: string
+  version_id: string
+  version_label?: string | null
+  parsed: Record<string, unknown>
+}
+
+export type DeriveTargetMode = 'create_new' | 'overwrite_draft'
+export type DeriveApplyTo = 'materials' | 'processes' | 'both'
+
+export interface DeriveRoundRule {
+  step: string | number
+  mode: 'round' | 'floor' | 'ceil'
+}
+
+export interface DeriveTemplateBase {
+  template_kind: 'linear'
+  calibrate_from_sample?: boolean
+  fixed_quantity?: string | number
+  coverage_ratio?: string | number
+  min_total?: string | number
+  max_total?: string | number
+  rounding?: DeriveRoundRule
+}
+
+export interface DeriveTemplateMaterial extends DeriveTemplateBase {
+  coefficient?: string | number
+}
+
+export interface DeriveTemplateProcess extends DeriveTemplateBase {
+  coefficient?: string | number
+  base_minutes?: string | number
+}
+
+export interface DeriveStandardRequest {
+  target_mode: DeriveTargetMode
+  target_standard_version_id?: string
+  apply_to: DeriveApplyTo
+}
+
+export interface DeriveStandardResponse {
+  standard_version_id: string
+  created: boolean
+  overwritten: boolean
+  line_stats: Record<string, unknown>
+}
+
+export type VariantTriggerType = 'sku_contains' | 'area_gte' | 'perimeter_gte'
+export type VariantActionType = 'replace_material' | 'add_material'
+
+export interface ModelVariantRuleRead {
+  id: string
+  model_id: string
+  rule_name: string
+  source_material_ref_id?: string | null
+  trigger_type: VariantTriggerType
+  trigger_value?: string | null
+  action_type: VariantActionType
+  target_material_ref_id?: string | null
+  quantity_delta?: string | number | null
+  status: string
+  metadata_json?: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export interface ModelVariantRuleCreatePayload {
+  rule_name: string
+  source_material_ref_id: string
+  trigger_type: VariantTriggerType
+  trigger_value?: string
+  action_type: VariantActionType
+  target_material_ref_id: string
+  quantity_delta?: number
+  status?: string
+  metadata_json?: Record<string, unknown>
+}
+
+export interface ModelVariantRuleUpdatePayload {
+  rule_name?: string
+  trigger_type?: VariantTriggerType
+  trigger_value?: string
+  action_type?: VariantActionType
+  target_material_ref_id?: string
+  quantity_delta?: number
+  status?: string
+  metadata_json?: Record<string, unknown>
+}
+
+export type ProcessChargingMode = 'fixed' | 'count' | 'area' | 'perimeter' | 'width' | 'height'
+
+export interface ProcessSummary {
+  id: string
+  process_code: string
+  process_name: string
+  description?: string | null
+  category?: string | null
+  team_name?: string | null
+  charging_mode: ProcessChargingMode
+  standard_rate?: string | number | null
+  unit_of_measure?: string | null
+  status: string
+  is_active: boolean
+  metadata_json?: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export interface ProcessDetail extends ProcessSummary {}
+
+export interface ProcessQueryParams
+  extends Record<string, string | number | boolean | undefined> {
+  search?: string
+  status?: string
+  charging_mode?: string
+  page?: number
+  page_size?: number
+}
+
+export interface ProcessListResponse extends PaginatedResponse<ProcessSummary> {}
+
+export interface ProcessCreatePayload {
+  process_code: string
+  process_name: string
+  description?: string
+  category?: string
+  team_name?: string
+  charging_mode?: ProcessChargingMode
+  standard_rate?: number
+  unit_of_measure?: string
+  status?: string
+  metadata_json?: Record<string, unknown>
+  operator_id?: string
+}
+
+export interface ProcessUpdatePayload {
+  process_name?: string
+  description?: string
+  category?: string
+  team_name?: string
+  charging_mode?: ProcessChargingMode
+  standard_rate?: number
+  unit_of_measure?: string
+  status?: string
+  metadata_json?: Record<string, unknown>
+  operator_id?: string
+}
+
+export interface ProcessCopyPayload {
+  process_code: string
+  process_name: string
+  status?: string
+  operator_id?: string
+}
+
+export interface ProcessBatchStatusPayload {
+  ids: string[]
+  status: string
+  operator_id?: string
+}
+
+export interface ProcessReference {
+  id: string
+  process_code: string
+  process_name: string
+  charging_mode: ProcessChargingMode
+  standard_rate?: string | number | null
+  unit_of_measure?: string | null
+  team_name?: string | null
+  category?: string | null
+}
+
+export interface ProcessModuleReferenceQuery {
+  module_ids?: string[]
+  search?: string
+  status?: string
+}
+
+export interface CodeGenerateRequest {
+  prefix: string
+  width?: number
+}
+
+export interface CodeGenerateResponse {
+  code: string
+}
 

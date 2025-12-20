@@ -42,12 +42,24 @@ const menuItems: MenuProps['items'] = [
         label: <Link to="/costing/materials">物料管理</Link>,
       },
       {
-        key: '/costing/models',
-        label: <Link to="/costing/models">模型配置</Link>,
+        key: '/costing/virtual-materials',
+        label: <Link to="/costing/virtual-materials">虚拟物料</Link>,
       },
       {
         key: '/costing/processes',
-        label: <Link to="/costing/processes">工艺模块</Link>,
+        label: <Link to="/costing/processes">工序库</Link>,
+      },
+      {
+        key: '/costing/process-modules',
+        label: <Link to="/costing/process-modules">工艺模块</Link>,
+      },
+      {
+        key: '/costing/sample-models',
+        label: <Link to="/costing/sample-models">打样模型</Link>,
+      },
+      {
+        key: '/costing/standard-models',
+        label: <Link to="/costing/standard-models">标准模型</Link>,
       },
       {
         key: '/costing/pricing-tools',
@@ -84,11 +96,20 @@ const AppLayout = ({ children }: AppLayoutProps) => {
       if (location.pathname.startsWith('/costing/materials')) {
         return ['/costing/materials']
       }
-      if (location.pathname.startsWith('/costing/models')) {
-        return ['/costing/models']
+      if (location.pathname.startsWith('/costing/virtual-materials')) {
+        return ['/costing/virtual-materials']
       }
       if (location.pathname.startsWith('/costing/processes')) {
         return ['/costing/processes']
+      }
+      if (location.pathname.startsWith('/costing/process-modules')) {
+        return ['/costing/process-modules']
+      }
+      if (location.pathname.startsWith('/costing/sample-models')) {
+        return ['/costing/sample-models']
+      }
+      if (location.pathname.startsWith('/costing/standard-models')) {
+        return ['/costing/standard-models']
       }
       if (location.pathname.startsWith('/costing/pricing-tools')) {
         return ['/costing/pricing-tools']

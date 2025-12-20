@@ -24,6 +24,45 @@ import type {
   PaginatedResponse,
   PackageNode,
   PlannerJob,
+  ProcessBatchStatusPayload,
+  ProcessCopyPayload,
+  ProcessCreatePayload,
+  ProcessDetail,
+  ProcessListResponse,
+  ProcessModuleCopyPayload,
+  ProcessModuleCreatePayload,
+  ProcessModuleDetail,
+  ProcessModuleListResponse,
+  ProcessModuleQueryParams,
+  ProcessModuleReferenceQuery,
+  ProcessModuleReferenceResponse,
+  ProcessModuleUpdatePayload,
+  ProcessQueryParams,
+  ProcessReference,
+  ProcessUpdatePayload,
+  ProductModel,
+  ProductModelCreatePayload,
+  ProductModelListResponse,
+  ProductModelPlaceholder,
+  ProductModelQueryParams,
+  ProductModelLinesResponse,
+  ProductModelLinesUpdateRequest,
+  ProductModelPreviewRequest,
+  ProductModelPreviewResponse,
+  ProductModelSkuPreviewRequest,
+  ProductModelSkuPreviewResponse,
+  DeriveStandardRequest,
+  DeriveStandardResponse,
+  ProductModelSyncFromModulesRequest,
+  ProductModelUpdatePayload,
+  ProductModelVersionCreatePayload,
+  ProductModelVersionPublishPayload,
+  ProductModelVersionRead,
+  RandomCodeGenerateRequest,
+  RandomCodeGenerateResponse,
+  ModelVariantRuleRead,
+  ModelVariantRuleCreatePayload,
+  ModelVariantRuleUpdatePayload,
   ScenarioClonePayload,
   ScenarioCloneResponse,
   ScenarioDiffParams,
@@ -32,9 +71,43 @@ import type {
   ScenarioExportResponse,
   ScenarioListQueryParams,
   ScenarioListResponse,
+  VirtualMaterial,
+  VirtualMaterialBindingRequest,
+  VirtualMaterialCreatePayload,
+  VirtualMaterialInventoryRequest,
+  VirtualMaterialInventoryResponse,
+  VirtualMaterialListResponse,
+  VirtualMaterialQueryParams,
+  VirtualMaterialReference,
+  VirtualMaterialUpdatePayload,
+  CodeGenerateRequest,
+  CodeGenerateResponse,
+  SkuModelVersionMappingCreatePayload,
+  SkuModelVersionMappingRead,
+  PaginatedProductModelVersionResponse,
 } from '@/types/planner'
 
-const API_BASE_URL = import.meta.env.VITE_PLANNER_API_BASE ?? '/api/planner'
+const resolvePlannerApiBase = (raw?: string): string => {
+  if (!raw) return '/api/planner'
+  // If someone sets API base to same host but a different port (e.g. :8800),
+  // browsers will treat it as cross-origin and block unless CORS is configured.
+  // In production we rely on nginx to proxy `/api/planner` on the same origin.
+  if (typeof window === 'undefined') return raw
+  try {
+    const url = new URL(raw, window.location.origin)
+    const sameHostAndProto =
+      url.hostname === window.location.hostname && url.protocol === window.location.protocol
+    const differentPort = url.port !== window.location.port
+    if (sameHostAndProto && differentPort) {
+      return '/api/planner'
+    }
+    return raw
+  } catch {
+    return raw
+  }
+}
+
+const API_BASE_URL = resolvePlannerApiBase(import.meta.env.VITE_PLANNER_API_BASE)
 const DEFAULT_PLANNER_USER = import.meta.env.VITE_PLANNER_USER_ID ?? 'planner_user'
 
 const mapBenchmarkFavorite = (favorite: any): BenchmarkFavorite => ({
@@ -289,13 +362,20 @@ export const fetchMaterials = async (
   return response.data
 }
 
-export const updateMaterialStatus = async (
+export const fetchMaterial = async (materialId: string): Promise<Material> => {
+  const response = await plannerClient.get(`/base-config/materials/${materialId}`)
+  return response.data
+}
+
+export const updateMaterial = async (
   materialId: string,
   payload: MaterialStatusUpdatePayload,
 ): Promise<Material> => {
   const response = await plannerClient.patch(`/base-config/materials/${materialId}`, payload)
   return response.data
 }
+
+export const updateMaterialStatus = updateMaterial
 
 export const exportMaterials = async (
   params: MaterialQueryParams = {},
@@ -322,6 +402,423 @@ export const fetchMaterialSyncLogs = async (
   const response = await plannerClient.get('/base-config/materials/sync-jobs', {
     params: sanitizeParams(params as Record<string, unknown>),
   })
+  return response.data
+}
+
+export const fetchVirtualMaterials = async (
+  params: VirtualMaterialQueryParams = {},
+): Promise<VirtualMaterialListResponse> => {
+  const response = await plannerClient.get('/base-config/virtual-materials', {
+    params: sanitizeParams(params as Record<string, unknown>),
+  })
+  return response.data
+}
+
+export const fetchVirtualMaterial = async (virtualMaterialId: string): Promise<VirtualMaterial> => {
+  const response = await plannerClient.get(`/base-config/virtual-materials/${virtualMaterialId}`)
+  return response.data
+}
+
+export const createVirtualMaterial = async (
+  payload: VirtualMaterialCreatePayload,
+): Promise<VirtualMaterial> => {
+  const response = await plannerClient.post('/base-config/virtual-materials', payload)
+  return response.data
+}
+
+export const updateVirtualMaterial = async (
+  virtualMaterialId: string,
+  payload: VirtualMaterialUpdatePayload,
+): Promise<VirtualMaterial> => {
+  const response = await plannerClient.patch(
+    `/base-config/virtual-materials/${virtualMaterialId}`,
+    payload,
+  )
+  return response.data
+}
+
+export const saveVirtualMaterialBindings = async (
+  virtualMaterialId: string,
+  payload: VirtualMaterialBindingRequest,
+): Promise<VirtualMaterial> => {
+  const response = await plannerClient.put(
+    `/base-config/virtual-materials/${virtualMaterialId}/bindings`,
+    payload,
+  )
+  return response.data
+}
+
+export const deactivateVirtualMaterial = async (virtualMaterialId: string): Promise<VirtualMaterial> => {
+  const response = await plannerClient.post(
+    `/base-config/virtual-materials/${virtualMaterialId}/deactivate`,
+  )
+  return response.data
+}
+
+export const fetchMaterialVirtualLinks = async (
+  materialId: string,
+): Promise<VirtualMaterialReference[]> => {
+  const response = await plannerClient.get(`/base-config/materials/${materialId}/virtual-links`)
+  return response.data
+}
+
+export const calculateVirtualMaterialInventory = async (
+  virtualMaterialId: string,
+  payload: VirtualMaterialInventoryRequest,
+): Promise<VirtualMaterialInventoryResponse> => {
+  const response = await plannerClient.post(
+    `/base-config/virtual-materials/${virtualMaterialId}/inventory-breakdown`,
+    payload,
+  )
+  return response.data
+}
+
+export const fetchProcessModules = async (
+  params: ProcessModuleQueryParams = {},
+): Promise<ProcessModuleListResponse> => {
+  const response = await plannerClient.get('/process-modules', {
+    params: sanitizeParams(params as Record<string, unknown>),
+  })
+  return response.data
+}
+
+export const fetchProcessModule = async (moduleId: string): Promise<ProcessModuleDetail> => {
+  const response = await plannerClient.get(`/process-modules/${moduleId}`)
+  return response.data
+}
+
+export const createProcessModule = async (
+  payload: ProcessModuleCreatePayload,
+): Promise<ProcessModuleDetail> => {
+  const response = await plannerClient.post('/process-modules', payload)
+  return response.data
+}
+
+export const updateProcessModule = async (
+  moduleId: string,
+  payload: ProcessModuleUpdatePayload,
+): Promise<ProcessModuleDetail> => {
+  const response = await plannerClient.patch(`/process-modules/${moduleId}`, payload)
+  return response.data
+}
+
+export const activateProcessModule = async (moduleId: string): Promise<ProcessModuleDetail> => {
+  const response = await plannerClient.post(`/process-modules/${moduleId}/activate`)
+  return response.data
+}
+
+export const deactivateProcessModule = async (moduleId: string): Promise<ProcessModuleDetail> => {
+  const response = await plannerClient.post(`/process-modules/${moduleId}/deactivate`)
+  return response.data
+}
+
+export const copyProcessModule = async (
+  moduleId: string,
+  payload: ProcessModuleCopyPayload,
+): Promise<ProcessModuleDetail> => {
+  const response = await plannerClient.post(`/process-modules/${moduleId}/copy`, payload)
+  return response.data
+}
+
+export const fetchProcessModuleReferences = async (
+  params: ProcessModuleReferenceQuery = {},
+): Promise<ProcessModuleReferenceResponse> => {
+  const response = await plannerClient.get('/process-modules/references', {
+    params: sanitizeParams(params as Record<string, unknown>),
+  })
+  return response.data
+}
+
+export const fetchProcesses = async (
+  params: ProcessQueryParams = {},
+): Promise<ProcessListResponse> => {
+  const response = await plannerClient.get('/processes', {
+    params: sanitizeParams(params as Record<string, unknown>),
+  })
+  return response.data
+}
+
+export const fetchProcess = async (processId: string): Promise<ProcessDetail> => {
+  const response = await plannerClient.get(`/processes/${processId}`)
+  return response.data
+}
+
+export const createProcess = async (payload: ProcessCreatePayload): Promise<ProcessDetail> => {
+  const response = await plannerClient.post('/processes', payload)
+  return response.data
+}
+
+export const updateProcess = async (
+  processId: string,
+  payload: ProcessUpdatePayload,
+): Promise<ProcessDetail> => {
+  const response = await plannerClient.patch(`/processes/${processId}`, payload)
+  return response.data
+}
+
+export const copyProcess = async (
+  processId: string,
+  payload: ProcessCopyPayload,
+): Promise<ProcessDetail> => {
+  const response = await plannerClient.post(`/processes/${processId}/copy`, payload)
+  return response.data
+}
+
+export const activateProcess = async (processId: string): Promise<ProcessDetail> => {
+  const response = await plannerClient.post(`/processes/${processId}/activate`)
+  return response.data
+}
+
+export const deactivateProcess = async (processId: string): Promise<ProcessDetail> => {
+  const response = await plannerClient.post(`/processes/${processId}/deactivate`)
+  return response.data
+}
+
+export const batchUpdateProcessStatus = async (
+  payload: ProcessBatchStatusPayload,
+): Promise<{ updated: number }> => {
+  const response = await plannerClient.post('/processes/batch/status', payload)
+  return response.data
+}
+
+export const fetchProcessReferences = async (
+  params: ProcessQueryParams = {},
+): Promise<ProcessReference[]> => {
+  const response = await plannerClient.get('/processes/references', {
+    params: sanitizeParams(params as Record<string, unknown>),
+  })
+  return response.data
+}
+
+export const fetchProductModels = async (
+  params: ProductModelQueryParams = {},
+): Promise<ProductModelListResponse> => {
+  const response = await plannerClient.get('/product-models', {
+    params: sanitizeParams(params as Record<string, unknown>),
+  })
+  return response.data
+}
+
+export const fetchProductModel = async (modelId: string): Promise<ProductModel> => {
+  const response = await plannerClient.get(`/product-models/${modelId}`)
+  return response.data
+}
+
+export const createProductModel = async (
+  payload: ProductModelCreatePayload,
+): Promise<ProductModel> => {
+  const response = await plannerClient.post('/product-models', payload)
+  return response.data
+}
+
+export const updateProductModel = async (
+  modelId: string,
+  payload: ProductModelUpdatePayload,
+): Promise<ProductModel> => {
+  const response = await plannerClient.patch(`/product-models/${modelId}`, payload)
+  return response.data
+}
+
+export const activateProductModel = async (modelId: string): Promise<ProductModel> => {
+  const response = await plannerClient.post(`/product-models/${modelId}/activate`)
+  return response.data
+}
+
+export const deactivateProductModel = async (modelId: string): Promise<ProductModel> => {
+  const response = await plannerClient.post(`/product-models/${modelId}/deactivate`)
+  return response.data
+}
+
+export const fetchProductModelPlaceholders = async (
+  modelId: string,
+): Promise<ProductModelPlaceholder[]> => {
+  const response = await plannerClient.get(`/product-models/${modelId}/placeholders`)
+  return response.data
+}
+
+export const previewProductModel = async (
+  modelId: string,
+  payload: ProductModelPreviewRequest,
+): Promise<ProductModelPreviewResponse> => {
+  const response = await plannerClient.post(`/product-models/${modelId}/preview`, payload)
+  return response.data
+}
+
+export const fetchProductModelVersions = async (modelId: string): Promise<ProductModelVersionRead[]> => {
+  const response = await plannerClient.get(`/product-models/${modelId}/versions`)
+  return response.data
+}
+
+export const fetchProductModelVersionsPaged = async (
+  params: {
+    search?: string
+    version_kind?: string
+    version_status?: string
+    page?: number
+    page_size?: number
+  } = {},
+): Promise<PaginatedProductModelVersionResponse> => {
+  const response = await plannerClient.get(`/product-model-versions`, {
+    params: sanitizeParams(params),
+  })
+  return response.data
+}
+
+export const createProductModelVersion = async (
+  modelId: string,
+  payload: ProductModelVersionCreatePayload,
+): Promise<ProductModelVersionRead> => {
+  const response = await plannerClient.post(`/product-models/${modelId}/versions`, payload)
+  return response.data
+}
+
+export const fetchProductModelVersionLines = async (versionId: string): Promise<ProductModelLinesResponse> => {
+  const response = await plannerClient.get(`/product-model-versions/${versionId}/lines`)
+  return response.data
+}
+
+export const updateProductModelVersionLines = async (
+  versionId: string,
+  payload: ProductModelLinesUpdateRequest,
+): Promise<ProductModelLinesResponse> => {
+  const response = await plannerClient.put(`/product-model-versions/${versionId}/lines`, payload)
+  return response.data
+}
+
+export const syncProductModelVersionFromModules = async (
+  versionId: string,
+  payload: ProductModelSyncFromModulesRequest = {},
+): Promise<ProductModelLinesResponse> => {
+  const response = await plannerClient.post(`/product-model-versions/${versionId}/sync-from-modules`, payload)
+  return response.data
+}
+
+export const previewProductModelVersion = async (
+  versionId: string,
+  payload: ProductModelPreviewRequest,
+): Promise<ProductModelPreviewResponse> => {
+  const response = await plannerClient.post(`/product-model-versions/${versionId}/preview`, payload)
+  return response.data
+}
+
+export const publishProductModelVersion = async (
+  versionId: string,
+  payload: ProductModelVersionPublishPayload = {},
+): Promise<ProductModelVersionRead> => {
+  const response = await plannerClient.post(`/product-model-versions/${versionId}/publish`, payload)
+  return response.data
+}
+
+export const bindSkuModelVersion = async (
+  payload: SkuModelVersionMappingCreatePayload,
+): Promise<SkuModelVersionMappingRead> => {
+  const response = await plannerClient.post(`/sku-model-version-mapping`, payload)
+  return response.data
+}
+
+export const fetchSkuModelVersionMappings = async (params: {
+  sku_code: string
+  include_inactive?: boolean
+}): Promise<SkuModelVersionMappingRead[]> => {
+  const response = await plannerClient.get(`/sku-model-version-mapping`, {
+    params: sanitizeParams(params),
+  })
+  return response.data
+}
+
+export const previewBySku = async (
+  payload: ProductModelSkuPreviewRequest,
+): Promise<ProductModelSkuPreviewResponse> => {
+  const response = await plannerClient.post(`/sku-preview`, payload)
+  return response.data
+}
+
+export const deriveStandardFromSampleVersion = async (
+  sourceVersionId: string,
+  payload: DeriveStandardRequest,
+): Promise<DeriveStandardResponse> => {
+  const response = await plannerClient.post(
+    `/product-model-versions/${sourceVersionId}/derive-standard`,
+    payload,
+  )
+  return response.data
+}
+
+export const fetchProductModelMaterials = async (
+  modelId: string,
+): Promise<Array<Record<string, any>>> => {
+  const response = await plannerClient.get(`/product-models/${modelId}/materials`)
+  return response.data
+}
+
+export const fetchProductModelVariantRules = async (modelId: string): Promise<ModelVariantRuleRead[]> => {
+  const response = await plannerClient.get(`/product-models/${modelId}/variant-rules`)
+  return response.data
+}
+
+export const createProductModelVariantRule = async (
+  modelId: string,
+  payload: ModelVariantRuleCreatePayload,
+): Promise<ModelVariantRuleRead> => {
+  const response = await plannerClient.post(`/product-models/${modelId}/variant-rules`, payload)
+  return response.data
+}
+
+export const updateProductModelVariantRule = async (
+  modelId: string,
+  ruleId: string,
+  payload: ModelVariantRuleUpdatePayload,
+): Promise<ModelVariantRuleRead> => {
+  const response = await plannerClient.patch(
+    `/product-models/${modelId}/variant-rules/${ruleId}`,
+    payload,
+  )
+  return response.data
+}
+
+export const deleteProductModelVariantRule = async (modelId: string, ruleId: string) => {
+  await plannerClient.delete(`/product-models/${modelId}/variant-rules/${ruleId}`)
+}
+
+export const generateNextCode = async (
+  payload: CodeGenerateRequest,
+): Promise<CodeGenerateResponse> => {
+  const response = await plannerClient.post('/codes/next', payload)
+  return response.data
+}
+
+export const generateRandomCode = async (
+  payload: RandomCodeGenerateRequest,
+): Promise<RandomCodeGenerateResponse> => {
+  const response = await plannerClient.post('/codes/random', payload)
+  return response.data
+}
+
+export const syncProductModelFromModules = async (
+  modelId: string,
+  payload: ProductModelSyncFromModulesRequest = {},
+): Promise<ProductModel> => {
+  const response = await plannerClient.post(`/product-models/${modelId}/sync-from-modules`, payload)
+  return response.data
+}
+
+export const refreshProductModelMaterialPrices = async (
+  modelId: string,
+): Promise<ProductModelLinesResponse> => {
+  const response = await plannerClient.post(`/product-models/${modelId}/refresh-material-prices`, {})
+  return response.data
+}
+
+export const fetchProductModelLines = async (modelId: string): Promise<ProductModelLinesResponse> => {
+  const response = await plannerClient.get(`/product-models/${modelId}/lines`)
+  return response.data
+}
+
+export const updateProductModelLines = async (
+  modelId: string,
+  payload: ProductModelLinesUpdateRequest,
+): Promise<ProductModel> => {
+  const response = await plannerClient.put(`/product-models/${modelId}/lines`, payload)
   return response.data
 }
 

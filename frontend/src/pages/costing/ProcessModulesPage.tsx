@@ -1,45 +1,2182 @@
-import { Card, Col, Empty, List, Row, Skeleton, Space, Tag, Typography } from 'antd'
+import {
+  Alert,
+  Button,
+  Card,
+  Col,
+  Drawer,
+  Empty,
+  Form,
+  Input,
+  InputNumber,
+  message,
+  Modal,
+  Radio,
+  Row,
+  Select,
+  Space,
+  Table,
+  Tag,
+  Tabs,
+  Typography,
+} from 'antd'
+import type { ColumnsType } from 'antd/es/table'
+import {
+  ArrowDownOutlined,
+  ArrowUpOutlined,
+  CopyOutlined,
+  DeleteOutlined,
+  EditOutlined,
+  EyeOutlined,
+  LinkOutlined,
+  PlusOutlined,
+  QuestionCircleOutlined,
+  ReloadOutlined,
+} from '@ant-design/icons'
+import dayjs from 'dayjs'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { Key } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { normalizeUnit } from '@/utils/unit'
+import {
+  activateProcessModule,
+  copyProcessModule,
+  createProcessModule,
+  deactivateProcessModule,
+  fetchMaterial,
+  fetchMaterials,
+  fetchVirtualMaterial,
+  fetchProcessModule,
+  fetchProcessModuleReferences,
+  fetchProcessModules,
+  fetchProcessReferences,
+  fetchVirtualMaterials,
+  generateNextCode,
+  updateProcessModule,
+} from '@/services/planner'
+import type {
+  Material,
+  MaterialQueryParams,
+  ProcessReference,
+  ProcessModuleCopyPayload,
+  ProcessModuleCreatePayload,
+  ProcessModuleListResponse,
+  ProcessModuleMaterialInput,
+  ProcessModuleQueryParams,
+  ProcessModuleStepInput,
+  ProcessModuleSummary,
+  ProcessModuleUpdatePayload,
+  VirtualMaterial,
+  VirtualMaterialQueryParams,
+} from '@/types/planner'
+import { MATERIAL_CATEGORIES } from '@/constants/materialCategories'
+import { CALCULATION_METHOD_OPTIONS } from '@/constants/calculationMethods'
+import type { MaterialReferenceKind } from '@/types/planner'
+import GuideDrawer from '@/components/common/GuideDrawer'
+import processModulesGuide from '@/guides/process_modules_guide.md?raw'
 
-const mockStages = ['BOM 解析', '产线工艺', '质检节点']
+const { Title, Text } = Typography
+
+type StepCostMode = 'time' | 'piece'
+type StepMeasureType = 'area' | 'perimeter' | 'length' | 'count'
+
+const STEP_MEASURE_TYPE_OPTIONS: Array<{ label: string; value: StepMeasureType; unitHint: string }> = [
+  { label: '面积', value: 'area', unitHint: '㎡' },
+  { label: '周长', value: 'perimeter', unitHint: 'm' },
+  { label: '长度', value: 'length', unitHint: 'm' },
+  { label: '数量', value: 'count', unitHint: '个' },
+]
+
+const safeNum = (value: unknown, fallback = 0) => {
+  const n = Number(value)
+  return Number.isFinite(n) ? n : fallback
+}
+
+const fallbackModuleCode = () => {
+  const suffix = String(Date.now() % 10000).padStart(4, '0')
+  return `MOD${suffix}`
+}
+
+const calcMeasureQty = (measureType: StepMeasureType, params: { width_mm: number; height_mm: number; length_m: number; count: number }) => {
+  const qty = Math.max(0, safeNum(params.count, 0))
+  const w = Math.max(0, safeNum(params.width_mm, 0))
+  const h = Math.max(0, safeNum(params.height_mm, 0))
+  const len = Math.max(0, safeNum(params.length_m, 0))
+  if (measureType === 'count') return qty
+  if (measureType === 'length') return len * qty
+  if (measureType === 'perimeter') return (2 * (w + h)) / 1000 * qty
+  // area
+  return (w * h) / 1_000_000 * qty
+}
+
+type DrawerMode = 'view' | 'edit' | 'create'
+type EditorMaterialValue = ProcessModuleMaterialInput & { id?: string }
+type EditorStepValue = ProcessModuleStepInput & { id?: string; process?: ProcessReference | null }
+
+const DEFAULT_OPERATOR = import.meta.env.VITE_PLANNER_USER_ID ?? 'planner_user'
+const DEFAULT_PAGE_SIZE = 10
+
+const STATUS_OPTIONS = [
+  { label: '草稿', value: 'draft' },
+  { label: '启用', value: 'active' },
+  { label: '停用', value: 'inactive' },
+]
+
+const TEAM_OPTIONS = [
+  '技术部',
+  '仓库部',
+  '采购部',
+  '生产部',
+  '品控部',
+  '财务部',
+  '行政部',
+  '销售部',
+  '运营部',
+].map((item) => ({ label: item, value: item }))
+
+const MATERIAL_KIND_COLOR: Record<string, string> = {
+  real: 'blue',
+  bom: 'orange',
+  virtual: 'purple',
+}
+
+const renderCodePill = (code: string, opts?: { color?: string; solid?: boolean }) => {
+  const color = opts?.color
+  const solid = opts?.solid ?? true
+  if (!code) {
+    return <Text type="secondary">-</Text>
+  }
+  return (
+    <span
+      style={{
+        display: 'inline-block',
+        padding: '2px 8px',
+        borderRadius: 10,
+        border: `1px solid ${color ?? '#d9d9d9'}`,
+        background: solid ? (color ? `${color}1A` : '#fafafa') : 'transparent',
+        color: color ?? 'rgba(0,0,0,0.88)',
+        fontFamily:
+          'ui-monospace, SFMono-Regular, SF Mono, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+        fontSize: 12,
+        lineHeight: '18px',
+      }}
+    >
+      {code}
+    </span>
+  )
+}
+
+const parseNum = (value: unknown): number | undefined => {
+  if (value === undefined || value === null) return undefined
+  const n = Number(value)
+  return Number.isFinite(n) ? n : undefined
+}
+
+const deriveBomUnitPrice = (material: Material): number | undefined => {
+  const meta = (material.metadata_json ?? {}) as Record<string, unknown>
+  const metaPrice = parseNum(meta['bom_unit_price'])
+  if (metaPrice !== undefined) return metaPrice
+  // fallback: unit_price / conversion_purchase_to_bom
+  const unitPrice = parseNum(material.unit_price)
+  const conversion = parseNum(material.conversion_purchase_to_bom)
+  if (unitPrice === undefined || !conversion || conversion <= 0) return undefined
+  return unitPrice / conversion
+}
+
+const PRICING_METHOD_OPTIONS = [
+  { label: '固定工时', value: 'fixed' },
+  { label: '按数量', value: 'count' },
+  { label: '按面积', value: 'area' },
+  { label: '按周长', value: 'perimeter' },
+  { label: '按宽度', value: 'width' },
+  { label: '按高度', value: 'height' },
+]
+
+const createEmptyMaterial = (): ProcessModuleMaterialInput => ({
+  material_kind: 'real',
+  material_ref_id: undefined,
+  material_code: undefined,
+  material_name: '',
+  unit_of_measure: '',
+  calculation_method: 'count',
+  quantity: 1,
+  loss_rate: 0,
+  selection_notes: '',
+  loss_notes: '',
+})
+
+const createEmptyStep = (order = 1): ProcessModuleStepInput => ({
+  sequence_order: order,
+  // pricing_method/work_minutes/unit_of_measure 属于历史字段；V1 以 metadata_json 中的计价参数为准
+  pricing_method: 'count',
+  work_minutes: 0,
+  team_name: '',
+  unit_of_measure: '',
+  description: '',
+  notes: '',
+  process_id: null,
+  // 工序库仅是字典；实际调参落在工艺模块步骤行
+  metadata_json: {
+    cost_type: 'piece', // 'time' | 'piece'
+    base_minutes: 0,
+    unit_minutes: 0,
+    measure_unit: '个', // '㎡' | 'm' | '个'
+    rate_per_minute: null,
+    piece_rate: null,
+  },
+})
 
 const ProcessModulesPage = () => {
+  const queryClient = useQueryClient()
+  const [filtersForm] = Form.useForm()
+  const [editorForm] = Form.useForm()
+  const [filters, setFilters] = useState<ProcessModuleQueryParams>({})
+  const [pagination, setPagination] = useState({ current: 1, pageSize: DEFAULT_PAGE_SIZE })
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [drawerMode, setDrawerMode] = useState<DrawerMode>('view')
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [guideOpen, setGuideOpen] = useState(false)
+  const [materialsLocal, setMaterialsLocal] = useState<EditorMaterialValue[]>([])
+  const [stepsLocal, setStepsLocal] = useState<EditorStepValue[]>([])
+  const [materialSelectContext, setMaterialSelectContext] = useState<{
+    kind: MaterialReferenceKind
+    targetIndex?: number
+  } | null>(null)
+  const [virtualSelectContext, setVirtualSelectContext] = useState<{
+    targetIndex?: number
+  } | null>(null)
+  const [materialKindChooser, setMaterialKindChooser] = useState<{
+    targetIndex?: number
+  } | null>(null)
+  const [materialKindDraft, setMaterialKindDraft] = useState<MaterialReferenceKind>('real')
+  const [processSelectContext, setProcessSelectContext] = useState<{
+    targetIndex?: number
+  } | null>(null)
+  const [referenceDrawerOpen, setReferenceDrawerOpen] = useState(false)
+
+  // Guard against late detailQuery hydration overwriting user edits (common when user starts selecting before detail loads).
+  const hydratedRef = useRef(false)
+  const lastHydratedIdRef = useRef<string | null>(null)
+  const userTouchedRef = useRef(false)
+  const suppressTouchRef = useRef(false)
+
+  useEffect(() => {
+    if (!drawerOpen) return
+    // switching selected record while drawer open should re-hydrate cleanly
+    hydratedRef.current = false
+    lastHydratedIdRef.current = null
+    userTouchedRef.current = false
+  }, [drawerOpen, selectedId])
+
+  const listQuery = useQuery<ProcessModuleListResponse>({
+    queryKey: ['process-modules', filters, pagination],
+    queryFn: () =>
+      fetchProcessModules({
+        ...filters,
+        page: pagination.current,
+        page_size: pagination.pageSize,
+      }),
+    placeholderData: (previousData) => previousData,
+  })
+
+  const detailQuery = useQuery({
+    queryKey: ['process-module', selectedId],
+    queryFn: () => fetchProcessModule(selectedId as string),
+    enabled: drawerOpen && !!selectedId,
+  })
+
+  const referencesQuery = useQuery({
+    queryKey: ['process-module-references', selectedId],
+    queryFn: () =>
+      fetchProcessModuleReferences({
+        module_ids: selectedId ? [selectedId] : undefined,
+        status: 'active',
+      }),
+    enabled: referenceDrawerOpen && !!selectedId,
+  })
+
+  const createMutation = useMutation({
+    mutationFn: (payload: ProcessModuleCreatePayload) => createProcessModule(payload),
+    onSuccess: (data) => {
+      message.success('工艺模块已创建')
+      queryClient.invalidateQueries({ queryKey: ['process-modules'] })
+      setSelectedId(data.id)
+      setDrawerMode('view')
+      detailQuery.refetch()
+    },
+  })
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: ProcessModuleUpdatePayload }) =>
+      updateProcessModule(id, payload),
+    onSuccess: () => {
+      message.success('工艺模块已更新')
+      queryClient.invalidateQueries({ queryKey: ['process-modules'] })
+      if (selectedId) {
+        detailQuery.refetch()
+      }
+      setDrawerMode('view')
+    },
+  })
+
+  const activateMutation = useMutation({
+    mutationFn: activateProcessModule,
+    onSuccess: () => {
+      message.success('模块已启用')
+      queryClient.invalidateQueries({ queryKey: ['process-modules'] })
+      detailQuery.refetch()
+    },
+  })
+
+  const deactivateMutation = useMutation({
+    mutationFn: deactivateProcessModule,
+    onSuccess: () => {
+      message.success('模块已停用')
+      queryClient.invalidateQueries({ queryKey: ['process-modules'] })
+      detailQuery.refetch()
+    },
+  })
+
+  const copyMutation = useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: ProcessModuleCopyPayload }) =>
+      copyProcessModule(id, payload),
+    onSuccess: (data) => {
+      message.success('模块已复制')
+      queryClient.invalidateQueries({ queryKey: ['process-modules'] })
+      setSelectedId(data.id)
+      setDrawerMode('view')
+      detailQuery.refetch()
+    },
+  })
+
+  useEffect(() => {
+    if (!drawerOpen) {
+      hydratedRef.current = false
+      lastHydratedIdRef.current = null
+      userTouchedRef.current = false
+      suppressTouchRef.current = false
+      editorForm.resetFields()
+      setMaterialsLocal([])
+      setStepsLocal([])
+      setDrawerMode('view')
+      return
+    }
+    if (drawerMode === 'create') {
+      hydratedRef.current = true
+      lastHydratedIdRef.current = 'create'
+      userTouchedRef.current = false
+      suppressTouchRef.current = true
+      editorForm.setFieldsValue({
+        module_code: '',
+        module_name: '',
+        description: '',
+        category: MATERIAL_CATEGORIES[0] ?? '',
+        status: 'draft',
+        tags: [],
+        materials: [],
+        steps: [],
+      })
+      setMaterialsLocal([])
+      setStepsLocal([])
+      suppressTouchRef.current = false
+    } else if (detailQuery.data) {
+      const module = detailQuery.data
+      // hydrate once per module id (don't overwrite user edits)
+      if (
+        !userTouchedRef.current &&
+        (!hydratedRef.current || (module.id && lastHydratedIdRef.current !== module.id))
+      ) {
+        suppressTouchRef.current = true
+        const nextMaterials = module.materials.length ? (module.materials as any) : []
+        const nextSteps = module.steps.length ? (module.steps as any) : []
+        editorForm.setFieldsValue({
+          module_code: module.module_code,
+          module_name: module.module_name,
+          description: module.description,
+          category: module.category,
+          status: module.status,
+          tags: module.tags ?? [],
+          materials: nextMaterials,
+          steps: nextSteps,
+        })
+        setMaterialsLocal(nextMaterials)
+        setStepsLocal(nextSteps)
+        suppressTouchRef.current = false
+        hydratedRef.current = true
+        lastHydratedIdRef.current = module.id ?? null
+        userTouchedRef.current = false
+      }
+    }
+  }, [drawerOpen, drawerMode, detailQuery.data, editorForm])
+
+  const materialsValue = Form.useWatch('materials', editorForm) as EditorMaterialValue[] | undefined
+  const stepsValue = Form.useWatch('steps', editorForm) as EditorStepValue[] | undefined
+
+  const [previewInput, setPreviewInput] = useState({
+    width_mm: 0,
+    height_mm: 0,
+    length_m: 0,
+    count: 1,
+  })
+
+  const previewResult = useMemo(() => {
+    // prefer local state (table source-of-truth), fallback to form watch
+    const steps = (stepsLocal.length ? stepsLocal : stepsValue) ?? []
+    const rows = steps.map((step, index) => {
+      const meta = (step.metadata_json ?? {}) as Record<string, unknown>
+      const costMode = (meta.cost_mode as StepCostMode) ?? (safeNum(meta.rate_per_minute, NaN) > 0 ? 'time' : 'piece')
+      const measureType = (meta.measure_type as StepMeasureType) ?? 'count'
+      const measureQty = calcMeasureQty(measureType, previewInput)
+
+      const baseMinutes = safeNum(meta.base_minutes, 0)
+      const unitMinutes = safeNum(meta.unit_minutes, 0)
+      const ratePerMinute = safeNum(meta.rate_per_minute, 0)
+      const pieceRate = safeNum(meta.piece_rate, 0)
+
+      const minutes = baseMinutes + unitMinutes * measureQty
+      const cost = costMode === 'time' ? minutes * ratePerMinute : pieceRate * measureQty
+
+      const snapshot =
+        step.process ??
+        ((meta.process_snapshot as any) as ProcessReference | undefined)
+      const name = snapshot ? `${snapshot.process_code} - ${snapshot.process_name}` : step.team_name || `Step ${index + 1}`
+
+      const warnings: string[] = []
+      if (measureQty <= 0) warnings.push('计价量=0')
+      if (costMode === 'time' && ratePerMinute <= 0) warnings.push('分钟单价未配置')
+      if (costMode === 'piece' && pieceRate <= 0) warnings.push('计件单价未配置')
+
+      return {
+        key: step.id ?? index,
+        index,
+        name,
+        cost_mode: costMode,
+        measure_type: measureType,
+        measure_qty: measureQty,
+        minutes,
+        cost,
+        warnings,
+      }
+    })
+    const total = rows.reduce((acc, item) => acc + safeNum(item.cost, 0), 0)
+    return { rows, total }
+  }, [stepsValue, previewInput])
+
+  const handleFilterSubmit = () => {
+    const values = filtersForm.getFieldsValue()
+    setFilters({
+      search: values.search?.trim() || undefined,
+      status: values.status || undefined,
+    })
+    setPagination((prev) => ({ ...prev, current: 1 }))
+  }
+
+  const handleFilterReset = () => {
+    filtersForm.resetFields()
+    setFilters({})
+    setPagination({ current: 1, pageSize: DEFAULT_PAGE_SIZE })
+  }
+
+  const openCreateDrawer = () => {
+    // hard reset to avoid any stale local rows showing up as "empty records"
+    suppressTouchRef.current = true
+    editorForm.resetFields()
+    setMaterialsLocal([])
+    setStepsLocal([])
+    suppressTouchRef.current = false
+    setDrawerMode('create')
+    setSelectedId(null)
+    setDrawerOpen(true)
+  }
+
+  const openViewDrawer = (record: ProcessModuleSummary) => {
+    setDrawerMode('view')
+    setSelectedId(record.id)
+    setDrawerOpen(true)
+  }
+
+  const moduleListColumns: ColumnsType<ProcessModuleSummary> = [
+    {
+      title: '编码',
+      dataIndex: 'module_code',
+      key: 'module_code',
+      width: 160,
+      render: (value, record) => (
+        <Button type="link" size="small" onClick={() => openViewDrawer(record)}>
+          {value}
+        </Button>
+      ),
+    },
+    {
+      title: '名称',
+      dataIndex: 'module_name',
+      key: 'module_name',
+      render: (value: string) => (
+        <Space direction="vertical" size={0}>
+          <Text strong>{value}</Text>
+        </Space>
+      ),
+    },
+    {
+      title: '类别',
+      dataIndex: 'category',
+      key: 'category',
+      width: 140,
+      render: (value?: string) => value || '-',
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      width: 110,
+      render: (value: string) => (
+        <Tag color={value === 'active' ? 'green' : value === 'inactive' ? 'red' : 'gold'}>
+          {value === 'active' ? '启用' : value === 'inactive' ? '停用' : '草稿'}
+        </Tag>
+      ),
+    },
+    {
+      title: '版本',
+      dataIndex: 'version',
+      key: 'version',
+      width: 80,
+    },
+    {
+      title: '引用次数',
+      dataIndex: 'metadata_json',
+      key: 'references',
+      width: 120,
+      render: (metadata?: Record<string, any>) => metadata?.reference_count ?? '-',
+    },
+    {
+      title: '更新时间',
+      dataIndex: 'updated_at',
+      key: 'updated_at',
+      width: 200,
+      render: (value: string) => dayjs(value).format('YYYY-MM-DD HH:mm'),
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 220,
+      fixed: 'right',
+      render: (_, record) => (
+        <Space size={8}>
+          <Button icon={<EyeOutlined />} size="small" onClick={() => openViewDrawer(record)}>
+            查看
+          </Button>
+          <Button
+            icon={<EditOutlined />}
+            size="small"
+            onClick={() => {
+              setSelectedId(record.id)
+              setDrawerMode('edit')
+              setDrawerOpen(true)
+            }}
+          >
+            编辑
+          </Button>
+        </Space>
+      ),
+    },
+  ]
+
+  const materialsDataSource =
+    (materialsLocal.length ? materialsLocal : materialsValue)?.map((item, index) => ({
+      key: item.id ?? index,
+      index,
+      record: item,
+    })) ?? []
+
+  const stepsDataSource =
+    (stepsLocal.length ? stepsLocal : stepsValue)?.map((item, index) => ({
+      key: item.id ?? index,
+      index,
+      record: item,
+    })) ?? []
+
+  const updateMaterials = (updater: (prev: EditorMaterialValue[]) => EditorMaterialValue[]) => {
+    const prev = (editorForm.getFieldValue('materials') as EditorMaterialValue[]) ?? []
+    const next = updater(prev)
+    editorForm.setFieldValue('materials', next)
+    setMaterialsLocal(next)
+  }
+
+  const updateSteps = (updater: (prev: EditorStepValue[]) => EditorStepValue[]) => {
+    const prev = (editorForm.getFieldValue('steps') as EditorStepValue[]) ?? []
+    const next = updater(prev)
+    editorForm.setFieldValue('steps', next)
+    setStepsLocal(next)
+  }
+
+  const handleRemoveMaterial = (index: number) => {
+    updateMaterials((prev) => prev.filter((_, idx) => idx !== index))
+  }
+
+  const handleDuplicateMaterial = (index: number) => {
+    updateMaterials((prev) => {
+      const target = prev[index]
+      if (!target) return prev
+      const clone = { ...target }
+      return [...prev.slice(0, index + 1), clone, ...prev.slice(index + 1)]
+    })
+  }
+
+  const handleMoveMaterial = (index: number, direction: 'up' | 'down') => {
+    updateMaterials((prev) => {
+      const targetIndex = direction === 'up' ? index - 1 : index + 1
+      if (targetIndex < 0 || targetIndex >= prev.length) return prev
+      const next = [...prev]
+      const temp = next[index]
+      next[index] = next[targetIndex]
+      next[targetIndex] = temp
+      return next
+    })
+  }
+
+  const handleRemoveStep = (index: number) => {
+    updateSteps((prev) => prev.filter((_, idx) => idx !== index))
+  }
+
+  const handleDuplicateStep = (index: number) => {
+    updateSteps((prev) => {
+      const target = prev[index]
+      if (!target) return prev
+      const clone = { ...target }
+      return [...prev.slice(0, index + 1), clone, ...prev.slice(index + 1)]
+    })
+  }
+
+  const handleMoveStep = (index: number, direction: 'up' | 'down') => {
+    updateSteps((prev) => {
+      const targetIndex = direction === 'up' ? index - 1 : index + 1
+      if (targetIndex < 0 || targetIndex >= prev.length) return prev
+      const next = [...prev]
+      const temp = next[index]
+      next[index] = next[targetIndex]
+      next[targetIndex] = temp
+      return next
+    })
+  }
+
+  const handleAddBlankMaterial = () => {
+    updateMaterials((prev) => [...prev, createEmptyMaterial()])
+  }
+
+  const handleAddBlankStep = () => {
+    updateSteps((prev) => [...prev, createEmptyStep(prev.length + 1)])
+  }
+
+  const buildPayload = (): {
+    create: ProcessModuleCreatePayload
+    update: ProcessModuleUpdatePayload
+  } => {
+    const values = editorForm.getFieldsValue()
+    const normalizeMaterials = (items: EditorMaterialValue[] = []) =>
+      items
+        .filter((item) => Boolean(item.material_ref_id))
+        .map((item, index) => ({
+        material_kind: item.material_kind ?? 'real',
+        material_ref_id: item.material_ref_id ?? null,
+        material_code: item.material_code,
+        material_name: item.material_name,
+        unit_of_measure: item.unit_of_measure,
+        calculation_method: item.calculation_method ?? 'count',
+        quantity: item.quantity ?? 0,
+        loss_rate: item.loss_rate ?? 0,
+        sequence_order: item.sequence_order ?? index,
+        material_category: item.material_category,
+        selection_notes: item.selection_notes,
+        loss_notes: item.loss_notes,
+        metadata_json: item.metadata_json ?? {},
+      }))
+
+    const normalizeSteps = (items: EditorStepValue[] = []) =>
+      items
+        .filter((item) => Boolean(item.process_id))
+        .map((item, index) => ({
+        process_id: item.process_id ?? null,
+        sequence_order: item.sequence_order ?? index,
+        team_name: item.team_name,
+        pricing_method: item.pricing_method ?? 'count',
+        work_minutes: item.work_minutes ?? 0,
+        unit_of_measure: item.unit_of_measure,
+        description: item.description,
+        notes: item.notes,
+        metadata_json: item.metadata_json ?? {},
+      }))
+
+    return {
+      create: {
+        module_code: values.module_code,
+        module_name: values.module_name,
+        description: values.description,
+        category: values.category,
+        status: values.status,
+        tags: values.tags ?? [],
+        metadata_json: {},
+        materials: normalizeMaterials(values.materials),
+        steps: normalizeSteps(values.steps),
+        operator_id: DEFAULT_OPERATOR,
+      },
+      update: {
+        module_name: values.module_name,
+        description: values.description,
+        category: values.category,
+        status: values.status,
+        tags: values.tags ?? [],
+        metadata_json: {},
+        materials: normalizeMaterials(values.materials),
+        steps: normalizeSteps(values.steps),
+        operator_id: DEFAULT_OPERATOR,
+      },
+    }
+  }
+
+  const handleSave = async () => {
+    // Create: allocate code only when user actually clicks "创建"
+    if (drawerMode === 'create') {
+      const currentCode = String(editorForm.getFieldValue('module_code') || '').trim()
+      if (!currentCode) {
+        try {
+          const res = await generateNextCode({ prefix: 'MOD', width: 4 })
+          editorForm.setFieldValue('module_code', res.code)
+        } catch {
+          editorForm.setFieldValue('module_code', fallbackModuleCode())
+        }
+      }
+    }
+    await editorForm.validateFields()
+    // prevent saving with placeholder rows (user sees "empty records")
+    const values = editorForm.getFieldsValue()
+    const rawMaterials = (values.materials ?? []) as EditorMaterialValue[]
+    const rawSteps = (values.steps ?? []) as EditorStepValue[]
+    const invalidMaterialRows = rawMaterials
+      .map((m, idx) => ({ m, idx: idx + 1 }))
+      .filter(({ m }) => !m.material_ref_id && (m.material_code || m.material_name))
+      .map(({ idx }) => idx)
+    const invalidStepRows = rawSteps
+      .map((s, idx) => ({ s, idx: idx + 1 }))
+      .filter(({ s }) => !s.process_id)
+      .map(({ idx }) => idx)
+    if (invalidMaterialRows.length) {
+      message.error(`物料组存在未选择物料的行：第 ${invalidMaterialRows.join('、')} 行，请先删除或重新选择`)
+      return
+    }
+    if (invalidStepRows.length) {
+      // steps can be empty; but if user added rows, require selecting process
+      message.error(`工序组存在未选择工序的行：第 ${invalidStepRows.join('、')} 行，请先删除或选择工序`)
+      return
+    }
+    // materials duplicate guard: same material + same calculation_method should be merged before saving
+    const materials = (values.materials ?? []) as EditorMaterialValue[]
+    const dupMap = new Map<string, { key: string; indices: number[] }>()
+    materials.forEach((m, idx) => {
+      const ref = String(m.material_ref_id || '').trim()
+      const kind = String(m.material_kind || '').trim()
+      const calc = String(m.calculation_method || '').trim()
+      if (!ref) return
+      const key = `${kind}:${ref}:${calc}`
+      const entry = dupMap.get(key) ?? { key, indices: [] }
+      entry.indices.push(idx + 1)
+      dupMap.set(key, entry)
+    })
+    const dups = Array.from(dupMap.values()).filter((x) => x.indices.length > 1)
+    if (dups.length) {
+      Modal.warning({
+        title: '物料组存在重复项，请先合并',
+        content: (
+          <Space direction="vertical">
+            <Text>检测到同一物料在相同“计量”口径下重复出现，请在保存前合并为一行（数量/损耗/备注）。</Text>
+            <Text type="secondary">
+              重复行号：{dups.map((x) => x.indices.join('、')).join('；')}
+            </Text>
+          </Space>
+        ),
+      })
+      return
+    }
+    if (drawerMode === 'create') {
+      const payload = buildPayload().create
+      if (!payload.module_code) {
+        message.error('请输入模块编码')
+        return
+      }
+      createMutation.mutate(payload)
+    } else if (selectedId) {
+      const payload = buildPayload().update
+      updateMutation.mutate({ id: selectedId, payload })
+    }
+  }
+
+  const handleCopy = async () => {
+    if (!selectedId || !detailQuery.data) return
+    const source = detailQuery.data
+    let newCode = fallbackModuleCode()
+    try {
+      newCode = (await generateNextCode({ prefix: 'MOD', width: 4 })).code
+    } catch {
+      // keep fallback
+    }
+    const payload: ProcessModuleCopyPayload = {
+      module_code: newCode,
+      module_name: `${source.module_name} Copy`,
+      status: 'draft',
+      operator_id: DEFAULT_OPERATOR,
+    }
+    copyMutation.mutate({ id: selectedId, payload })
+  }
+
+  const openMaterialChooser = (targetIndex?: number) => {
+    const currentKind =
+      targetIndex !== undefined
+        ? ((editorForm.getFieldValue(['materials', targetIndex, 'material_kind']) as MaterialReferenceKind) ??
+          'real')
+        : 'real'
+    setMaterialKindDraft(currentKind)
+    setMaterialKindChooser({ targetIndex })
+  }
+
+  const confirmMaterialKind = () => {
+    const ctx = materialKindChooser
+    setMaterialKindChooser(null)
+    const targetIndex = ctx?.targetIndex
+    if (targetIndex !== undefined) {
+      editorForm.setFieldValue(['materials', targetIndex, 'material_kind'], materialKindDraft)
+    }
+    if (materialKindDraft === 'virtual') {
+      setVirtualSelectContext(targetIndex !== undefined ? { targetIndex } : {})
+    } else {
+      setMaterialSelectContext({ kind: materialKindDraft, targetIndex })
+    }
+  }
+
+  const materialsColumns: ColumnsType<{ index: number; record: EditorMaterialValue }> = [
+    {
+      title: '序号',
+      dataIndex: 'index',
+      width: 70,
+      render: (value) => value + 1,
+    },
+    {
+      title: '物料',
+      dataIndex: 'material_code',
+      width: 260,
+      render: (_: unknown, row, index) => {
+        const kind =
+          (row.record.material_kind as any) ||
+          (editorForm.getFieldValue(['materials', index, 'material_kind']) as any) ||
+          'real'
+        const color = MATERIAL_KIND_COLOR[String(kind)] || '#1677ff'
+        const code = String(row.record.material_code || '')
+        const name = String(row.record.material_name || '')
+        return (
+          <Space direction="vertical" size={4} style={{ width: '100%' }}>
+            <Space size={8} align="center">
+              {renderCodePill(code || '-', { color, solid: true })}
+              <Text ellipsis={{ tooltip: name || '-' }} style={{ maxWidth: 220 }}>
+                {name || '-'}
+              </Text>
+              <Button size="small" type="link" icon={<LinkOutlined />} onClick={() => openMaterialChooser(index)} />
+            </Space>
+            {/* keep values in form for submit */}
+            <Form.Item name={['materials', index, 'material_kind']} hidden>
+              <Input />
+            </Form.Item>
+            <Form.Item name={['materials', index, 'material_ref_id']} hidden>
+              <Input />
+            </Form.Item>
+            <Form.Item name={['materials', index, 'material_code']} hidden>
+              <Input />
+            </Form.Item>
+            <Form.Item name={['materials', index, 'material_name']} hidden>
+              <Input />
+            </Form.Item>
+            <Form.Item name={['materials', index, 'unit_of_measure']} hidden>
+              <Input />
+            </Form.Item>
+          </Space>
+        )
+      },
+    },
+    {
+      title: '数量 / 损耗',
+      dataIndex: 'quantity',
+      width: 200,
+      render: (_: unknown, _record, index) => (
+        <Space align="start">
+          <Form.Item
+            name={['materials', index, 'quantity']}
+            style={{ marginBottom: 0 }}
+            rules={[{ required: true, message: '请输入数量' }]}
+          >
+            <InputNumber min={0} precision={2} placeholder="数量" />
+          </Form.Item>
+          <Form.Item
+            name={['materials', index, 'loss_rate']}
+            style={{ marginBottom: 0 }}
+            rules={[
+              { required: true, message: '请输入损耗' },
+              {
+                validator: (_rule, value) =>
+                  value === undefined || (value >= 0 && value <= 100)
+                    ? Promise.resolve()
+                    : Promise.reject(new Error('0-100')),
+              },
+            ]}
+          >
+            <InputNumber min={0} max={100} precision={2} placeholder="损耗%" />
+          </Form.Item>
+        </Space>
+      ),
+    },
+    {
+      title: '计量',
+      dataIndex: 'calculation_method',
+      width: 80,
+      render: (_: unknown, _record, index) => (
+        <Form.Item
+          name={['materials', index, 'calculation_method']}
+          style={{ marginBottom: 0 }}
+          rules={[{ required: true, message: '必填' }]}
+        >
+          <Select options={CALCULATION_METHOD_OPTIONS} placeholder="计量方式" optionLabelProp="label" />
+        </Form.Item>
+      ),
+    },
+    {
+      title: 'BOM单价/单位',
+      key: 'bom_price',
+      width: 150,
+      render: (_: unknown, row, index) => {
+        const meta = ((row.record.metadata_json ?? {}) as any) || {}
+        const price = parseNum(meta.bom_unit_price)
+        const unit = normalizeUnit(meta.bom_unit || row.record.unit_of_measure) || ''
+        return (
+          <Space>
+            <Text>{price === undefined ? '-' : `${price.toFixed(2)}/${unit || '-'}`}</Text>
+            <Form.Item name={['materials', index, 'metadata_json']} hidden>
+              <Input />
+            </Form.Item>
+          </Space>
+        )
+      },
+    },
+    {
+      title: '备注',
+      dataIndex: 'selection_notes',
+      width: 260,
+      render: (_: unknown, _record, index) => (
+        <Form.Item name={['materials', index, 'selection_notes']} style={{ marginBottom: 0 }}>
+          <Input.TextArea rows={1} placeholder="备注" />
+        </Form.Item>
+      ),
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 180,
+      render: (_: unknown, row) => (
+        <Space>
+          <Button
+            size="small"
+            icon={<ArrowUpOutlined />}
+            onClick={() => handleMoveMaterial(row.index, 'up')}
+          />
+          <Button
+            size="small"
+            icon={<ArrowDownOutlined />}
+            onClick={() => handleMoveMaterial(row.index, 'down')}
+          />
+          <Button
+            size="small"
+            icon={<CopyOutlined />}
+            onClick={() => handleDuplicateMaterial(row.index)}
+          />
+          <Button
+            danger
+            size="small"
+            icon={<DeleteOutlined />}
+            onClick={() => handleRemoveMaterial(row.index)}
+          />
+        </Space>
+      ),
+    },
+  ]
+
+  const stepsColumns: ColumnsType<{ index: number; record: EditorStepValue }> = [
+    {
+      title: '序号',
+      dataIndex: 'index',
+      width: 70,
+      render: (value) => value + 1,
+    },
+    {
+      title: '工序',
+      key: 'process',
+      width: 260,
+      render: (_: unknown, row, index) => {
+        const snapshot =
+          row.record.process ??
+          ((row.record.metadata_json as any)?.process_snapshot as ProcessReference | undefined)
+        const canEdit = drawerMode === 'create' || drawerMode === 'edit'
+        const code = snapshot?.process_code ?? '-'
+        const name = snapshot?.process_name ?? '-'
+        return (
+          <Space direction="vertical" size={4} style={{ width: '100%' }}>
+            <Space size={8}>
+              {renderCodePill(code, { solid: false })}
+              <Text ellipsis={{ tooltip: name }} style={{ maxWidth: 240 }}>
+                {name}
+              </Text>
+              {canEdit ? (
+                <Button
+                  size="small"
+                  type="link"
+                  icon={<LinkOutlined />}
+                  onClick={() => setProcessSelectContext({ targetIndex: index })}
+                />
+              ) : null}
+            </Space>
+            <Form.Item name={['steps', index, 'process_id']} hidden>
+              <Input />
+            </Form.Item>
+          </Space>
+        )
+      },
+    },
+    {
+      title: '班组',
+      key: 'team_name',
+      width: 120,
+      render: (_: unknown, _row, index) => (
+        <Form.Item name={['steps', index, 'team_name']} style={{ marginBottom: 0 }} rules={[{ required: true, message: '必填' }]}>
+          <Select
+            allowClear
+            showSearch
+            placeholder="选择班组"
+            options={TEAM_OPTIONS}
+            optionFilterProp="label"
+          />
+        </Form.Item>
+      ),
+    },
+    {
+      title: '基础(分)',
+      key: 'base_minutes',
+      width: 80,
+      render: (_: unknown, _row, index) => (
+        <Form.Item
+          name={['steps', index, 'metadata_json', 'base_minutes']}
+          style={{ marginBottom: 0 }}
+          rules={[{ required: true, message: '必填' }]}
+        >
+          <InputNumber min={0} precision={2} style={{ width: '100%' }} />
+        </Form.Item>
+      ),
+    },
+    {
+      title: '计量(分)',
+      key: 'unit_minutes',
+      width: 90,
+      render: (_: unknown, _row, index) => (
+        <Form.Item
+          name={['steps', index, 'metadata_json', 'unit_minutes']}
+          style={{ marginBottom: 0 }}
+          rules={[{ required: true, message: '必填' }]}
+        >
+          <InputNumber min={0} precision={2} style={{ width: '100%' }} />
+        </Form.Item>
+      ),
+    },
+    {
+      title: '单位',
+      key: 'measure_unit',
+      width: 80,
+      render: (_: unknown, _row, index) => (
+        <Form.Item
+          name={['steps', index, 'metadata_json', 'measure_unit']}
+          style={{ marginBottom: 0 }}
+          rules={[{ required: true, message: '必填' }]}
+        >
+          <Select
+            options={[
+              { label: '㎡', value: '㎡' },
+              { label: 'm', value: 'm' },
+              { label: '个', value: '个' },
+            ]}
+          />
+        </Form.Item>
+      ),
+    },
+    {
+      title: '单价(元/分)',
+      key: 'rate_per_minute',
+      width: 100,
+      render: (_: unknown, _row, index) => (
+        <Form.Item
+          name={['steps', index, 'metadata_json', 'rate_per_minute']}
+          style={{ marginBottom: 0 }}
+          rules={[{ required: true, message: '必填' }]}
+        >
+          <InputNumber min={0} precision={2} style={{ width: '100%' }} />
+        </Form.Item>
+      ),
+    },
+    {
+      title: '备注',
+      key: 'notes',
+      width: 220,
+      render: (_: unknown, _row, index) => (
+        <Form.Item name={['steps', index, 'notes']} style={{ marginBottom: 0 }}>
+          <Input placeholder="备注" />
+        </Form.Item>
+      ),
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 200,
+      render: (_: unknown, row) => (
+        <Space>
+          <Button size="small" icon={<ArrowUpOutlined />} onClick={() => handleMoveStep(row.index, 'up')} />
+          <Button size="small" icon={<ArrowDownOutlined />} onClick={() => handleMoveStep(row.index, 'down')} />
+          <Button size="small" icon={<CopyOutlined />} onClick={() => handleDuplicateStep(row.index)} />
+          <Button danger size="small" icon={<DeleteOutlined />} onClick={() => handleRemoveStep(row.index)} />
+        </Space>
+      ),
+    },
+  ]
+
+  const currentModule = detailQuery.data
+
+  const drawerTitle =
+    drawerMode === 'create'
+      ? '新建工艺模块'
+      : currentModule
+        ? `工艺模块：${currentModule.module_name}`
+        : '工艺模块'
+
+  const isEditing = drawerMode === 'create' || drawerMode === 'edit'
+
+  const handleRealMaterialConfirm = (records: Material[], kind: MaterialReferenceKind) => {
+    if (!records.length) {
+      message.warning('请选择物料')
+      return
+    }
+    const ctx = materialSelectContext
+    setMaterialSelectContext(null)
+    updateMaterials((prev) => {
+      if (ctx?.targetIndex !== undefined) {
+        const next = [...prev]
+        const bomUnitPrice = deriveBomUnitPrice(records[0])
+        next[ctx.targetIndex] = {
+          ...(next[ctx.targetIndex] ?? createEmptyMaterial()),
+          material_kind: kind as MaterialReferenceKind,
+          material_ref_id: records[0].id,
+          material_code: records[0].material_code,
+          material_name: records[0].material_name,
+          unit_of_measure: normalizeUnit(records[0].unit || records[0].purchase_unit) || '',
+          material_category: records[0].category || undefined,
+          metadata_json: {
+            ...(((next[ctx.targetIndex] ?? {}) as any).metadata_json ?? {}),
+            bom_unit_price: bomUnitPrice,
+            bom_unit: normalizeUnit(records[0].unit || records[0].purchase_unit) || '',
+            currency: records[0].currency,
+          },
+        }
+        return next
+      }
+      const additions = records.map((record) => ({
+        ...createEmptyMaterial(),
+        material_kind: kind as MaterialReferenceKind,
+        material_ref_id: record.id,
+        material_code: record.material_code,
+        material_name: record.material_name,
+        unit_of_measure: normalizeUnit(record.unit || record.purchase_unit) || '',
+        material_category: record.category || undefined,
+        metadata_json: {
+          bom_unit_price: deriveBomUnitPrice(record),
+          bom_unit: normalizeUnit(record.unit || record.purchase_unit) || '',
+          currency: record.currency,
+        },
+      }))
+      return [...prev, ...additions]
+    })
+  }
+
+  const handleVirtualMaterialConfirm = (records: VirtualMaterial[]) => {
+    if (!records.length) {
+      message.warning('请选择虚拟物料')
+      return
+    }
+    ;(async () => {
+      const hide = message.loading('正在读取虚拟物料详情...', 0)
+      try {
+        // list API might not include bom_unit_price; use detail API for accurate snapshot
+        const details = await Promise.all(records.map((r) => fetchVirtualMaterial(r.id)))
+
+        // Also: virtual material bom_unit_price may be NULL; compute from bindings + underlying real material bom_unit_price
+        const materialIds = Array.from(
+          new Set(
+            details
+              .flatMap((vm) => (vm.bindings ?? []).map((b: any) => String(b.material_id ?? '').trim()))
+              .filter(Boolean),
+          ),
+        )
+        const materialDetails = await Promise.all(materialIds.map((id) => fetchMaterial(id)))
+        const materialMap = new Map(materialDetails.map((m) => [m.id, m]))
+
+        const ctx = virtualSelectContext
+        setVirtualSelectContext(null)
+        updateMaterials((prev) => {
+          const toRow = (vm: VirtualMaterial, baseRow?: any) => {
+            const unitOfMeasure =
+              vm.virtual_kind === 'recipe' || vm.virtual_kind === 'placeholder' ? vm.unit || '' : '套'
+
+            const computeVirtualBomUnitPrice = (): number | undefined => {
+              if (vm.virtual_kind === 'placeholder') return 0
+              const bindings = (vm.bindings ?? []) as any[]
+              if (!bindings.length) return undefined
+              let total = 0
+              let hitAny = false
+              for (const b of bindings) {
+                const mid = String(b.material_id ?? '').trim()
+                if (!mid) continue
+                const mat = materialMap.get(mid)
+                if (!mat) continue
+                const price = deriveBomUnitPrice(mat)
+                if (price === undefined) continue
+
+                let qty = Number(b.quantity_ratio ?? 0)
+                if (!Number.isFinite(qty)) qty = 0
+                if (vm.virtual_kind === 'recipe' && qty > 1.5) {
+                  // safety: if old data stored 0-100, convert to fraction
+                  qty = qty / 100
+                }
+
+                // backend loss_rate is 0-100 (%)
+                const lossRatePct = Number(b.loss_rate ?? 0)
+                const lossFactor = 1 + Math.max(0, lossRatePct) / 100
+                total += price * Math.max(0, qty) * lossFactor
+                hitAny = true
+              }
+              return hitAny ? total : undefined
+            }
+            const computedBomPrice = computeVirtualBomUnitPrice()
+
+            return {
+              ...(baseRow ?? createEmptyMaterial()),
+              material_kind: 'virtual' as MaterialReferenceKind,
+              material_ref_id: vm.id,
+              material_code: vm.virtual_code,
+              material_name: vm.name,
+              unit_of_measure: normalizeUnit(unitOfMeasure) || unitOfMeasure,
+              material_category: vm.category || undefined,
+              metadata_json: {
+                ...(((baseRow ?? {}) as any).metadata_json ?? {}),
+                bom_unit_price: computedBomPrice,
+                bom_unit: normalizeUnit(unitOfMeasure) || unitOfMeasure,
+                currency: (vm as any).currency,
+              },
+            }
+          }
+
+          if (ctx?.targetIndex !== undefined) {
+            const next = [...prev]
+            next[ctx.targetIndex] = toRow(details[0], next[ctx.targetIndex])
+            return next
+          }
+          return [...prev, ...details.map((vm) => toRow(vm))]
+        })
+      } catch (err: any) {
+        message.error(err?.response?.data?.detail ?? '读取虚拟物料详情失败')
+      } finally {
+        hide()
+      }
+    })()
+  }
+
+  const handleProcessConfirm = (process: ProcessReference) => {
+    const ctx = processSelectContext
+    setProcessSelectContext(null)
+    updateSteps((prev) => {
+      const targetIndex = ctx?.targetIndex
+      if (targetIndex !== undefined) {
+        const next = [...prev]
+        const current = next[targetIndex] ?? (createEmptyStep(targetIndex + 1) as EditorStepValue)
+        next[targetIndex] = {
+          ...current,
+          process_id: process.id,
+          process,
+          // 工序库是字典：只回填工序引用信息，不带任何“值/参数”
+          team_name: current.team_name || '',
+          metadata_json: {
+            ...(current.metadata_json ?? {}),
+            process_snapshot: process,
+          },
+        }
+        message.success(`已选择工序：${process.process_code}（更新第 ${targetIndex + 1} 行）`)
+        return next
+      }
+      message.success(`已选择工序：${process.process_code}（新增一行）`)
+      const empty = createEmptyStep(prev.length + 1) as EditorStepValue
+      return [
+        ...prev,
+        {
+          ...empty,
+          process_id: process.id,
+          process,
+          team_name: '',
+          metadata_json: {
+            ...(empty.metadata_json ?? {}),
+            process_snapshot: process,
+          },
+        },
+      ]
+    })
+  }
+
   return (
     <Space direction="vertical" size={24} style={{ width: '100%' }}>
       <div>
-        <Typography.Title level={3} style={{ marginBottom: 0 }}>
+        <Title level={3} style={{ marginBottom: 0 }}>
           工艺模块
-        </Typography.Title>
-        <Typography.Text type="secondary">
-          这里将承载工序模板、产线配置、工时参数等模块化配置能力。
-        </Typography.Text>
+        </Title>
+        <Text type="secondary">维护可复用的物料+工序组合，可在产品模型中直接引用。</Text>
       </div>
-      <Row gutter={[24, 24]}>
-        <Col xs={24} lg={8}>
-          <Card title="工艺阶段">
-            <List
-              dataSource={mockStages}
-              renderItem={(item) => (
-                <List.Item>
-                  <Space>
-                    <Tag color="cyan">{item}</Tag>
-                    <Typography.Text type="secondary">占位中</Typography.Text>
-                  </Space>
-                </List.Item>
-              )}
+
+      <Card
+        title="筛选"
+        bordered={false}
+        extra={
+          <Space>
+            <Button icon={<ReloadOutlined />} onClick={() => listQuery.refetch()}>
+              刷新
+            </Button>
+            <Button type="primary" icon={<PlusOutlined />} onClick={openCreateDrawer}>
+              新建工艺模块
+            </Button>
+          </Space>
+        }
+      >
+        <Form form={filtersForm} layout="inline" onFinish={handleFilterSubmit}>
+          <Form.Item name="search" label="关键词">
+            <Input.Search
+              placeholder="编码 / 名称"
+              allowClear
+              onSearch={handleFilterSubmit}
+              style={{ width: 240 }}
             />
+          </Form.Item>
+          <Form.Item name="status" label="状态">
+            <Select
+              allowClear
+              placeholder="全部"
+              options={STATUS_OPTIONS}
+              style={{ width: 160 }}
+            />
+          </Form.Item>
+          <Form.Item>
+            <Space>
+              <Button type="primary" htmlType="submit">
+                查询
+              </Button>
+              <Button onClick={handleFilterReset}>重置</Button>
+            </Space>
+          </Form.Item>
+        </Form>
+      </Card>
+
+      <Card>
+        <Table<ProcessModuleSummary>
+          rowKey="id"
+          loading={listQuery.isLoading}
+          columns={moduleListColumns}
+          dataSource={listQuery.data?.items ?? []}
+          pagination={{
+            current: pagination.current,
+            pageSize: pagination.pageSize,
+            total: listQuery.data?.total ?? 0,
+            showSizeChanger: true,
+            onChange: (current, pageSize) => setPagination({ current, pageSize }),
+          }}
+          scroll={{ x: 1200 }}
+        />
+      </Card>
+
+      <Drawer
+        title={drawerTitle}
+        width={1400}
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        destroyOnClose
+        extra={
+          currentModule && drawerMode === 'view' ? (
+            <Space>
+              <Button onClick={() => setDrawerMode('edit')} icon={<EditOutlined />}>
+                编辑
+              </Button>
+              <Button onClick={handleCopy} icon={<CopyOutlined />}>
+                复制
+              </Button>
+              <Button onClick={() => setReferenceDrawerOpen(true)} icon={<LinkOutlined />}>
+                引用
+              </Button>
+              {currentModule.status === 'active' ? (
+                <Button
+                  danger
+                  onClick={() => selectedId && deactivateMutation.mutate(selectedId)}
+                >
+                  停用
+                </Button>
+              ) : (
+                <Button type="primary" onClick={() => selectedId && activateMutation.mutate(selectedId)}>
+                  启用
+                </Button>
+              )}
+            </Space>
+          ) : null
+        }
+        footer={
+          isEditing ? (
+            <Space style={{ float: 'right' }}>
+              <Button icon={<QuestionCircleOutlined />} onClick={() => setGuideOpen(true)}>
+                新建指南
+              </Button>
+              <Button onClick={() => setDrawerMode(selectedId ? 'view' : 'create')}>取消</Button>
+              <Button
+                type="primary"
+                loading={createMutation.isPending || updateMutation.isPending}
+                onClick={handleSave}
+              >
+                {drawerMode === 'create' ? '创建' : '保存'}
+              </Button>
+            </Space>
+          ) : null
+        }
+      >
+        <Tabs
+          items={[
+            {
+              key: 'edit',
+              label: '编辑',
+              children: (
+                <Form
+                  layout="vertical"
+                  form={editorForm}
+                  disabled={!isEditing}
+                  onValuesChange={() => {
+                    if (suppressTouchRef.current) return
+                    userTouchedRef.current = true
+                    // keep table row records in sync for display-only cells (e.g. snapshot title)
+                    setMaterialsLocal((editorForm.getFieldValue('materials') as EditorMaterialValue[]) ?? [])
+                    setStepsLocal((editorForm.getFieldValue('steps') as EditorStepValue[]) ?? [])
+                  }}
+                >
+                  <Card title="基础信息" size="small" bordered={false}>
+            <Row gutter={16}>
+              <Col span={12}>
+                <Form.Item
+                  label="模块编码"
+                  name="module_code"
+                  rules={[{ required: true, message: '创建时自动生成' }]}
+                >
+                  <Input placeholder="创建时自动生成" disabled />
+                </Form.Item>
+              </Col>
+              <Col span={12}>
+                <Form.Item
+                  label="模块名称"
+                  name="module_name"
+                  rules={[{ required: true, message: '请输入模块名称' }]}
+                >
+                  <Input placeholder="例如：UV 喷绘-灯片" />
+                </Form.Item>
+              </Col>
+            </Row>
+            <Row gutter={16}>
+              <Col span={12}>
+                <Form.Item label="类别" name="category">
+                  <Select
+                    allowClear
+                    placeholder="请选择"
+                    showSearch
+                    options={MATERIAL_CATEGORIES.map((item) => ({ label: item, value: item }))}
+                  />
+                </Form.Item>
+              </Col>
+              <Col span={12}>
+                <Form.Item label="状态" name="status" rules={[{ required: true }]}>
+                  <Select options={STATUS_OPTIONS} />
+                </Form.Item>
+              </Col>
+            </Row>
+            <Row gutter={16}>
+              <Col span={12}>
+                <Form.Item label="标签" name="tags">
+                  <Select mode="tags" placeholder="用于筛选/分组" />
+                </Form.Item>
+              </Col>
+              <Col span={12}>
+                <Form.Item label="描述" name="description">
+                  <Input.TextArea rows={2} placeholder="可同步宜搭表单备注" />
+                </Form.Item>
+              </Col>
+            </Row>
           </Card>
-        </Col>
-        <Col xs={24} lg={16}>
-          <Card title="工艺详情">
-            <Skeleton active paragraph={{ rows: 5 }} />
-            <Empty description="等待后续模块挂载" imageStyle={{ marginTop: 16 }} />
+
+          <Card
+            title="物料组"
+            size="small"
+            bordered={false}
+            extra={
+              isEditing && (
+                <Space>
+                  <Button onClick={handleAddBlankMaterial}>添加空行</Button>
+                  <Button type="primary" icon={<LinkOutlined />} onClick={() => openMaterialChooser(undefined)}>
+                    选择物料
+                  </Button>
+                </Space>
+              )
+            }
+            style={{ marginTop: 16 }}
+          >
+            {materialsDataSource.length ? (
+              <Table
+                dataSource={materialsDataSource}
+                columns={materialsColumns}
+                pagination={false}
+                size="small"
+                tableLayout="fixed"
+              />
+            ) : (
+              <Empty description="尚未添加物料" />
+            )}
           </Card>
-        </Col>
-      </Row>
+
+          <Card
+            title="工序组"
+            size="small"
+            bordered={false}
+            style={{ marginTop: 16 }}
+            extra={
+              isEditing && (
+                <Space>
+                  <Button onClick={handleAddBlankStep}>添加空行</Button>
+                  <Button type="primary" icon={<LinkOutlined />} onClick={() => setProcessSelectContext({})}>
+                    选择工序
+                  </Button>
+                </Space>
+              )
+            }
+          >
+            {stepsDataSource.length ? (
+              <Table
+                dataSource={stepsDataSource}
+                columns={stepsColumns}
+                pagination={false}
+                size="small"
+                tableLayout="fixed"
+              />
+            ) : (
+              <Empty description="尚未添加工序" />
+            )}
+          </Card>
+                </Form>
+              ),
+            },
+            {
+              key: 'preview',
+              label: '预览计算',
+              children: (
+                <Space direction="vertical" style={{ width: '100%' }} size={12}>
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="预览计算（订单维度）"
+                    description="输入宽/高/数量（可选长度），系统会按每步的 measure_type 计算计价量，并按 计时/计件 公式实时汇总成本。"
+                  />
+
+                  <Card size="small" title="订单输入">
+                    <Space wrap>
+                      <Form.Item label="宽(mm)" style={{ marginBottom: 0 }}>
+                        <InputNumber
+                          min={0}
+                          value={previewInput.width_mm}
+                          onChange={(v) => setPreviewInput((p) => ({ ...p, width_mm: safeNum(v, 0) }))}
+                        />
+                      </Form.Item>
+                      <Form.Item label="高(mm)" style={{ marginBottom: 0 }}>
+                        <InputNumber
+                          min={0}
+                          value={previewInput.height_mm}
+                          onChange={(v) => setPreviewInput((p) => ({ ...p, height_mm: safeNum(v, 0) }))}
+                        />
+                      </Form.Item>
+                      <Form.Item label="长度(m)" style={{ marginBottom: 0 }}>
+                        <InputNumber
+                          min={0}
+                          value={previewInput.length_m}
+                          onChange={(v) => setPreviewInput((p) => ({ ...p, length_m: safeNum(v, 0) }))}
+                        />
+                      </Form.Item>
+                      <Form.Item label="数量(个)" style={{ marginBottom: 0 }}>
+                        <InputNumber
+                          min={0}
+                          value={previewInput.count}
+                          onChange={(v) => setPreviewInput((p) => ({ ...p, count: safeNum(v, 0) }))}
+                        />
+                      </Form.Item>
+                    </Space>
+                  </Card>
+
+                  <Card
+                    size="small"
+                    title="成本预览"
+                    extra={<Text strong>合计：{safeNum(previewResult.total, 0).toFixed(4)}</Text>}
+                  >
+                    <Table
+                      size="small"
+                      pagination={false}
+                      dataSource={previewResult.rows}
+                      columns={[
+                        { title: '步骤', dataIndex: 'name', width: 260, ellipsis: true },
+                        {
+                          title: '模式',
+                          dataIndex: 'cost_mode',
+                          width: 80,
+                          render: (v: StepCostMode) => (v === 'time' ? '计时' : '计件'),
+                        },
+                        {
+                          title: '计价量类型',
+                          dataIndex: 'measure_type',
+                          width: 110,
+                          render: (v: StepMeasureType) =>
+                            STEP_MEASURE_TYPE_OPTIONS.find((x) => x.value === v)?.label ?? v,
+                        },
+                        {
+                          title: '计价量',
+                          dataIndex: 'measure_qty',
+                          width: 120,
+                          render: (v: number, r: any) => {
+                            const unit = STEP_MEASURE_TYPE_OPTIONS.find((x) => x.value === r.measure_type)?.unitHint ?? ''
+                            return `${safeNum(v, 0).toFixed(4)} ${unit}`
+                          },
+                        },
+                        {
+                          title: '成本',
+                          dataIndex: 'cost',
+                          width: 120,
+                          render: (v: number, r: any) =>
+                            r.warnings?.length ? (
+                              <Space direction="vertical" size={0}>
+                                <Text type="danger">{safeNum(v, 0).toFixed(4)}</Text>
+                                <Text type="secondary">{r.warnings.join('，')}</Text>
+                              </Space>
+                            ) : (
+                              safeNum(v, 0).toFixed(4)
+                            ),
+                        },
+                      ]}
+                    />
+                  </Card>
+                </Space>
+              ),
+            },
+          ]}
+        />
+      </Drawer>
+
+      <GuideDrawer
+        open={guideOpen}
+        onClose={() => setGuideOpen(false)}
+        title="新建工艺模块指南"
+        content={processModulesGuide}
+        tip="提示：这是“工艺模块”面板的新建/维护指南（Markdown）。需要调整内容，直接修改对应文档并重新部署即可。"
+      />
+
+      <ReferenceDrawer
+        open={referenceDrawerOpen}
+        onClose={() => setReferenceDrawerOpen(false)}
+        data={referencesQuery.data}
+        loading={referencesQuery.isLoading}
+      />
+
+      <RealMaterialSelectModal
+        open={!!materialSelectContext}
+        onClose={() => setMaterialSelectContext(null)}
+        onConfirm={(records, kind) => handleRealMaterialConfirm(records, kind)}
+        presetKind={materialSelectContext?.kind ?? 'real'}
+      />
+
+      <VirtualMaterialSelectModal
+        open={!!virtualSelectContext}
+        onClose={() => setVirtualSelectContext(null)}
+        onConfirm={handleVirtualMaterialConfirm}
+      />
+
+      <ProcessSelectModal
+        open={!!processSelectContext}
+        onClose={() => setProcessSelectContext(null)}
+        onConfirm={handleProcessConfirm}
+      />
+
+      <Modal
+        title="选择物料分类"
+        open={!!materialKindChooser}
+        onCancel={() => setMaterialKindChooser(null)}
+        onOk={confirmMaterialKind}
+        okText="下一步：选择物料"
+        destroyOnClose
+      >
+        <Space direction="vertical" style={{ width: '100%' }} size={12}>
+          <Radio.Group
+            value={materialKindDraft}
+            optionType="button"
+            buttonStyle="solid"
+            onChange={(e) => setMaterialKindDraft(e.target.value as MaterialReferenceKind)}
+            options={[
+              { label: '真实物料', value: 'real' },
+              { label: 'BOM 物料', value: 'bom' },
+              { label: '虚拟物料', value: 'virtual' },
+            ]}
+          />
+          <Text type="secondary">
+            提示：BOM/虚拟/真实会在物料组中用不同颜色标识（编号左侧 Tag）。
+          </Text>
+        </Space>
+      </Modal>
     </Space>
   )
 }
 
+interface RealMaterialSelectModalProps {
+  open: boolean
+  onClose: () => void
+  onConfirm: (materials: Material[], kind: MaterialReferenceKind) => void
+  presetKind: MaterialReferenceKind
+}
+
+interface ProcessSelectModalProps {
+  open: boolean
+  onClose: () => void
+  onConfirm: (process: ProcessReference) => void
+}
+
+const ProcessSelectModal = ({ open, onClose, onConfirm }: ProcessSelectModalProps) => {
+  const [search, setSearch] = useState('')
+  const [chargingMode, setChargingMode] = useState<string | undefined>(undefined)
+  const [selectedRowKeys, setSelectedRowKeys] = useState<Key[]>([])
+  const [selectedRows, setSelectedRows] = useState<ProcessReference[]>([])
+
+  useEffect(() => {
+    if (!open) {
+      setSearch('')
+      setChargingMode(undefined)
+      setSelectedRowKeys([])
+      setSelectedRows([])
+    }
+  }, [open])
+
+  const query = useQuery<ProcessReference[]>({
+    queryKey: ['process-picker', search, chargingMode],
+    queryFn: () =>
+      fetchProcessReferences({
+        search: search || undefined,
+        charging_mode: chargingMode || undefined,
+        status: 'active',
+        limit: 200,
+      } as any),
+    enabled: open,
+  })
+
+  const handleConfirm = () => {
+    if (!selectedRows.length) {
+      message.warning('请选择一个工序')
+      return
+    }
+    onConfirm(selectedRows[0])
+    onClose()
+  }
+
+  return (
+    <Drawer
+      title="选择工序（全局工序库）"
+      open={open}
+      onClose={onClose}
+      width={860}
+      destroyOnClose
+      extra={
+        <Space>
+          <Button onClick={onClose}>取消</Button>
+          <Button type="primary" onClick={handleConfirm}>
+            选择
+          </Button>
+        </Space>
+      }
+    >
+      <Space direction="vertical" style={{ width: '100%' }}>
+        <Space align="start">
+          <Input.Search
+            placeholder="搜索编码/名称"
+            allowClear
+            style={{ width: 260 }}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+          <Select
+            allowClear
+            placeholder="计价方式"
+            style={{ width: 200 }}
+            value={chargingMode}
+            onChange={(value) => setChargingMode(value)}
+            options={PRICING_METHOD_OPTIONS}
+          />
+        </Space>
+
+        <Table<ProcessReference>
+          rowKey="id"
+          loading={query.isLoading}
+          dataSource={query.data ?? []}
+          pagination={{ pageSize: 10 }}
+          rowSelection={{
+            type: 'radio',
+            selectedRowKeys,
+            onChange: (_keys, rows) => {
+              setSelectedRowKeys(_keys)
+              setSelectedRows(rows)
+            },
+          }}
+          columns={[
+            {
+              title: '编码',
+              dataIndex: 'process_code',
+              width: 160,
+              render: (code: string) => <Text code>{code}</Text>,
+            },
+            {
+              title: '名称',
+              dataIndex: 'process_name',
+              width: 220,
+              ellipsis: true,
+            },
+            {
+              title: '计价方式',
+              dataIndex: 'charging_mode',
+              width: 120,
+              render: (value: string) => value || '-',
+            },
+            {
+              title: '标准单价',
+              dataIndex: 'standard_rate',
+              width: 140,
+              render: (value: string | number | null, record) => {
+                if (value === null || value === undefined) return '-'
+                return `${value} / ${normalizeUnit(record.unit_of_measure) || '-'}`
+              },
+            },
+          ]}
+        />
+      </Space>
+    </Drawer>
+  )
+}
+
+const RealMaterialSelectModal = ({
+  open,
+  onClose,
+  onConfirm,
+  presetKind,
+}: RealMaterialSelectModalProps) => {
+  const [search, setSearch] = useState('')
+  const [category, setCategory] = useState<string | undefined>(undefined)
+  const [onlyBom, setOnlyBom] = useState(presetKind === 'bom')
+  const [selectedRowKeys, setSelectedRowKeys] = useState<Key[]>([])
+  const [selectedRows, setSelectedRows] = useState<Material[]>([])
+
+  useEffect(() => {
+    if (!open) {
+      setSearch('')
+      setCategory(undefined)
+      setOnlyBom(presetKind === 'bom')
+      setSelectedRowKeys([])
+      setSelectedRows([])
+    }
+  }, [open, presetKind])
+
+  const query = useQuery({
+    queryKey: ['process-material-picker', search, category, onlyBom],
+    queryFn: () =>
+      fetchMaterials({
+        search: search || undefined,
+        category: category || undefined,
+        is_active: true,
+        is_bom_material: onlyBom || undefined,
+        page_size: 20,
+      } as MaterialQueryParams),
+    enabled: open,
+  })
+
+  const handleConfirm = () => {
+    if (!selectedRows.length) {
+      message.warning('请选择至少一个物料')
+      return
+    }
+    onConfirm(selectedRows, onlyBom ? 'bom' : 'real')
+    onClose()
+  }
+
+  return (
+    <Drawer
+      title="选择真实物料"
+      open={open}
+      onClose={onClose}
+      width={720}
+      destroyOnClose
+      extra={
+        <Space>
+          <Button onClick={onClose}>取消</Button>
+          <Button type="primary" onClick={handleConfirm}>
+            添加
+          </Button>
+        </Space>
+      }
+    >
+      <Space direction="vertical" style={{ width: '100%' }}>
+        <Space align="start">
+          <Input.Search
+            placeholder="搜索编码/名称"
+            allowClear
+            style={{ width: 240 }}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+          <Select
+            allowClear
+            placeholder="分类"
+            style={{ width: 180 }}
+            value={category}
+            onChange={(value) => setCategory(value)}
+            options={MATERIAL_CATEGORIES.map((item) => ({ label: item, value: item }))}
+          />
+          <Select
+            style={{ width: 160 }}
+            value={onlyBom ? 'bom' : 'real'}
+            onChange={(value) => setOnlyBom(value === 'bom')}
+            options={[
+              { label: '真实物料', value: 'real' },
+              { label: 'BOM 物料', value: 'bom' },
+            ]}
+          />
+        </Space>
+
+        <Table<Material>
+          rowKey="id"
+          loading={query.isLoading}
+          dataSource={query.data?.items ?? []}
+          pagination={{ pageSize: 10 }}
+          rowSelection={{
+            selectedRowKeys,
+            onChange: (_keys, rows) => {
+              setSelectedRowKeys(_keys)
+              setSelectedRows(rows)
+            },
+          }}
+          columns={[
+            {
+              title: '物料编码',
+              dataIndex: 'material_code',
+              width: 160,
+              render: (code: string) => <Text code>{code}</Text>,
+            },
+            {
+              title: '名称',
+              dataIndex: 'material_name',
+            },
+            {
+              title: '分类',
+              dataIndex: 'category',
+              width: 160,
+              render: (value?: string) => value || '-',
+            },
+            {
+              title: '单位',
+              dataIndex: 'unit',
+              width: 100,
+            },
+          ]}
+        />
+      </Space>
+    </Drawer>
+  )
+}
+
+interface VirtualMaterialSelectModalProps {
+  open: boolean
+  onClose: () => void
+  onConfirm: (materials: VirtualMaterial[]) => void
+}
+
+const VirtualMaterialSelectModal = ({
+  open,
+  onClose,
+  onConfirm,
+}: VirtualMaterialSelectModalProps) => {
+  const [search, setSearch] = useState('')
+  const [status, setStatus] = useState<string | undefined>('active')
+  const [selectedRowKeys, setSelectedRowKeys] = useState<Key[]>([])
+  const [selectedRows, setSelectedRows] = useState<VirtualMaterial[]>([])
+
+  useEffect(() => {
+    if (!open) {
+      setSearch('')
+      setStatus('active')
+      setSelectedRowKeys([])
+      setSelectedRows([])
+    }
+  }, [open])
+
+  const query = useQuery({
+    queryKey: ['process-virtual-picker', search, status],
+    queryFn: () =>
+      fetchVirtualMaterials({
+        search: search || undefined,
+        status: status || undefined,
+        page_size: 20,
+      } as VirtualMaterialQueryParams),
+    enabled: open,
+  })
+
+  const handleConfirm = () => {
+    if (!selectedRows.length) {
+      message.warning('请选择至少一个虚拟物料')
+      return
+    }
+    onConfirm(selectedRows)
+    onClose()
+  }
+
+  return (
+    <Drawer
+      title="选择虚拟物料"
+      open={open}
+      onClose={onClose}
+      width={720}
+      destroyOnClose
+      extra={
+        <Space>
+          <Button onClick={onClose}>取消</Button>
+          <Button type="primary" onClick={handleConfirm}>
+            添加
+          </Button>
+        </Space>
+      }
+    >
+      <Space direction="vertical" style={{ width: '100%' }}>
+        <Space align="start">
+          <Input.Search
+            placeholder="搜索编码/名称"
+            allowClear
+            style={{ width: 240 }}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+          <Select
+            allowClear
+            placeholder="状态"
+            style={{ width: 160 }}
+            value={status}
+            onChange={(value) => setStatus(value)}
+            options={[
+              { label: '草稿', value: 'draft' },
+              { label: '启用', value: 'active' },
+              { label: '停用', value: 'inactive' },
+            ]}
+          />
+        </Space>
+        <Table<VirtualMaterial>
+          rowKey="id"
+          loading={query.isLoading}
+          dataSource={query.data?.items ?? []}
+          pagination={{ pageSize: 10 }}
+          rowSelection={{
+            selectedRowKeys,
+            onChange: (_keys, rows) => {
+              setSelectedRowKeys(_keys)
+              setSelectedRows(rows)
+            },
+          }}
+          columns={[
+            {
+              title: '虚拟编码',
+              dataIndex: 'virtual_code',
+              width: 160,
+              render: (code: string) => <Text code>{code}</Text>,
+            },
+            {
+              title: '名称',
+              dataIndex: 'name',
+            },
+            {
+              title: '分类',
+              dataIndex: 'category',
+              width: 160,
+              render: (value?: string) => value || '-',
+            },
+            {
+              title: '状态',
+              dataIndex: 'status',
+              width: 120,
+              render: (value: string) => (
+                <Tag color={value === 'active' ? 'green' : value === 'inactive' ? 'red' : 'gold'}>
+                  {value === 'active' ? '启用' : value === 'inactive' ? '停用' : '草稿'}
+                </Tag>
+              ),
+            },
+          ]}
+        />
+      </Space>
+    </Drawer>
+  )
+}
+
+interface ReferenceDrawerProps {
+  open: boolean
+  onClose: () => void
+  data?: Awaited<ReturnType<typeof fetchProcessModuleReferences>>
+  loading: boolean
+}
+
+const ReferenceDrawer = ({ open, onClose, data, loading }: ReferenceDrawerProps) => {
+  const references = data?.items ?? []
+  return (
+    <Drawer title="引用详情" open={open} onClose={onClose} width={720} destroyOnClose>
+      {loading ? (
+        <Empty description="加载中..." />
+      ) : references.length ? (
+        <Space direction="vertical" style={{ width: '100%' }}>
+          {references.map((item) => (
+            <Card
+              key={item.id}
+              size="small"
+              title={`${item.module_code} · ${item.module_name}`}
+              extra={
+                <Tag color={item.status === 'active' ? 'green' : 'gold'}>
+                  {item.status === 'active' ? '启用' : '草稿'}
+                </Tag>
+              }
+            >
+              <Text type="secondary">
+                物料 {item.materials.length} 条 · 工序 {item.steps.length} 条
+              </Text>
+            </Card>
+          ))}
+        </Space>
+      ) : (
+        <Empty description="暂无引用信息" />
+      )}
+    </Drawer>
+  )
+}
+
 export default ProcessModulesPage
-
-

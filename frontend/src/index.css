@@ -90,3 +90,11 @@ a {
   font-weight: 600;
   text-transform: capitalize;
 }
+
+/* Hide horizontal scrollbar for AntD tables while preserving horizontal scrolling (trackpad/shift+wheel). */
+.hide-x-scrollbar .ant-table-body {
+  scrollbar-width: none; /* Firefox */
+}
+.hide-x-scrollbar .ant-table-body::-webkit-scrollbar {
+  height: 0; /* WebKit */
+}

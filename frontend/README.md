@@ -16,7 +16,7 @@ npm run deploy:static    # build + 同步 dist/ 至正式静态目录
 
 ## 静态部署
 
-1. 设置目标目录：`export PLANNER_STATIC_DIR=/srv/nginx/planner`（未设置时默认 `/srv/www/ai-costing-system/planner`）。
+1. （可选）设置目标目录：`export PLANNER_STATIC_DIR=/path/to/dir`。不设置时脚本会同步到 **`/var/www/html/ai-costing/dist`**（生产 Nginx 当前使用的目录）。
 2. 执行 `npm run deploy:static`，脚本会自动 `npm run build` 并调用 `scripts/deploy_static.sh` 把 `dist/` 拷贝至目标目录（使用 `rsync --delete`）。
 3. 前端不再依赖 `vite preview`；如需验证，使用生产静态目录挂载的域名访问。
 
@@ -40,7 +40,8 @@ npm run deploy:static    # build + 同步 dist/ 至正式静态目录
 - `/planner`：initiative 列表 + 成本包树 + 行项目表（内联编辑、分页、CSV 导入、Job Drawer 轮询/SSE）。
 - `/planner/scenarios`：支持搜索、按状态/Initiative/Owner/收藏过滤，批量提交审批 & 批量导出（长任务自动弹出 Job Drawer，含 Trace ID/Job ID 一键复制）。
 - `/planner/scenario-builder`：基于 API 的场景列表、克隆、差异分析、审批、导出历史时间轴、分页审计日志、AI Benchmark 建议（收藏持久化）。
-- `/costing/materials`：物料主数据管理（分页筛选、启用/停用、YiDa 同步日志、CSV/XLSX 导出），为工序/模型配置提供数据底座。
+- `/costing/materials`：物料主数据管理（分页筛选、启用/停用、本地 BOM 标记、YiDa 同步日志、CSV/XLSX 导出），BOM 开关仅影响本地成本计算，不会回写宜搭，物料图片通过 `/api/planner/base-config/materials/{id}/images/{idx}` 代理展示。
+- `/costing/virtual-materials`：虚拟物料列表、创建/编辑、真实物料绑定、配比/损耗校验、盘点折算计算器，以及引用真实物料的提示。
 - Observability：所有耗时操作统一 `message.loading` 提示，Drawer/Timeline 提供 Trace ID/Job ID 复制；Audit Drawer 支持 Trace/关键字搜索。
 
 ## 性能优化

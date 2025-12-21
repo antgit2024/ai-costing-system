@@ -85,6 +85,14 @@ import type {
   SkuModelVersionMappingCreatePayload,
   SkuModelVersionMappingRead,
   PaginatedProductModelVersionResponse,
+  SpecParseRequest,
+  SpecParseResponse,
+  LineVariantCreateRequest,
+  LineVariantDetailRead,
+  LineVariantItemsReplaceRequest,
+  LineVariantUpdateRequest,
+  BomGenerateRequest,
+  BomGenerateResponse,
 } from '@/types/planner'
 
 const resolvePlannerApiBase = (raw?: string): string => {
@@ -604,6 +612,10 @@ export const fetchProductModel = async (modelId: string): Promise<ProductModel> 
   return response.data
 }
 
+export const deleteProductModel = async (modelId: string): Promise<void> => {
+  await plannerClient.delete(`/product-models/${modelId}`)
+}
+
 export const createProductModel = async (
   payload: ProductModelCreatePayload,
 ): Promise<ProductModel> => {
@@ -685,6 +697,10 @@ export const updateProductModelVersionLines = async (
   return response.data
 }
 
+export const deleteProductModelVersion = async (versionId: string): Promise<void> => {
+  await plannerClient.delete(`/product-model-versions/${versionId}`)
+}
+
 export const syncProductModelVersionFromModules = async (
   versionId: string,
   payload: ProductModelSyncFromModulesRequest = {},
@@ -741,6 +757,56 @@ export const deriveStandardFromSampleVersion = async (
     `/product-model-versions/${sourceVersionId}/derive-standard`,
     payload,
   )
+  return response.data
+}
+
+// --- Line variants (version-scoped) + spec parser + dynamic BOM (MVP) ---
+
+export const parseSpec = async (payload: SpecParseRequest): Promise<SpecParseResponse> => {
+  const response = await plannerClient.post(`/spec/parse`, payload)
+  return response.data
+}
+
+export const listLineVariants = async (params: {
+  version_id: string
+  base_line_id?: string
+}): Promise<LineVariantDetailRead[]> => {
+  const response = await plannerClient.get(`/product-model-versions/${params.version_id}/line-variants`, {
+    params: sanitizeParams({ base_line_id: params.base_line_id }),
+  })
+  return response.data
+}
+
+export const createLineVariant = async (
+  versionId: string,
+  payload: LineVariantCreateRequest,
+): Promise<LineVariantDetailRead> => {
+  const response = await plannerClient.post(`/product-model-versions/${versionId}/line-variants`, payload)
+  return response.data
+}
+
+export const updateLineVariant = async (
+  variantId: string,
+  payload: LineVariantUpdateRequest,
+): Promise<LineVariantDetailRead> => {
+  const response = await plannerClient.patch(`/line-variants/${variantId}`, payload)
+  return response.data
+}
+
+export const deleteLineVariant = async (variantId: string): Promise<void> => {
+  await plannerClient.delete(`/line-variants/${variantId}`)
+}
+
+export const replaceLineVariantItems = async (
+  variantId: string,
+  payload: LineVariantItemsReplaceRequest,
+): Promise<LineVariantDetailRead> => {
+  const response = await plannerClient.put(`/line-variants/${variantId}/items`, payload)
+  return response.data
+}
+
+export const generateBom = async (payload: BomGenerateRequest): Promise<BomGenerateResponse> => {
+  const response = await plannerClient.post(`/bom/generate`, payload)
   return response.data
 }
 

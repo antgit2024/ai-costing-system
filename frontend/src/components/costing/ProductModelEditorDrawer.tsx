@@ -30,6 +30,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import {
   CopyOutlined,
+  BranchesOutlined,
   DownOutlined,
   DeleteOutlined,
   EditOutlined,
@@ -44,6 +45,7 @@ import {
 import { normalizeUnit } from '@/utils/unit'
 import GuideDrawer from '@/components/common/GuideDrawer'
 import derivePerSqmGuide from '@/guides/derive_standard_per_sqm_tablecloth_example.md?raw'
+import LineVariantDrawer from '@/components/costing/LineVariantDrawer'
 
 import {
   bindSkuModelVersion,
@@ -273,6 +275,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   const [materialPreviewOpen, setMaterialPreviewOpen] = useState(false)
   const [materialPreviewRow, setMaterialPreviewRow] = useState<any>(null)
 
+  const [lineVariantDrawerOpen, setLineVariantDrawerOpen] = useState(false)
+  const [lineVariantBaseLineId, setLineVariantBaseLineId] = useState<string | null>(null)
+  const [lineVariantBaseLineLabel, setLineVariantBaseLineLabel] = useState<string>('')
+
   const [sampleSpecLocked, setSampleSpecLocked] = useState(false)
 
   const [modules, setModules] = useState<ModuleLinkDraft[]>([])
@@ -353,6 +359,11 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     const name = String(row?.material_name ?? '').trim()
     const code = String(row?.material_code ?? '').trim()
     return name.includes('#{') || code.includes('#{')
+  }
+
+  const isAnchorMaterialRow = (row: any): boolean => {
+    const meta = (row?.metadata_json ?? {}) as any
+    return !!(meta?.is_anchor || meta?.anchor_flag || meta?.anchor_line)
   }
 
   const deriveSampleCodeFromModel = (m: any): string => {
@@ -968,6 +979,22 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     const cur = (row.metadata_json as any)?.derive_template
     setTuningDeriveTemplateDraft(cur ?? { template_kind: 'linear', calibrate_from_sample: true })
     setTuningOpen(true)
+  }
+
+  const openLineVariantDrawerForMaterialRow = (row: any) => {
+    if (entryContext !== 'standard') return
+    if (!selectedVersionId) {
+      message.warning('请先选择标准版本')
+      return
+    }
+    const baseLineId = String(row?.id ?? '').trim()
+    if (!baseLineId) {
+      message.warning('该物料行尚未落库（缺少 base_line_id），请先“保存清单”后再配置变体')
+      return
+    }
+    setLineVariantBaseLineId(baseLineId)
+    setLineVariantBaseLineLabel(String(row?.material_name ?? row?.material_code ?? '').trim())
+    setLineVariantDrawerOpen(true)
   }
 
   const openTuningPanelForProcess = (rowIndex: number) => {
@@ -2449,6 +2476,11 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                     请替换物料
                                   </Tag>
                                 ) : null}
+                                {isAnchorMaterialRow(r) ? (
+                                  <Tag color="blue" style={{ marginInlineStart: 4, fontSize: 10, padding: '0 4px', lineHeight: '16px' }}>
+                                    锚点
+                                  </Tag>
+                                ) : null}
                               </Space>
                             ),
                           },
@@ -2488,6 +2520,15 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                             render: (_: any, __: any, idx: number) => (
                               <Space size={2}>
                                 <Button size="small" type="text" icon={<SwapOutlined />} title="替换" onClick={() => openMaterialPickerForRow(idx)} />
+                                {entryContext === 'standard' ? (
+                                  <Button
+                                    size="small"
+                                    type="text"
+                                    icon={<BranchesOutlined />}
+                                    title="变体（Overlay）"
+                                    onClick={() => openLineVariantDrawerForMaterialRow((materials as any[])[idx])}
+                                  />
+                                ) : null}
                                 <Button
                                   size="small"
                                   type="text"
@@ -3699,6 +3740,14 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
           </Space>
         )}
       </Modal>
+
+      <LineVariantDrawer
+        open={lineVariantDrawerOpen}
+        onClose={() => setLineVariantDrawerOpen(false)}
+        versionId={String(selectedVersionId ?? '')}
+        baseLineId={String(lineVariantBaseLineId ?? '')}
+        baseLineLabel={lineVariantBaseLineLabel}
+      />
 
       <GuideDrawer
         open={deriveGuideOpen}

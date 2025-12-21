@@ -24,5 +24,11 @@
 - 本轮只交付一个闭环产物：**把旧编辑器迁到 `ProductModelEditorDrawer.tsx` 并接通两入口页**。
 - 不要顺手重构 unrelated 组件；避免一次改动牵扯几十个文件导致 diff 巨大、交互层卡顿。
 
+### 5) 行级变体需要 base_line_id（未保存清单无法配置）
+
+- “变体（Overlay）”是 **version-scoped + base_line_id-scoped**：只有当版本清单行已落库（物料行有 `id`）才能创建/绑定变体规则。
+- 现象：刚新增的物料行（尚未“保存清单”）点击“变体”会提示缺少 base_line_id。
+- 处理：先点一次“保存清单”（PUT version lines）再配置变体。
+
 
 

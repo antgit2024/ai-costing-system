@@ -7,6 +7,7 @@
 ### 1) 前端：产品模型（迁移编辑器的核心工作区）
 
 - `frontend/src/components/costing/ProductModelEditorDrawer.tsx`（目标：承载完整编辑器逻辑）
+- `frontend/src/components/costing/LineVariantDrawer.tsx`（行级变体 Overlay Drawer：对接 line-variants/spec/parse/bom）
 - `DOC/index/extracted/ProductModelEditorDrawer_confirmed_20251221T042643Z.tsx`（已确认正确的快照备份）
 - `frontend/src/guides/`（编辑器内嵌的统一 Markdown 指南：通过 `?raw` 导入）
 - `frontend/src/guides/derive_standard_per_sqm_tablecloth_example.md`（推导标准版本：按㎡口径示例）

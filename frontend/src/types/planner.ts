@@ -968,6 +968,141 @@ export interface DeriveStandardResponse {
   line_stats: Record<string, unknown>
 }
 
+// --- Line variants (version-scoped) + spec parser + dynamic BOM (MVP) ---
+
+export interface SpecTokenExplanation {
+  token: string
+  source: string
+  rule: string
+}
+
+export interface SpecParseRequest {
+  spec_text: string
+  sku_code?: string
+}
+
+export interface SpecParseResponse {
+  tokens: string[]
+  width_cm?: string | number | null
+  height_cm?: string | number | null
+  diameter_cm?: string | number | null
+  area_m2?: string | number | null
+  perimeter_m?: string | number | null
+  explanations: SpecTokenExplanation[]
+}
+
+export type LineVariantAction = 'replace_bundle' | 'replace_self' | 'remove_self' | 'add_siblings'
+
+export interface LineVariantCondition {
+  spec_contains_any?: string[]
+  spec_contains_all?: string[]
+  width_between?: [string | number | null, string | number | null]
+  height_between?: [string | number | null, string | number | null]
+  area_between?: [string | number | null, string | number | null]
+  perimeter_between?: [string | number | null, string | number | null]
+}
+
+export interface LineVariantItemPayload {
+  sequence_order?: number
+  material_kind: MaterialReferenceKind
+  material_ref_id?: string | null
+  material_code?: string | null
+  material_name?: string | null
+  unit_of_measure?: string | null
+  calculation_method: CalculationMethod
+  base_quantity: number
+  fixed_quantity: number
+  coverage_ratio: number
+  loss_rate: number
+  metadata_json?: Record<string, unknown>
+}
+
+export interface LineVariantItemRead extends LineVariantItemPayload {
+  id: string
+  sequence_order: number
+  created_at: string
+  updated_at: string
+}
+
+export interface LineVariantCreateRequest {
+  version_id: string
+  base_line_id: string
+  priority?: number
+  enabled?: boolean
+  action?: LineVariantAction
+  stop_on_hit?: boolean
+  notes?: string
+  conditions?: LineVariantCondition
+  metadata_json?: Record<string, unknown>
+  items?: LineVariantItemPayload[]
+  operator_id?: string
+}
+
+export interface LineVariantUpdateRequest {
+  base_line_id?: string
+  priority?: number
+  enabled?: boolean
+  action?: LineVariantAction
+  stop_on_hit?: boolean
+  notes?: string
+  conditions?: LineVariantCondition
+  metadata_json?: Record<string, unknown>
+  operator_id?: string
+}
+
+export interface LineVariantItemsReplaceRequest {
+  items: LineVariantItemPayload[]
+}
+
+export interface LineVariantDetailRead {
+  id: string
+  version_id: string
+  base_line_id: string
+  priority: number
+  enabled: boolean
+  action: LineVariantAction
+  stop_on_hit: boolean
+  notes?: string | null
+  conditions: Record<string, unknown>
+  metadata: Record<string, unknown>
+  items: LineVariantItemRead[]
+  created_at: string
+  updated_at: string
+}
+
+export interface BomLineRead {
+  line_index: number
+  source_type: 'base_line' | 'variant_item'
+  base_line_id?: string | null
+  variant_id?: string | null
+  variant_item_id?: string | null
+  material_kind: string
+  material_ref_id?: string | null
+  material_code?: string | null
+  material_name?: string | null
+  unit_of_measure?: string | null
+  calculation_method: CalculationMethod
+  base_quantity: string | number
+  fixed_quantity: string | number
+  coverage_ratio: string | number
+  loss_rate: string | number
+  computed_quantity: string | number
+  metadata: Record<string, unknown>
+}
+
+export interface BomGenerateRequest {
+  spec_text: string
+  model_version_id?: string
+  sku_code?: string
+  quantity?: number
+  operator_id?: string
+}
+
+export interface BomGenerateResponse {
+  final_material_lines: BomLineRead[]
+  trace: Record<string, unknown>
+}
+
 export type VariantTriggerType = 'sku_contains' | 'area_gte' | 'perimeter_gte'
 export type VariantActionType = 'replace_material' | 'add_material'
 

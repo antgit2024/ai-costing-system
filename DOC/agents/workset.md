@@ -27,10 +27,13 @@
 - `backend/src/planner/routers/bom.py`（bom/generate：动态 BOM 预演）
 - `backend/src/planner/routers/line_variants.py`（version-scoped 行级变体 CRUD）
 - `backend/src/planner/schemas.py`（如需核对字段名/response 结构）
+- `backend/src/planner/services/bom_generation_service.py`（动态 BOM 生成：overlay 套用与 replace_bundle 语义）
+- `backend/src/planner/services/line_variant_service.py`（行级变体：bundle 选择范围与 CRUD 细节）
 
 ### 3) 文档：口径与验收
 
 - `DOC/costing/ui_specs/product_model.md`（产品模型 UI 规格/口径）
+- `DOC/costing/manuals/standard_model_variants_ops_rules.md`（标准模型行级变体：运营/实施规范）
 - `DOC/agents/task_log.md`（最新变更/决策记录）
 
 ### 3.1) 业务输入（基础表单/场景说明，仅限本轮变体方案）

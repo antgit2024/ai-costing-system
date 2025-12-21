@@ -11,6 +11,11 @@
 - 构建（验收门槛）：
   - `npm -C frontend run build`
 
+### 4) 文档验收（可选）
+
+- 行级变体运营规范文档存在性：
+  - `grep -nF "## 标准模型：行级变体（Overlay）运营/实施规范（v0.1）" DOC/costing/manuals/standard_model_variants_ops_rules.md`
+
 ### 2) 本地联调（可选，但强烈建议）
 
 - 访问页面：

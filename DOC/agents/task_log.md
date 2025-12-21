@@ -2,6 +2,7 @@
 
 | 日期 | 模块 | 角色 | 任务/问题 | 结论 | 待办 |
 | --- | --- | --- | --- | --- | --- |
+| 2025-12-21 | 协作方法论（可复用） | Planner（Hub Agent） | 将本仓“Hub Agent 派单 + 执行 Agent 闭环 + 恢复包/工作集/提炼件”机制整理成跨项目可复用的标准说明，便于新项目快速落地规则与目录结构。 | ✅ 新增 `DOC/agents/task_distribution_standard.md`：包含角色边界、必备文件/目录、强制规则、派单模板、验收/提交/恢复流程、新项目落地步骤。并已加入 `DOC/agents/workset.md`。 | 建议新项目初始化时先复制 `DOC/agents/` 目录骨架，再按项目特点填充 workset/commands。 |
 | 2025-12-21 | Agent 体系/接力 | Planner（Hub Agent） | 固化“Hub Agent + 执行 Agent”最稳最低成本协作架构，并将闭环任务单模板写入接力包；修正本轮验收命令为系统默认可用的 `grep -n`。 | ✅ `DOC/agents/handoff_planner.md` 已补齐推荐架构与任务单模板；`DOC/agents/state.md` 已回填本轮产物与可执行验收命令；`grep` 验证通过。 | 后续每轮 Hub Agent 产出“下一步闭环任务单 + 验收命令 + 依赖契约”，执行 Agent 回填 state/task_log。 |
 | 2025-12-21 | Agent 派单规范 | Planner（Hub Agent） | 为避免执行 Agent 不清楚自身身份/交付门槛，将“每轮必须自维护+硬验收+Git落地”三件事固化为派单统一尾注，并要求派单首行明确 `@Frontend/@Backend/@Docs Agent` 身份。 | ✅ `DOC/agents/handoff_planner.md` 新增“派单统一尾注（每次派活必贴）”；`DOC/agents/state.md` 更新本轮验收命令指向该标题。 | 建议后续把此尾注作为所有派单消息的默认结尾，执行 Agent 完成/暂停前照单执行并回填恢复包。 |
 | 2025-12-21 | Hub Agent 自检 | Planner（Hub Agent） | 用户担心 Hub Agent 也会忘规则：将“Hub Agent 派单 SOP/自检清单”固化到接力包，便于每次派活时由用户回贴提醒。 | ✅ `DOC/agents/handoff_planner.md` 新增“Hub Agent 派单 SOP / 自检清单”；`DOC/agents/state.md` 回填本轮产物与验收命令（grep）。 | 后续派单时先贴自检清单，再给执行 Agent 派单任务单，严格一轮一个闭环。 |

@@ -22,6 +22,9 @@
 
 - `backend/src/planner/routers/product_models.py`
 - `backend/src/planner/routers/product_model_versions.py`
+- `backend/src/planner/routers/specs.py`（spec/parse：规格解析 tokens）
+- `backend/src/planner/routers/bom.py`（bom/generate：动态 BOM 预演）
+- `backend/src/planner/routers/line_variants.py`（version-scoped 行级变体 CRUD）
 - `backend/src/planner/schemas.py`（如需核对字段名/response 结构）
 
 ### 3) 文档：口径与验收
@@ -51,6 +54,7 @@
 ### 5) Agent 接力/恢复包（必须维护）
 
 - `DOC/agents/handoff_planner.md`（Planner 新 Agent 接力包：关键结论/唯一真相/快照/恢复清单）
+- `DOC/agents/task_distribution_standard.md`（跨项目复用：Hub派单体系标准说明/模板/必备文件）
 - `DOC/agents/handoff_frontend.md`（Frontend 新 Agent 接力包：P0 目标/接口索引/验收命令）
 - `DOC/agents/handoff_backend.md`（Backend 新 Agent 接力包：接口契约/验收命令）
 - `DOC/agents/handoff_docs.md`（Docs 新 Agent 接力包：口径/产出格式/风险点）

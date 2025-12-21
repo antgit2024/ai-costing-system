@@ -22,6 +22,23 @@ def _to_decimal(value: Any, default: Decimal = Decimal("0")) -> Decimal:
         return default
 
 
+def _json_safe(value: Any) -> Any:
+    """
+    Ensure JSON-serializable payloads for JSON columns (e.g. conditions_json/metadata_json).
+    SQLAlchemy's default JSON serializer cannot handle Decimal/tuple.
+    """
+    if value is None:
+        return None
+    if isinstance(value, Decimal):
+        # keep precision and avoid float rounding
+        return str(value)
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    return value
+
+
 def list_variants(
     db: Session,
     *,
@@ -80,8 +97,8 @@ def create_variant(
         action=action,
         stop_on_hit=stop_on_hit,
         notes=notes,
-        conditions_json=conditions or {},
-        metadata_json=metadata or {},
+        conditions_json=_json_safe(conditions or {}),
+        metadata_json=_json_safe(metadata or {}),
     )
     db.add(variant)
     db.flush()
@@ -119,9 +136,9 @@ def update_variant(
     if notes is not None:
         variant.notes = notes
     if conditions is not None:
-        variant.conditions_json = conditions
+        variant.conditions_json = _json_safe(conditions)
     if metadata is not None:
-        variant.metadata_json = metadata
+        variant.metadata_json = _json_safe(metadata)
     db.commit()
     db.refresh(variant)
     return variant

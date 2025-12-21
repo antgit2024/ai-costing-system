@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Button, Card, Drawer, Input, InputNumber, Select, Space, Switch, Table, Tag, Tooltip, Typography, message } from 'antd'
+import { Alert, Button, Card, Drawer, Input, InputNumber, Select, Space, Switch, Table, Tag, Tooltip, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { DeleteOutlined, EditOutlined, PlayCircleOutlined, SaveOutlined } from '@ant-design/icons'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -29,13 +29,19 @@ type EditableItemRow = LineVariantItemPayload & {
   _tmpId: string
 }
 
-const DEFAULT_ACTION: LineVariantAction = 'replace_bundle'
+const FIXED_ACTION: LineVariantAction = 'replace_self'
+const STABLE_SHAPE_LABEL = '最稳形态：replace_self + 同单位 1→1（启用前必须预演成功）'
 
 const asStringArray = (v: unknown): string[] => (Array.isArray(v) ? v.map((x) => String(x)).filter(Boolean) : [])
 
 const toNumber = (v: any, fallback = 0): number => {
   const n = Number(v)
   return Number.isFinite(n) ? n : fallback
+}
+
+const normalizeUnit = (u: unknown): string | null => {
+  const s = String(u ?? '').trim()
+  return s ? s : null
 }
 
 const buildEditableItems = (items: Array<any>): EditableItemRow[] =>
@@ -62,7 +68,6 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
   const [selectedVariantId, setSelectedVariantId] = useState<string | null>(null)
   const [draftEnabled, setDraftEnabled] = useState(true)
   const [draftPriority, setDraftPriority] = useState(100)
-  const [draftAction, setDraftAction] = useState<LineVariantAction>(DEFAULT_ACTION)
   const [draftStopOnHit, setDraftStopOnHit] = useState(true)
   const [draftNotes, setDraftNotes] = useState('')
   const [draftContainsAny, setDraftContainsAny] = useState<string[]>([])
@@ -72,6 +77,18 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
   const [specText, setSpecText] = useState('')
   const [specParsed, setSpecParsed] = useState<SpecParseResponse | null>(null)
   const [bomPreview, setBomPreview] = useState<BomGenerateResponse | null>(null)
+  const [lastPreviewAt, setLastPreviewAt] = useState<number | null>(null)
+  const [lastPreviewOk, setLastPreviewOk] = useState<boolean | null>(null)
+  const [lastPreviewError, setLastPreviewError] = useState<string | null>(null)
+  const [lastPreviewSummary, setLastPreviewSummary] = useState<{
+    spec_text: string
+    tokens_count: number
+    final_lines_count: number
+    trace_keys: number
+    base_unit: string | null
+    target_unit: string | null
+  } | null>(null)
+  const [lastPreviewFingerprint, setLastPreviewFingerprint] = useState<string | null>(null)
 
   const variantsQuery = useQuery({
     queryKey: ['lineVariants', versionId, baseLineId],
@@ -99,7 +116,6 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     if (!selectedVariant) return
     setDraftEnabled(!!selectedVariant.enabled)
     setDraftPriority(toNumber(selectedVariant.priority, 100))
-    setDraftAction((selectedVariant.action ?? DEFAULT_ACTION) as LineVariantAction)
     setDraftStopOnHit(!!selectedVariant.stop_on_hit)
     setDraftNotes(String(selectedVariant.notes ?? ''))
     const cond = (selectedVariant.conditions ?? {}) as any
@@ -112,16 +128,112 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     if (!open) return
     setSpecParsed(null)
     setBomPreview(null)
+    setLastPreviewAt(null)
+    setLastPreviewOk(null)
+    setLastPreviewError(null)
+    setLastPreviewSummary(null)
+    setLastPreviewFingerprint(null)
   }, [open, versionId, baseLineId])
+
+  const normalizedDraftItemsForFingerprint = useMemo(
+    () =>
+      draftItems.map((r) => ({
+        material_kind: r.material_kind ?? 'real',
+        material_ref_id: String(r.material_ref_id ?? '').trim() || null,
+        base_quantity: toNumber(r.base_quantity, 0),
+        fixed_quantity: toNumber(r.fixed_quantity, 0),
+        coverage_ratio: toNumber(r.coverage_ratio, 1),
+        loss_rate: toNumber(r.loss_rate, 0),
+      })),
+    [draftItems],
+  )
+
+  const currentPreviewFingerprint = useMemo(() => {
+    const payload = {
+      versionId,
+      baseLineId,
+      selectedVariantId,
+      action: FIXED_ACTION,
+      stop_on_hit: draftStopOnHit,
+      conditions: {
+        spec_contains_any: draftContainsAny,
+        spec_contains_all: draftContainsAll,
+      },
+      items: normalizedDraftItemsForFingerprint,
+      spec_text: String(specText ?? '').trim(),
+    }
+    return JSON.stringify(payload)
+  }, [versionId, baseLineId, selectedVariantId, draftStopOnHit, draftContainsAny, draftContainsAll, normalizedDraftItemsForFingerprint, specText])
+
+  const previewStale = useMemo(() => {
+    if (!lastPreviewOk) return false
+    if (!lastPreviewFingerprint) return true
+    return lastPreviewFingerprint !== currentPreviewFingerprint
+  }, [lastPreviewOk, lastPreviewFingerprint, currentPreviewFingerprint])
+
+  const baseUnitFromBom = useMemo(() => {
+    const lines = (bomPreview?.final_material_lines ?? []) as any[]
+    const baseLine = lines.find((r) => String(r?.source_type) === 'base_line' && String(r?.base_line_id ?? '') === String(baseLineId))
+    return normalizeUnit(baseLine?.unit_of_measure)
+  }, [bomPreview, baseLineId])
+
+  const targetUnitFromItems = useMemo(() => normalizeUnit(draftItems?.[0]?.unit_of_measure), [draftItems])
+
+  const unitMismatch = useMemo(() => {
+    const baseU = baseUnitFromBom
+    const targetU = targetUnitFromItems
+    if (!baseU || !targetU) return null
+    if (baseU !== targetU) return { base: baseU, target: targetU }
+    return null
+  }, [baseUnitFromBom, targetUnitFromItems])
+
+  const enableBlockReason = useMemo((): string | null => {
+    // 1) 必须 1→1
+    if (draftItems.length !== 1) return '最稳形态只允许 1→1：请确保 items 仅 1 行目标物料'
+    const targetRefId = String(draftItems?.[0]?.material_ref_id ?? '').trim()
+    if (!targetRefId) return '请先填写目标物料 material_ref_id（并保存清单让后端回填单位）'
+
+    // 2) 必须预演成功且不过期
+    if (!lastPreviewOk) return '启用前必须先预演成功（spec/parse + bom/generate）'
+    if (previewStale) return '规则/清单/spec_text 已变更：请重新预演后再启用'
+
+    // 3) 同计量单位校验（拿不到单位也要阻止）
+    if (!baseUnitFromBom || !targetUnitFromItems) {
+      return '单位信息缺失：请先“保存清单”（让后端回填 unit_of_measure），并确保主数据单位已补齐；然后重新预演'
+    }
+    if (unitMismatch) {
+      return `单位不一致：基准行单位=${unitMismatch.base}，目标物料单位=${unitMismatch.target}（最稳形态仅允许同单位平替）`
+    }
+
+    return null
+  }, [draftItems, lastPreviewOk, previewStale, baseUnitFromBom, targetUnitFromItems, unitMismatch])
+
+  const handleToggleEnabled = (nextEnabled: boolean) => {
+    if (!nextEnabled) {
+      setDraftEnabled(false)
+      return
+    }
+    if (!selectedVariantId) {
+      message.warning('请先选择一条变体规则')
+      return
+    }
+    if (enableBlockReason) {
+      message.error(enableBlockReason)
+      setDraftEnabled(false)
+      return
+    }
+    setDraftEnabled(true)
+  }
 
   const createVariantMutation = useMutation({
     mutationFn: async () => {
       const payload: LineVariantCreateRequest = {
         version_id: versionId,
         base_line_id: baseLineId,
-        enabled: true,
+        // 收口：新建规则默认不启用，必须预演通过后才能启用
+        enabled: false,
         priority: 100,
-        action: DEFAULT_ACTION,
+        action: FIXED_ACTION,
         stop_on_hit: true,
         notes: '',
         conditions: { spec_contains_any: [], spec_contains_all: [] },
@@ -142,10 +254,14 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
   const saveVariantMutation = useMutation({
     mutationFn: async () => {
       if (!selectedVariantId) throw new Error('请先选择一条变体规则')
+      if (draftEnabled && enableBlockReason) {
+        throw new Error(enableBlockReason)
+      }
       const payload: LineVariantUpdateRequest = {
         enabled: draftEnabled,
         priority: draftPriority,
-        action: draftAction,
+        // 收口：UI 固定 replace_self（最稳第一步）
+        action: FIXED_ACTION,
         stop_on_hit: draftStopOnHit,
         notes: draftNotes || undefined,
         conditions: {
@@ -166,6 +282,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
   const saveItemsMutation = useMutation({
     mutationFn: async () => {
       if (!selectedVariantId) throw new Error('请先选择一条变体规则')
+      if (draftItems.length > 1) throw new Error('最稳形态只允许 1→1：items 仅允许 1 行目标物料')
       // normalize sequence order
       const items: LineVariantItemPayload[] = draftItems.map((r, idx) => ({
         sequence_order: idx,
@@ -214,9 +331,36 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     onSuccess: ({ parsed, bom }) => {
       setSpecParsed(parsed)
       setBomPreview(bom)
+      const now = Date.now()
+      const baseU = (() => {
+        const lines = (bom?.final_material_lines ?? []) as any[]
+        const baseLine = lines.find((r) => String(r?.source_type) === 'base_line' && String(r?.base_line_id ?? '') === String(baseLineId))
+        return normalizeUnit(baseLine?.unit_of_measure)
+      })()
+      const targetU = normalizeUnit(draftItems?.[0]?.unit_of_measure)
+      setLastPreviewAt(now)
+      setLastPreviewOk(true)
+      setLastPreviewError(null)
+      setLastPreviewFingerprint(currentPreviewFingerprint)
+      setLastPreviewSummary({
+        spec_text: String(specText ?? '').trim(),
+        tokens_count: parsed.tokens?.length ?? 0,
+        final_lines_count: (bom.final_material_lines ?? []).length,
+        trace_keys: Object.keys(bom.trace ?? {}).length,
+        base_unit: baseU,
+        target_unit: targetU,
+      })
       message.success('预演完成')
     },
-    onError: (err: any) => message.error(err?.response?.data?.detail ?? err?.message ?? '预演失败'),
+    onError: (err: any) => {
+      const detail = err?.response?.data?.detail ?? err?.message ?? '预演失败'
+      setLastPreviewAt(Date.now())
+      setLastPreviewOk(false)
+      setLastPreviewError(String(detail))
+      setLastPreviewFingerprint(currentPreviewFingerprint)
+      setLastPreviewSummary(null)
+      message.error(String(detail))
+    },
   })
 
   const itemColumns: ColumnsType<EditableItemRow> = [
@@ -409,6 +553,22 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
       destroyOnClose
     >
       <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        <Alert
+          type="info"
+          showIcon
+          message="行级变体已收口为 ERP 最稳第一步"
+          description={
+            <div style={{ fontSize: 12 }}>
+              <div>
+                <b>{STABLE_SHAPE_LABEL}</b>
+              </div>
+              <div style={{ color: '#8c8c8c' }}>
+                口径唯一真相：DOC/costing/manuals/standard_model_variants_ops_rules.md（7.1/7.2）
+              </div>
+            </div>
+          }
+        />
+
         <Card
           size="small"
           title="规则列表"
@@ -440,7 +600,23 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
 
         <Card
           size="small"
-          title="规则设置（最小字段）"
+          title={
+            <Space size={8} wrap>
+              <span>规则设置</span>
+              <Tag color="blue">action=replace_self</Tag>
+              <Tooltip title={STABLE_SHAPE_LABEL}>
+                <Tag>最稳形态</Tag>
+              </Tooltip>
+              {lastPreviewOk ? (
+                <Tag color={previewStale ? 'orange' : 'green'}>{previewStale ? '预演已过期' : '预演已通过'}</Tag>
+              ) : lastPreviewOk === false ? (
+                <Tag color="red">预演失败</Tag>
+              ) : (
+                <Tag>未预演</Tag>
+              )}
+              {lastPreviewAt ? <Text type="secondary" style={{ fontSize: 12 }}>最近预演：{new Date(lastPreviewAt).toLocaleString()}</Text> : null}
+            </Space>
+          }
           extra={
             <Button
               size="small"
@@ -458,7 +634,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
             <Space wrap>
               <Space>
                 <Text>启用</Text>
-                <Switch checked={draftEnabled} onChange={(v) => setDraftEnabled(v)} />
+                <Switch checked={draftEnabled} onChange={(v) => handleToggleEnabled(v)} />
               </Space>
               <Space>
                 <Text>优先级</Text>
@@ -466,23 +642,19 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
               </Space>
               <Space>
                 <Text>动作</Text>
-                <Select
-                  value={draftAction}
-                  style={{ width: 160 }}
-                  options={[
-                    { label: 'replace_bundle', value: 'replace_bundle' },
-                    { label: 'replace_self', value: 'replace_self' },
-                    { label: 'remove_self', value: 'remove_self' },
-                    { label: 'add_siblings', value: 'add_siblings' },
-                  ]}
-                  onChange={(v) => setDraftAction(v as any)}
-                />
+                <Tag color="blue" style={{ marginInlineStart: 0 }}>
+                  replace_self
+                </Tag>
               </Space>
               <Space>
                 <Text>命中后停止</Text>
                 <Switch checked={draftStopOnHit} onChange={(v) => setDraftStopOnHit(v)} />
               </Space>
             </Space>
+
+            {draftEnabled && enableBlockReason ? (
+              <Alert type="error" showIcon message="当前不满足启用门槛" description={enableBlockReason} />
+            ) : null}
 
             <Space direction="vertical" size={6} style={{ width: '100%' }}>
               <Text type="secondary">条件（MVP：仅 spec_contains_any / spec_contains_all）</Text>
@@ -523,17 +695,33 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
 
         <Card
           size="small"
-          title="变体物料清单（整单替换 items）"
+          title={
+            <Space size={8} wrap>
+              <span>变体物料清单（1→1 同单位平替）</span>
+              <Tag>仅 1 行目标物料</Tag>
+              {baseUnitFromBom ? <Tag color="geekblue">基准单位：{baseUnitFromBom}</Tag> : <Tag>基准单位：未知</Tag>}
+              {targetUnitFromItems ? <Tag color="geekblue">目标单位：{targetUnitFromItems}</Tag> : <Tag>目标单位：未知</Tag>}
+              {unitMismatch ? <Tag color="red">单位不一致</Tag> : null}
+            </Space>
+          }
           extra={
             <Space>
               <Button
                 size="small"
-                onClick={() =>
+                disabled={!selectedVariantId || draftItems.length >= 1}
+                onClick={() => {
+                  if (!selectedVariantId) {
+                    message.warning('请先选择一条变体规则')
+                    return
+                  }
+                  if (draftItems.length >= 1) {
+                    message.warning('最稳形态只允许 1→1：不允许新增第 2 行')
+                    return
+                  }
                   setDraftItems([
-                    ...draftItems,
                     {
                       _tmpId: `tmp-${Date.now()}`,
-                      sequence_order: draftItems.length,
+                      sequence_order: 0,
                       material_kind: 'real' as any,
                       material_ref_id: '',
                       calculation_method: 'count' as any,
@@ -544,9 +732,9 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                       metadata_json: {},
                     },
                   ])
-                }
+                }}
               >
-                新增行
+                设置目标物料
               </Button>
               <Button
                 size="small"
@@ -570,7 +758,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
           />
           <div style={{ marginTop: 8 }}>
             <Text type="secondary" style={{ fontSize: 12 }}>
-              提示：本轮 MVP 直接输入 material_ref_id；保存后后端会回填编码/名称/单位/计量方式并用于 BOM 预演。
+              提示：最稳形态要求“同单位 1→1”。请先保存清单让后端回填单位，再进行预演；启用前必须预演成功（见上方门槛提示）。
             </Text>
           </div>
         </Card>
@@ -591,6 +779,45 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
           }
         >
           <Space direction="vertical" size={10} style={{ width: '100%' }}>
+            {lastPreviewAt ? (
+              <Alert
+                type={lastPreviewOk ? (previewStale ? 'warning' : 'success') : 'error'}
+                showIcon
+                message={
+                  lastPreviewOk
+                    ? previewStale
+                      ? '最近一次预演已过期（配置已变更）'
+                      : '最近一次预演通过'
+                    : '最近一次预演失败'
+                }
+                description={
+                  <div style={{ fontSize: 12 }}>
+                    <div>时间：{new Date(lastPreviewAt).toLocaleString()}</div>
+                    {lastPreviewOk && lastPreviewSummary ? (
+                      <>
+                        <div>spec_text：{lastPreviewSummary.spec_text}</div>
+                        <div>
+                          tokens={lastPreviewSummary.tokens_count} · final_lines={lastPreviewSummary.final_lines_count} · trace_keys={lastPreviewSummary.trace_keys}
+                        </div>
+                        <div>
+                          基准单位={lastPreviewSummary.base_unit ?? '未知'} · 目标单位={lastPreviewSummary.target_unit ?? '未知'}
+                        </div>
+                      </>
+                    ) : (
+                      <div>{lastPreviewError ?? '预演失败'}</div>
+                    )}
+                  </div>
+                }
+              />
+            ) : (
+              <Alert
+                type="info"
+                showIcon
+                message="启用门槛：必须先预演成功"
+                description={<span style={{ fontSize: 12 }}>建议保存清单（回填单位）→ 输入 spec_text → 预演通过 → 再启用。</span>}
+              />
+            )}
+
             <Input.TextArea
               value={specText}
               onChange={(e) => setSpecText(e.target.value)}
@@ -660,4 +887,5 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     </Drawer>
   )
 }
+
 

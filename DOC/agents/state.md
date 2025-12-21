@@ -1,12 +1,17 @@
 ## 当前状态（崩了也能继续）
 
-- **最近校对（北京时间 GMT+8）**：2025-12-21 20:10（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
+- **最近校对（北京时间 GMT+8）**：2025-12-21 20:45（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **分支**：`backup/20251214-1535`
 
-- **本轮闭环产物（Frontend / 行级变体 UI MVP）**：
+- **本轮闭环产物（Frontend / 行级变体收口：ERP 最稳第一步）**：
   - 标准入口（`entryContext="standard"`）“清单编辑”Tab：物料行新增 **“变体（Overlay）”** 按钮
   - 点击按钮打开 `LineVariantDrawer`：管理 version-scoped `line-variants`（不修改基准清单）
   - Drawer 内支持 `spec_text` 预演：`POST /api/planner/spec/parse`（tokens） + `POST /api/planner/bom/generate`（最终 BOM + trace）
+  - **收口（最稳形态）**：
+    - action **固定** `replace_self`（UI 隐藏其它动作）
+    - items **限制 1→1**（只允许 1 行目标物料，禁止新增第 2 行）
+    - **同单位校验**：目标单位与基准行单位不一致 → 禁止启用并提示（单位缺失提示先补齐主数据/先保存清单）
+    - **启用门槛**：启用前必须预演成功，并在 UI 显示最近预演时间/结果摘要（配置变更会标记“预演已过期”）
 
 - **关键实现文件**：
   - `frontend/src/components/costing/ProductModelEditorDrawer.tsx`

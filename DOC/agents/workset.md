@@ -34,6 +34,7 @@
 
 - `DOC/costing/ui_specs/product_model.md`（产品模型 UI 规格/口径）
 - `DOC/costing/manuals/standard_model_variants_ops_rules.md`（标准模型行级变体：运营/实施规范）
+- `DOC/index/extracted/variants_discussion_extracted_20251221T200250+0800.md`（变体讨论提炼件：禁止直读导出全文）
 - `DOC/agents/task_log.md`（最新变更/决策记录）
 
 ### 3.1) 业务输入（基础表单/场景说明，仅限本轮变体方案）

@@ -37,6 +37,10 @@
 
 - `DOC/costing/blueprints/standard_model_variants_plan.md`（标准模型：变体/动态 BOM 功能方案）
 
+### 3.3) 派单任务单（供执行 Agent 闭环）
+
+- `DOC/agents/briefings/backend_line_variants_mvp.md`（后端闭环：行级变体 overlay + spec/parse tokens + bom/generate MVP）
+
 ### 4) 质量门槛（可运行/可验收）
 
 - `frontend/package.json`（build/test 脚本）

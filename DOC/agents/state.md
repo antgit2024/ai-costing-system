@@ -27,5 +27,8 @@
 
 - **方案关键确认（交互）**：点击物料行“变体”按钮 → 弹出独立面板管理“变体清单（overlay）”；**基准标准清单不直接修改**（变体用于动态生成/预览/订单出料）。
 
+- **下一步闭环任务单（后端）**：`DOC/agents/briefings/backend_line_variants_mvp.md`（行级变体 overlay + spec/parse tokens + bom/generate MVP；ADD 挂锚点行）
+- **验收命令（派单文件存在）**：`grep -nF "# Backend 闭环任务单：行级变体（overlay）+ 规格解析（tokens）MVP" DOC/agents/briefings/backend_line_variants_mvp.md`
+
 
 

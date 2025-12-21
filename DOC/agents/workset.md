@@ -40,6 +40,7 @@
 ### 3.3) 派单任务单（供执行 Agent 闭环）
 
 - `DOC/agents/briefings/backend_line_variants_mvp.md`（后端闭环：行级变体 overlay + spec/parse tokens + bom/generate MVP）
+- `DOC/agents/briefings/frontend_line_variants_panel_mvp.md`（前端闭环：物料行变体按钮 + overlay Drawer + 预演对接）
 
 ### 4) 质量门槛（可运行/可验收）
 

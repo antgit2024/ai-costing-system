@@ -29,6 +29,9 @@
 
 - **下一步闭环任务单（后端）**：`DOC/agents/briefings/backend_line_variants_mvp.md`（行级变体 overlay + spec/parse tokens + bom/generate MVP；ADD 挂锚点行）
 - **验收命令（派单文件存在）**：`grep -nF "# Backend 闭环任务单：行级变体（overlay）+ 规格解析（tokens）MVP" DOC/agents/briefings/backend_line_variants_mvp.md`
+
+- **下一步闭环任务单（前端）**：`DOC/agents/briefings/frontend_line_variants_panel_mvp.md`（物料行“变体”按钮 + Overlay Drawer（不改基准清单）+ 预演对接 spec/parse & bom/generate）
+- **验收命令（派单文件存在）**：`grep -nF "# Frontend 闭环任务单：物料行“变体”按钮 + Overlay Drawer（接后端 line-variants/spec/parse/bom）" DOC/agents/briefings/frontend_line_variants_panel_mvp.md`
 - **本轮产物（Backend 行级变体 MVP）**：落库 `product_model_line_variants` + `product_model_line_variant_items` 表，新增 `Spec Parser`、`Line Variants`、`BOM Generate` 三类服务（FastAPI 路由 + Service + Alembic），行级变体允许 version-scoped 绑定、整组替换/删除/追加，`spec/parse` 输出 tokens + 尺寸 +解释，`bom/generate` 依据锚点/优先级套用 overlay 并返回 trace。README/Task Log/State 已同步说明。补充修复：审计日志 payload 现支持 Decimal/日期/UUID 序列化，变体 items 保存时自动回填引用物料编码/名称/单位/计量方式，确保 BOM 结果字段齐全。
 - **后端验收命令**：`pytest backend/tests/planner/test_line_variants_mvp.py -q`
 - **前端验收命令**：`npm -C frontend run build`

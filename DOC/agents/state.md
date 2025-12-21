@@ -1,6 +1,6 @@
 ## 当前状态（崩了也能继续）
 
-- **最近校对（北京时间 GMT+8）**：2025-12-21 21:10（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
+- **最近校对（北京时间 GMT+8）**：2025-12-21 21:55（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **分支**：`backup/20251214-1535`
 
 - **本轮闭环产物（Frontend / 行级变体收口：ERP 最稳第一步）**：
@@ -14,6 +14,10 @@
     - **启用门槛**：启用前必须预演成功，并在 UI 显示最近预演时间/结果摘要（配置变更会标记“预演已过期”）
     - **条件增强（已接入 UI）**：在 token 基础上，额外支持 `width_between/height_between/area_between/perimeter_between`（可选）。若配置了这些条件，启用前要求预演样例能解析出对应数值（避免没测过就启用）。
     - **数量/个数条件（缺口）**：后端 `LineVariantCondition` 暂无 `quantity_between` 等字段；如业务必须支持“个数”，需要下一轮后端补字段或通过 token 离散化临时承载。
+
+- **重要修复（Backend / 使 between 条件可落库）**：
+  - 修复 `line-variants` 在写入 JSON 列时 `Decimal`/`tuple` 不可序列化导致 500：将 `conditions/metadata` 递归转为 JSON-safe（Decimal→字符串、tuple→list）。
+  - 补齐缺失模块以恢复 `planner-costing.service` 可重启（恢复 `codes/processes/process_modules/product_models/product_model_versions` 路由与相关 service/utils）。
 
 - **关键实现文件**：
   - `frontend/src/components/costing/ProductModelEditorDrawer.tsx`

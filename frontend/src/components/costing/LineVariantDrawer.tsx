@@ -44,6 +44,25 @@ const normalizeUnit = (u: unknown): string | null => {
   return s ? s : null
 }
 
+const asBetween = (v: any): [number | null, number | null] | null => {
+  if (!Array.isArray(v) || v.length < 2) return null
+  const a = v[0]
+  const b = v[1]
+  const min = a == null || a === '' ? null : Number(a)
+  const max = b == null || b === '' ? null : Number(b)
+  const minOk = min == null || Number.isFinite(min)
+  const maxOk = max == null || Number.isFinite(max)
+  if (!minOk || !maxOk) return null
+  return [min, max]
+}
+
+const betweenToPayload = (pair: [number | null, number | null] | null): [number | null, number | null] | undefined => {
+  if (!pair) return undefined
+  const [min, max] = pair
+  if (min == null && max == null) return undefined
+  return [min ?? null, max ?? null]
+}
+
 const buildEditableItems = (items: Array<any>): EditableItemRow[] =>
   (items ?? []).map((it, idx) => ({
     _tmpId: String(it?.id ?? `tmp-${idx}-${Math.random().toString(16).slice(2)}`),
@@ -72,6 +91,10 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
   const [draftNotes, setDraftNotes] = useState('')
   const [draftContainsAny, setDraftContainsAny] = useState<string[]>([])
   const [draftContainsAll, setDraftContainsAll] = useState<string[]>([])
+  const [draftWidthBetween, setDraftWidthBetween] = useState<[number | null, number | null] | null>(null)
+  const [draftHeightBetween, setDraftHeightBetween] = useState<[number | null, number | null] | null>(null)
+  const [draftAreaBetween, setDraftAreaBetween] = useState<[number | null, number | null] | null>(null)
+  const [draftPerimeterBetween, setDraftPerimeterBetween] = useState<[number | null, number | null] | null>(null)
   const [draftItems, setDraftItems] = useState<EditableItemRow[]>([])
 
   const [specText, setSpecText] = useState('')
@@ -87,6 +110,10 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     trace_keys: number
     base_unit: string | null
     target_unit: string | null
+    width_cm: string | number | null
+    height_cm: string | number | null
+    area_m2: string | number | null
+    perimeter_m: string | number | null
   } | null>(null)
   const [lastPreviewFingerprint, setLastPreviewFingerprint] = useState<string | null>(null)
 
@@ -121,6 +148,10 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     const cond = (selectedVariant.conditions ?? {}) as any
     setDraftContainsAny(asStringArray(cond.spec_contains_any))
     setDraftContainsAll(asStringArray(cond.spec_contains_all))
+    setDraftWidthBetween(asBetween(cond.width_between))
+    setDraftHeightBetween(asBetween(cond.height_between))
+    setDraftAreaBetween(asBetween(cond.area_between))
+    setDraftPerimeterBetween(asBetween(cond.perimeter_between))
     setDraftItems(buildEditableItems(selectedVariant.items as any))
   }, [open, selectedVariant])
 
@@ -158,12 +189,29 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
       conditions: {
         spec_contains_any: draftContainsAny,
         spec_contains_all: draftContainsAll,
+        width_between: betweenToPayload(draftWidthBetween),
+        height_between: betweenToPayload(draftHeightBetween),
+        area_between: betweenToPayload(draftAreaBetween),
+        perimeter_between: betweenToPayload(draftPerimeterBetween),
       },
       items: normalizedDraftItemsForFingerprint,
       spec_text: String(specText ?? '').trim(),
     }
     return JSON.stringify(payload)
-  }, [versionId, baseLineId, selectedVariantId, draftStopOnHit, draftContainsAny, draftContainsAll, normalizedDraftItemsForFingerprint, specText])
+  }, [
+    versionId,
+    baseLineId,
+    selectedVariantId,
+    draftStopOnHit,
+    draftContainsAny,
+    draftContainsAll,
+    draftWidthBetween,
+    draftHeightBetween,
+    draftAreaBetween,
+    draftPerimeterBetween,
+    normalizedDraftItemsForFingerprint,
+    specText,
+  ])
 
   const previewStale = useMemo(() => {
     if (!lastPreviewOk) return false
@@ -196,6 +244,20 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     // 2) 必须预演成功且不过期
     if (!lastPreviewOk) return '启用前必须先预演成功（spec/parse + bom/generate）'
     if (previewStale) return '规则/清单/spec_text 已变更：请重新预演后再启用'
+
+    // 2.1) 若配置了尺寸/面积/周长条件，则预演样例必须解析出对应数值（避免“没测过就启用”）
+    if (betweenToPayload(draftWidthBetween) && (lastPreviewSummary?.width_cm == null || lastPreviewSummary?.width_cm === '')) {
+      return '你配置了“宽度区间”条件，但预演样例未解析出宽度（请用包含尺寸的 spec_text 重新预演）'
+    }
+    if (betweenToPayload(draftHeightBetween) && (lastPreviewSummary?.height_cm == null || lastPreviewSummary?.height_cm === '')) {
+      return '你配置了“高度区间”条件，但预演样例未解析出高度（请用包含尺寸的 spec_text 重新预演）'
+    }
+    if (betweenToPayload(draftAreaBetween) && (lastPreviewSummary?.area_m2 == null || lastPreviewSummary?.area_m2 === '')) {
+      return '你配置了“面积区间”条件，但预演样例未解析出面积（请用包含尺寸/直径的 spec_text 重新预演）'
+    }
+    if (betweenToPayload(draftPerimeterBetween) && (lastPreviewSummary?.perimeter_m == null || lastPreviewSummary?.perimeter_m === '')) {
+      return '你配置了“周长区间”条件，但预演样例未解析出周长（请用包含尺寸/直径的 spec_text 重新预演）'
+    }
 
     // 3) 同计量单位校验（拿不到单位也要阻止）
     if (!baseUnitFromBom || !targetUnitFromItems) {
@@ -267,6 +329,10 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
         conditions: {
           spec_contains_any: draftContainsAny,
           spec_contains_all: draftContainsAll,
+          width_between: betweenToPayload(draftWidthBetween),
+          height_between: betweenToPayload(draftHeightBetween),
+          area_between: betweenToPayload(draftAreaBetween),
+          perimeter_between: betweenToPayload(draftPerimeterBetween),
         },
         operator_id: 'planner-ui',
       }
@@ -349,6 +415,10 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
         trace_keys: Object.keys(bom.trace ?? {}).length,
         base_unit: baseU,
         target_unit: targetU,
+        width_cm: (parsed as any)?.width_cm ?? null,
+        height_cm: (parsed as any)?.height_cm ?? null,
+        area_m2: (parsed as any)?.area_m2 ?? null,
+        perimeter_m: (parsed as any)?.perimeter_m ?? null,
       })
       message.success('预演完成')
     },
@@ -682,6 +752,101 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                   </div>
                 </Tooltip>
               </Space>
+
+              <Alert
+                type="info"
+                showIcon
+                message="尺寸/面积/周长条件（可选）"
+                description={
+                  <div style={{ fontSize: 12 }}>
+                    <div>单位口径：宽/高=cm，面积=m²，周长=m（来自 spec/parse）。</div>
+                    <div style={{ color: '#8c8c8c' }}>
+                      运营规范建议：边界尽量用整数并做离散档位（避免灰区），详见 `standard_model_variants_ops_rules.md`。
+                    </div>
+                  </div>
+                }
+              />
+
+              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                <Space wrap>
+                  <Text style={{ width: 90 }}>宽度(cm)</Text>
+                  <InputNumber
+                    placeholder="min"
+                    value={draftWidthBetween?.[0] ?? null}
+                    onChange={(v) => setDraftWidthBetween([v == null ? null : Number(v), draftWidthBetween?.[1] ?? null])}
+                  />
+                  <Text type="secondary">到</Text>
+                  <InputNumber
+                    placeholder="max"
+                    value={draftWidthBetween?.[1] ?? null}
+                    onChange={(v) => setDraftWidthBetween([draftWidthBetween?.[0] ?? null, v == null ? null : Number(v)])}
+                  />
+                  <Button size="small" onClick={() => setDraftWidthBetween(null)}>
+                    清空
+                  </Button>
+                </Space>
+
+                <Space wrap>
+                  <Text style={{ width: 90 }}>高度(cm)</Text>
+                  <InputNumber
+                    placeholder="min"
+                    value={draftHeightBetween?.[0] ?? null}
+                    onChange={(v) => setDraftHeightBetween([v == null ? null : Number(v), draftHeightBetween?.[1] ?? null])}
+                  />
+                  <Text type="secondary">到</Text>
+                  <InputNumber
+                    placeholder="max"
+                    value={draftHeightBetween?.[1] ?? null}
+                    onChange={(v) => setDraftHeightBetween([draftHeightBetween?.[0] ?? null, v == null ? null : Number(v)])}
+                  />
+                  <Button size="small" onClick={() => setDraftHeightBetween(null)}>
+                    清空
+                  </Button>
+                </Space>
+
+                <Space wrap>
+                  <Text style={{ width: 90 }}>面积(m²)</Text>
+                  <InputNumber
+                    placeholder="min"
+                    value={draftAreaBetween?.[0] ?? null}
+                    onChange={(v) => setDraftAreaBetween([v == null ? null : Number(v), draftAreaBetween?.[1] ?? null])}
+                  />
+                  <Text type="secondary">到</Text>
+                  <InputNumber
+                    placeholder="max"
+                    value={draftAreaBetween?.[1] ?? null}
+                    onChange={(v) => setDraftAreaBetween([draftAreaBetween?.[0] ?? null, v == null ? null : Number(v)])}
+                  />
+                  <Button size="small" onClick={() => setDraftAreaBetween(null)}>
+                    清空
+                  </Button>
+                </Space>
+
+                <Space wrap>
+                  <Text style={{ width: 90 }}>周长(m)</Text>
+                  <InputNumber
+                    placeholder="min"
+                    value={draftPerimeterBetween?.[0] ?? null}
+                    onChange={(v) => setDraftPerimeterBetween([v == null ? null : Number(v), draftPerimeterBetween?.[1] ?? null])}
+                  />
+                  <Text type="secondary">到</Text>
+                  <InputNumber
+                    placeholder="max"
+                    value={draftPerimeterBetween?.[1] ?? null}
+                    onChange={(v) => setDraftPerimeterBetween([draftPerimeterBetween?.[0] ?? null, v == null ? null : Number(v)])}
+                  />
+                  <Button size="small" onClick={() => setDraftPerimeterBetween(null)}>
+                    清空
+                  </Button>
+                </Space>
+              </Space>
+
+              <Alert
+                type="warning"
+                showIcon
+                message="个数/数量条件"
+                description={<span style={{ fontSize: 12 }}>当前后端条件 schema 未提供数量区间字段（例如 quantity_between），因此 UI 暂无法写入规则条件。若你确认必须支持“个数”，需要下一轮补后端字段；临时可用 token 离散化（如 QTY_1/QTY_2/QTY_GT_2）。</span>}
+              />
 
               <Input.TextArea
                 value={draftNotes}

@@ -29,6 +29,8 @@ type EditableItemRow = LineVariantItemPayload & {
   _tmpId: string
 }
 
+type MetricOp = 'off' | 'gte' | 'lte' | 'eq' | 'between'
+
 const FIXED_ACTION: LineVariantAction = 'replace_self'
 const STABLE_SHAPE_LABEL = '最稳形态：replace_self + 同单位 1→1（启用前必须预演成功）'
 
@@ -63,6 +65,28 @@ const betweenToPayload = (pair: [number | null, number | null] | null): [number 
   return [min ?? null, max ?? null]
 }
 
+const opFromBetween = (pair: [number | null, number | null] | null): MetricOp => {
+  if (!pair) return 'off'
+  const [min, max] = pair
+  if (min == null && max == null) return 'off'
+  if (min != null && max != null) return min === max ? 'eq' : 'between'
+  if (min != null) return 'gte'
+  return 'lte'
+}
+
+const applyOpToBetween = (
+  op: MetricOp,
+  current: [number | null, number | null] | null,
+): [number | null, number | null] | null => {
+  if (op === 'off') return null
+  const [min, max] = current ?? [null, null]
+  const seed = min ?? max ?? null
+  if (op === 'gte') return [seed, null]
+  if (op === 'lte') return [null, seed]
+  if (op === 'eq') return [seed, seed]
+  return [min, max]
+}
+
 const buildEditableItems = (items: Array<any>): EditableItemRow[] =>
   (items ?? []).map((it, idx) => ({
     _tmpId: String(it?.id ?? `tmp-${idx}-${Math.random().toString(16).slice(2)}`),
@@ -95,6 +119,10 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
   const [draftHeightBetween, setDraftHeightBetween] = useState<[number | null, number | null] | null>(null)
   const [draftAreaBetween, setDraftAreaBetween] = useState<[number | null, number | null] | null>(null)
   const [draftPerimeterBetween, setDraftPerimeterBetween] = useState<[number | null, number | null] | null>(null)
+  const [draftWidthOp, setDraftWidthOp] = useState<MetricOp>('off')
+  const [draftHeightOp, setDraftHeightOp] = useState<MetricOp>('off')
+  const [draftAreaOp, setDraftAreaOp] = useState<MetricOp>('off')
+  const [draftPerimeterOp, setDraftPerimeterOp] = useState<MetricOp>('off')
   const [draftItems, setDraftItems] = useState<EditableItemRow[]>([])
 
   const [specText, setSpecText] = useState('')
@@ -148,10 +176,18 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     const cond = (selectedVariant.conditions ?? {}) as any
     setDraftContainsAny(asStringArray(cond.spec_contains_any))
     setDraftContainsAll(asStringArray(cond.spec_contains_all))
-    setDraftWidthBetween(asBetween(cond.width_between))
-    setDraftHeightBetween(asBetween(cond.height_between))
-    setDraftAreaBetween(asBetween(cond.area_between))
-    setDraftPerimeterBetween(asBetween(cond.perimeter_between))
+    const wb = asBetween(cond.width_between)
+    const hb = asBetween(cond.height_between)
+    const ab = asBetween(cond.area_between)
+    const pb = asBetween(cond.perimeter_between)
+    setDraftWidthBetween(wb)
+    setDraftHeightBetween(hb)
+    setDraftAreaBetween(ab)
+    setDraftPerimeterBetween(pb)
+    setDraftWidthOp(opFromBetween(wb))
+    setDraftHeightOp(opFromBetween(hb))
+    setDraftAreaOp(opFromBetween(ab))
+    setDraftPerimeterOp(opFromBetween(pb))
     setDraftItems(buildEditableItems(selectedVariant.items as any))
   }, [open, selectedVariant])
 
@@ -165,6 +201,17 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     setLastPreviewSummary(null)
     setLastPreviewFingerprint(null)
   }, [open, versionId, baseLineId])
+
+  const conditionRows = useMemo(() => {
+    return [
+      { key: 'token_any', field: 'token_any', label: 'token(any)', operator: '包含任一', unit: '', valueKind: 'tokens' },
+      { key: 'token_all', field: 'token_all', label: 'token(all)', operator: '包含全部', unit: '', valueKind: 'tokens' },
+      { key: 'width', field: 'width', label: '宽度', operator: draftWidthOp, unit: 'cm', valueKind: 'metric' },
+      { key: 'height', field: 'height', label: '高度', operator: draftHeightOp, unit: 'cm', valueKind: 'metric' },
+      { key: 'area', field: 'area', label: '面积', operator: draftAreaOp, unit: 'm²', valueKind: 'metric' },
+      { key: 'perimeter', field: 'perimeter', label: '周长', operator: draftPerimeterOp, unit: 'm', valueKind: 'metric' },
+    ]
+  }, [draftWidthOp, draftHeightOp, draftAreaOp, draftPerimeterOp])
 
   const normalizedDraftItemsForFingerprint = useMemo(
     () =>
@@ -329,10 +376,10 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
         conditions: {
           spec_contains_any: draftContainsAny,
           spec_contains_all: draftContainsAll,
-          width_between: betweenToPayload(draftWidthBetween),
-          height_between: betweenToPayload(draftHeightBetween),
-          area_between: betweenToPayload(draftAreaBetween),
-          perimeter_between: betweenToPayload(draftPerimeterBetween),
+          width_between: draftWidthOp === 'off' ? undefined : betweenToPayload(draftWidthBetween),
+          height_between: draftHeightOp === 'off' ? undefined : betweenToPayload(draftHeightBetween),
+          area_between: draftAreaOp === 'off' ? undefined : betweenToPayload(draftAreaBetween),
+          perimeter_between: draftPerimeterOp === 'off' ? undefined : betweenToPayload(draftPerimeterBetween),
         },
         operator_id: 'planner-ui',
       }
@@ -727,39 +774,15 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
             ) : null}
 
             <Space direction="vertical" size={6} style={{ width: '100%' }}>
-              <Text type="secondary">条件（MVP：仅 spec_contains_any / spec_contains_all）</Text>
-              <Space wrap style={{ width: '100%' }}>
-                <Tooltip title="命中任意 token 即触发（OR）">
-                  <div style={{ width: 420 }}>
-                    <Select
-                      mode="tags"
-                      value={draftContainsAny}
-                      style={{ width: '100%' }}
-                      placeholder="spec_contains_any（例如：黑色,无框）"
-                      onChange={(v) => setDraftContainsAny(v)}
-                    />
-                  </div>
-                </Tooltip>
-                <Tooltip title="必须包含所有 token 才触发（AND）">
-                  <div style={{ width: 420 }}>
-                    <Select
-                      mode="tags"
-                      value={draftContainsAll}
-                      style={{ width: '100%' }}
-                      placeholder="spec_contains_all（例如：加厚,防水）"
-                      onChange={(v) => setDraftContainsAll(v)}
-                    />
-                  </div>
-                </Tooltip>
-              </Space>
+              <Text type="secondary">条件（列表式：字段 / 运算符 / 值）</Text>
 
               <Alert
                 type="info"
                 showIcon
-                message="尺寸/面积/周长条件（可选）"
+                message="条件输入口径"
                 description={
                   <div style={{ fontSize: 12 }}>
-                    <div>单位口径：宽/高=cm，面积=m²，周长=m（来自 spec/parse）。</div>
+                    <div>宽/高=cm，面积=m²，周长=m（来自 spec/parse）。</div>
                     <div style={{ color: '#8c8c8c' }}>
                       运营规范建议：边界尽量用整数并做离散档位（避免灰区），详见 `standard_model_variants_ops_rules.md`。
                     </div>
@@ -767,79 +790,143 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                 }
               />
 
-              <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                <Space wrap>
-                  <Text style={{ width: 90 }}>宽度(cm)</Text>
-                  <InputNumber
-                    placeholder="min"
-                    value={draftWidthBetween?.[0] ?? null}
-                    onChange={(v) => setDraftWidthBetween([v == null ? null : Number(v), draftWidthBetween?.[1] ?? null])}
-                  />
-                  <Text type="secondary">到</Text>
-                  <InputNumber
-                    placeholder="max"
-                    value={draftWidthBetween?.[1] ?? null}
-                    onChange={(v) => setDraftWidthBetween([draftWidthBetween?.[0] ?? null, v == null ? null : Number(v)])}
-                  />
-                  <Button size="small" onClick={() => setDraftWidthBetween(null)}>
-                    清空
-                  </Button>
-                </Space>
+              <Table
+                rowKey="key"
+                size="small"
+                pagination={false}
+                dataSource={conditionRows as any[]}
+                columns={[
+                  { title: '字段', width: 120, dataIndex: 'label' },
+                  {
+                    title: '运算符',
+                    width: 160,
+                    render: (_: any, row: any) => {
+                      if (row.valueKind === 'tokens') return <Tag>{row.operator}</Tag>
+                      const op = row.operator as MetricOp
+                      const setOp = (next: MetricOp) => {
+                        if (row.field === 'width') {
+                          setDraftWidthOp(next)
+                          setDraftWidthBetween(applyOpToBetween(next, draftWidthBetween))
+                          if (next === 'off') setDraftWidthBetween(null)
+                        }
+                        if (row.field === 'height') {
+                          setDraftHeightOp(next)
+                          setDraftHeightBetween(applyOpToBetween(next, draftHeightBetween))
+                          if (next === 'off') setDraftHeightBetween(null)
+                        }
+                        if (row.field === 'area') {
+                          setDraftAreaOp(next)
+                          setDraftAreaBetween(applyOpToBetween(next, draftAreaBetween))
+                          if (next === 'off') setDraftAreaBetween(null)
+                        }
+                        if (row.field === 'perimeter') {
+                          setDraftPerimeterOp(next)
+                          setDraftPerimeterBetween(applyOpToBetween(next, draftPerimeterBetween))
+                          if (next === 'off') setDraftPerimeterBetween(null)
+                        }
+                      }
+                      return (
+                        <Select
+                          size="small"
+                          value={op}
+                          style={{ width: 140 }}
+                          options={[
+                            { label: '关闭', value: 'off' },
+                            { label: '≥', value: 'gte' },
+                            { label: '≤', value: 'lte' },
+                            { label: '=', value: 'eq' },
+                            { label: '区间', value: 'between' },
+                          ]}
+                          onChange={(v) => setOp(v as MetricOp)}
+                        />
+                      )
+                    },
+                  },
+                  {
+                    title: '值',
+                    render: (_: any, row: any) => {
+                      if (row.field === 'token_any') {
+                        return (
+                          <Select
+                            mode="tags"
+                            value={draftContainsAny}
+                            style={{ width: '100%' }}
+                            placeholder="命中任意 token（OR）"
+                            onChange={(v) => setDraftContainsAny(v)}
+                          />
+                        )
+                      }
+                      if (row.field === 'token_all') {
+                        return (
+                          <Select
+                            mode="tags"
+                            value={draftContainsAll}
+                            style={{ width: '100%' }}
+                            placeholder="必须包含所有 token（AND）"
+                            onChange={(v) => setDraftContainsAll(v)}
+                          />
+                        )
+                      }
 
-                <Space wrap>
-                  <Text style={{ width: 90 }}>高度(cm)</Text>
-                  <InputNumber
-                    placeholder="min"
-                    value={draftHeightBetween?.[0] ?? null}
-                    onChange={(v) => setDraftHeightBetween([v == null ? null : Number(v), draftHeightBetween?.[1] ?? null])}
-                  />
-                  <Text type="secondary">到</Text>
-                  <InputNumber
-                    placeholder="max"
-                    value={draftHeightBetween?.[1] ?? null}
-                    onChange={(v) => setDraftHeightBetween([draftHeightBetween?.[0] ?? null, v == null ? null : Number(v)])}
-                  />
-                  <Button size="small" onClick={() => setDraftHeightBetween(null)}>
-                    清空
-                  </Button>
-                </Space>
+                      const op = row.operator as MetricOp
+                      const unit = String(row.unit ?? '')
+                      const pair =
+                        row.field === 'width'
+                          ? draftWidthBetween
+                          : row.field === 'height'
+                            ? draftHeightBetween
+                            : row.field === 'area'
+                              ? draftAreaBetween
+                              : draftPerimeterBetween
+                      const min = pair?.[0] ?? null
+                      const max = pair?.[1] ?? null
+                      const setPair = (nextMin: number | null, nextMax: number | null) => {
+                        const next: [number | null, number | null] = [nextMin, nextMax]
+                        if (row.field === 'width') setDraftWidthBetween(next)
+                        if (row.field === 'height') setDraftHeightBetween(next)
+                        if (row.field === 'area') setDraftAreaBetween(next)
+                        if (row.field === 'perimeter') setDraftPerimeterBetween(next)
+                      }
 
-                <Space wrap>
-                  <Text style={{ width: 90 }}>面积(m²)</Text>
-                  <InputNumber
-                    placeholder="min"
-                    value={draftAreaBetween?.[0] ?? null}
-                    onChange={(v) => setDraftAreaBetween([v == null ? null : Number(v), draftAreaBetween?.[1] ?? null])}
-                  />
-                  <Text type="secondary">到</Text>
-                  <InputNumber
-                    placeholder="max"
-                    value={draftAreaBetween?.[1] ?? null}
-                    onChange={(v) => setDraftAreaBetween([draftAreaBetween?.[0] ?? null, v == null ? null : Number(v)])}
-                  />
-                  <Button size="small" onClick={() => setDraftAreaBetween(null)}>
-                    清空
-                  </Button>
-                </Space>
-
-                <Space wrap>
-                  <Text style={{ width: 90 }}>周长(m)</Text>
-                  <InputNumber
-                    placeholder="min"
-                    value={draftPerimeterBetween?.[0] ?? null}
-                    onChange={(v) => setDraftPerimeterBetween([v == null ? null : Number(v), draftPerimeterBetween?.[1] ?? null])}
-                  />
-                  <Text type="secondary">到</Text>
-                  <InputNumber
-                    placeholder="max"
-                    value={draftPerimeterBetween?.[1] ?? null}
-                    onChange={(v) => setDraftPerimeterBetween([draftPerimeterBetween?.[0] ?? null, v == null ? null : Number(v)])}
-                  />
-                  <Button size="small" onClick={() => setDraftPerimeterBetween(null)}>
-                    清空
-                  </Button>
-                </Space>
-              </Space>
+                      if (op === 'off') return <Text type="secondary">-</Text>
+                      if (op === 'between') {
+                        return (
+                          <Space wrap>
+                            <InputNumber
+                              size="small"
+                              placeholder="min"
+                              value={min}
+                              onChange={(v) => setPair(v == null ? null : Number(v), max)}
+                            />
+                            <Text type="secondary">到</Text>
+                            <InputNumber
+                              size="small"
+                              placeholder="max"
+                              value={max}
+                              onChange={(v) => setPair(min, v == null ? null : Number(v))}
+                            />
+                            <Text type="secondary">{unit}</Text>
+                          </Space>
+                        )
+                      }
+                      // gte/lte/eq: use single value input (we store in min/max accordingly)
+                      const single = op === 'lte' ? max : min
+                      const setSingle = (v: number | null) => {
+                        const num = v == null ? null : Number(v)
+                        if (op === 'gte') setPair(num, null)
+                        if (op === 'lte') setPair(null, num)
+                        if (op === 'eq') setPair(num, num)
+                      }
+                      return (
+                        <Space wrap>
+                          <InputNumber size="small" placeholder="value" value={single} onChange={(v) => setSingle(v == null ? null : Number(v))} />
+                          <Text type="secondary">{unit}</Text>
+                        </Space>
+                      )
+                    },
+                  },
+                ]}
+              />
 
               <Alert
                 type="warning"

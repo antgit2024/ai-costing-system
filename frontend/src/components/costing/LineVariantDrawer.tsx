@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Card, Drawer, Input, InputNumber, Select, Space, Switch, Table, Tag, Tooltip, Typography, message } from 'antd'
+import { Alert, Button, Card, Drawer, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag, Tooltip, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { DeleteOutlined, EditOutlined, PlayCircleOutlined, SaveOutlined } from '@ant-design/icons'
+import { DeleteOutlined, EditOutlined, PlayCircleOutlined } from '@ant-design/icons'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { createLineVariant, deleteLineVariant, generateBom, listLineVariants, parseSpec, replaceLineVariantItems, updateLineVariant } from '@/services/planner'
@@ -30,6 +30,7 @@ type EditableItemRow = LineVariantItemPayload & {
 }
 
 type MetricOp = 'off' | 'gte' | 'lte' | 'eq' | 'between'
+type TriggerType = 'token' | 'width' | 'height' | 'area' | 'perimeter'
 
 const FIXED_ACTION: LineVariantAction = 'replace_self'
 const STABLE_SHAPE_LABEL = '最稳形态：replace_self + 同单位 1→1（启用前必须预演成功）'
@@ -74,19 +75,6 @@ const opFromBetween = (pair: [number | null, number | null] | null): MetricOp =>
   return 'lte'
 }
 
-const applyOpToBetween = (
-  op: MetricOp,
-  current: [number | null, number | null] | null,
-): [number | null, number | null] | null => {
-  if (op === 'off') return null
-  const [min, max] = current ?? [null, null]
-  const seed = min ?? max ?? null
-  if (op === 'gte') return [seed, null]
-  if (op === 'lte') return [null, seed]
-  if (op === 'eq') return [seed, seed]
-  return [min, max]
-}
-
 const buildEditableItems = (items: Array<any>): EditableItemRow[] =>
   (items ?? []).map((it, idx) => ({
     _tmpId: String(it?.id ?? `tmp-${idx}-${Math.random().toString(16).slice(2)}`),
@@ -124,6 +112,10 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
   const [draftAreaOp, setDraftAreaOp] = useState<MetricOp>('off')
   const [draftPerimeterOp, setDraftPerimeterOp] = useState<MetricOp>('off')
   const [draftItems, setDraftItems] = useState<EditableItemRow[]>([])
+  const [draftTriggerType, setDraftTriggerType] = useState<TriggerType>('token')
+
+  const [editModalOpen, setEditModalOpen] = useState(false)
+  const [editMode, setEditMode] = useState<'create' | 'edit'>('edit')
 
   const [specText, setSpecText] = useState('')
   const [specParsed, setSpecParsed] = useState<SpecParseResponse | null>(null)
@@ -158,6 +150,17 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     [selectedVariantId, variants],
   )
 
+  const inferTriggerType = (cond: any): TriggerType => {
+    const anyCnt = asStringArray(cond?.spec_contains_any).length
+    const allCnt = asStringArray(cond?.spec_contains_all).length
+    if (anyCnt || allCnt) return 'token'
+    if (cond?.perimeter_between) return 'perimeter'
+    if (cond?.area_between) return 'area'
+    if (cond?.width_between) return 'width'
+    if (cond?.height_between) return 'height'
+    return 'token'
+  }
+
   useEffect(() => {
     if (!open) return
     // default select: first variant if any
@@ -174,20 +177,53 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     setDraftStopOnHit(!!selectedVariant.stop_on_hit)
     setDraftNotes(String(selectedVariant.notes ?? ''))
     const cond = (selectedVariant.conditions ?? {}) as any
-    setDraftContainsAny(asStringArray(cond.spec_contains_any))
-    setDraftContainsAll(asStringArray(cond.spec_contains_all))
-    const wb = asBetween(cond.width_between)
-    const hb = asBetween(cond.height_between)
-    const ab = asBetween(cond.area_between)
-    const pb = asBetween(cond.perimeter_between)
-    setDraftWidthBetween(wb)
-    setDraftHeightBetween(hb)
-    setDraftAreaBetween(ab)
-    setDraftPerimeterBetween(pb)
-    setDraftWidthOp(opFromBetween(wb))
-    setDraftHeightOp(opFromBetween(hb))
-    setDraftAreaOp(opFromBetween(ab))
-    setDraftPerimeterOp(opFromBetween(pb))
+    const inferred = inferTriggerType(cond)
+    setDraftTriggerType(inferred)
+
+    // 单触发类型：只回填一种条件，其他清空（避免“规则里混多种条件”导致判断口径不清晰）
+    const clearTokens = () => {
+      setDraftContainsAny([])
+      setDraftContainsAll([])
+    }
+    const clearMetrics = () => {
+      setDraftWidthBetween(null)
+      setDraftHeightBetween(null)
+      setDraftAreaBetween(null)
+      setDraftPerimeterBetween(null)
+      setDraftWidthOp('off')
+      setDraftHeightOp('off')
+      setDraftAreaOp('off')
+      setDraftPerimeterOp('off')
+    }
+
+    if (inferred === 'token') {
+      clearMetrics()
+      setDraftContainsAny(asStringArray(cond.spec_contains_any))
+      setDraftContainsAll(asStringArray(cond.spec_contains_all))
+    } else {
+      clearTokens()
+      clearMetrics()
+      if (inferred === 'width') {
+        const wb = asBetween(cond.width_between)
+        setDraftWidthBetween(wb)
+        setDraftWidthOp(opFromBetween(wb))
+      }
+      if (inferred === 'height') {
+        const hb = asBetween(cond.height_between)
+        setDraftHeightBetween(hb)
+        setDraftHeightOp(opFromBetween(hb))
+      }
+      if (inferred === 'area') {
+        const ab = asBetween(cond.area_between)
+        setDraftAreaBetween(ab)
+        setDraftAreaOp(opFromBetween(ab))
+      }
+      if (inferred === 'perimeter') {
+        const pb = asBetween(cond.perimeter_between)
+        setDraftPerimeterBetween(pb)
+        setDraftPerimeterOp(opFromBetween(pb))
+      }
+    }
     setDraftItems(buildEditableItems(selectedVariant.items as any))
   }, [open, selectedVariant])
 
@@ -202,16 +238,66 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     setLastPreviewFingerprint(null)
   }, [open, versionId, baseLineId])
 
-  const conditionRows = useMemo(() => {
-    return [
-      { key: 'token_any', field: 'token_any', label: 'token(any)', operator: '包含任一', unit: '', valueKind: 'tokens' },
-      { key: 'token_all', field: 'token_all', label: 'token(all)', operator: '包含全部', unit: '', valueKind: 'tokens' },
-      { key: 'width', field: 'width', label: '宽度', operator: draftWidthOp, unit: 'cm', valueKind: 'metric' },
-      { key: 'height', field: 'height', label: '高度', operator: draftHeightOp, unit: 'cm', valueKind: 'metric' },
-      { key: 'area', field: 'area', label: '面积', operator: draftAreaOp, unit: 'm²', valueKind: 'metric' },
-      { key: 'perimeter', field: 'perimeter', label: '周长', operator: draftPerimeterOp, unit: 'm', valueKind: 'metric' },
-    ]
-  }, [draftWidthOp, draftHeightOp, draftAreaOp, draftPerimeterOp])
+
+  const openCreateModal = () => {
+    setEditMode('create')
+    setSelectedVariantId(null)
+    // reset draft
+    setDraftEnabled(false)
+    setDraftPriority(100)
+    setDraftStopOnHit(true)
+    setDraftNotes('')
+    setDraftContainsAny([])
+    setDraftContainsAll([])
+    setDraftWidthBetween(null)
+    setDraftHeightBetween(null)
+    setDraftAreaBetween(null)
+    setDraftPerimeterBetween(null)
+    setDraftWidthOp('off')
+    setDraftHeightOp('off')
+    setDraftAreaOp('off')
+    setDraftPerimeterOp('off')
+    setDraftTriggerType('token')
+    setDraftItems([])
+    setSpecText('')
+    setSpecParsed(null)
+    setBomPreview(null)
+    setLastPreviewAt(null)
+    setLastPreviewOk(null)
+    setLastPreviewError(null)
+    setLastPreviewSummary(null)
+    setLastPreviewFingerprint(null)
+    setEditModalOpen(true)
+  }
+
+  const openEditModal = (variantId: string) => {
+    setEditMode('edit')
+    setSelectedVariantId(variantId)
+    setEditModalOpen(true)
+  }
+
+  const buildConditionsPayload = (): any => {
+    // 单触发类型：只允许一种触发维度（token 或某一个 metric）
+    const base: any = { spec_contains_any: [], spec_contains_all: [] }
+    if (draftTriggerType === 'token') {
+      base.spec_contains_any = draftContainsAny
+      base.spec_contains_all = draftContainsAll
+      return base
+    }
+    const metricMap: Record<Exclude<TriggerType, 'token'>, { op: MetricOp; pair: [number | null, number | null] | null }> = {
+      width: { op: draftWidthOp, pair: draftWidthBetween },
+      height: { op: draftHeightOp, pair: draftHeightBetween },
+      area: { op: draftAreaOp, pair: draftAreaBetween },
+      perimeter: { op: draftPerimeterOp, pair: draftPerimeterBetween },
+    }
+    const selected = metricMap[draftTriggerType]
+    if (!selected || selected.op === 'off') return base
+    const key = `${draftTriggerType}_between`
+    return {
+      ...base,
+      [key]: betweenToPayload(selected.pair),
+    }
+  }
 
   const normalizedDraftItemsForFingerprint = useMemo(
     () =>
@@ -226,6 +312,20 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     [draftItems],
   )
 
+  const normalizedConditionsForFingerprint = useMemo(() => buildConditionsPayload(), [
+    draftTriggerType,
+    draftContainsAny,
+    draftContainsAll,
+    draftWidthOp,
+    draftWidthBetween,
+    draftHeightOp,
+    draftHeightBetween,
+    draftAreaOp,
+    draftAreaBetween,
+    draftPerimeterOp,
+    draftPerimeterBetween,
+  ])
+
   const currentPreviewFingerprint = useMemo(() => {
     const payload = {
       versionId,
@@ -233,14 +333,8 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
       selectedVariantId,
       action: FIXED_ACTION,
       stop_on_hit: draftStopOnHit,
-      conditions: {
-        spec_contains_any: draftContainsAny,
-        spec_contains_all: draftContainsAll,
-        width_between: betweenToPayload(draftWidthBetween),
-        height_between: betweenToPayload(draftHeightBetween),
-        area_between: betweenToPayload(draftAreaBetween),
-        perimeter_between: betweenToPayload(draftPerimeterBetween),
-      },
+      trigger_type: draftTriggerType,
+      conditions: normalizedConditionsForFingerprint,
       items: normalizedDraftItemsForFingerprint,
       spec_text: String(specText ?? '').trim(),
     }
@@ -250,12 +344,8 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     baseLineId,
     selectedVariantId,
     draftStopOnHit,
-    draftContainsAny,
-    draftContainsAll,
-    draftWidthBetween,
-    draftHeightBetween,
-    draftAreaBetween,
-    draftPerimeterBetween,
+    draftTriggerType,
+    normalizedConditionsForFingerprint,
     normalizedDraftItemsForFingerprint,
     specText,
   ])
@@ -334,89 +424,125 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     setDraftEnabled(true)
   }
 
-  const createVariantMutation = useMutation({
-    mutationFn: async () => {
-      const payload: LineVariantCreateRequest = {
-        version_id: versionId,
-        base_line_id: baseLineId,
-        // 收口：新建规则默认不启用，必须预演通过后才能启用
-        enabled: false,
-        priority: 100,
-        action: FIXED_ACTION,
-        stop_on_hit: true,
-        notes: '',
-        conditions: { spec_contains_any: [], spec_contains_all: [] },
-        metadata_json: {},
-        items: [],
-        operator_id: 'planner-ui',
-      }
-      return await createLineVariant(versionId, payload)
-    },
-    onSuccess: async (created) => {
-      message.success('已创建变体规则')
-      await queryClient.invalidateQueries({ queryKey: ['lineVariants', versionId, baseLineId] })
-      setSelectedVariantId(created.id)
-    },
-    onError: (err: any) => message.error(err?.response?.data?.detail ?? '创建失败'),
-  })
+  const buildItemsPayloadFromDraft = (): LineVariantItemPayload[] =>
+    draftItems.map((r, idx) => ({
+      sequence_order: idx,
+      material_kind: (r.material_kind ?? 'real') as any,
+      material_ref_id: String(r.material_ref_id ?? '').trim() || null,
+      calculation_method: (r.calculation_method ?? 'count') as any,
+      base_quantity: toNumber(r.base_quantity, 0),
+      fixed_quantity: toNumber(r.fixed_quantity, 0),
+      coverage_ratio: toNumber(r.coverage_ratio, 1),
+      loss_rate: toNumber(r.loss_rate, 0),
+      metadata_json: (r.metadata_json ?? {}) as any,
+    }))
 
-  const saveVariantMutation = useMutation({
+  const handleTriggerTypeChange = (next: TriggerType) => {
+    setDraftTriggerType(next)
+    // 强制单类型：切换时清空其它条件
+    setDraftContainsAny([])
+    setDraftContainsAll([])
+    setDraftWidthBetween(null)
+    setDraftHeightBetween(null)
+    setDraftAreaBetween(null)
+    setDraftPerimeterBetween(null)
+    setDraftWidthOp('off')
+    setDraftHeightOp('off')
+    setDraftAreaOp('off')
+    setDraftPerimeterOp('off')
+    if (next !== 'token') {
+      // 默认给一个常见运算符，用户再填值
+      if (next === 'width') setDraftWidthOp('gte')
+      if (next === 'height') setDraftHeightOp('gte')
+      if (next === 'area') setDraftAreaOp('gte')
+      if (next === 'perimeter') setDraftPerimeterOp('gte')
+    }
+    // 预演结果会失效
+    setLastPreviewOk(null)
+    setLastPreviewAt(null)
+    setLastPreviewError(null)
+    setLastPreviewSummary(null)
+    setLastPreviewFingerprint(null)
+  }
+
+  const modalSaveMutation = useMutation({
     mutationFn: async () => {
-      if (!selectedVariantId) throw new Error('请先选择一条变体规则')
-      if (draftEnabled && enableBlockReason) {
-        throw new Error(enableBlockReason)
+      // 1) 单触发类型必须有值
+      if (draftTriggerType === 'token') {
+        if (draftContainsAny.length === 0 && draftContainsAll.length === 0) {
+          throw new Error('请至少填写 1 个 token（any 或 all）')
+        }
+      } else {
+        const active =
+          draftTriggerType === 'width'
+            ? { op: draftWidthOp, pair: draftWidthBetween, label: '宽度' }
+            : draftTriggerType === 'height'
+              ? { op: draftHeightOp, pair: draftHeightBetween, label: '高度' }
+              : draftTriggerType === 'area'
+                ? { op: draftAreaOp, pair: draftAreaBetween, label: '面积' }
+                : { op: draftPerimeterOp, pair: draftPerimeterBetween, label: '周长' }
+        if (active.op === 'off') throw new Error(`请为“${active.label}”选择运算符并填写值`)
+        const payload = betweenToPayload(active.pair)
+        if (!payload) throw new Error(`请为“${active.label}”填写数值（或区间）`)
       }
-      const payload: LineVariantUpdateRequest = {
+
+      // 2) items 1→1（允许先不填，但启用时会被门槛挡住）
+      if (draftItems.length > 1) throw new Error('最稳形态只允许 1→1：不允许超过 1 行目标物料')
+      if (draftItems.length === 1 && !String(draftItems?.[0]?.material_ref_id ?? '').trim()) {
+        throw new Error('请填写目标物料 material_ref_id')
+      }
+
+      if (editMode === 'create') {
+        const payload: LineVariantCreateRequest = {
+          version_id: versionId,
+          base_line_id: baseLineId,
+          enabled: false,
+          priority: draftPriority,
+          action: FIXED_ACTION,
+          stop_on_hit: draftStopOnHit,
+          notes: draftNotes || '',
+          conditions: buildConditionsPayload(),
+          metadata_json: {},
+          items: buildItemsPayloadFromDraft(),
+          operator_id: 'planner-ui',
+        }
+        const created = await createLineVariant(versionId, payload)
+        // 若后端未回填单位信息，用户需要后续“保存清单”/补齐主数据再启用
+        if ((created as any)?.items) {
+          setDraftItems(buildEditableItems((created as any).items))
+        }
+        setSelectedVariantId(created.id)
+        return { id: created.id }
+      }
+
+      if (!selectedVariantId) throw new Error('请先选择一条变体规则')
+      if (draftEnabled && enableBlockReason) throw new Error(enableBlockReason)
+
+      const updatePayload: LineVariantUpdateRequest = {
         enabled: draftEnabled,
         priority: draftPriority,
-        // 收口：UI 固定 replace_self（最稳第一步）
         action: FIXED_ACTION,
         stop_on_hit: draftStopOnHit,
         notes: draftNotes || undefined,
-        conditions: {
-          spec_contains_any: draftContainsAny,
-          spec_contains_all: draftContainsAll,
-          width_between: draftWidthOp === 'off' ? undefined : betweenToPayload(draftWidthBetween),
-          height_between: draftHeightOp === 'off' ? undefined : betweenToPayload(draftHeightBetween),
-          area_between: draftAreaOp === 'off' ? undefined : betweenToPayload(draftAreaBetween),
-          perimeter_between: draftPerimeterOp === 'off' ? undefined : betweenToPayload(draftPerimeterBetween),
-        },
+        conditions: buildConditionsPayload(),
         operator_id: 'planner-ui',
       }
-      return await updateLineVariant(selectedVariantId, payload)
-    },
-    onSuccess: async () => {
-      message.success('已保存规则设置')
-      await queryClient.invalidateQueries({ queryKey: ['lineVariants', versionId, baseLineId] })
-    },
-    onError: (err: any) => message.error(err?.response?.data?.detail ?? '保存失败'),
-  })
+      await updateLineVariant(selectedVariantId, updatePayload)
 
-  const saveItemsMutation = useMutation({
-    mutationFn: async () => {
-      if (!selectedVariantId) throw new Error('请先选择一条变体规则')
-      if (draftItems.length > 1) throw new Error('最稳形态只允许 1→1：items 仅允许 1 行目标物料')
-      // normalize sequence order
-      const items: LineVariantItemPayload[] = draftItems.map((r, idx) => ({
-        sequence_order: idx,
-        material_kind: (r.material_kind ?? 'real') as any,
-        material_ref_id: String(r.material_ref_id ?? '').trim() || null,
-        calculation_method: (r.calculation_method ?? 'count') as any,
-        base_quantity: toNumber(r.base_quantity, 0),
-        fixed_quantity: toNumber(r.fixed_quantity, 0),
-        coverage_ratio: toNumber(r.coverage_ratio, 1),
-        loss_rate: toNumber(r.loss_rate, 0),
-        metadata_json: (r.metadata_json ?? {}) as any,
-      }))
-      return await replaceLineVariantItems(selectedVariantId, { items })
+      // items 保存（用于回填 unit_of_measure / code / name）
+      if (draftItems.length === 1) {
+        const updated = await replaceLineVariantItems(selectedVariantId, { items: buildItemsPayloadFromDraft() })
+        setDraftItems(buildEditableItems(updated.items as any))
+      }
+      return { id: selectedVariantId }
     },
-    onSuccess: async (updated) => {
-      message.success('已保存变体物料清单')
+    onSuccess: async ({ id }) => {
+      message.success(editMode === 'create' ? '已创建规则' : '已保存')
+      setEditModalOpen(false)
       await queryClient.invalidateQueries({ queryKey: ['lineVariants', versionId, baseLineId] })
-      // keep edit state aligned with server (material_code/name filled by backend)
-      setDraftItems(buildEditableItems(updated.items as any))
+      setSelectedVariantId(id)
     },
-    onError: (err: any) => message.error(err?.response?.data?.detail ?? '保存清单失败'),
+    onError: (err: any) => message.error(err?.response?.data?.detail ?? err?.message ?? '保存失败'),
   })
 
   const deleteVariantMutation = useMutation({
@@ -614,6 +740,16 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     },
   ]
 
+  const formatBetween = (pair: any, unit: string): string | null => {
+    const b = asBetween(pair)
+    if (!b) return null
+    const [min, max] = b
+    if (min == null && max == null) return null
+    if (min != null && max != null) return min === max ? `=${min}${unit}` : `${min}~${max}${unit}`
+    if (min != null) return `≥${min}${unit}`
+    return `≤${max}${unit}`
+  }
+
   const variantColumns: ColumnsType<LineVariantDetailRead> = [
     { title: '启用', width: 70, render: (_: any, r: any) => (r.enabled ? <Tag color="green">ON</Tag> : <Tag>OFF</Tag>) },
     { title: '优先级', width: 90, dataIndex: 'priority' },
@@ -624,13 +760,25 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
         const cond = (r.conditions ?? {}) as any
         const anyCnt = asStringArray(cond.spec_contains_any).length
         const allCnt = asStringArray(cond.spec_contains_all).length
-        if (!anyCnt && !allCnt) return <span style={{ color: '#bfbfbf' }}>-</span>
-        return (
-          <Space size={6}>
-            {anyCnt ? <Tag>any:{anyCnt}</Tag> : null}
-            {allCnt ? <Tag>all:{allCnt}</Tag> : null}
-          </Space>
-        )
+        const w = formatBetween(cond.width_between, 'cm')
+        const h = formatBetween(cond.height_between, 'cm')
+        const a = formatBetween(cond.area_between, 'm²')
+        const p = formatBetween(cond.perimeter_between, 'm')
+        const hasMetric = !!(w || h || a || p)
+
+        if (!anyCnt && !allCnt && !hasMetric) return <span style={{ color: '#bfbfbf' }}>-</span>
+        if (anyCnt || allCnt) {
+          return (
+            <Space size={6}>
+              <Tag>token</Tag>
+              {anyCnt ? <Tag>any:{anyCnt}</Tag> : null}
+              {allCnt ? <Tag>all:{allCnt}</Tag> : null}
+            </Space>
+          )
+        }
+        // 单触发类型：优先展示一个 metric（如果历史数据存在多种，这里只展示第一个）
+        const metricTag = p ? `周长${p}` : a ? `面积${a}` : w ? `宽度${w}` : h ? `高度${h}` : null
+        return metricTag ? <Tag>{metricTag}</Tag> : <span style={{ color: '#bfbfbf' }}>-</span>
       },
     },
     { title: 'items', width: 70, render: (_: any, r: any) => (r.items?.length ?? 0) },
@@ -639,7 +787,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
       width: 110,
       render: (_: any, r: any) => (
         <Space size={6}>
-          <Button size="small" icon={<EditOutlined />} onClick={() => setSelectedVariantId(r.id)}>
+          <Button size="small" icon={<EditOutlined />} onClick={() => openEditModal(r.id)}>
             编辑
           </Button>
           <Button
@@ -688,10 +836,10 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
 
         <Card
           size="small"
-          title="规则列表"
+          title="规则列表（只展示/选择）"
           extra={
             <Space>
-              <Button size="small" type="primary" onClick={() => createVariantMutation.mutate()} loading={createVariantMutation.isPending}>
+              <Button size="small" type="primary" onClick={openCreateModal}>
                 新建规则
               </Button>
               <Button size="small" onClick={() => variantsQuery.refetch()} disabled={variantsQuery.isLoading}>
@@ -714,427 +862,385 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
             })}
           />
         </Card>
-
-        <Card
-          size="small"
+        <div style={{ fontSize: 12, color: '#8c8c8c' }}>
+          选择一条规则后点击“编辑”在弹窗内配置（触发类型/条件/替换物料/预演）。
+        </div>
+        <Modal
           title={
-            <Space size={8} wrap>
-              <span>规则设置</span>
-              <Tag color="blue">action=replace_self</Tag>
-              <Tooltip title={STABLE_SHAPE_LABEL}>
-                <Tag>最稳形态</Tag>
-              </Tooltip>
-              {lastPreviewOk ? (
-                <Tag color={previewStale ? 'orange' : 'green'}>{previewStale ? '预演已过期' : '预演已通过'}</Tag>
-              ) : lastPreviewOk === false ? (
-                <Tag color="red">预演失败</Tag>
-              ) : (
-                <Tag>未预演</Tag>
-              )}
-              {lastPreviewAt ? <Text type="secondary" style={{ fontSize: 12 }}>最近预演：{new Date(lastPreviewAt).toLocaleString()}</Text> : null}
-            </Space>
+            editMode === 'create'
+              ? `新建规则（${baseLineLabel ?? baseLineId.slice(0, 8)}…）`
+              : `编辑规则（${selectedVariantId?.slice(0, 8) ?? '-'}）`
           }
-          extra={
-            <Button
-              size="small"
-              type="primary"
-              icon={<SaveOutlined />}
-              disabled={!selectedVariantId}
-              loading={saveVariantMutation.isPending}
-              onClick={() => saveVariantMutation.mutate()}
-            >
-              保存设置
-            </Button>
-          }
+          open={editModalOpen}
+          onCancel={() => setEditModalOpen(false)}
+          width={980}
+          okText={editMode === 'create' ? '创建并保存' : '保存'}
+          confirmLoading={modalSaveMutation.isPending}
+          onOk={() => modalSaveMutation.mutate()}
+          bodyStyle={{ maxHeight: '72vh', overflowY: 'auto' }}
+          destroyOnClose
         >
-          <Space direction="vertical" size={10} style={{ width: '100%' }}>
-            <Space wrap>
-              <Space>
-                <Text>启用</Text>
-                <Switch checked={draftEnabled} onChange={(v) => handleToggleEnabled(v)} />
-              </Space>
-              <Space>
-                <Text>优先级</Text>
-                <InputNumber min={0} value={draftPriority} onChange={(v) => setDraftPriority(toNumber(v, 100))} />
-              </Space>
-              <Space>
-                <Text>动作</Text>
-                <Tag color="blue" style={{ marginInlineStart: 0 }}>
-                  replace_self
-                </Tag>
-              </Space>
-              <Space>
-                <Text>命中后停止</Text>
-                <Switch checked={draftStopOnHit} onChange={(v) => setDraftStopOnHit(v)} />
-              </Space>
-            </Space>
-
-            {draftEnabled && enableBlockReason ? (
-              <Alert type="error" showIcon message="当前不满足启用门槛" description={enableBlockReason} />
-            ) : null}
-
-            <Space direction="vertical" size={6} style={{ width: '100%' }}>
-              <Text type="secondary">条件（列表式：字段 / 运算符 / 值）</Text>
-
-              <Alert
-                type="info"
-                showIcon
-                message="条件输入口径"
-                description={
-                  <div style={{ fontSize: 12 }}>
-                    <div>宽/高=cm，面积=m²，周长=m（来自 spec/parse）。</div>
-                    <div style={{ color: '#8c8c8c' }}>
-                      运营规范建议：边界尽量用整数并做离散档位（避免灰区），详见 `standard_model_variants_ops_rules.md`。
-                    </div>
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <Alert
+              type="info"
+              showIcon
+              message="最稳形态（固定动作）"
+              description={
+                <div style={{ fontSize: 12 }}>
+                  <div>
+                    <b>{STABLE_SHAPE_LABEL}</b>
                   </div>
-                }
-              />
+                  <div style={{ color: '#8c8c8c' }}>
+                    注意：单条规则只允许 1 种触发类型（token / 宽 / 高 / 面积 / 周长），避免 AND 组合造成歧义。
+                  </div>
+                </div>
+              }
+            />
 
-              <Table
-                rowKey="key"
-                size="small"
-                pagination={false}
-                dataSource={conditionRows as any[]}
-                columns={[
-                  { title: '字段', width: 120, dataIndex: 'label' },
-                  {
-                    title: '运算符',
-                    width: 160,
-                    render: (_: any, row: any) => {
-                      if (row.valueKind === 'tokens') return <Tag>{row.operator}</Tag>
-                      const op = row.operator as MetricOp
-                      const setOp = (next: MetricOp) => {
-                        if (row.field === 'width') {
-                          setDraftWidthOp(next)
-                          setDraftWidthBetween(applyOpToBetween(next, draftWidthBetween))
-                          if (next === 'off') setDraftWidthBetween(null)
-                        }
-                        if (row.field === 'height') {
-                          setDraftHeightOp(next)
-                          setDraftHeightBetween(applyOpToBetween(next, draftHeightBetween))
-                          if (next === 'off') setDraftHeightBetween(null)
-                        }
-                        if (row.field === 'area') {
-                          setDraftAreaOp(next)
-                          setDraftAreaBetween(applyOpToBetween(next, draftAreaBetween))
-                          if (next === 'off') setDraftAreaBetween(null)
-                        }
-                        if (row.field === 'perimeter') {
-                          setDraftPerimeterOp(next)
-                          setDraftPerimeterBetween(applyOpToBetween(next, draftPerimeterBetween))
-                          if (next === 'off') setDraftPerimeterBetween(null)
-                        }
-                      }
-                      return (
+            <Card size="small" title="基本设置">
+              <Space wrap>
+                <Space>
+                  <Text>启用</Text>
+                  <Tooltip title={editMode === 'create' ? '新建规则默认不启用；请先保存→保存清单回填单位→预演通过→再启用' : undefined}>
+                    <Switch checked={draftEnabled} disabled={editMode === 'create'} onChange={(v) => handleToggleEnabled(v)} />
+                  </Tooltip>
+                </Space>
+                <Space>
+                  <Text>优先级</Text>
+                  <InputNumber min={0} value={draftPriority} onChange={(v) => setDraftPriority(toNumber(v, 100))} />
+                </Space>
+                <Space>
+                  <Text>动作</Text>
+                  <Tag color="blue" style={{ marginInlineStart: 0 }}>
+                    replace_self
+                  </Tag>
+                </Space>
+                <Space>
+                  <Text>命中后停止</Text>
+                  <Switch checked={draftStopOnHit} onChange={(v) => setDraftStopOnHit(v)} />
+                </Space>
+              </Space>
+
+              {draftEnabled && enableBlockReason ? (
+                <div style={{ marginTop: 8 }}>
+                  <Alert type="error" showIcon message="当前不满足启用门槛" description={enableBlockReason} />
+                </div>
+              ) : null}
+
+              <div style={{ marginTop: 8 }}>
+                <Input.TextArea
+                  value={draftNotes}
+                  onChange={(e) => setDraftNotes(e.target.value)}
+                  placeholder="备注（可选）"
+                  autoSize={{ minRows: 2, maxRows: 4 }}
+                />
+              </div>
+            </Card>
+
+            <Card size="small" title="触发条件（单类型）">
+              <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                <Space wrap>
+                  <Text>触发类型</Text>
+                  <Select
+                    value={draftTriggerType}
+                    style={{ width: 220 }}
+                    options={[
+                      { label: 'token（包含）', value: 'token' },
+                      { label: '宽度（cm）', value: 'width' },
+                      { label: '高度（cm）', value: 'height' },
+                      { label: '面积（m²）', value: 'area' },
+                      { label: '周长（m）', value: 'perimeter' },
+                    ]}
+                    onChange={(v) => handleTriggerTypeChange(v as any)}
+                  />
+                </Space>
+
+                {draftTriggerType === 'token' ? (
+                  <Space wrap style={{ width: '100%' }}>
+                    <div style={{ width: 420 }}>
+                      <Text type="secondary">token(any)：命中任意（OR）</Text>
+                      <Select
+                        mode="tags"
+                        value={draftContainsAny}
+                        style={{ width: '100%' }}
+                        placeholder="例如：黑色、无框"
+                        onChange={(v) => setDraftContainsAny(v)}
+                      />
+                    </div>
+                    <div style={{ width: 420 }}>
+                      <Text type="secondary">token(all)：必须包含（AND）</Text>
+                      <Select
+                        mode="tags"
+                        value={draftContainsAll}
+                        style={{ width: '100%' }}
+                        placeholder="例如：加厚、防水"
+                        onChange={(v) => setDraftContainsAll(v)}
+                      />
+                    </div>
+                  </Space>
+                ) : (
+                  (() => {
+                    const unit = draftTriggerType === 'area' ? 'm²' : draftTriggerType === 'perimeter' ? 'm' : 'cm'
+                    const label = draftTriggerType === 'area' ? '面积' : draftTriggerType === 'perimeter' ? '周长' : draftTriggerType === 'height' ? '高度' : '宽度'
+                    const op =
+                      draftTriggerType === 'width'
+                        ? draftWidthOp
+                        : draftTriggerType === 'height'
+                          ? draftHeightOp
+                          : draftTriggerType === 'area'
+                            ? draftAreaOp
+                            : draftPerimeterOp
+                    const setOp =
+                      draftTriggerType === 'width'
+                        ? setDraftWidthOp
+                        : draftTriggerType === 'height'
+                          ? setDraftHeightOp
+                          : draftTriggerType === 'area'
+                            ? setDraftAreaOp
+                            : setDraftPerimeterOp
+                    const pair =
+                      draftTriggerType === 'width'
+                        ? draftWidthBetween
+                        : draftTriggerType === 'height'
+                          ? draftHeightBetween
+                          : draftTriggerType === 'area'
+                            ? draftAreaBetween
+                            : draftPerimeterBetween
+                    const setPair =
+                      draftTriggerType === 'width'
+                        ? setDraftWidthBetween
+                        : draftTriggerType === 'height'
+                          ? setDraftHeightBetween
+                          : draftTriggerType === 'area'
+                            ? setDraftAreaBetween
+                            : setDraftPerimeterBetween
+                    const min = pair?.[0] ?? null
+                    const max = pair?.[1] ?? null
+                    return (
+                      <Space wrap style={{ width: '100%' }}>
+                        <Text type="secondary">
+                          {label} 条件（来自 spec/parse，单位 {unit}）
+                        </Text>
                         <Select
-                          size="small"
                           value={op}
-                          style={{ width: 140 }}
+                          style={{ width: 160 }}
                           options={[
-                            { label: '关闭', value: 'off' },
                             { label: '≥', value: 'gte' },
                             { label: '≤', value: 'lte' },
                             { label: '=', value: 'eq' },
                             { label: '区间', value: 'between' },
                           ]}
-                          onChange={(v) => setOp(v as MetricOp)}
+                          onChange={(v) => setOp(v as any)}
                         />
-                      )
-                    },
-                  },
-                  {
-                    title: '值',
-                    render: (_: any, row: any) => {
-                      if (row.field === 'token_any') {
-                        return (
-                          <Select
-                            mode="tags"
-                            value={draftContainsAny}
-                            style={{ width: '100%' }}
-                            placeholder="命中任意 token（OR）"
-                            onChange={(v) => setDraftContainsAny(v)}
-                          />
-                        )
-                      }
-                      if (row.field === 'token_all') {
-                        return (
-                          <Select
-                            mode="tags"
-                            value={draftContainsAll}
-                            style={{ width: '100%' }}
-                            placeholder="必须包含所有 token（AND）"
-                            onChange={(v) => setDraftContainsAll(v)}
-                          />
-                        )
-                      }
-
-                      const op = row.operator as MetricOp
-                      const unit = String(row.unit ?? '')
-                      const pair =
-                        row.field === 'width'
-                          ? draftWidthBetween
-                          : row.field === 'height'
-                            ? draftHeightBetween
-                            : row.field === 'area'
-                              ? draftAreaBetween
-                              : draftPerimeterBetween
-                      const min = pair?.[0] ?? null
-                      const max = pair?.[1] ?? null
-                      const setPair = (nextMin: number | null, nextMax: number | null) => {
-                        const next: [number | null, number | null] = [nextMin, nextMax]
-                        if (row.field === 'width') setDraftWidthBetween(next)
-                        if (row.field === 'height') setDraftHeightBetween(next)
-                        if (row.field === 'area') setDraftAreaBetween(next)
-                        if (row.field === 'perimeter') setDraftPerimeterBetween(next)
-                      }
-
-                      if (op === 'off') return <Text type="secondary">-</Text>
-                      if (op === 'between') {
-                        return (
+                        {op === 'between' ? (
+                          <Space wrap>
+                            <InputNumber placeholder="min" value={min} onChange={(v) => setPair([v == null ? null : Number(v), max])} />
+                            <Text type="secondary">到</Text>
+                            <InputNumber placeholder="max" value={max} onChange={(v) => setPair([min, v == null ? null : Number(v)])} />
+                            <Text type="secondary">{unit}</Text>
+                          </Space>
+                        ) : (
                           <Space wrap>
                             <InputNumber
-                              size="small"
-                              placeholder="min"
-                              value={min}
-                              onChange={(v) => setPair(v == null ? null : Number(v), max)}
-                            />
-                            <Text type="secondary">到</Text>
-                            <InputNumber
-                              size="small"
-                              placeholder="max"
-                              value={max}
-                              onChange={(v) => setPair(min, v == null ? null : Number(v))}
+                              placeholder="value"
+                              value={op === 'lte' ? max : min}
+                              onChange={(v) => {
+                                const n = v == null ? null : Number(v)
+                                if (op === 'gte') setPair([n, null])
+                                if (op === 'lte') setPair([null, n])
+                                if (op === 'eq') setPair([n, n])
+                              }}
                             />
                             <Text type="secondary">{unit}</Text>
                           </Space>
-                        )
-                      }
-                      // gte/lte/eq: use single value input (we store in min/max accordingly)
-                      const single = op === 'lte' ? max : min
-                      const setSingle = (v: number | null) => {
-                        const num = v == null ? null : Number(v)
-                        if (op === 'gte') setPair(num, null)
-                        if (op === 'lte') setPair(null, num)
-                        if (op === 'eq') setPair(num, num)
-                      }
-                      return (
-                        <Space wrap>
-                          <InputNumber size="small" placeholder="value" value={single} onChange={(v) => setSingle(v == null ? null : Number(v))} />
-                          <Text type="secondary">{unit}</Text>
-                        </Space>
-                      )
-                    },
-                  },
-                ]}
-              />
+                        )}
+                      </Space>
+                    )
+                  })()
+                )}
 
-              <Alert
-                type="warning"
-                showIcon
-                message="个数/数量条件"
-                description={<span style={{ fontSize: 12 }}>当前后端条件 schema 未提供数量区间字段（例如 quantity_between），因此 UI 暂无法写入规则条件。若你确认必须支持“个数”，需要下一轮补后端字段；临时可用 token 离散化（如 QTY_1/QTY_2/QTY_GT_2）。</span>}
-              />
-
-              <Input.TextArea
-                value={draftNotes}
-                onChange={(e) => setDraftNotes(e.target.value)}
-                placeholder="备注（可选）"
-                autoSize={{ minRows: 2, maxRows: 4 }}
-              />
-            </Space>
-          </Space>
-        </Card>
-
-        <Card
-          size="small"
-          title={
-            <Space size={8} wrap>
-              <span>变体物料清单（1→1 同单位平替）</span>
-              <Tag>仅 1 行目标物料</Tag>
-              {baseUnitFromBom ? <Tag color="geekblue">基准单位：{baseUnitFromBom}</Tag> : <Tag>基准单位：未知</Tag>}
-              {targetUnitFromItems ? <Tag color="geekblue">目标单位：{targetUnitFromItems}</Tag> : <Tag>目标单位：未知</Tag>}
-              {unitMismatch ? <Tag color="red">单位不一致</Tag> : null}
-            </Space>
-          }
-          extra={
-            <Space>
-              <Button
-                size="small"
-                disabled={!selectedVariantId || draftItems.length >= 1}
-                onClick={() => {
-                  if (!selectedVariantId) {
-                    message.warning('请先选择一条变体规则')
-                    return
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="个数/数量条件"
+                  description={
+                    <span style={{ fontSize: 12 }}>
+                      当前后端条件 schema 未提供数量区间字段（例如 quantity_between），因此 UI 暂无法写入规则条件。若必须支持“个数”，需要下一轮补后端字段；临时可用 token 离散化（如 QTY_1/QTY_2/QTY_GT_2）。
+                    </span>
                   }
-                  if (draftItems.length >= 1) {
-                    message.warning('最稳形态只允许 1→1：不允许新增第 2 行')
-                    return
-                  }
-                  setDraftItems([
-                    {
-                      _tmpId: `tmp-${Date.now()}`,
-                      sequence_order: 0,
-                      material_kind: 'real' as any,
-                      material_ref_id: '',
-                      calculation_method: 'count' as any,
-                      base_quantity: 0,
-                      fixed_quantity: 0,
-                      coverage_ratio: 1,
-                      loss_rate: 0,
-                      metadata_json: {},
-                    },
-                  ])
-                }}
-              >
-                设置目标物料
-              </Button>
-              <Button
-                size="small"
-                type="primary"
-                icon={<SaveOutlined />}
-                disabled={!selectedVariantId}
-                loading={saveItemsMutation.isPending}
-                onClick={() => saveItemsMutation.mutate()}
-              >
-                保存清单
-              </Button>
-            </Space>
-          }
-        >
-          <Table
-            rowKey={(r) => r._tmpId}
-            size="small"
-            pagination={false}
-            dataSource={draftItems}
-            columns={itemColumns}
-          />
-          <div style={{ marginTop: 8 }}>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              提示：最稳形态要求“同单位 1→1”。请先保存清单让后端回填单位，再进行预演；启用前必须预演成功（见上方门槛提示）。
-            </Text>
-          </div>
-        </Card>
-
-        <Card
-          size="small"
-          title="spec_text 预演（tokens + 最终 BOM）"
-          extra={
-            <Button
-              size="small"
-              type="primary"
-              icon={<PlayCircleOutlined />}
-              loading={previewMutation.isPending}
-              onClick={() => previewMutation.mutate()}
-            >
-              预演
-            </Button>
-          }
-        >
-          <Space direction="vertical" size={10} style={{ width: '100%' }}>
-            {lastPreviewAt ? (
-              <Alert
-                type={lastPreviewOk ? (previewStale ? 'warning' : 'success') : 'error'}
-                showIcon
-                message={
-                  lastPreviewOk
-                    ? previewStale
-                      ? '最近一次预演已过期（配置已变更）'
-                      : '最近一次预演通过'
-                    : '最近一次预演失败'
-                }
-                description={
-                  <div style={{ fontSize: 12 }}>
-                    <div>时间：{new Date(lastPreviewAt).toLocaleString()}</div>
-                    {lastPreviewOk && lastPreviewSummary ? (
-                      <>
-                        <div>spec_text：{lastPreviewSummary.spec_text}</div>
-                        <div>
-                          tokens={lastPreviewSummary.tokens_count} · final_lines={lastPreviewSummary.final_lines_count} · trace_keys={lastPreviewSummary.trace_keys}
-                        </div>
-                        <div>
-                          基准单位={lastPreviewSummary.base_unit ?? '未知'} · 目标单位={lastPreviewSummary.target_unit ?? '未知'}
-                        </div>
-                      </>
-                    ) : (
-                      <div>{lastPreviewError ?? '预演失败'}</div>
-                    )}
-                  </div>
-                }
-              />
-            ) : (
-              <Alert
-                type="info"
-                showIcon
-                message="启用门槛：必须先预演成功"
-                description={<span style={{ fontSize: 12 }}>建议保存清单（回填单位）→ 输入 spec_text → 预演通过 → 再启用。</span>}
-              />
-            )}
-
-            <Input.TextArea
-              value={specText}
-              onChange={(e) => setSpecText(e.target.value)}
-              placeholder="输入 spec_text（例如：120*80 黑色 无框）"
-              autoSize={{ minRows: 2, maxRows: 6 }}
-            />
-
-            <Card size="small" title="解析结果（tokens）">
-              {specParsed ? (
-                <Space direction="vertical" style={{ width: '100%' }} size={6}>
-                  <Space wrap>
-                    <Tag>tokens: {specParsed.tokens?.length ?? 0}</Tag>
-                    {specParsed.width_cm != null ? <Tag>W(cm): {String(specParsed.width_cm)}</Tag> : null}
-                    {specParsed.height_cm != null ? <Tag>H(cm): {String(specParsed.height_cm)}</Tag> : null}
-                    {specParsed.area_m2 != null ? <Tag>area(m²): {String(specParsed.area_m2)}</Tag> : null}
-                    {specParsed.perimeter_m != null ? <Tag>perimeter(m): {String(specParsed.perimeter_m)}</Tag> : null}
-                  </Space>
-                  <div>
-                    {(specParsed.tokens ?? []).map((t) => (
-                      <Tag key={t}>{t}</Tag>
-                    ))}
-                  </div>
-                </Space>
-              ) : (
-                <Text type="secondary">暂无（点击“预演”后生成）</Text>
-              )}
-            </Card>
-
-            <Card size="small" title="最终 BOM（final_material_lines）">
-              {bomPreview ? (
-                <Table
-                  rowKey={(r: any) => `${r.line_index}-${r.variant_item_id ?? r.base_line_id ?? ''}`}
-                  size="small"
-                  pagination={false}
-                  dataSource={(bomPreview.final_material_lines ?? []) as any[]}
-                  columns={[
-                    { title: '#', width: 48, dataIndex: 'line_index' },
-                    { title: '来源', width: 100, dataIndex: 'source_type', render: (v) => <Tag>{String(v)}</Tag> },
-                    { title: '编码', width: 130, dataIndex: 'material_code', render: (v) => v ?? '-' },
-                    { title: '名称', dataIndex: 'material_name', render: (v) => v ?? '-' },
-                    {
-                      title: '数量',
-                      width: 120,
-                      dataIndex: 'computed_quantity',
-                      render: (v) => (v != null ? String(v) : '-'),
-                    },
-                    { title: '单位', width: 80, dataIndex: 'unit_of_measure', render: (v) => v ?? '-' },
-                  ]}
                 />
-              ) : (
-                <Text type="secondary">暂无（点击“预演”后生成）</Text>
-              )}
-              {bomPreview?.trace ? (
-                <div style={{ marginTop: 8 }}>
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    trace（摘要）：{Object.keys(bomPreview.trace ?? {}).length} keys
-                  </Text>
-                  <pre style={{ whiteSpace: 'pre-wrap', margin: '6px 0 0', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' }}>
-                    {JSON.stringify(bomPreview.trace ?? {}, null, 2)}
-                  </pre>
-                </div>
-              ) : null}
+              </Space>
+            </Card>
+
+            <Card
+              size="small"
+              title={
+                <Space size={8} wrap>
+                  <span>目标替换物料（1→1 同单位平替）</span>
+                  {baseUnitFromBom ? <Tag color="geekblue">基准单位：{baseUnitFromBom}</Tag> : <Tag>基准单位：未知</Tag>}
+                  {targetUnitFromItems ? <Tag color="geekblue">目标单位：{targetUnitFromItems}</Tag> : <Tag>目标单位：未知</Tag>}
+                  {unitMismatch ? <Tag color="red">单位不一致</Tag> : null}
+                </Space>
+              }
+              extra={
+                <Button
+                  size="small"
+                  disabled={draftItems.length >= 1}
+                  onClick={() => {
+                    if (draftItems.length >= 1) {
+                      message.warning('最稳形态只允许 1→1：不允许新增第 2 行')
+                      return
+                    }
+                    setDraftItems([
+                      {
+                        _tmpId: `tmp-${Date.now()}`,
+                        sequence_order: 0,
+                        material_kind: 'real' as any,
+                        material_ref_id: '',
+                        calculation_method: 'count' as any,
+                        base_quantity: 0,
+                        fixed_quantity: 0,
+                        coverage_ratio: 1,
+                        loss_rate: 0,
+                        metadata_json: {},
+                      },
+                    ])
+                  }}
+                >
+                  设置目标物料
+                </Button>
+              }
+            >
+              <Table rowKey={(r) => r._tmpId} size="small" pagination={false} dataSource={draftItems} columns={itemColumns} />
+              <div style={{ marginTop: 8 }}>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  提示：启用前需要“保存（回填单位）→ 预演通过”。单位缺失会被启用门槛阻止。
+                </Text>
+              </div>
+            </Card>
+
+            <Card
+              size="small"
+              title="预演（spec/parse + bom/generate，启用前必须成功）"
+              extra={
+                <Button
+                  size="small"
+                  type="primary"
+                  icon={<PlayCircleOutlined />}
+                  loading={previewMutation.isPending}
+                  onClick={() => previewMutation.mutate()}
+                >
+                  预演
+                </Button>
+              }
+            >
+              <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                {lastPreviewAt ? (
+                  <Alert
+                    type={lastPreviewOk ? (previewStale ? 'warning' : 'success') : 'error'}
+                    showIcon
+                    message={
+                      lastPreviewOk
+                        ? previewStale
+                          ? '最近一次预演已过期（配置已变更）'
+                          : '最近一次预演通过'
+                        : '最近一次预演失败'
+                    }
+                    description={
+                      <div style={{ fontSize: 12 }}>
+                        <div>时间：{new Date(lastPreviewAt).toLocaleString()}</div>
+                        {lastPreviewOk && lastPreviewSummary ? (
+                          <>
+                            <div>spec_text：{lastPreviewSummary.spec_text}</div>
+                            <div>
+                              tokens={lastPreviewSummary.tokens_count} · final_lines={lastPreviewSummary.final_lines_count} · trace_keys={lastPreviewSummary.trace_keys}
+                            </div>
+                            <div>
+                              基准单位={lastPreviewSummary.base_unit ?? '未知'} · 目标单位={lastPreviewSummary.target_unit ?? '未知'}
+                            </div>
+                          </>
+                        ) : (
+                          <div>{lastPreviewError ?? '预演失败'}</div>
+                        )}
+                      </div>
+                    }
+                  />
+                ) : (
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="启用门槛：必须先预演成功"
+                    description={<span style={{ fontSize: 12 }}>建议：先保存（回填单位）→ 输入 spec_text → 预演通过 → 再启用。</span>}
+                  />
+                )}
+
+                <Input.TextArea
+                  value={specText}
+                  onChange={(e) => setSpecText(e.target.value)}
+                  placeholder="输入 spec_text（例如：120*80 黑色 无框）"
+                  autoSize={{ minRows: 2, maxRows: 6 }}
+                />
+
+                <Card size="small" title="解析结果（tokens/尺寸）">
+                  {specParsed ? (
+                    <Space direction="vertical" style={{ width: '100%' }} size={6}>
+                      <Space wrap>
+                        <Tag>tokens: {specParsed.tokens?.length ?? 0}</Tag>
+                        {specParsed.width_cm != null ? <Tag>W(cm): {String(specParsed.width_cm)}</Tag> : null}
+                        {specParsed.height_cm != null ? <Tag>H(cm): {String(specParsed.height_cm)}</Tag> : null}
+                        {specParsed.area_m2 != null ? <Tag>area(m²): {String(specParsed.area_m2)}</Tag> : null}
+                        {specParsed.perimeter_m != null ? <Tag>perimeter(m): {String(specParsed.perimeter_m)}</Tag> : null}
+                      </Space>
+                      <div>
+                        {(specParsed.tokens ?? []).map((t) => (
+                          <Tag key={t}>{t}</Tag>
+                        ))}
+                      </div>
+                    </Space>
+                  ) : (
+                    <Text type="secondary">暂无（点击“预演”后生成）</Text>
+                  )}
+                </Card>
+
+                <Card size="small" title="最终 BOM（final_material_lines）">
+                  {bomPreview ? (
+                    <Table
+                      rowKey={(r: any) => `${r.line_index}-${r.variant_item_id ?? r.base_line_id ?? ''}`}
+                      size="small"
+                      pagination={false}
+                      dataSource={(bomPreview.final_material_lines ?? []) as any[]}
+                      columns={[
+                        { title: '#', width: 48, dataIndex: 'line_index' },
+                        { title: '来源', width: 100, dataIndex: 'source_type', render: (v) => <Tag>{String(v)}</Tag> },
+                        { title: '编码', width: 130, dataIndex: 'material_code', render: (v) => v ?? '-' },
+                        { title: '名称', dataIndex: 'material_name', render: (v) => v ?? '-' },
+                        {
+                          title: '数量',
+                          width: 120,
+                          dataIndex: 'computed_quantity',
+                          render: (v) => (v != null ? String(v) : '-'),
+                        },
+                        { title: '单位', width: 80, dataIndex: 'unit_of_measure', render: (v) => v ?? '-' },
+                      ]}
+                    />
+                  ) : (
+                    <Text type="secondary">暂无（点击“预演”后生成）</Text>
+                  )}
+                  {bomPreview?.trace ? (
+                    <div style={{ marginTop: 8 }}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        trace（摘要）：{Object.keys(bomPreview.trace ?? {}).length} keys
+                      </Text>
+                      <pre style={{ whiteSpace: 'pre-wrap', margin: '6px 0 0', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' }}>
+                        {JSON.stringify(bomPreview.trace ?? {}, null, 2)}
+                      </pre>
+                    </div>
+                  ) : null}
+                </Card>
+              </Space>
             </Card>
           </Space>
-        </Card>
+        </Modal>
       </Space>
     </Drawer>
   )

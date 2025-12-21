@@ -1,6 +1,6 @@
 ## 当前状态（崩了也能继续）
 
-- **最近校对（北京时间 GMT+8）**：2025-12-21 17:20（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
+- **最近校对（北京时间 GMT+8）**：2025-12-21 20:10（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **分支**：`backup/20251214-1535`
 
 - **本轮闭环产物（Frontend / 行级变体 UI MVP）**：
@@ -24,6 +24,11 @@
 
 - **下一步闭环任务单（运维/上线）**：`DOC/agents/briefings/ops_deploy_line_variants_to_4799.md`
 - **验收命令（派单文件存在）**：`grep -nF "# Ops/Backend Ops 闭环任务单：部署“行级变体（overlay）”到 47.99.89.206" DOC/agents/briefings/ops_deploy_line_variants_to_4799.md`
+- **最新部署（2025-12-21 20:10 CST）**：
+  - `47.99.89.206` 已执行 `git pull --ff-only`、`alembic upgrade heads`（存在 `0016_line_variants_mvp` 与 `0754ad7d6c3f` 双 head，采用 `heads` 选项同步）
+  - `systemctl --user restart planner-costing.service` 后，`curl http://127.0.0.1:8800/api/planner/health` 返回 `{"status":"ok"}`
+  - 前端 `npm -C frontend ci && npm -C frontend run build`，并通过 `PLANNER_STATIC_DIR=/var/www/html/ai-costing/dist ./scripts/deploy_static.sh` 发布
+  - 验收命令：`curl -sS http://127.0.0.1:8800/openapi.json | python -c "... print(...)"` → `True`（确认 `spec/parse` / `bom/generate` / `line-variants` 路由已生效）
 
 - **本轮闭环产物（Docs / 运营规范）**：`DOC/costing/manuals/standard_model_variants_ops_rules.md`（行级变体：token/尺寸边界/预演留痕/变更控制/扣库口径）
 - **本轮验收命令（Docs）**：`grep -nF "## 标准模型：行级变体（Overlay）运营/实施规范（v0.1）" DOC/costing/manuals/standard_model_variants_ops_rules.md`

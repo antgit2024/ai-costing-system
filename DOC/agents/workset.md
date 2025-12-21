@@ -29,6 +29,14 @@
 - `DOC/costing/ui_specs/product_model.md`（产品模型 UI 规格/口径）
 - `DOC/agents/task_log.md`（最新变更/决策记录）
 
+### 3.1) 业务输入（基础表单/场景说明，仅限本轮变体方案）
+
+- `DOC/基础表单/BOM动态生成引擎业务需求说明.md`（标准模型变体/动态 BOM 业务逻辑与场景说明）
+
+### 3.2) 方案产出（本轮交付物）
+
+- `DOC/costing/blueprints/standard_model_variants_plan.md`（标准模型：变体/动态 BOM 功能方案）
+
 ### 4) 质量门槛（可运行/可验收）
 
 - `frontend/package.json`（build/test 脚本）

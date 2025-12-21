@@ -21,3 +21,6 @@
 - **本轮验收命令（必须）**：`npm -C frontend run build`（已通过）
 
 - **下一步（不在本轮范围）**：如需更易用的 items 选材（从物料/虚拟物料列表挑选并回填 material_ref_id），再开下一轮单独闭环。
+
+- **下一步闭环任务单（运维/上线）**：`DOC/agents/briefings/ops_deploy_line_variants_to_4799.md`
+- **验收命令（派单文件存在）**：`grep -nF "# Ops/Backend Ops 闭环任务单：部署“行级变体（overlay）”到 47.99.89.206" DOC/agents/briefings/ops_deploy_line_variants_to_4799.md`

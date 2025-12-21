@@ -16,12 +16,14 @@ class MaterialFilters:
         material_type: Optional[str] = None,
         category: Optional[str] = None,
         status: Optional[str] = None,
+        is_bom_material: Optional[bool] = None,
         is_active: Optional[bool] = None,
     ):
         self.search = search
         self.material_type = material_type
         self.category = category
         self.status = status
+        self.is_bom_material = is_bom_material
         self.is_active = is_active
 
 
@@ -41,6 +43,8 @@ def apply_material_filters(query: Query, filters: MaterialFilters) -> Query:
         query = query.filter(models.Material.category == filters.category)
     if filters.status:
         query = query.filter(models.Material.status == filters.status)
+    if filters.is_bom_material is not None:
+        query = query.filter(models.Material.is_bom_material == filters.is_bom_material)
     if filters.is_active is not None:
         query = query.filter(models.Material.is_active == filters.is_active)
     return query

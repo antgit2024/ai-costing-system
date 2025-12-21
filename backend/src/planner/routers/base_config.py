@@ -136,6 +136,7 @@ def list_materials(
     material_type: Optional[str] = None,
     category: Optional[str] = None,
     status: Optional[str] = None,
+    is_bom_material: Optional[bool] = None,
     is_active: Optional[bool] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
@@ -146,6 +147,7 @@ def list_materials(
         material_type=material_type,
         category=category,
         status=status,
+        is_bom_material=is_bom_material,
         is_active=is_active,
     )
     total, items = material_service.list_materials(db, filters=filters, page=page, page_size=page_size)
@@ -155,6 +157,17 @@ def list_materials(
         page_size=page_size,
         items=[schemas.MaterialRead.from_orm(item) for item in items],
     )
+
+
+@router.get(
+    "/materials/{material_id}",
+    response_model=schemas.MaterialRead,
+)
+def get_material(material_id: str, db: Session = Depends(get_db)) -> schemas.MaterialRead:
+    material = db.get(models.Material, material_id)
+    if not material or material.is_archived:
+        raise HTTPException(status_code=404, detail="Material not found")
+    return schemas.MaterialRead.from_orm(material)
 
 
 @router.patch(
@@ -173,6 +186,36 @@ def update_material(
         material.is_active = payload.is_active
     if payload.status is not None:
         material.status = payload.status
+    if payload.is_bom_material is not None:
+        material.is_bom_material = payload.is_bom_material
+    if payload.unit is not None:
+        material.unit = payload.unit
+    if payload.inventory_unit is not None:
+        material.inventory_unit = payload.inventory_unit
+    if payload.calculation_method is not None:
+        material.calculation_method = str(payload.calculation_method)
+    if payload.conversion_purchase_to_bom is not None:
+        material.conversion_purchase_to_bom = payload.conversion_purchase_to_bom
+    if payload.conversion_bom_to_inventory is not None:
+        material.conversion_bom_to_inventory = payload.conversion_bom_to_inventory
+
+    metadata = dict(material.metadata_json or {})
+    metadata_updated = False
+    if payload.metadata is not None:
+        for key, value in (payload.metadata or {}).items():
+            if value is None:
+                if key in metadata:
+                    metadata.pop(key, None)
+                    metadata_updated = True
+            else:
+                metadata[key] = value
+                metadata_updated = True
+    if payload.bom_unit_price is not None:
+        # store as float in metadata for backward compatibility
+        metadata["bom_unit_price"] = float(payload.bom_unit_price)
+        metadata_updated = True
+    if metadata_updated:
+        material.metadata_json = metadata
     db.commit()
     db.refresh(material)
     return schemas.MaterialRead.from_orm(material)
@@ -240,6 +283,7 @@ def export_materials(
         material_type=payload.material_type,
         category=payload.category,
         status=payload.status,
+        is_bom_material=payload.is_bom_material,
         is_active=payload.is_active,
     )
     materials = material_service.fetch_materials_for_export(db, filters=filters)

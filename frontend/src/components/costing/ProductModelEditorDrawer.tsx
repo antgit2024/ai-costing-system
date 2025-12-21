@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import dayjs from 'dayjs'
 import {
   Alert,
   Button,
@@ -6,28 +7,38 @@ import {
   Col,
   Row,
   Drawer,
+  Divider,
   Form,
+  Image,
   Input,
   InputNumber,
   message,
   Modal,
   Select,
   Space,
+  Spin,
   Switch,
   Table,
   Tabs,
   Tag,
   Tooltip,
   Typography,
+  Upload,
 } from 'antd'
+import type { UploadFile } from 'antd'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
 import {
+  CopyOutlined,
+  DownOutlined,
   DeleteOutlined,
+  EditOutlined,
   FileTextOutlined,
   InfoCircleOutlined,
   LockOutlined,
   ReloadOutlined,
   SwapOutlined,
+  UpOutlined,
   UnlockOutlined,
 } from '@ant-design/icons'
 import { normalizeUnit } from '@/utils/unit'
@@ -37,10 +48,11 @@ import derivePerSqmGuide from '@/guides/derive_standard_per_sqm_tablecloth_examp
 import {
   bindSkuModelVersion,
   createProductModelVersion,
+  deleteProductModelVersion,
   deriveStandardFromSampleVersion,
+  fetchMaterial,
   fetchMaterials,
   fetchProductModel,
-  fetchProductModelPlaceholders,
   fetchProductModelVersionLines,
   fetchProductModelVersions,
   fetchProcessModules,
@@ -50,6 +62,7 @@ import {
   syncProductModelVersionFromModules,
   updateProductModel,
   updateProductModelVersionLines,
+  fetchVirtualMaterial,
   fetchVirtualMaterials,
 } from '@/services/planner'
 import type {
@@ -58,7 +71,6 @@ import type {
   ProductModel,
   ProductModelLinesResponse,
   ProductModelMaterialLineInput,
-  ProductModelPlaceholder,
   ProductModelProcessLineInput,
   ProductModelSampleSpec,
   ProductModelVersionRead,
@@ -74,17 +86,9 @@ const { Text } = Typography
 
 type EntryContext = 'sample' | 'standard'
 
-type ReplacementKind = 'real' | 'bom' | 'virtual'
 type MaterialKind = 'real' | 'bom' | 'virtual'
 
 type CalcMethod = 'count' | 'area' | 'perimeter' | 'width' | 'height'
-
-type PlaceholderMappingDraft = {
-  placeholder_virtual_id: string
-  replacement_kind: ReplacementKind
-  replacement_ref_id: string
-  metadata_json?: Record<string, unknown>
-}
 
 type ModuleLinkDraft = {
   module_id: string
@@ -107,8 +111,27 @@ const lockStandardSpec = (): ProductModelSampleSpec => ({
   width_mm: 1000,
   height_mm: 1000,
   quantity: 1,
-  unit_label: '幅',
+  unit_label: 'CM',
 })
+
+const formatCm = (mm: unknown): string => {
+  const v = Number(mm ?? 0) / 10
+  if (!Number.isFinite(v)) return '-'
+  return String(Number(v.toFixed(2)))
+}
+
+const normalizeSpecUnitLabel = (v: unknown): string => {
+  const s = String(v ?? '').trim()
+  if (!s) return 'CM'
+  if (s.toLowerCase() === 'mm') return 'CM'
+  return s
+}
+
+const hashDigit = (s: string): number => {
+  let h = 0
+  for (let i = 0; i < s.length; i += 1) h = (h * 31 + s.charCodeAt(i)) >>> 0
+  return h % 10
+}
 
 const TABLE_FONT_SIZE = 12
 const FIRST_COL_WIDTH = 280
@@ -236,8 +259,9 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   const { open, onClose, entryContext, modelId, initialVersionId } = props
   const queryClient = useQueryClient()
   const [form] = Form.useForm()
+  const navigate = useNavigate()
 
-  const [activeTab, setActiveTab] = useState<'basic' | 'versions' | 'lines' | 'placeholders'>('lines')
+  const [activeTab, setActiveTab] = useState<'basic' | 'versions' | 'lines'>('lines')
   const [versions, setVersions] = useState<ProductModelVersionRead[]>([])
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null)
 
@@ -245,6 +269,9 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   const [standardSpec, setStandardSpec] = useState<ProductModelSampleSpec>(lockStandardSpec())
   const [materials, setMaterials] = useState<ProductModelMaterialLineInput[]>([])
   const [processes, setProcesses] = useState<ProductModelProcessLineInput[]>([])
+
+  const [materialPreviewOpen, setMaterialPreviewOpen] = useState(false)
+  const [materialPreviewRow, setMaterialPreviewRow] = useState<any>(null)
 
   const [sampleSpecLocked, setSampleSpecLocked] = useState(false)
 
@@ -268,9 +295,12 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   const [materialPickerOpen, setMaterialPickerOpen] = useState(false)
   const [processPickerOpen, setProcessPickerOpen] = useState(false)
   const [pickerRowIndex, setPickerRowIndex] = useState<number | null>(null)
+  const [pickerMode, setPickerMode] = useState<'replace' | 'add'>('replace')
   const [pickerMaterialKind, setPickerMaterialKind] = useState<MaterialKind>('bom')
   const [pickerKeyword, setPickerKeyword] = useState<string>('')
+  const [pickerMaterialCategory, setPickerMaterialCategory] = useState<string | undefined>(undefined)
   const [pickerProcessKeyword, setPickerProcessKeyword] = useState<string>('')
+  const [pickerProcessCategory, setPickerProcessCategory] = useState<string | undefined>(undefined)
 
   const [notesModalOpen, setNotesModalOpen] = useState(false)
   const [notesModalKind, setNotesModalKind] = useState<'material' | 'process'>('material')
@@ -294,11 +324,48 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     calibrate_from_sample: true,
   })
 
-  const [placeholderMappings, setPlaceholderMappings] = useState<PlaceholderMappingDraft[]>([])
   const [skuBindCode, setSkuBindCode] = useState('')
+  const [sampleImages, setSampleImages] = useState<string[]>([])
+  const [imagePreviewOpen, setImagePreviewOpen] = useState(false)
+  const [imagePreviewUrl, setImagePreviewUrl] = useState<string>('')
 
   const desiredKind = entryContext === 'sample' ? 'sample' : 'standard'
   const specLocked = entryContext === 'standard' || sampleSpecLocked
+
+  const getVersionDisplayName = (v: any): string => {
+    const meta = (v?.metadata_json ?? v?.metadata ?? {}) as any
+    const uiLabel = String(meta?.ui_label ?? '').trim()
+    if (uiLabel) return uiLabel
+    const fallback = String(v?.version_label ?? '').trim()
+    return fallback || '-'
+  }
+
+  const getRowSourceModuleId = (row: any): string => {
+    const meta = (row?.metadata_json ?? {}) as any
+    return String(row?.source_module_id ?? meta?.source_module_id ?? '').trim()
+  }
+
+  const isPlaceholderMaterialRow = (row: any): boolean => {
+    if (String(row?.material_kind ?? '') !== 'virtual') return false
+    const meta = (row?.metadata_json ?? {}) as any
+    const vk = String(meta?.virtual_kind ?? '').trim()
+    if (vk === 'placeholder') return true
+    const name = String(row?.material_name ?? '').trim()
+    const code = String(row?.material_code ?? '').trim()
+    return name.includes('#{') || code.includes('#{')
+  }
+
+  const deriveSampleCodeFromModel = (m: any): string => {
+    const meta = (m?.metadata_json ?? {}) as any
+    const existed = String(meta?.sample_code ?? '').trim()
+    if (existed) return existed
+    const createdAt = String(m?.created_at ?? '').trim()
+    const d = createdAt ? new Date(createdAt) : new Date()
+    const yy = String(d.getFullYear()).slice(2, 4)
+    const mm = String(d.getMonth() + 1).padStart(2, '0')
+    const digit = hashDigit(String(m?.id ?? m?.model_code ?? ''))
+    return `SM${yy}${mm}${digit}`
+  }
 
   const AlphaIcon = (
     <span style={{ fontWeight: 700, fontFamily: 'ui-serif, Georgia, Times, serif', lineHeight: 1 }}>α</span>
@@ -334,16 +401,143 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     enabled: open && !!selectedVersionId,
   })
 
-  const placeholdersQuery = useQuery({
-    queryKey: ['productModelPlaceholders', modelId],
-    queryFn: () => fetchProductModelPlaceholders(modelId as string),
-    enabled: open && !!modelId && entryContext === 'sample' && activeTab === 'placeholders',
-  })
-
   const filteredVersions = useMemo(
     () => (versions ?? []).filter((v) => String(v.version_kind) === desiredKind),
     [desiredKind, versions],
   )
+
+  const hasDerivedStandardFromSample = (sampleVersionId: string): boolean => {
+    if (!sampleVersionId) return false
+    return (versions ?? []).some((v: any) => {
+      if (String(v?.version_kind) !== 'standard') return false
+      const meta = (v?.metadata_json ?? {}) as any
+      return String(meta?.derived_from_version_id ?? '') === String(sampleVersionId)
+    })
+  }
+
+  const [versionStatsById, setVersionStatsById] = useState<Record<string, any>>({})
+  const [versionStatsLoadingById, setVersionStatsLoadingById] = useState<Record<string, boolean>>({})
+
+  const materialImageIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const r of materials as any[]) {
+      const kind = String((r as any)?.material_kind ?? (r as any)?.material_type ?? '').toLowerCase()
+      if (kind === 'virtual') continue
+      const id = String((r as any)?.material_ref_id ?? '').trim()
+      if (id) ids.add(id)
+    }
+    return Array.from(ids).sort()
+  }, [materials])
+
+  const materialImagesQuery = useQuery({
+    queryKey: ['materialImagesById', materialImageIds],
+    enabled: open && activeTab === 'lines' && materialImageIds.length > 0,
+    queryFn: async () => {
+      const results = await Promise.allSettled(materialImageIds.map((id) => fetchMaterial(id)))
+      const map = new Map<string, string>()
+      for (let i = 0; i < results.length; i += 1) {
+        const id = materialImageIds[i]
+        const r = results[i]
+        if (r.status !== 'fulfilled') continue
+        const m: any = r.value
+        const url =
+          m?.image_url ||
+          (Array.isArray(m?.images) && m.images.length > 0 ? m.images[0] : undefined) ||
+          (m?.metadata_json ?? {})?.image_url ||
+          undefined
+        if (url) map.set(id, String(url))
+      }
+      return map
+    },
+  })
+
+  const previewKind = String(materialPreviewRow?.material_kind ?? materialPreviewRow?.material_type ?? '').toLowerCase()
+  const previewRefId = String(materialPreviewRow?.material_ref_id ?? '').trim()
+
+  const materialPreviewQuery = useQuery({
+    queryKey: ['materialPreview', previewRefId],
+    enabled: open && materialPreviewOpen && !!previewRefId && previewKind !== 'virtual',
+    queryFn: () => fetchMaterial(previewRefId),
+  })
+
+  const virtualPreviewQuery = useQuery({
+    queryKey: ['virtualMaterialPreview', previewRefId],
+    enabled: open && materialPreviewOpen && !!previewRefId && previewKind === 'virtual',
+    queryFn: () => fetchVirtualMaterial(previewRefId),
+  })
+
+  useEffect(() => {
+    if (!open) return
+    // hydrate cached stats from version.metadata_json.ui_stats so refresh won't lose it
+    const next: Record<string, any> = {}
+    for (const v of filteredVersions as any[]) {
+      const ui = (v?.metadata_json ?? v?.metadata ?? {}).ui_stats
+      if (ui && typeof ui === 'object') next[v.id] = ui
+    }
+    if (Object.keys(next).length > 0) setVersionStatsById((prev) => ({ ...prev, ...next }))
+  }, [open, filteredVersions])
+
+  const computeVersionStats = async (versionId: string) => {
+    if (!versionId) return
+    if (versionStatsLoadingById[versionId]) return
+    setVersionStatsLoadingById((prev) => ({ ...prev, [versionId]: true }))
+    try {
+      const lines = (await fetchProductModelVersionLines(versionId)) as any
+      const mats = (lines?.materials ?? []) as any[]
+      const procs = (lines?.processes ?? []) as any[]
+      const spec = (lines?.sample ?? {}) as any
+      const qty = Number(spec?.quantity ?? 1)
+
+      let materialCost = 0
+      let laborCost = 0
+
+      for (const r of mats) {
+        const meta = (r.metadata_json as any) ?? {}
+        const rawPrice = meta.bom_unit_price
+        const unitPrice = rawPrice != null ? Number(rawPrice) : NaN
+        const usedQty = Number(r.sample_used_quantity ?? 0)
+        const lossRatePct = Number(r.loss_rate ?? 0)
+        if (!Number.isFinite(unitPrice) || unitPrice < 0) continue
+        if (!Number.isFinite(usedQty) || usedQty < 0) continue
+        if (!Number.isFinite(lossRatePct) || lossRatePct < 0) continue
+        materialCost += usedQty * (1 + lossRatePct / 100) * unitPrice
+      }
+
+      for (const p of procs) {
+        const meta = (p.metadata_json as any) ?? {}
+        const costType = String(p.cost_type ?? meta.cost_type ?? 'time')
+        if (costType === 'piece') {
+          const pieceRate = Number(p.piece_rate ?? meta.piece_rate)
+          if (!Number.isFinite(pieceRate) || pieceRate <= 0) continue
+          laborCost += pieceRate * Math.max(0, qty || 1)
+          continue
+        }
+        const minutes = Number(p.sample_minutes ?? meta.sample_minutes ?? 0)
+        const rate = Number(p.rate_per_minute ?? meta.rate_per_minute)
+        if (!Number.isFinite(minutes) || minutes < 0) continue
+        if (!Number.isFinite(rate) || rate <= 0) continue
+        laborCost += minutes * rate
+      }
+
+      const manufacturingFee = 0.3 * (materialCost + laborCost)
+      const totalCost = materialCost + laborCost + manufacturingFee
+      setVersionStatsById((prev) => ({
+        ...prev,
+        [versionId]: {
+          material_count: mats.length,
+          process_count: procs.length,
+          material_cost: materialCost,
+          labor_cost: laborCost,
+          manufacturing_fee: manufacturingFee,
+          total_cost: totalCost,
+        },
+      }))
+    } catch (err: any) {
+      message.error(err?.response?.data?.detail ?? '计算统计失败')
+    } finally {
+      setVersionStatsLoadingById((prev) => ({ ...prev, [versionId]: false }))
+    }
+  }
 
   const modulePickerParams: ProcessModuleQueryParams = useMemo(
     () => ({
@@ -363,13 +557,14 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   const modelLineMaterialPickerParams: MaterialQueryParams = useMemo(
     () => ({
       search: pickerKeyword || undefined,
+      category: pickerMaterialCategory || undefined,
       status: 'active',
       is_active: true,
       page: 1,
       page_size: 50,
       is_bom_material: pickerMaterialKind === 'bom' ? true : undefined,
     }),
-    [pickerKeyword, pickerMaterialKind],
+    [pickerKeyword, pickerMaterialCategory, pickerMaterialKind],
   )
 
   const modelLineMaterialPickerQuery = useQuery({
@@ -395,16 +590,36 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   })
 
   const modelLineProcessPickerQuery = useQuery({
-    queryKey: ['processesForModelLinePicker', pickerProcessKeyword],
+    queryKey: ['processesForModelLinePicker', pickerProcessKeyword, pickerProcessCategory],
     queryFn: () =>
       fetchProcesses({
         search: pickerProcessKeyword || undefined,
+        category: pickerProcessCategory || undefined,
         status: 'active',
         page: 1,
         page_size: 50,
       }),
     enabled: open && processPickerOpen,
   })
+
+  const materialCategoryOptions = useMemo(() => {
+    const cats = ((modelLineMaterialPickerQuery.data as any)?.categories ?? []) as any[]
+    return (cats ?? [])
+      .filter((x) => typeof x === 'string' && x.trim())
+      .map((c) => ({ label: c, value: c }))
+  }, [modelLineMaterialPickerQuery.data])
+
+  const processCategoryOptions = useMemo(() => {
+    const items = (((modelLineProcessPickerQuery.data as any)?.items ?? []) as any[]).slice()
+    const set = new Set<string>()
+    for (const it of items) {
+      const c = String(it?.category ?? '').trim()
+      if (c) set.add(c)
+    }
+    return Array.from(set)
+      .sort()
+      .map((c) => ({ label: c, value: c }))
+  }, [modelLineProcessPickerQuery.data])
 
   useEffect(() => {
     if (!open) return
@@ -417,14 +632,16 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   useEffect(() => {
     if (!modelQuery.data) return
     const m = modelQuery.data as ProductModel
+    const meta = (m.metadata_json ?? {}) as any
     form.setFieldsValue({
       model_code: m.model_code,
       model_name: m.model_name,
-      status: m.status,
-      calc_mode: m.calc_mode,
-      fixed_price: m.fixed_price,
-      unit_of_measure: m.unit_of_measure,
+      category: m.category,
+      description: m.description,
+      sample_owner: meta.sample_owner ?? '',
+      ...(entryContext === 'sample' ? { sample_code: deriveSampleCodeFromModel(m) } : {}),
     })
+    setSampleImages(Array.isArray(meta.sample_images) ? meta.sample_images.filter(Boolean) : [])
 
     // modules（左侧工艺模块栏）
     setModules(
@@ -441,18 +658,6 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
         .map((x, i) => ({ ...x, sequence_order: i + 1 })),
     )
 
-    const meta = (m.metadata_json ?? {}) as any
-    const pm = Array.isArray(meta.placeholder_mappings) ? meta.placeholder_mappings : []
-    setPlaceholderMappings(
-      pm
-        .filter((x: any) => x && typeof x === 'object')
-        .map((x: any) => ({
-          placeholder_virtual_id: String(x.placeholder_virtual_id ?? ''),
-          replacement_kind: (x.replacement_kind ?? 'real') as any,
-          replacement_ref_id: String(x.replacement_ref_id ?? ''),
-          metadata_json: x.metadata_json ?? {},
-        })),
-    )
   }, [modelQuery.data, form])
 
   useEffect(() => {
@@ -473,15 +678,19 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
 
   const hydrateLinesFromApi = (data: any) => {
     if (!data) return
-    setSampleSpec(data.sample)
+    setSampleSpec({ ...(data.sample ?? {}), unit_label: normalizeSpecUnitLabel(data?.sample?.unit_label) })
     setStandardSpec(data.standard)
 
     // normalize numeric fields (API uses Decimal-as-string)
     const normalizedMaterials = (data.materials ?? []).map((r: any) => {
       const std = r.standard_used_quantity != null ? Number(r.standard_used_quantity) : 0
       const samp = r.sample_used_quantity != null ? Number(r.sample_used_quantity) : NaN
+      const meta = (r.metadata_json ?? {}) as any
       return {
         ...r,
+        source_module_id: r.source_module_id ?? meta.source_module_id ?? null,
+        source_module_code: r.source_module_code ?? meta.source_module_code ?? null,
+        source_module_name: r.source_module_name ?? meta.source_module_name ?? null,
         base_quantity: r.base_quantity != null ? Number(r.base_quantity) : 0,
         loss_rate: r.loss_rate != null ? Number(r.loss_rate) : 0,
         fixed_quantity: r.fixed_quantity != null ? Number(r.fixed_quantity) : 0,
@@ -493,6 +702,9 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     })
     const normalizedProcesses = (data.processes ?? []).map((p: any) => ({
       ...p,
+      source_module_id: p.source_module_id ?? ((p.metadata_json ?? {}) as any).source_module_id ?? null,
+      source_module_code: p.source_module_code ?? ((p.metadata_json ?? {}) as any).source_module_code ?? null,
+      source_module_name: p.source_module_name ?? ((p.metadata_json ?? {}) as any).source_module_name ?? null,
       base_minutes: p.base_minutes != null ? Number(p.base_minutes) : p.base_minutes,
       unit_minutes: p.unit_minutes != null ? Number(p.unit_minutes) : p.unit_minutes,
       rate_per_minute: p.rate_per_minute != null ? Number(p.rate_per_minute) : p.rate_per_minute,
@@ -657,30 +869,16 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     if (activeTab !== 'lines') return
     setMaterials((prev: any[]) => {
       if (!Array.isArray(prev) || prev.length === 0) return prev
-      let changed = false
       const next = prev.map((row) => {
         const bomUnit = getBomUnitForRow(row)
         const allowed = allowedCalcMethodsByBomUnit(bomUnit)
         const cur = (row.calculation_method as CalcMethod) ?? 'count'
-        if (allowed.includes(cur)) return row
-        // auto-fix to first allowed to avoid invalid pricing
-        const v = allowed[0] ?? 'count'
-        const baseQty = Number(row.base_quantity ?? 0)
-        const fixedQty = Number(row.fixed_quantity ?? 0)
-        const cov = Number(row.coverage_ratio ?? 1)
-        const mqSample = Math.max(0, measureQty(v, sampleSpec))
-        const mqStandard = Math.max(0, measureQty(v, standardSpec))
-        const sampleUsed = fixedQty + mqSample * baseQty * cov
-        const standardUsed = fixedQty + mqStandard * baseQty * cov
-        changed = true
-        return {
-          ...row,
-          calculation_method: v,
-          sample_used_quantity: sampleUsed,
-          standard_used_quantity: standardUsed,
-        }
+        // IMPORTANT: do not auto-mutate persisted versions on load (e.g. copy version should be 1:1).
+        // We only constrain options at edit time; keep legacy/old values untouched here.
+        if (!allowed.includes(cur)) return row
+        return row
       })
-      return changed ? next : prev
+      return next
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, activeTab, sampleSpec.width_mm, sampleSpec.height_mm, sampleSpec.quantity, standardSpec.width_mm, standardSpec.height_mm, standardSpec.quantity])
@@ -743,8 +941,19 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   }, [open, activeTab, sampleSpec.width_mm, sampleSpec.height_mm, sampleSpec.quantity, sampleSpec.unit_label, specLocked])
 
   const openMaterialPickerForRow = (rowIndex: number) => {
+    setPickerMode('replace')
     setPickerRowIndex(rowIndex)
     setPickerKeyword('')
+    setPickerMaterialCategory(undefined)
+    setPickerMaterialKind('bom')
+    setMaterialPickerOpen(true)
+  }
+
+  const openMaterialPickerForAdd = () => {
+    setPickerMode('add')
+    setPickerRowIndex(null)
+    setPickerKeyword('')
+    setPickerMaterialCategory(undefined)
     setPickerMaterialKind('bom')
     setMaterialPickerOpen(true)
   }
@@ -801,9 +1010,29 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     setNotesModalOpen(false)
   }
 
+  const moveInArray = <T,>(arr: T[], from: number, to: number): T[] => {
+    if (from === to) return arr
+    if (from < 0 || to < 0) return arr
+    if (from >= arr.length || to >= arr.length) return arr
+    const next = arr.slice()
+    const [item] = next.splice(from, 1)
+    next.splice(to, 0, item)
+    return next
+  }
+
   const openProcessPickerForRow = (rowIndex: number) => {
+    setPickerMode('replace')
     setPickerRowIndex(rowIndex)
     setPickerProcessKeyword('')
+    setPickerProcessCategory(undefined)
+    setProcessPickerOpen(true)
+  }
+
+  const openProcessPickerForAdd = () => {
+    setPickerMode('add')
+    setPickerRowIndex(null)
+    setPickerProcessKeyword('')
+    setPickerProcessCategory(undefined)
     setProcessPickerOpen(true)
   }
 
@@ -911,7 +1140,50 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     category?: string | null
     defaults?: { fixed_quantity?: number; coverage_ratio?: number; loss_rate?: number }
   }) => {
-    if (pickerRowIndex === null) return
+    const unitNorm = normalizeUnit(payload.unit) || payload.unit || undefined
+
+    // 新增模式：append 一行（不依赖工艺模块）
+    if (pickerMode === 'add' || pickerRowIndex === null) {
+      const calcMethod = (() => {
+        const allowed = allowedCalcMethodsByBomUnit(unitNorm)
+        return (allowed[0] ?? 'count') as any
+      })()
+      const baseQty = 0
+      const fixedQty = payload.defaults?.fixed_quantity != null ? Number(payload.defaults.fixed_quantity) : 0
+      const cov = payload.defaults?.coverage_ratio != null ? Number(payload.defaults.coverage_ratio) : 1
+      const mqSample = Math.max(0, measureQty(calcMethod, sampleSpec))
+      const mqStandard = Math.max(0, measureQty(calcMethod, standardSpec))
+      const sampleUsed = fixedQty + mqSample * baseQty * cov
+      const standardUsed = fixedQty + mqStandard * baseQty * cov
+
+      const appended: any = {
+        id: undefined,
+        source_module_id: null,
+        material_kind: payload.kind,
+        material_ref_id: payload.id,
+        material_code: payload.code ?? undefined,
+        material_name: payload.name ?? undefined,
+        unit_of_measure: unitNorm,
+        calculation_method: calcMethod,
+        base_quantity: baseQty,
+        fixed_quantity: fixedQty,
+        coverage_ratio: cov,
+        loss_rate: entryContext === 'sample' ? Number(payload.defaults?.loss_rate ?? 0) : 0,
+        notes: '',
+        sample_used_quantity: sampleUsed,
+        standard_used_quantity: standardUsed,
+        metadata_json: {
+          display_unit: unitNorm,
+          bom_unit: unitNorm,
+          display_category: payload.category ?? undefined,
+        },
+      }
+      setMaterials([...(materials as any[]), appended] as any)
+      setMaterialPickerOpen(false)
+      return
+    }
+
+    // 替换模式：更新某一行
     const next = materials.slice()
     const row = next[pickerRowIndex] as any
     if (!row) return
@@ -939,7 +1211,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
           : row.loss_rate,
       metadata_json: {
         ...(row.metadata_json ?? {}),
-        display_unit: payload.unit ?? undefined,
+        display_unit: unitNorm,
+        bom_unit: (row.metadata_json as any)?.bom_unit ?? unitNorm,
         display_category: payload.category ?? undefined,
       },
     }
@@ -948,7 +1221,49 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   }
 
   const applyPickedProcessToRow = (proc: ProcessDetail) => {
-    if (pickerRowIndex === null) return
+    // 新增模式：append 一行
+    if (pickerMode === 'add' || pickerRowIndex === null) {
+      const pricing = (() => {
+        const v = String((proc as any)?.charging_mode ?? (proc as any)?.pricing_method ?? 'count')
+        const allowed = new Set(['count', 'area', 'perimeter', 'width', 'height', 'fixed'])
+        return (allowed.has(v) ? v : 'count') as any
+      })()
+      const base = 0
+      const unit = 0
+      const method = pricing === 'fixed' ? 'count' : pricing
+      const mqSample = Math.max(0, measureQty(method as any, sampleSpec))
+      const stdMq = Math.max(0, measureQty(method as any, standardSpec))
+      const appended: any = {
+        id: undefined,
+        source_module_id: null,
+        process_id: proc.id,
+        process_code: proc.process_code,
+        process_name: proc.process_name,
+        team_name: (proc as any)?.team_name ?? undefined,
+        pricing_method: pricing,
+        base_minutes: base,
+        unit_minutes: unit,
+        rate_per_minute: (proc as any)?.rate_per_minute ?? undefined,
+        piece_rate: (proc as any)?.piece_rate ?? undefined,
+        cost_type: (proc as any)?.cost_type ?? undefined,
+        notes: '',
+        sample_minutes: base + unit * mqSample,
+        standard_minutes: base + unit * stdMq,
+        metadata_json: {
+          pricing_method: pricing,
+          base_minutes: base,
+          unit_minutes: unit,
+          team_name: (proc as any)?.team_name ?? undefined,
+          sample_minutes: base + unit * mqSample,
+          standard_minutes: base + unit * stdMq,
+        },
+      }
+      setProcesses([...(processes as any[]), appended] as any)
+      setProcessPickerOpen(false)
+      return
+    }
+
+    // 替换模式：更新某一行
     const next = processes.slice()
     const row = next[pickerRowIndex] as any
     if (!row) return
@@ -989,12 +1304,16 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       message.warning('缺少 modelId')
       return
     }
-    if (!selectedVersionId) {
-      message.warning('请先选择版本后再同步')
-      return
+    const ensureVersion = async () => {
+      if (selectedVersionId) return selectedVersionId
+      const created = await createProductModelVersion(modelId, { version_kind: desiredKind as any, metadata_json: {} })
+      await versionsQuery.refetch()
+      setSelectedVersionId(created.id)
+      return created.id
     }
     try {
       setSyncingFromModules(true)
+      const vid = await ensureVersion()
       await updateProductModel(modelId, {
         modules: nextModules
           .slice()
@@ -1006,10 +1325,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
             metadata_json: m.metadata_json ?? {},
           })),
       } as any)
-      const res = await syncProductModelVersionFromModules(selectedVersionId, { keep_overrides: true })
+      const res = await syncProductModelVersionFromModules(vid, { keep_overrides: true })
       hydrateLinesFromApi(res)
       await queryClient.invalidateQueries({ queryKey: ['productModel', modelId] })
-      await queryClient.invalidateQueries({ queryKey: ['productModelVersionLines', selectedVersionId] })
+      await queryClient.invalidateQueries({ queryKey: ['productModelVersionLines', vid] })
       message.success('已添加模块并生成版本清单')
     } catch (err: any) {
       message.error(err?.response?.data?.detail ?? '添加模块失败')
@@ -1035,8 +1354,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
 
         const moduleId = target.module_id
         setModules(normalizedModules)
-        setMaterials((prev) => prev.filter((x: any) => String(x.source_module_id ?? '') !== String(moduleId)))
-        setProcesses((prev) => prev.filter((x: any) => String(x.source_module_id ?? '') !== String(moduleId)))
+        setMaterials((prev) => prev.filter((x: any) => getRowSourceModuleId(x) !== String(moduleId)))
+        setProcesses((prev) => prev.filter((x: any) => getRowSourceModuleId(x) !== String(moduleId)))
 
         if (!modelId || !selectedVersionId) return
 
@@ -1072,16 +1391,32 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       message.warning('缺少 modelId')
       return
     }
-    if (!selectedVersionId) {
-      message.warning('请先选择版本')
-      return
+    const ensureVersion = async () => {
+      if (selectedVersionId) return selectedVersionId
+      const created = await createProductModelVersion(modelId, { version_kind: desiredKind as any, metadata_json: {} })
+      await versionsQuery.refetch()
+      setSelectedVersionId(created.id)
+      return created.id
     }
     const doSync = async () => {
       setSyncingFromModules(true)
       try {
-        const res = await syncProductModelVersionFromModules(selectedVersionId, { keep_overrides: syncKeepOverrides })
+        const vid = await ensureVersion()
+        // 先把当前模块列表写回主档（保证同步读取到最新 modules）
+        await updateProductModel(modelId, {
+          modules: modules
+            .slice()
+            .sort((a, b) => a.sequence_order - b.sequence_order)
+            .map((m, idx2) => ({
+              module_id: m.module_id,
+              sequence_order: idx2 + 1,
+              notes: m.notes,
+              metadata_json: m.metadata_json ?? {},
+            })),
+        } as any)
+        const res = await syncProductModelVersionFromModules(vid, { keep_overrides: syncKeepOverrides })
         hydrateLinesFromApi(res)
-        await queryClient.invalidateQueries({ queryKey: ['productModelVersionLines', selectedVersionId] })
+        await queryClient.invalidateQueries({ queryKey: ['productModelVersionLines', vid] })
         message.success(syncKeepOverrides ? '已同步到版本清单（保留版本层调参）' : '已同步到版本清单（覆盖版本层调参）')
       } catch (err: any) {
         message.warning(err?.response?.data?.detail ?? '同步失败（不影响继续编辑/保存）')
@@ -1124,60 +1459,24 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       return
     }
 
-    // 保存清单前做“占位符兜底替换”（保证清单可计价/可推导）
-    const mappingByPlaceholderId = new Map(
-      placeholderMappings.map((m) => [String(m.placeholder_virtual_id || '').trim(), m] as const),
-    )
-    const placeholderHits = materials
-      .map((row: any, idx: number) => ({ row, idx }))
-      .filter(({ row }) => mappingByPlaceholderId.has(String(row.material_ref_id || '').trim()))
-
-    let replacedMaterials = materials.slice() as any[]
-    if (placeholderHits.length) {
-      const missing: Array<{ idx: number; label: string }> = []
-      replacedMaterials = materials.map((row: any, index: number) => {
-        const phId = String(row.material_ref_id || '').trim()
-        const mapping = mappingByPlaceholderId.get(phId)
-        if (!mapping) return row
-        if (!mapping.replacement_kind || !mapping.replacement_ref_id) {
-          const label = String(row.material_code || row.material_name || phId)
-          missing.push({ idx: index, label })
-          return row
-        }
-        const meta = (mapping.metadata_json ?? {}) as any
-        if (mapping.replacement_kind === 'virtual' && String(meta.virtual_kind || '').trim() === 'placeholder') {
-          const label = String(row.material_code || row.material_name || phId)
-          missing.push({ idx: index, label })
-          return row
-        }
-        return {
-          ...row,
-          material_kind: mapping.replacement_kind,
-          material_ref_id: mapping.replacement_ref_id,
-          material_code: meta.display_code ?? row.material_code,
-          material_name: meta.display_name ?? row.material_name,
-          metadata_json: {
-            ...(row.metadata_json ?? {}),
-            placeholder_replaced: true,
-            placeholder_virtual_id: phId,
-            display_unit: meta.display_unit ?? (row.metadata_json ?? {}).display_unit,
-            display_category: meta.display_category ?? (row.metadata_json ?? {}).display_category,
-          },
-        }
-      })
-      if (missing.length) {
-        message.error(`占位符映射缺失/不合法：${missing.slice(0, 3).map((x) => `第${x.idx + 1}行(${x.label})`).join('，')}${missing.length > 3 ? '…' : ''}`)
-        return
-      }
+    const placeholderIdx = materials.findIndex((m: any) => isPlaceholderMaterialRow(m))
+    if (placeholderIdx >= 0) {
+      const row = materials[placeholderIdx] as any
+      const label = String(row?.material_name ?? row?.material_code ?? row?.material_ref_id ?? '').trim() || '占位物料'
+      message.error(`存在占位物料未替换：第 ${placeholderIdx + 1} 行（${label}），请先替换为真实/BOM/虚拟物料后再保存清单`)
+      return
     }
 
     await updateProductModelVersionLines(selectedVersionId, {
       sample: entryContext === 'standard' ? lockStandardSpec() : sampleSpec,
       standard: lockStandardSpec(),
-      materials: replacedMaterials,
+      materials,
       processes,
     } as any)
     await queryClient.invalidateQueries({ queryKey: ['productModelVersionLines', selectedVersionId] })
+    if (entryContext === 'sample') {
+      await computeVersionStats(selectedVersionId)
+    }
     message.success('已保存清单')
   }
 
@@ -1185,15 +1484,17 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     mutationFn: async () => {
       if (!modelId) return
       const values = await form.validateFields()
+      const existingMeta = ((modelQuery.data as any)?.metadata_json ?? {}) as any
       const meta = {
-        placeholder_mappings: placeholderMappings,
+        ...existingMeta,
+        ...(entryContext === 'sample' ? { sample_owner: String(values.sample_owner ?? '').trim() } : {}),
+        ...(entryContext === 'sample' ? { sample_code: String(values.sample_code ?? '').trim() } : {}),
+        sample_images: sampleImages,
       }
       await updateProductModel(modelId, {
         model_name: values.model_name,
-        status: values.status,
-        calc_mode: values.calc_mode,
-        fixed_price: values.calc_mode === 'fixed' ? values.fixed_price : null,
-        unit_of_measure: values.unit_of_measure,
+        category: values.category,
+        description: values.description,
         metadata_json: meta as any,
       } as any)
     },
@@ -1216,24 +1517,6 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       setSavingLines(false)
     }
   }
-
-  const deriveMutation = useMutation({
-    mutationFn: async () => {
-      if (!selectedVersionId) throw new Error('请先选择打样版本')
-      return await deriveStandardFromSampleVersion(selectedVersionId, {
-        target_mode: 'create_new',
-        apply_to: 'both',
-      } as any)
-    },
-    onSuccess: async (res: any) => {
-      message.success('已生成标准版本（草稿）')
-      await versionsQuery.refetch()
-      if (res?.standard_version_id) {
-        setSelectedVersionId(res.standard_version_id)
-      }
-    },
-    onError: (err: any) => message.error(err?.response?.data?.detail ?? '生成标准模型失败'),
-  })
 
   const publishMutation = useMutation({
     mutationFn: async () => {
@@ -1261,37 +1544,108 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     onError: (err: any) => message.error(err?.response?.data?.detail ?? 'SKU 绑定失败'),
   })
 
-  const createVersion = async () => {
+  const [versionOpOpen, setVersionOpOpen] = useState(false)
+  const [versionOpMode, setVersionOpMode] = useState<'create' | 'copy'>('create')
+  const [versionOpName, setVersionOpName] = useState('')
+  const [versionOpSourceId, setVersionOpSourceId] = useState<string | null>(null)
+  const [versionOpLoading, setVersionOpLoading] = useState(false)
+
+  const openCreateVersionModal = () => {
+    setVersionOpMode('create')
+    setVersionOpSourceId(null)
+    setVersionOpName('')
+    setVersionOpOpen(true)
+  }
+
+  const openCopyVersionModal = (sourceId?: string | null) => {
+    const sid = sourceId ?? selectedVersionId
+    if (!sid) {
+      message.warning('请先选择要复制的版本')
+      return
+    }
+    setVersionOpMode('copy')
+    setVersionOpSourceId(sid)
+    setVersionOpName('')
+    setVersionOpOpen(true)
+  }
+
+  const runVersionOp = async () => {
     if (!modelId) return
+    if (versionOpLoading) return
+    if (versionOpMode === 'copy' && !versionOpSourceId) {
+      message.warning('缺少源版本')
+      return
+    }
+
+    // 复制时：源版本必须属于当前入口的 kind（避免 sample/standard 串台）
+    if (versionOpMode === 'copy' && versionOpSourceId) {
+      const src = (versions ?? []).find((v) => v.id === versionOpSourceId)
+      if (src && String(src.version_kind) !== String(desiredKind)) {
+        message.error(`只能复制 ${desiredKind} 版本`)
+        return
+      }
+    }
+
+    setVersionOpLoading(true)
     try {
-      const created = await createProductModelVersion(modelId, { version_kind: desiredKind as any, metadata_json: {} })
+      const name = versionOpName.trim()
+      const created = await createProductModelVersion(modelId, {
+        version_kind: desiredKind as any,
+        metadata_json: name ? { ui_label: name } : {},
+      } as any)
+
+      if (versionOpMode === 'copy' && versionOpSourceId) {
+        const srcLines = await fetchProductModelVersionLines(versionOpSourceId)
+        await updateProductModelVersionLines(created.id, srcLines as any)
+      }
+
       await versionsQuery.refetch()
       setSelectedVersionId(created.id)
-      message.success('已创建版本')
+      setActiveTab('lines')
+      setVersionOpOpen(false)
+      message.success(versionOpMode === 'copy' ? '已复制版本' : '已新增版本')
     } catch (err: any) {
-      message.error(err?.response?.data?.detail ?? '创建版本失败')
+      message.error(err?.response?.data?.detail ?? (versionOpMode === 'copy' ? '复制版本失败' : '新增版本失败'))
+    } finally {
+      setVersionOpLoading(false)
     }
   }
 
-  const placeholderRows = useMemo(() => {
-    const placeholders = (placeholdersQuery.data ?? []) as ProductModelPlaceholder[]
-    const map = new Map(placeholderMappings.map((m) => [m.placeholder_virtual_id, m]))
-    return placeholders.map((ph) => ({
-      ph,
-      mapping: map.get(ph.virtual_material_id),
-    }))
-  }, [placeholdersQuery.data, placeholderMappings])
+  const deriveStandardFrom = async (sourceSampleVersionId: string) => {
+    if (!sourceSampleVersionId) {
+      message.warning('请先选择要推导的打样版本')
+      return
+    }
+    try {
+      const res = await deriveStandardFromSampleVersion(sourceSampleVersionId, {
+        target_mode: 'create_new',
+        apply_to: 'both',
+      } as any)
+      message.success('已生成标准版本（草稿）')
+      await versionsQuery.refetch()
+      const standardId = String(res?.standard_version_id ?? '').trim()
+      if (!standardId) return
 
-  const updateMapping = (placeholderId: string, patch: Partial<PlaceholderMappingDraft>) => {
-    setPlaceholderMappings((prev) => {
-      const idx = prev.findIndex((x) => x.placeholder_virtual_id === placeholderId)
-      if (idx < 0) {
-        return [...prev, { placeholder_virtual_id: placeholderId, replacement_kind: 'real', replacement_ref_id: '', ...patch } as any]
+      // 标准入口：直接切换到生成的 standard 版本继续编辑
+      if (entryContext === 'standard') {
+        setSelectedVersionId(standardId)
+        return
       }
-      const next = prev.slice()
-      next[idx] = { ...next[idx], ...patch }
-      return next
-    })
+
+      // 打样入口：提示跳转到“标准模型列表”管理（避免 sample/standard 串台）
+      Modal.confirm({
+        title: '已推导标准模型',
+        content: '已生成标准版本（草稿）。是否跳转到“标准模型”列表继续编辑与发布/SKU绑定？',
+        okText: '前往标准模型',
+        cancelText: '留在当前页',
+        onOk: () => {
+          if (onClose) onClose()
+          navigate('/costing/standard-models', { state: { openModelId: modelId, openVersionId: standardId } as any })
+        },
+      })
+    } catch (err: any) {
+      message.error(err?.response?.data?.detail ?? '生成标准模型失败')
+    }
   }
 
   return (
@@ -1314,6 +1668,94 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     >
       {!modelId ? <Alert type="warning" showIcon message="缺少 modelId" /> : null}
 
+      <style>{`
+        /* Scoped CSS for “清单编辑” (avoid affecting global UI) */
+        .pm-lines-scope {
+          --pm-lines-font-size: ${TABLE_FONT_SIZE}px;
+          --pm-lines-title-font-size: ${TABLE_FONT_SIZE}px;
+          --pm-lines-title-font-weight: 600;
+        }
+
+        .pm-lines-scope .pm-lines-muted {
+          font-size: var(--pm-lines-font-size);
+          color: #8c8c8c;
+        }
+
+        /* Group cards (物料组/工序组): title 12px bold */
+        .pm-lines-group-card .ant-card-head-title {
+          font-size: var(--pm-lines-title-font-size);
+          font-weight: var(--pm-lines-title-font-weight);
+        }
+
+        /* Table body text size (headers unchanged) */
+        .pm-lines-group-card .ant-table-tbody {
+          font-size: var(--pm-lines-font-size);
+        }
+
+        /* Compact controls inside lines panel */
+        .pm-lines-scope .ant-btn,
+        .pm-lines-scope .ant-input,
+        .pm-lines-scope .ant-input-number,
+        .pm-lines-scope .ant-select-selector {
+          font-size: var(--pm-lines-font-size);
+        }
+
+        /* Force ALL buttons in lines panel to look like "small" */
+        .pm-lines-scope .ant-btn {
+          height: 24px;
+          padding-inline: 8px;
+          font-size: var(--pm-lines-font-size);
+        }
+        .pm-lines-scope .ant-btn.ant-btn-icon-only {
+          width: 24px;
+          padding-inline: 0;
+        }
+
+        .pm-lines-scope .ant-btn-sm {
+          height: 24px;
+          padding-inline: 8px;
+        }
+
+        .pm-lines-scope .ant-input,
+        .pm-lines-scope .ant-input-number,
+        .pm-lines-scope .ant-select-single.ant-select-sm .ant-select-selector {
+          height: 24px;
+        }
+
+        .pm-lines-scope .ant-input-number-input {
+          height: 22px;
+        }
+
+        .pm-lines-scope .ant-select-single.ant-select-sm .ant-select-selector {
+          align-items: center;
+        }
+
+        /* Force Select font to 12px for both placeholder/selected and avoid "selected looks bigger" */
+        .pm-lines-scope .ant-select,
+        .pm-lines-scope .ant-select-selector {
+          font-size: var(--pm-lines-font-size) !important;
+        }
+
+        /* Select font in table body (selected + placeholder) */
+        .pm-lines-scope .pm-lines-select .ant-select-selector,
+        .pm-lines-scope .pm-lines-select .ant-select-selection-item,
+        .pm-lines-scope .pm-lines-select .ant-select-selection-placeholder {
+          font-size: var(--pm-lines-font-size) !important;
+        }
+
+        /* Dropdown is rendered in portal, so must use popupClassName */
+        .pm-lines-select-dropdown {
+          /* popup is mounted under document.body, so it does NOT inherit vars from .pm-lines-scope */
+          --pm-lines-font-size: ${TABLE_FONT_SIZE}px;
+          font-size: var(--pm-lines-font-size) !important;
+          line-height: 20px;
+        }
+        .pm-lines-select-dropdown * {
+          font-size: inherit !important;
+          line-height: inherit;
+        }
+      `}</style>
+
       <Tabs
         activeKey={activeTab}
         onChange={(k) => setActiveTab(k as any)}
@@ -1322,42 +1764,103 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
             key: 'basic',
             label: '基础信息',
             children: (
-              <Card size="small" title="模型主档">
+              <Card size="small" title={entryContext === 'sample' ? '打样主档' : '模型主档'}>
                 <Form form={form} layout="vertical">
-                  <Space wrap>
-                    <Form.Item label="总编码" name="model_code">
+                  <Space wrap align="start">
+                    <Form.Item label="编码" name="model_code">
                       <Input disabled style={{ width: 160 }} />
                     </Form.Item>
-                    <Form.Item label="模型名称" name="model_name" rules={[{ required: true, message: '请输入模型名称' }]}>
+                    {entryContext === 'sample' ? (
+                      <Form.Item label="打样编码" name="sample_code" rules={[{ required: true, message: '请填写/生成打样编码' }]}>
+                        <Input
+                          style={{ width: 220 }}
+                          placeholder="SMYYMMX"
+                          addonAfter={
+                            <Button
+                              size="small"
+                              type="link"
+                              onClick={() => {
+                                const m = modelQuery.data as any
+                                const next = deriveSampleCodeFromModel(m)
+                                form.setFieldValue('sample_code', next)
+                              }}
+                            >
+                              生成
+                            </Button>
+                          }
+                        />
+                      </Form.Item>
+                    ) : null}
+                    <Form.Item
+                      label={entryContext === 'sample' ? '打样名称' : '模型名称'}
+                      name="model_name"
+                      rules={[{ required: true, message: entryContext === 'sample' ? '请输入打样名称' : '请输入模型名称' }]}
+                    >
                       <Input style={{ width: 260 }} />
                     </Form.Item>
-                    <Form.Item label="状态" name="status">
-                      <Select
-                        style={{ width: 140 }}
-                        options={[
-                          { label: '草稿', value: 'draft' },
-                          { label: '启用', value: 'active' },
-                          { label: '停用', value: 'inactive' },
-                        ]}
-                      />
-                    </Form.Item>
-                    <Form.Item label="计算模式" name="calc_mode">
-                      <Select
-                        style={{ width: 180 }}
-                        options={[
-                          { label: '比例', value: 'ratio' },
-                          { label: '一口价', value: 'fixed' },
-                          { label: '独立', value: 'independent' },
-                        ]}
-                      />
-                    </Form.Item>
-                    <Form.Item label="一口价" name="fixed_price">
-                      <InputNumber style={{ width: 160 }} min={0} precision={4} />
-                    </Form.Item>
-                    <Form.Item label="单位口径" name="unit_of_measure">
-                      <Input style={{ width: 140 }} />
+                    {entryContext === 'sample' ? (
+                      <Form.Item label="打样人员" name="sample_owner">
+                        <Input style={{ width: 180 }} placeholder="姓名/花名" allowClear />
+                      </Form.Item>
+                    ) : null}
+                    <Form.Item label="品类" name="category">
+                      <Input style={{ width: 180 }} placeholder="例如：桌布/窗帘/靠垫…" allowClear />
                     </Form.Item>
                   </Space>
+                  <Form.Item label="描述" name="description">
+                    <Input.TextArea rows={3} placeholder="描述/备注（可选）" allowClear />
+                  </Form.Item>
+                  {entryContext === 'sample' ? (
+                    <Form.Item label="打样图片">
+                      <Upload
+                        accept="image/*"
+                        listType="picture-card"
+                        fileList={sampleImages.map((url, idx) => ({
+                          uid: `img-${idx}`,
+                          name: `image-${idx + 1}`,
+                          status: 'done',
+                          url,
+                        })) as UploadFile[]}
+                        beforeUpload={async (file) => {
+                          const f = file as File
+                          if (f.size > 2 * 1024 * 1024) {
+                            message.error('图片过大：请控制在 2MB 内')
+                            return Upload.LIST_IGNORE
+                          }
+                          const toDataUrl = (ff: File) =>
+                            new Promise<string>((resolve, reject) => {
+                              const reader = new FileReader()
+                              reader.onload = () => resolve(String(reader.result || ''))
+                              reader.onerror = () => reject(new Error('读取失败'))
+                              reader.readAsDataURL(ff)
+                            })
+                          try {
+                            const dataUrl = await toDataUrl(f)
+                            setSampleImages((prev) => [...prev, dataUrl])
+                          } catch {
+                            message.error('图片读取失败')
+                          }
+                          return false
+                        }}
+                        onRemove={(file) => {
+                          const url = (file as any)?.url
+                          setSampleImages((prev) => prev.filter((x) => x !== url))
+                          return true
+                        }}
+                        onPreview={(file) => {
+                          const url = (file as any)?.url
+                          if (!url) return
+                          setImagePreviewUrl(url)
+                          setImagePreviewOpen(true)
+                        }}
+                      >
+                        {sampleImages.length >= 10 ? null : <div>上传</div>}
+                      </Upload>
+                      <Text type="secondary" style={{ display: 'block' }}>
+                        当前为最小可用上传：以 dataURL 形式保存到 metadata_json.sample_images（后续可替换为对象存储/文件服务）。
+                      </Text>
+                    </Form.Item>
+                  ) : null}
                 </Form>
               </Card>
             ),
@@ -1367,41 +1870,252 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
             label: entryContext === 'sample' ? '打样版本' : '标准版本',
             children: (
               <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                <Card size="small" title="版本选择">
-                  <Space wrap>
-                    <Select
-                      style={{ width: 520 }}
-                      placeholder={entryContext === 'sample' ? '选择打样版本（sample）' : '选择标准版本（standard）'}
-                      value={selectedVersionId ?? undefined}
-                      loading={versionsQuery.isLoading}
-                      options={filteredVersions.map((v) => ({
-                        value: v.id,
-                        label: `${v.version_status}${v.version_label ? ` / ${v.version_label}` : ''}`,
-                      }))}
-                      onChange={(v) => setSelectedVersionId(v)}
-                      allowClear
-                    />
-                    <Button onClick={createVersion} disabled={!modelId}>
-                      新建{entryContext === 'sample' ? '打样' : '标准'}版本
-                    </Button>
-                    <Button onClick={() => versionsQuery.refetch()} disabled={!modelId}>
-                      刷新
-                    </Button>
-                  </Space>
-                  <div style={{ marginTop: 8 }}>
-                    <Text type="secondary">仅显示 {desiredKind} 版本，避免两个栏目文案互串。</Text>
-                  </div>
-                </Card>
                 {entryContext === 'sample' ? (
-                  <Card size="small" title="一键生成标准版本（草稿）">
-                    <Space wrap>
-                      <Button type="primary" onClick={() => deriveMutation.mutate()} loading={deriveMutation.isPending} disabled={!selectedVersionId}>
-                        生成标准模型
-                      </Button>
-                      <Text type="secondary">从当前打样版本推导生成 standard draft。</Text>
-                    </Space>
+                  <Card
+                    size="small"
+                    title="打样版本列表"
+                    extra={
+                      <Space>
+                        <Button size="small" type="primary" onClick={openCreateVersionModal} disabled={!modelId}>
+                          新增版本
+                        </Button>
+                        <Button size="small" onClick={() => openCopyVersionModal(selectedVersionId)} disabled={!selectedVersionId}>
+                          复制版本
+                        </Button>
+                        <Button size="small" onClick={() => versionsQuery.refetch()} disabled={!modelId} icon={<ReloadOutlined />}>
+                          刷新
+                        </Button>
+                      </Space>
+                    }
+                  >
+                    <Table
+                      rowKey="id"
+                      size="small"
+                      pagination={false}
+                      loading={versionsQuery.isLoading}
+                      dataSource={filteredVersions}
+                      columns={[
+                        {
+                          title: '编码',
+                          width: 110,
+                          render: () => {
+                            const m = modelQuery.data as any
+                            return m ? deriveSampleCodeFromModel(m) : '-'
+                          },
+                        },
+                        {
+                          title: '版本名称',
+                          ellipsis: true,
+                          render: (_: any, v: any) => getVersionDisplayName(v),
+                        },
+                        {
+                          title: '物料数',
+                          width: 60,
+                          render: (_: any, v: any) => versionStatsById[v.id]?.material_count ?? '-',
+                        },
+                        {
+                          title: '工序数',
+                          width: 60,
+                          render: (_: any, v: any) => versionStatsById[v.id]?.process_count ?? '-',
+                        },
+                        {
+                          title: '物料价',
+                          width: 75,
+                          render: (_: any, v: any) =>
+                            versionStatsById[v.id]?.material_cost != null ? Number(versionStatsById[v.id].material_cost).toFixed(2) : '-',
+                        },
+                        {
+                          title: '工序价',
+                          width: 75,
+                          render: (_: any, v: any) =>
+                            versionStatsById[v.id]?.labor_cost != null ? Number(versionStatsById[v.id].labor_cost).toFixed(2) : '-',
+                        },
+                        {
+                          title: '制造费',
+                          width: 75,
+                          render: (_: any, v: any) =>
+                            versionStatsById[v.id]?.manufacturing_fee != null
+                              ? Number(versionStatsById[v.id].manufacturing_fee).toFixed(2)
+                              : '-',
+                        },
+                        {
+                          title: '合计价',
+                          width: 75,
+                          render: (_: any, v: any) => {
+                            const s = versionStatsById[v.id] ?? {}
+                            const total =
+                              s.total_cost != null
+                                ? Number(s.total_cost)
+                                : Number(s.material_cost ?? 0) + Number(s.labor_cost ?? 0) + Number(s.manufacturing_fee ?? 0)
+                            return Number.isFinite(total) && total > 0 ? total.toFixed(2) : '-'
+                          },
+                        },
+                        {
+                          title: '创建时间',
+                          dataIndex: 'created_at',
+                          width: 140,
+                          render: (v: any) => (v ? dayjs(String(v)).format('YYYY-MM-DD HH:mm') : '-'),
+                        },
+                        {
+                          title: '模型生成',
+                          width: 75,
+                          render: (_: any, v: any) => (
+                            <Button
+                              size="small"
+                              type="primary"
+                              style={{ minWidth: 48, paddingInline: 6 }}
+                              onClick={() => void deriveStandardFrom(v.id)}
+                            >
+                              生成
+                            </Button>
+                          ),
+                        },
+                        {
+                          title: '操作',
+                          width: 120,
+                          render: (_: any, v: any) => (
+                            <Space wrap>
+                              <Tooltip title="编辑">
+                                <Button
+                                  size="small"
+                                  type="text"
+                                  icon={<EditOutlined />}
+                                  onClick={() => {
+                                    setSelectedVersionId(v.id)
+                                    setActiveTab('lines')
+                                  }}
+                                />
+                              </Tooltip>
+                              <Tooltip title={hasDerivedStandardFromSample(v.id) ? '已生成标准版本，不允许删除' : '删除'}>
+                                <Button
+                                  size="small"
+                                  type="text"
+                                  danger
+                                  icon={<DeleteOutlined />}
+                                  disabled={hasDerivedStandardFromSample(v.id)}
+                                  onClick={() => {
+                                    Modal.confirm({
+                                      title: '删除打样版本？',
+                                      content: '删除后该版本将从列表中移除（软删除/归档）。确认删除？',
+                                      okText: '删除',
+                                      okButtonProps: { danger: true },
+                                      cancelText: '取消',
+                                      onOk: async () => {
+                                        try {
+                                          await deleteProductModelVersion(v.id)
+                                          message.success('已删除版本')
+                                          await versionsQuery.refetch()
+                                          if (selectedVersionId === v.id) setSelectedVersionId(null)
+                                        } catch (err: any) {
+                                          message.error(err?.response?.data?.detail ?? '删除版本失败')
+                                        }
+                                      },
+                                    })
+                                  }}
+                                />
+                              </Tooltip>
+                              <Tooltip title="复制">
+                                <Button size="small" type="text" icon={<CopyOutlined />} onClick={() => openCopyVersionModal(v.id)} />
+                              </Tooltip>
+                            </Space>
+                          ),
+                        },
+                      ]}
+                    />
+                    <Text type="secondary" style={{ display: 'block', marginTop: 8 }}>
+                      提示：统计会在“保存清单”后自动更新；如需批量刷新多个版本，可逐个打开并保存一次清单。
+                    </Text>
                   </Card>
                 ) : (
+                  <Card
+                    size="small"
+                    title="标准版本列表"
+                    extra={
+                      <Space>
+                        <Button size="small" type="primary" onClick={openCreateVersionModal} disabled={!modelId}>
+                          新增版本
+                        </Button>
+                        <Button size="small" onClick={() => openCopyVersionModal(selectedVersionId)} disabled={!selectedVersionId}>
+                          复制版本
+                        </Button>
+                        <Button size="small" onClick={() => versionsQuery.refetch()} disabled={!modelId} icon={<ReloadOutlined />}>
+                          刷新
+                        </Button>
+                      </Space>
+                    }
+                  >
+                    <Table
+                      rowKey="id"
+                      size="small"
+                      pagination={false}
+                      loading={versionsQuery.isLoading}
+                      dataSource={filteredVersions}
+                      columns={[
+                        { title: '模型版本号', width: 220, ellipsis: true, render: (_: any, v: any) => getVersionDisplayName(v) },
+                        { title: '物料数', width: 60, render: (_: any, v: any) => versionStatsById[v.id]?.material_count ?? '-' },
+                        { title: '工序数', width: 60, render: (_: any, v: any) => versionStatsById[v.id]?.process_count ?? '-' },
+                        {
+                          title: '物料价',
+                          width: 75,
+                          render: (_: any, v: any) =>
+                            versionStatsById[v.id]?.material_cost != null ? Number(versionStatsById[v.id].material_cost).toFixed(2) : '-',
+                        },
+                        {
+                          title: '工序价',
+                          width: 75,
+                          render: (_: any, v: any) =>
+                            versionStatsById[v.id]?.labor_cost != null ? Number(versionStatsById[v.id].labor_cost).toFixed(2) : '-',
+                        },
+                        {
+                          title: '制造费',
+                          width: 75,
+                          render: (_: any, v: any) =>
+                            versionStatsById[v.id]?.manufacturing_fee != null
+                              ? Number(versionStatsById[v.id].manufacturing_fee).toFixed(2)
+                              : '-',
+                        },
+                        {
+                          title: '合计价',
+                          width: 75,
+                          render: (_: any, v: any) => {
+                            const s = versionStatsById[v.id] ?? {}
+                            const total =
+                              s.total_cost != null
+                                ? Number(s.total_cost)
+                                : Number(s.material_cost ?? 0) + Number(s.labor_cost ?? 0) + Number(s.manufacturing_fee ?? 0)
+                            return Number.isFinite(total) && total > 0 ? total.toFixed(2) : '-'
+                          },
+                        },
+                        {
+                          title: '创建时间',
+                          dataIndex: 'created_at',
+                          width: 140,
+                          render: (v: any) => (v ? dayjs(String(v)).format('YYYY-MM-DD HH:mm') : '-'),
+                        },
+                        {
+                          title: '操作',
+                          width: 90,
+                          render: (_: any, v: any) => (
+                            <Button
+                              size="small"
+                              type={selectedVersionId === v.id ? 'primary' : 'default'}
+                              onClick={() => {
+                                setSelectedVersionId(v.id)
+                                setActiveTab('lines')
+                              }}
+                            >
+                              编辑
+                            </Button>
+                          ),
+                        },
+                      ]}
+                    />
+                    <div style={{ marginTop: 8 }}>
+                      <Text type="secondary">仅显示 {desiredKind} 版本；“发布/SKU 绑定”以当前选中版本为准。</Text>
+                    </div>
+                  </Card>
+                )}
+                {entryContext === 'sample' ? null : (
                   <Card size="small" title="发布 / SKU 绑定">
                     <Space wrap>
                       <Button type="primary" onClick={() => publishMutation.mutate()} loading={publishMutation.isPending} disabled={!selectedVersionId}>
@@ -1419,81 +2133,19 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                       </Button>
                     </Space>
                     <div style={{ marginTop: 8 }}>
-                      <Tag color="blue">口径固定：1000×1000×1</Tag>
+                      <Tag color="blue">口径固定：{formatCm(1000)}×{formatCm(1000)}×1（cm）</Tag>
                     </div>
                   </Card>
                 )}
               </Space>
             ),
           },
-          ...(entryContext === 'sample'
-            ? [
-                {
-                  key: 'placeholders',
-                  label: '占位符映射',
-                  children: (
-                    <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                      <Alert
-                        type="info"
-                        showIcon
-                        message="打样管理：占位符兜底物料"
-                        description="占位符仅存在于模块模板层；保存/推导前会用映射替换为兜底物料。"
-                      />
-                      <Table
-                        rowKey={(r: any) => r.ph.virtual_material_id}
-                        loading={placeholdersQuery.isLoading}
-                        dataSource={placeholderRows}
-                        pagination={false}
-                        size="small"
-                        columns={[
-                          {
-                            title: '占位符',
-                            width: 220,
-                            render: (_: any, row: any) => row.ph.placeholder_symbol ?? row.ph.name ?? row.ph.virtual_code,
-                          },
-                          { title: '分类', width: 120, render: (_: any, row: any) => row.ph.constraint_category ?? '-' },
-                          { title: '单位', width: 90, render: (_: any, row: any) => row.ph.unit ?? '-' },
-                          {
-                            title: '兜底类型',
-                            width: 140,
-                            render: (_: any, row: any) => (
-                              <Select
-                                style={{ width: 120 }}
-                                value={row.mapping?.replacement_kind ?? 'real'}
-                                options={[
-                                  { label: '真实', value: 'real' },
-                                  { label: 'BOM', value: 'bom' },
-                                  { label: '虚拟', value: 'virtual' },
-                                ]}
-                                onChange={(v) => updateMapping(row.ph.virtual_material_id, { replacement_kind: v as any })}
-                              />
-                            ),
-                          },
-                          {
-                            title: '兜底ID',
-                            render: (_: any, row: any) => (
-                              <Input
-                                value={row.mapping?.replacement_ref_id ?? ''}
-                                placeholder="material_id / virtual_material_id"
-                                onChange={(e) => updateMapping(row.ph.virtual_material_id, { replacement_ref_id: e.target.value })}
-                              />
-                            ),
-                          },
-                        ]}
-                      />
-                      <Button onClick={() => saveBasicMutation.mutate()} loading={saveBasicMutation.isPending} disabled={!modelId}>
-                        保存映射到主档
-                      </Button>
-                    </Space>
-                  ),
-                },
-              ]
-            : []),
           {
             key: 'lines',
             label: '清单编辑',
             children: (
-              <Space direction="vertical" size={12} style={{ width: '100%' }}>
+              <div className="pm-lines-scope">
+                <Space direction="vertical" size={12} style={{ width: '100%' }}>
                 <Card
                   size="small"
                   title="版本选择"
@@ -1505,21 +2157,25 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                 >
                   <Space wrap>
                     <Select
+                      size="small"
                       style={{ width: 520 }}
                       placeholder={entryContext === 'sample' ? '选择打样版本（sample）' : '选择标准版本（standard）'}
                       value={selectedVersionId ?? undefined}
                       loading={versionsQuery.isLoading}
                       options={filteredVersions.map((v) => ({
                         value: v.id,
-                        label: `${v.version_status}${v.version_label ? ` / ${v.version_label}` : ''}`,
+                        label: `${v.version_status}${getVersionDisplayName(v) !== '-' ? ` / ${getVersionDisplayName(v)}` : ''}`,
                       }))}
                       onChange={(v) => setSelectedVersionId(v)}
                       allowClear
                     />
-                    <Button onClick={createVersion} disabled={!modelId}>
-                      新建{entryContext === 'sample' ? '打样' : '标准'}版本
+                    <Button size="small" onClick={openCreateVersionModal} disabled={!modelId}>
+                      新增版本
                     </Button>
-                    <Button onClick={() => versionsQuery.refetch()} disabled={!modelId} icon={<ReloadOutlined />}>
+                    <Button size="small" onClick={() => openCopyVersionModal(selectedVersionId)} disabled={!selectedVersionId}>
+                      复制版本
+                    </Button>
+                    <Button size="small" onClick={() => versionsQuery.refetch()} disabled={!modelId} icon={<ReloadOutlined />}>
                       刷新
                     </Button>
                   </Space>
@@ -1530,7 +2186,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                     type="warning"
                     showIcon
                     message="标准模型编辑口径"
-                    description="标准模型固定 1000×1000×1（1㎡）。编辑时请以该口径填写基数/分钟等参数。"
+                    description="标准模型固定 100×100×1（cm，1㎡）。编辑时请以该口径填写基数/分钟等参数。"
                   />
                 ) : null}
 
@@ -1539,13 +2195,16 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                   title={entryContext === 'standard' ? '口径（锁定）' : '打样尺寸'}
                   extra={
                     <Space>
-                      <Tag color="blue">sample: {String(sampleSpec.width_mm)}×{String(sampleSpec.height_mm)}×{String(sampleSpec.quantity)}</Tag>
-                      <Tag color="purple">standard: 1000×1000×1</Tag>
+                      <Tag color="blue">
+                        sample: {formatCm(sampleSpec.width_mm)}×{formatCm(sampleSpec.height_mm)}×{String(sampleSpec.quantity)}
+                      </Tag>
+                      <Tag color="purple">standard: {formatCm(1000)}×{formatCm(1000)}×1（cm）</Tag>
                     </Space>
                   }
                 >
                   <Space wrap>
                     <InputNumber
+                      size="small"
                       min={0}
                       precision={2}
                       value={Number(sampleSpec.width_mm ?? 0) / 10}
@@ -1554,6 +2213,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                       disabled={specLocked}
                     />
                     <InputNumber
+                      size="small"
                       min={0}
                       precision={2}
                       value={Number(sampleSpec.height_mm ?? 0) / 10}
@@ -1562,6 +2222,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                       disabled={specLocked}
                     />
                     <InputNumber
+                      size="small"
                       min={1}
                       precision={0}
                       value={sampleSpec.quantity}
@@ -1571,13 +2232,15 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                     />
                     <Space.Compact>
                       <Input
+                        size="small"
                         style={{ width: 140 }}
                         value={sampleSpec.unit_label}
-                        onChange={(e) => setSampleSpec({ ...sampleSpec, unit_label: e.target.value || '幅' })}
+                        onChange={(e) => setSampleSpec({ ...sampleSpec, unit_label: e.target.value || 'CM' })}
                         addonBefore="单位"
                         disabled={specLocked}
                       />
                       <Button
+                        size="small"
                         title={specLocked ? '已锁定：尺寸不可修改' : '点击锁定：尺寸不再变化'}
                         disabled={entryContext === 'standard'}
                         icon={specLocked ? <LockOutlined /> : <UnlockOutlined />}
@@ -1634,7 +2297,22 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                   title="计算汇总"
                   extra={
                     <Space>
-                      <Button loading={refreshingMaterialPrices} onClick={() => void handleRefreshMaterialPrices()} disabled={!modelId}>
+                      {entryContext === 'sample' ? (
+                        <Button
+                          size="small"
+                          type="primary"
+                          disabled={!selectedVersionId}
+                          onClick={() => void deriveStandardFrom(String(selectedVersionId ?? ''))}
+                        >
+                          推导标准模型
+                        </Button>
+                      ) : null}
+                      <Button
+                        size="small"
+                        loading={refreshingMaterialPrices}
+                        onClick={() => void handleRefreshMaterialPrices()}
+                        disabled={!modelId}
+                      >
                         同步物料价格
                       </Button>
                     </Space>
@@ -1643,7 +2321,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                   <Space wrap>
                     <Tag color="blue">物料费：{summary.material_cost.toFixed(2)}</Tag>
                     <Tag color="purple">人工费：{summary.labor_cost.toFixed(2)}</Tag>
-                    <Tag color="orange">管理费(30%)：{summary.overhead_cost.toFixed(2)}</Tag>
+                    <Tag color="orange">制造费(30%)：{summary.overhead_cost.toFixed(2)}</Tag>
                     <Tag color="green">合计：{summary.total_cost.toFixed(2)}</Tag>
                   </Space>
                   <Text type="secondary" style={{ display: 'block', marginTop: 8 }}>
@@ -1659,10 +2337,11 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                       extra={
                         <Space direction="vertical" size={4}>
                           <Space wrap>
-                            <Button onClick={() => setModulePickerOpen(true)} disabled={!modelId}>
+                            <Button size="small" onClick={() => setModulePickerOpen(true)} disabled={!modelId}>
                               添加
                             </Button>
                             <Button
+                              size="small"
                               loading={syncingFromModules}
                               onClick={() => void handleSyncFromModules()}
                               disabled={!selectedVersionId}
@@ -1676,7 +2355,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                             title={syncKeepOverrides ? '同步时保留版本清单已调参字段' : '同步时以模块内容覆盖版本清单调参'}
                           >
                             <Space size={6}>
-                              <span style={{ fontSize: 12, color: '#8c8c8c' }}>保留调参</span>
+                              <span className="pm-lines-muted">保留调参</span>
                               <Switch
                                 size="small"
                                 checked={syncKeepOverrides}
@@ -1720,14 +2399,20 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                           },
                         ]}
                       />
-                      <Text type="secondary" style={{ display: 'block', marginTop: 8 }}>
-                        模块仅作为模板来源；所有调参最终落在右侧版本清单。
-                      </Text>
                     </Card>
                   </Col>
 
                   <Col span={18}>
-                    <Card size="small" title="物料组">
+                    <Card
+                      size="small"
+                      title="物料组"
+                      className="pm-lines-group-card"
+                      extra={
+                        <Button size="small" type="primary" onClick={openMaterialPickerForAdd}>
+                          新增物料
+                        </Button>
+                      }
+                    >
                       <Table
                         rowKey={(r: any, idx?: number) => r.id ?? `mat-${idx ?? 0}`}
                         dataSource={materials as any}
@@ -1748,9 +2433,54 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                 {r.material_code ? (
                                   <CodePill code={r.material_code} color={getMaterialKindColor(r.material_kind as MaterialKind)} size="sm" />
                                 ) : null}
-                                <span style={{ whiteSpace: 'nowrap', fontSize: 12 }}>{r.material_name ?? r.material_ref_id}</span>
+                                <Button
+                                  type="link"
+                                  size="small"
+                                  style={{ padding: 0, height: 'auto', lineHeight: 1.2 }}
+                                  onClick={() => {
+                                    setMaterialPreviewRow(r)
+                                    setMaterialPreviewOpen(true)
+                                  }}
+                                >
+                                  {String(r.material_name ?? r.material_ref_id ?? '-')}
+                                </Button>
+                                {isPlaceholderMaterialRow(r) ? (
+                                  <Tag color="red" style={{ marginInlineStart: 4, fontSize: 10, padding: '0 4px', lineHeight: '16px' }}>
+                                    请替换物料
+                                  </Tag>
+                                ) : null}
                               </Space>
                             ),
+                          },
+                          {
+                            title: '图片',
+                            width: 70,
+                            render: (_: any, r: any) => {
+                              const kind = String((r as any)?.material_kind ?? (r as any)?.material_type ?? '').toLowerCase()
+                              if (kind === 'virtual') return <span style={{ color: '#bfbfbf' }}>-</span>
+                              const id = String((r as any)?.material_ref_id ?? '').trim()
+                              const url = (id ? materialImagesQuery.data?.get(id) : undefined) || undefined
+                              if (!url) return <span style={{ color: '#bfbfbf' }}>-</span>
+                              return (
+                                <Tooltip
+                                  getPopupContainer={() => document.body}
+                                  title={<Image src={String(url)} width={160} style={{ borderRadius: 8 }} />}
+                                >
+                                  <img
+                                    src={String(url)}
+                                    alt="material"
+                                    style={{
+                                      width: 32,
+                                      height: 32,
+                                      objectFit: 'cover',
+                                      borderRadius: 6,
+                                      border: '1px solid #f0f0f0',
+                                      cursor: 'pointer',
+                                    }}
+                                  />
+                                </Tooltip>
+                              )
+                            },
                           },
                           {
                             title: '操作',
@@ -1774,6 +2504,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                             render: (_: any, r: any, idx: number) => (
                               <Space size={6} style={{ width: '100%' }} align="center">
                                 <InputNumber
+                                  size="small"
                                   min={0}
                                   precision={2}
                                   value={r.sample_used_quantity}
@@ -1802,15 +2533,17 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                             ),
                           },
                           {
-                            title: '计价',
+                            title: '计量方式',
                             width: 90,
                             render: (_: any, r: any, idx: number) => (
                               <Space style={{ width: '100%' }} align="center" size={6}>
                                 <Select
+                                  size="small"
+                                  className="pm-lines-select"
+                                  popupClassName="pm-lines-select-dropdown"
                                   getPopupContainer={() => document.body}
                                   value={r.calculation_method}
-                                  style={{ width: 78, fontSize: 12 }}
-                                  dropdownStyle={{ fontSize: 12 }}
+                                  style={{ width: 78 }}
                                   options={(() => {
                                     const bomUnit = getBomUnitForRow(r)
                                     const allowed = new Set(allowedCalcMethodsByBomUnit(bomUnit))
@@ -1847,38 +2580,22 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                           {
                             title: 'BOM单价/单位',
                             width: 170,
-                            render: (_: any, r: any, idx: number) => {
+                            render: (_: any, r: any) => {
                               const meta = (r.metadata_json as any) ?? {}
-                              const price = meta.bom_unit_price != null ? Number(meta.bom_unit_price) : undefined
+                              const price = meta.bom_unit_price != null ? Number(meta.bom_unit_price) : NaN
                               const unit = normalizeUnit(meta.bom_unit ?? meta.display_unit) || ''
+                              const priceText = Number.isFinite(price) ? price.toFixed(2) : '-'
+                              const unitText = unit || '-'
                               return (
-                                <Space size={6} style={{ width: '100%' }} align="center">
-                                  <InputNumber
-                                    min={0}
-                                    precision={4}
-                                    value={Number.isFinite(price as any) ? price : undefined}
-                                    onChange={(v) => {
-                                      const next = (materials as any[]).slice()
-                                      next[idx] = {
-                                        ...next[idx],
-                                        metadata_json: {
-                                          ...(next[idx]?.metadata_json ?? {}),
-                                          bom_unit_price: v == null ? null : Number(v),
-                                        },
-                                      }
-                                      setMaterials(next as any)
-                                    }}
-                                    style={{ width: 110 }}
-                                    placeholder="单价"
-                                  />
-                                  <Tag style={{ marginInlineStart: 0 }}>{unit || '-'}</Tag>
-                                </Space>
+                                <span style={{ whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+                                  {priceText}/{unitText}
+                                </span>
                               )
                             },
                           },
                           {
                             title: '小计',
-                            width: 110,
+                            width: 80,
                             render: (_: any, r: any) => {
                               const meta = (r.metadata_json as any) ?? {}
                               const unitPrice = meta.bom_unit_price != null ? Number(meta.bom_unit_price) : NaN
@@ -1907,11 +2624,260 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                               )
                             },
                           },
+                          {
+                            title: '',
+                            width: 84,
+                            render: (_: any, __: any, idx: number) => (
+                              <Space size={0}>
+                                <Button
+                                  size="small"
+                                  type="text"
+                                  icon={<UpOutlined />}
+                                  title="上移"
+                                  disabled={idx === 0}
+                                  onClick={() => setMaterials((prev) => moveInArray(prev, idx, idx - 1))}
+                                />
+                                <Button
+                                  size="small"
+                                  type="text"
+                                  icon={<DownOutlined />}
+                                  title="下移"
+                                  disabled={idx >= (materials as any[]).length - 1}
+                                  onClick={() => setMaterials((prev) => moveInArray(prev, idx, idx + 1))}
+                                />
+                                <Button
+                                  size="small"
+                                  type="text"
+                                  danger
+                                  icon={<DeleteOutlined />}
+                                  title="删除"
+                                  onClick={() => setMaterials((prev) => (prev ?? []).filter((_: any, i: number) => i !== idx) as any)}
+                                />
+                              </Space>
+                            ),
+                          },
                         ]}
                       />
+
+                      <Drawer
+                        open={materialPreviewOpen}
+                        onClose={() => {
+                          setMaterialPreviewOpen(false)
+                          setMaterialPreviewRow(null)
+                        }}
+                        width={420}
+                        destroyOnClose
+                        title="物料预览（只读）"
+                      >
+                        <Spin spinning={materialPreviewQuery.isLoading || virtualPreviewQuery.isLoading}>
+                          {previewKind === 'virtual' ? (
+                            <>
+                              <Text strong>虚拟物料</Text>
+                              <Divider style={{ margin: '12px 0' }} />
+                              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                                <div>
+                                  <Text type="secondary">名称：</Text>
+                                  <Text>{materialPreviewRow?.material_name ?? '-'}</Text>
+                                </div>
+                                <div>
+                                  <Text type="secondary">编码：</Text>
+                                  <Text>{materialPreviewRow?.material_code ?? '-'}</Text>
+                                </div>
+                                <div>
+                                  <Text type="secondary">ID：</Text>
+                                  <Text code>{previewRefId || '-'}</Text>
+                                </div>
+                                {virtualPreviewQuery.data ? (
+                                  <>
+                                    <div>
+                                      <Text type="secondary">类型：</Text>
+                                      <Text>
+                                        {(() => {
+                                          const k = String((virtualPreviewQuery.data as any)?.virtual_kind ?? '')
+                                          if (k === 'recipe') return '配方型'
+                                          if (k === 'kit') return '套件型'
+                                          if (k === 'placeholder') return '占位型'
+                                          return k || '-'
+                                        })()}
+                                      </Text>
+                                    </div>
+                                    <div>
+                                      <Text type="secondary">单位：</Text>
+                                      <Text>{(virtualPreviewQuery.data as any)?.unit ?? '-'}</Text>
+                                    </div>
+                                    <div>
+                                      <Text type="secondary">BOM单价：</Text>
+                                      <Text>
+                                        {(() => {
+                                          const v = (virtualPreviewQuery.data as any)?.bom_unit_price
+                                          const n = Number(v)
+                                          return Number.isFinite(n) ? n.toFixed(2) : '-'
+                                        })()}
+                                      </Text>
+                                    </div>
+                                    {Array.isArray((virtualPreviewQuery.data as any)?.bindings) &&
+                                    ((virtualPreviewQuery.data as any)?.bindings?.length ?? 0) > 0 ? (
+                                      <div>
+                                        <Divider style={{ margin: '12px 0' }} />
+                                        <Text strong>绑定物料</Text>
+                                        <div style={{ marginTop: 8 }}>
+                                          {((virtualPreviewQuery.data as any)?.bindings ?? []).map((b: any, i: number) => (
+                                            <div key={`${b.material_id}-${i}`} style={{ padding: '6px 0' }}>
+                                              <div>
+                                                <Text>
+                                                  {b.material_code ?? '-'} {b.material_name ?? ''}
+                                                </Text>
+                                              </div>
+                                              <div style={{ color: '#8c8c8c', fontSize: 12 }}>
+                                                {(b.binding_type ?? 'ratio') === 'quantity' ? '数量' : '配比'}：{String(b.quantity_ratio ?? '-')}
+                                                {'；'}损耗%：{String(b.loss_rate ?? 0)}
+                                              </div>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    ) : null}
+                                  </>
+                                ) : null}
+                                <Button
+                                  type="primary"
+                                  onClick={() => window.open(`/costing/virtual-materials?virtual_id=${encodeURIComponent(previewRefId)}`, '_blank')}
+                                >
+                                  编辑虚拟物料
+                                </Button>
+                              </Space>
+                            </>
+                          ) : (
+                            <>
+                              <Text strong>真实/BOM 物料</Text>
+                              <Divider style={{ margin: '12px 0' }} />
+                              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                                <div>
+                                  <Text type="secondary">名称：</Text>
+                                  <Text>{materialPreviewRow?.material_name ?? '-'}</Text>
+                                </div>
+                                <div>
+                                  <Text type="secondary">编码：</Text>
+                                  <Text>{materialPreviewRow?.material_code ?? '-'}</Text>
+                                </div>
+                                <div>
+                                  <Text type="secondary">ID：</Text>
+                                  <Text code>{previewRefId || '-'}</Text>
+                                </div>
+                                <div>
+                                  <Text type="secondary">分类：</Text>
+                                  <Text>{(materialPreviewQuery.data as any)?.category ?? '-'}</Text>
+                                </div>
+                                <div>
+                                  <Text type="secondary">计量方式：</Text>
+                                  <Text>{(materialPreviewQuery.data as any)?.calculation_method ?? '-'}</Text>
+                                </div>
+                                <div>
+                                  <Text type="secondary">单位：</Text>
+                                  <Text>{(materialPreviewQuery.data as any)?.unit ?? '-'}</Text>
+                                </div>
+                                <div>
+                                  <Text type="secondary">BOM单价/单位：</Text>
+                                  <Text>
+                                    {(() => {
+                                      const meta = (materialPreviewRow?.metadata_json ?? {}) as any
+                                      const p = meta?.bom_unit_price != null ? Number(meta.bom_unit_price) : NaN
+                                      const u = normalizeUnit(meta?.bom_unit ?? meta?.display_unit) || ''
+                                      const pText = Number.isFinite(p) ? p.toFixed(2) : '-'
+                                      return `${pText}/${u || '-'}`
+                                    })()}
+                                  </Text>
+                                </div>
+                                <div>
+                                  <Text type="secondary">采购规格（只读）：</Text>
+                                  <Text>
+                                    {(() => {
+                                      const m: any = materialPreviewQuery.data
+                                      if (!m) return '-'
+                                      // More detailed purchase spec is stored in metadata/raw_form_data
+                                      const meta = (m?.metadata_json ?? {}) as any
+                                      const raw = meta?.raw_form_data ?? {}
+                                      const purchaseSpec = raw?.textField_lxo1y6ab ?? meta?.textField_lxo1y6ab ?? ''
+                                      if (String(purchaseSpec || '').trim()) return String(purchaseSpec).trim()
+                                      const pu = m.purchase_unit || '-'
+                                      const pp = m.unit_price != null ? Number(m.unit_price) : NaN
+                                      const ppText = Number.isFinite(pp) ? pp.toFixed(2) : '-'
+                                      return `${ppText}/${pu}`
+                                    })()}
+                                  </Text>
+                                </div>
+                                <div>
+                                  <Text type="secondary">采购→BOM 换算：</Text>
+                                  <Text>
+                                    {(() => {
+                                      const m: any = materialPreviewQuery.data
+                                      if (!m) return '-'
+                                      const pu = m.purchase_unit || '采购单位'
+                                      const bomUnit = normalizeUnit(m.unit) || 'BOM单位'
+                                      const c = Number(m.conversion_purchase_to_bom)
+                                      if (!Number.isFinite(c) || c <= 0) return '-'
+                                      return `1 ${pu} = ${c} ${bomUnit}`
+                                    })()}
+                                  </Text>
+                                </div>
+                                <div>
+                                  <Text type="secondary">固定用量 α：</Text>
+                                  <Text>{Number(materialPreviewRow?.fixed_quantity ?? 0).toFixed(2)}</Text>
+                                </div>
+                                <div>
+                                  <Text type="secondary">覆盖率 r (0~1)：</Text>
+                                  <Text>{Number(materialPreviewRow?.coverage_ratio ?? 1).toFixed(2)}</Text>
+                                </div>
+                                <div>
+                                  <Text type="secondary">默认损耗%：</Text>
+                                  <Text>{Number(materialPreviewRow?.loss_rate ?? 0).toFixed(2)}%</Text>
+                                </div>
+                                <div>
+                                  <Text type="secondary">本地描述：</Text>
+                                  <Text>
+                                    {(() => {
+                                      const m: any = materialPreviewQuery.data
+                                      const meta = (m?.metadata_json ?? {}) as any
+                                      const desc = meta?.local_description
+                                      return String(desc ?? materialPreviewRow?.notes ?? '').trim() || '-'
+                                    })()}
+                                  </Text>
+                                </div>
+                                {(() => {
+                                  const m: any = materialPreviewQuery.data
+                                  if (!m) return null
+                                  const url =
+                                    m?.image_url ||
+                                    (Array.isArray(m?.images) && m.images.length > 0 ? m.images[0] : undefined) ||
+                                    (m?.metadata_json ?? {})?.image_url ||
+                                    undefined
+                                  if (!url) return null
+                                  return <Image src={String(url)} width={180} style={{ borderRadius: 8 }} />
+                                })()}
+                                <Button
+                                  type="primary"
+                                  onClick={() => window.open(`/costing/materials?material_id=${encodeURIComponent(previewRefId)}`, '_blank')}
+                                >
+                                  编辑物料
+                                </Button>
+                              </Space>
+                            </>
+                          )}
+                        </Spin>
+                      </Drawer>
                     </Card>
 
-                    <Card size="small" title="工序组" style={{ marginTop: 12 }}>
+                    <Card
+                      size="small"
+                      title="工序组"
+                      className="pm-lines-group-card"
+                      style={{ marginTop: 12 }}
+                      extra={
+                        <Button size="small" type="primary" onClick={openProcessPickerForAdd}>
+                          新增工序
+                        </Button>
+                      }
+                    >
                       <Table
                         rowKey={(r: any, idx?: number) => r.id ?? `proc-${idx ?? 0}`}
                         dataSource={processes as any}
@@ -1946,13 +2912,15 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                             width: 120,
                             render: (_: any, r: any, idx: number) => (
                               <Select
+                                size="small"
+                                className="pm-lines-select"
+                                popupClassName="pm-lines-select-dropdown"
                                 getPopupContainer={() => document.body}
                                 allowClear
                                 showSearch
                                 placeholder="选择班组"
                                 optionFilterProp="label"
-                                style={{ width: '100%', fontSize: 12 }}
-                                dropdownStyle={{ fontSize: 12 }}
+                                style={{ width: '100%' }}
                                 value={r.team_name}
                                 options={TEAM_OPTIONS}
                                 onChange={(v) => {
@@ -1964,13 +2932,15 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                             ),
                           },
                           {
-                            title: '计价',
+                            title: '计量方式',
                             width: 90,
                             render: (_: any, r: any, idx: number) => (
                               <Select
+                                size="small"
+                                className="pm-lines-select"
+                                popupClassName="pm-lines-select-dropdown"
                                 getPopupContainer={() => document.body}
-                                style={{ width: '100%', fontSize: 12 }}
-                                dropdownStyle={{ fontSize: 12 }}
+                                style={{ width: '100%' }}
                                 value={r.pricing_method}
                                 options={[
                                   { label: '数量', value: 'count' },
@@ -2042,12 +3012,45 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                               )
                             },
                           },
+                          {
+                            title: '',
+                            width: 84,
+                            render: (_: any, __: any, idx: number) => (
+                              <Space size={0}>
+                                <Button
+                                  size="small"
+                                  type="text"
+                                  icon={<UpOutlined />}
+                                  title="上移"
+                                  disabled={idx === 0}
+                                  onClick={() => setProcesses((prev) => moveInArray(prev, idx, idx - 1))}
+                                />
+                                <Button
+                                  size="small"
+                                  type="text"
+                                  icon={<DownOutlined />}
+                                  title="下移"
+                                  disabled={idx >= (processes as any[]).length - 1}
+                                  onClick={() => setProcesses((prev) => moveInArray(prev, idx, idx + 1))}
+                                />
+                                <Button
+                                  size="small"
+                                  type="text"
+                                  danger
+                                  icon={<DeleteOutlined />}
+                                  title="删除"
+                                  onClick={() => setProcesses((prev) => (prev ?? []).filter((_: any, i: number) => i !== idx) as any)}
+                                />
+                              </Space>
+                            ),
+                          },
                         ]}
                       />
                     </Card>
                   </Col>
                 </Row>
-              </Space>
+                </Space>
+              </div>
             ),
           },
         ]}
@@ -2055,7 +3058,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
 
       {/* Model line material picker */}
       <Modal
-        title="替换物料"
+        title={pickerMode === 'add' ? '新增物料' : '替换物料'}
         open={materialPickerOpen}
         onCancel={() => setMaterialPickerOpen(false)}
         footer={null}
@@ -2071,8 +3074,25 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
               { label: '真实物料', value: 'real' },
               { label: '虚拟物料', value: 'virtual' },
             ]}
-            onChange={(v) => setPickerMaterialKind(v as any)}
+            onChange={(v) => {
+              setPickerMaterialKind(v as any)
+              // 最小可用：切换类型时重置分类筛选，避免“无结果”的困惑
+              if (v === 'virtual') setPickerMaterialCategory(undefined)
+            }}
           />
+          {(pickerMaterialKind === 'real' || pickerMaterialKind === 'bom') && (
+            <Select
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              placeholder="分类"
+              style={{ width: 180 }}
+              value={pickerMaterialCategory}
+              options={materialCategoryOptions}
+              onChange={(v) => setPickerMaterialCategory(v ?? undefined)}
+              disabled={modelLineMaterialPickerQuery.isLoading}
+            />
+          )}
           <Input.Search
             allowClear
             placeholder="搜索编码/名称"
@@ -2170,7 +3190,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
 
       {/* Model line process picker */}
       <Modal
-        title="替换工序"
+        title={pickerMode === 'add' ? '新增工序' : '替换工序'}
         open={processPickerOpen}
         onCancel={() => setProcessPickerOpen(false)}
         footer={null}
@@ -2178,6 +3198,17 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
         destroyOnClose
       >
         <Space wrap style={{ marginBottom: 12 }}>
+          <Select
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            placeholder="分类"
+            style={{ width: 180 }}
+            value={pickerProcessCategory}
+            options={processCategoryOptions}
+            onChange={(v) => setPickerProcessCategory(v ?? undefined)}
+            disabled={modelLineProcessPickerQuery.isLoading}
+          />
           <Input.Search
             allowClear
             placeholder="搜索工序编码/名称"
@@ -2208,6 +3239,34 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
             },
           ]}
         />
+      </Modal>
+
+      {/* Version operation (create/copy) */}
+      <Modal
+        title={versionOpMode === 'copy' ? '复制版本' : '新增版本'}
+        open={versionOpOpen}
+        onCancel={() => setVersionOpOpen(false)}
+        onOk={() => void runVersionOp()}
+        okText={versionOpMode === 'copy' ? '复制' : '新增'}
+        confirmLoading={versionOpLoading}
+        destroyOnClose
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Input
+            value={versionOpName}
+            onChange={(e) => setVersionOpName(e.target.value)}
+            placeholder="版本名称（可选）"
+            allowClear
+          />
+          <Text type="secondary">
+            说明：当前后端创建版本仅支持写入 <Text code>metadata_json</Text>，因此“版本名称”会存为{' '}
+            <Text code>metadata_json.ui_label</Text> 并在前端优先展示。
+          </Text>
+        </Space>
+      </Modal>
+
+      <Modal open={imagePreviewOpen} footer={null} onCancel={() => setImagePreviewOpen(false)} width={860} destroyOnClose>
+        <img alt="preview" style={{ width: '100%' }} src={imagePreviewUrl} />
       </Modal>
 
       {/* Tuning panel (material/process) */}
@@ -2723,3 +3782,14 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     </Drawer>
   )
 }
+
+
+
+
+
+
+
+
+
+
+

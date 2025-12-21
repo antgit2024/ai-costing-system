@@ -1,0 +1,28 @@
+## 已知坑（新 Agent 必读）
+
+> 最近校对（北京时间 GMT+8）：2025-12-21（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
+
+### 1) API_BASE 与跨域
+
+- 前端 `frontend/src/services/planner.ts` 内置了“同 host 不同端口”回退逻辑：浏览器若检测到 `VITE_PLANNER_API_BASE` 设成 `http(s)://同域:8800/...` 会回退到 `/api/planner`，避免 CORS。
+- 结论：**生产联调尽量走 nginx 同源 `/api/planner`**；不要强制把浏览器 API_BASE 指向 `:8800`。
+
+### 4) 统一 Markdown 指南（实际以纯文本展示）
+
+- `frontend/src/guides/*.md` 通过 `?raw` 导入为字符串，在 `frontend/src/components/common/GuideDrawer.tsx` 里以 `<pre>` 纯文本展示并支持“一键复制”。
+- 结论：指南内容以“可读/可复制”为第一目标；不要依赖 markdown 渲染效果（避免引入额外依赖/构建风险）。
+
+### 2) @/* alias（构建稳定性）
+
+- 需要同时满足：
+  - `frontend/tsconfig.app.json` 有 `baseUrl="."` + `paths: { "@/*": ["src/*"] }`
+  - `frontend/vite.config.ts` 有 `resolve.alias` 指向 `src`
+- 若 build 报 `TS2307 Cannot find module '@/...'`，先检查以上两处。
+
+### 3) 迁移范围控制（避免“跨文件风暴”）
+
+- 本轮只交付一个闭环产物：**把旧编辑器迁到 `ProductModelEditorDrawer.tsx` 并接通两入口页**。
+- 不要顺手重构 unrelated 组件；避免一次改动牵扯几十个文件导致 diff 巨大、交互层卡顿。
+
+
+

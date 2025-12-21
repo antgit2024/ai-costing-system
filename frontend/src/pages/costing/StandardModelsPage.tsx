@@ -1,13 +1,16 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Button, Card, Input, Space, Table, Tag } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useQuery } from '@tanstack/react-query'
+import { useLocation, useNavigate } from 'react-router-dom'
 
 import { fetchProductModelVersionsPaged } from '@/services/planner'
 import type { ProductModelVersionListItem } from '@/types/planner'
 import ProductModelEditorDrawer from '@/components/costing/ProductModelEditorDrawer'
 
 export default function StandardModelsPage() {
+  const location = useLocation() as any
+  const navigate = useNavigate()
   const [search, setSearch] = useState('')
   const [page] = useState(1)
   const [pageSize] = useState(50)
@@ -15,6 +18,19 @@ export default function StandardModelsPage() {
   const [editorOpen, setEditorOpen] = useState(false)
   const [editingModelId, setEditingModelId] = useState<string | null>(null)
   const [editingVersionId, setEditingVersionId] = useState<string | null>(null)
+
+  useEffect(() => {
+    const st = (location as any)?.state ?? {}
+    const openModelId = String(st?.openModelId ?? '').trim()
+    const openVersionId = String(st?.openVersionId ?? '').trim()
+    if (!openModelId || !openVersionId) return
+
+    setEditingModelId(openModelId)
+    setEditingVersionId(openVersionId)
+    setEditorOpen(true)
+    // 清掉 state，避免刷新/返回时重复弹抽屉
+    navigate(location.pathname, { replace: true, state: null })
+  }, [location, navigate])
 
   const params = useMemo(
     () => ({
@@ -91,5 +107,16 @@ export default function StandardModelsPage() {
     </Space>
   )
 }
+
+
+
+
+
+
+
+
+
+
+
 
 

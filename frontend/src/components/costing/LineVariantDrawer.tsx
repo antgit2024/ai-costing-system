@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Card, Drawer, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag, Tooltip, Typography, message } from 'antd'
+import { Alert, Button, Card, Drawer, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { DeleteOutlined, EditOutlined, PlayCircleOutlined } from '@ant-design/icons'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -31,6 +31,20 @@ type EditableItemRow = LineVariantItemPayload & {
 
 type MetricOp = 'off' | 'gte' | 'lte' | 'eq' | 'between'
 type TriggerType = 'token' | 'width' | 'height' | 'area' | 'perimeter'
+
+type ModalRuleRow = {
+  key: string
+  id?: string
+  enabled: boolean
+  // condition
+  op: Exclude<MetricOp, 'off'>
+  min: number | null
+  max: number | null
+  token_any: string[]
+  token_all: string[]
+  // item (1->1)
+  item: EditableItemRow
+}
 
 const FIXED_ACTION: LineVariantAction = 'replace_self'
 const STABLE_SHAPE_LABEL = '最稳形态：replace_self + 同单位 1→1（启用前必须预演成功）'
@@ -97,25 +111,13 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
   const queryClient = useQueryClient()
 
   const [selectedVariantId, setSelectedVariantId] = useState<string | null>(null)
-  const [draftEnabled, setDraftEnabled] = useState(true)
-  const [draftPriority, setDraftPriority] = useState(100)
   const [draftStopOnHit, setDraftStopOnHit] = useState(true)
-  const [draftNotes, setDraftNotes] = useState('')
-  const [draftContainsAny, setDraftContainsAny] = useState<string[]>([])
-  const [draftContainsAll, setDraftContainsAll] = useState<string[]>([])
-  const [draftWidthBetween, setDraftWidthBetween] = useState<[number | null, number | null] | null>(null)
-  const [draftHeightBetween, setDraftHeightBetween] = useState<[number | null, number | null] | null>(null)
-  const [draftAreaBetween, setDraftAreaBetween] = useState<[number | null, number | null] | null>(null)
-  const [draftPerimeterBetween, setDraftPerimeterBetween] = useState<[number | null, number | null] | null>(null)
-  const [draftWidthOp, setDraftWidthOp] = useState<MetricOp>('off')
-  const [draftHeightOp, setDraftHeightOp] = useState<MetricOp>('off')
-  const [draftAreaOp, setDraftAreaOp] = useState<MetricOp>('off')
-  const [draftPerimeterOp, setDraftPerimeterOp] = useState<MetricOp>('off')
-  const [draftItems, setDraftItems] = useState<EditableItemRow[]>([])
+  // legacy single-rule item editor removed; modal uses per-row item
   const [draftTriggerType, setDraftTriggerType] = useState<TriggerType>('token')
 
   const [editModalOpen, setEditModalOpen] = useState(false)
   const [editMode, setEditMode] = useState<'create' | 'edit'>('edit')
+  const [modalRows, setModalRows] = useState<ModalRuleRow[]>([])
 
   const [specText, setSpecText] = useState('')
   const [specParsed, setSpecParsed] = useState<SpecParseResponse | null>(null)
@@ -161,6 +163,96 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     return 'token'
   }
 
+  const triggerLabel = (t: TriggerType): string => {
+    if (t === 'token') return 'token（包含）'
+    if (t === 'width') return '宽度（cm）'
+    if (t === 'height') return '高度（cm）'
+    if (t === 'area') return '面积（m²）'
+    return '周长（m）'
+  }
+
+  const blankItemRow = (): EditableItemRow => ({
+    _tmpId: `tmp-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    sequence_order: 0,
+    material_kind: 'real' as any,
+    material_ref_id: '',
+    material_code: null,
+    material_name: null,
+    unit_of_measure: null,
+    calculation_method: 'count' as any,
+    base_quantity: 0,
+    fixed_quantity: 0,
+    coverage_ratio: 1,
+    loss_rate: 0,
+    metadata_json: {},
+  })
+
+  const rowFromVariant = (v: LineVariantDetailRead): ModalRuleRow => {
+    const cond = (v.conditions ?? {}) as any
+    const anyArr = asStringArray(cond.spec_contains_any)
+    const allArr = asStringArray(cond.spec_contains_all)
+    const key = v.id
+    let op: Exclude<MetricOp, 'off'> = 'gte'
+    let min: number | null = null
+    let max: number | null = null
+    const t = inferTriggerType(cond)
+    if (t !== 'token') {
+      const pair =
+        t === 'width'
+          ? asBetween(cond.width_between)
+          : t === 'height'
+            ? asBetween(cond.height_between)
+            : t === 'area'
+              ? asBetween(cond.area_between)
+              : asBetween(cond.perimeter_between)
+      const o = opFromBetween(pair)
+      op = (o === 'off' ? 'gte' : o) as any
+      min = pair?.[0] ?? null
+      max = pair?.[1] ?? null
+    }
+    const item0 = buildEditableItems(((v.items ?? []) as any[]).slice(0, 1))[0] ?? blankItemRow()
+    return {
+      key,
+      id: v.id,
+      enabled: !!v.enabled,
+      op,
+      min,
+      max,
+      token_any: anyArr,
+      token_all: allArr,
+      item: item0,
+    }
+  }
+
+  const rowToConditions = (trigger: TriggerType, row: ModalRuleRow): any => {
+    if (trigger === 'token') {
+      return { spec_contains_any: row.token_any, spec_contains_all: row.token_all }
+    }
+    const toPair = (): [number | null, number | null] | null => {
+      const a = row.min
+      const b = row.max
+      if (row.op === 'between') return [a, b]
+      if (row.op === 'gte') return [a, null]
+      if (row.op === 'lte') return [null, b]
+      return [a, a]
+    }
+    const pair = betweenToPayload(toPair())
+    if (trigger === 'width') return { spec_contains_any: [], spec_contains_all: [], width_between: pair }
+    if (trigger === 'height') return { spec_contains_any: [], spec_contains_all: [], height_between: pair }
+    if (trigger === 'area') return { spec_contains_any: [], spec_contains_all: [], area_between: pair }
+    return { spec_contains_any: [], spec_contains_all: [], perimeter_between: pair }
+  }
+
+  const invalidatePreview = () => {
+    setSpecParsed(null)
+    setBomPreview(null)
+    setLastPreviewAt(null)
+    setLastPreviewOk(null)
+    setLastPreviewError(null)
+    setLastPreviewSummary(null)
+    setLastPreviewFingerprint(null)
+  }
+
   useEffect(() => {
     if (!open) return
     // default select: first variant if any
@@ -172,70 +264,22 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
   useEffect(() => {
     if (!open) return
     if (!selectedVariant) return
-    setDraftEnabled(!!selectedVariant.enabled)
-    setDraftPriority(toNumber(selectedVariant.priority, 100))
     setDraftStopOnHit(!!selectedVariant.stop_on_hit)
-    setDraftNotes(String(selectedVariant.notes ?? ''))
     const cond = (selectedVariant.conditions ?? {}) as any
     const inferred = inferTriggerType(cond)
     setDraftTriggerType(inferred)
-
-    // 单触发类型：只回填一种条件，其他清空（避免“规则里混多种条件”导致判断口径不清晰）
-    const clearTokens = () => {
-      setDraftContainsAny([])
-      setDraftContainsAll([])
-    }
-    const clearMetrics = () => {
-      setDraftWidthBetween(null)
-      setDraftHeightBetween(null)
-      setDraftAreaBetween(null)
-      setDraftPerimeterBetween(null)
-      setDraftWidthOp('off')
-      setDraftHeightOp('off')
-      setDraftAreaOp('off')
-      setDraftPerimeterOp('off')
-    }
-
-    if (inferred === 'token') {
-      clearMetrics()
-      setDraftContainsAny(asStringArray(cond.spec_contains_any))
-      setDraftContainsAll(asStringArray(cond.spec_contains_all))
-    } else {
-      clearTokens()
-      clearMetrics()
-      if (inferred === 'width') {
-        const wb = asBetween(cond.width_between)
-        setDraftWidthBetween(wb)
-        setDraftWidthOp(opFromBetween(wb))
-      }
-      if (inferred === 'height') {
-        const hb = asBetween(cond.height_between)
-        setDraftHeightBetween(hb)
-        setDraftHeightOp(opFromBetween(hb))
-      }
-      if (inferred === 'area') {
-        const ab = asBetween(cond.area_between)
-        setDraftAreaBetween(ab)
-        setDraftAreaOp(opFromBetween(ab))
-      }
-      if (inferred === 'perimeter') {
-        const pb = asBetween(cond.perimeter_between)
-        setDraftPerimeterBetween(pb)
-        setDraftPerimeterOp(opFromBetween(pb))
-      }
-    }
-    setDraftItems(buildEditableItems(selectedVariant.items as any))
   }, [open, selectedVariant])
 
   useEffect(() => {
+    if (!editModalOpen) return
+    // keep rows in sync with current trigger selection (simple filter view)
+    const filtered = variants.filter((v) => inferTriggerType((v.conditions ?? {}) as any) === draftTriggerType)
+    setModalRows(filtered.map((v) => rowFromVariant(v)))
+  }, [editModalOpen, variants, draftTriggerType])
+
+  useEffect(() => {
     if (!open) return
-    setSpecParsed(null)
-    setBomPreview(null)
-    setLastPreviewAt(null)
-    setLastPreviewOk(null)
-    setLastPreviewError(null)
-    setLastPreviewSummary(null)
-    setLastPreviewFingerprint(null)
+    invalidatePreview()
   }, [open, versionId, baseLineId])
 
 
@@ -243,22 +287,8 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     setEditMode('create')
     setSelectedVariantId(null)
     // reset draft
-    setDraftEnabled(false)
-    setDraftPriority(100)
     setDraftStopOnHit(true)
-    setDraftNotes('')
-    setDraftContainsAny([])
-    setDraftContainsAll([])
-    setDraftWidthBetween(null)
-    setDraftHeightBetween(null)
-    setDraftAreaBetween(null)
-    setDraftPerimeterBetween(null)
-    setDraftWidthOp('off')
-    setDraftHeightOp('off')
-    setDraftAreaOp('off')
-    setDraftPerimeterOp('off')
     setDraftTriggerType('token')
-    setDraftItems([])
     setSpecText('')
     setSpecParsed(null)
     setBomPreview(null)
@@ -273,58 +303,37 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
   const openEditModal = (variantId: string) => {
     setEditMode('edit')
     setSelectedVariantId(variantId)
+    const v = variants.find((x) => x.id === variantId)
+    if (v) {
+      const inferred = inferTriggerType((v.conditions ?? {}) as any)
+      setDraftTriggerType(inferred)
+    }
     setEditModalOpen(true)
   }
 
-  const buildConditionsPayload = (): any => {
-    // 单触发类型：只允许一种触发维度（token 或某一个 metric）
-    const base: any = { spec_contains_any: [], spec_contains_all: [] }
-    if (draftTriggerType === 'token') {
-      base.spec_contains_any = draftContainsAny
-      base.spec_contains_all = draftContainsAll
-      return base
-    }
-    const metricMap: Record<Exclude<TriggerType, 'token'>, { op: MetricOp; pair: [number | null, number | null] | null }> = {
-      width: { op: draftWidthOp, pair: draftWidthBetween },
-      height: { op: draftHeightOp, pair: draftHeightBetween },
-      area: { op: draftAreaOp, pair: draftAreaBetween },
-      perimeter: { op: draftPerimeterOp, pair: draftPerimeterBetween },
-    }
-    const selected = metricMap[draftTriggerType]
-    if (!selected || selected.op === 'off') return base
-    const key = `${draftTriggerType}_between`
-    return {
-      ...base,
-      [key]: betweenToPayload(selected.pair),
-    }
-  }
+  // legacy buildConditionsPayload removed: modal uses rowToConditions per row
 
-  const normalizedDraftItemsForFingerprint = useMemo(
+  const normalizedModalRowsForFingerprint = useMemo(
     () =>
-      draftItems.map((r) => ({
-        material_kind: r.material_kind ?? 'real',
-        material_ref_id: String(r.material_ref_id ?? '').trim() || null,
-        base_quantity: toNumber(r.base_quantity, 0),
-        fixed_quantity: toNumber(r.fixed_quantity, 0),
-        coverage_ratio: toNumber(r.coverage_ratio, 1),
-        loss_rate: toNumber(r.loss_rate, 0),
+      modalRows.map((r) => ({
+        id: r.id ?? null,
+        enabled: !!r.enabled,
+        op: r.op,
+        min: r.min ?? null,
+        max: r.max ?? null,
+        token_any: r.token_any ?? [],
+        token_all: r.token_all ?? [],
+        item: {
+          material_kind: r.item?.material_kind ?? 'real',
+          material_ref_id: String(r.item?.material_ref_id ?? '').trim() || null,
+          base_quantity: toNumber(r.item?.base_quantity, 0),
+          fixed_quantity: toNumber(r.item?.fixed_quantity, 0),
+          coverage_ratio: toNumber(r.item?.coverage_ratio, 1),
+          loss_rate: toNumber(r.item?.loss_rate, 0),
+        },
       })),
-    [draftItems],
+    [modalRows],
   )
-
-  const normalizedConditionsForFingerprint = useMemo(() => buildConditionsPayload(), [
-    draftTriggerType,
-    draftContainsAny,
-    draftContainsAll,
-    draftWidthOp,
-    draftWidthBetween,
-    draftHeightOp,
-    draftHeightBetween,
-    draftAreaOp,
-    draftAreaBetween,
-    draftPerimeterOp,
-    draftPerimeterBetween,
-  ])
 
   const currentPreviewFingerprint = useMemo(() => {
     const payload = {
@@ -334,8 +343,8 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
       action: FIXED_ACTION,
       stop_on_hit: draftStopOnHit,
       trigger_type: draftTriggerType,
-      conditions: normalizedConditionsForFingerprint,
-      items: normalizedDraftItemsForFingerprint,
+      // 以弹窗多行规则为准（用于“预演是否过期”的判定）
+      rules: normalizedModalRowsForFingerprint,
       spec_text: String(specText ?? '').trim(),
     }
     return JSON.stringify(payload)
@@ -345,8 +354,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     selectedVariantId,
     draftStopOnHit,
     draftTriggerType,
-    normalizedConditionsForFingerprint,
-    normalizedDraftItemsForFingerprint,
+    normalizedModalRowsForFingerprint,
     specText,
   ])
 
@@ -362,101 +370,10 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     return normalizeUnit(baseLine?.unit_of_measure)
   }, [bomPreview, baseLineId])
 
-  const targetUnitFromItems = useMemo(() => normalizeUnit(draftItems?.[0]?.unit_of_measure), [draftItems])
-
-  const unitMismatch = useMemo(() => {
-    const baseU = baseUnitFromBom
-    const targetU = targetUnitFromItems
-    if (!baseU || !targetU) return null
-    if (baseU !== targetU) return { base: baseU, target: targetU }
-    return null
-  }, [baseUnitFromBom, targetUnitFromItems])
-
-  const enableBlockReason = useMemo((): string | null => {
-    // 1) 必须 1→1
-    if (draftItems.length !== 1) return '最稳形态只允许 1→1：请确保 items 仅 1 行目标物料'
-    const targetRefId = String(draftItems?.[0]?.material_ref_id ?? '').trim()
-    if (!targetRefId) return '请先填写目标物料 material_ref_id（并保存清单让后端回填单位）'
-
-    // 2) 必须预演成功且不过期
-    if (!lastPreviewOk) return '启用前必须先预演成功（spec/parse + bom/generate）'
-    if (previewStale) return '规则/清单/spec_text 已变更：请重新预演后再启用'
-
-    // 2.1) 若配置了尺寸/面积/周长条件，则预演样例必须解析出对应数值（避免“没测过就启用”）
-    if (betweenToPayload(draftWidthBetween) && (lastPreviewSummary?.width_cm == null || lastPreviewSummary?.width_cm === '')) {
-      return '你配置了“宽度区间”条件，但预演样例未解析出宽度（请用包含尺寸的 spec_text 重新预演）'
-    }
-    if (betweenToPayload(draftHeightBetween) && (lastPreviewSummary?.height_cm == null || lastPreviewSummary?.height_cm === '')) {
-      return '你配置了“高度区间”条件，但预演样例未解析出高度（请用包含尺寸的 spec_text 重新预演）'
-    }
-    if (betweenToPayload(draftAreaBetween) && (lastPreviewSummary?.area_m2 == null || lastPreviewSummary?.area_m2 === '')) {
-      return '你配置了“面积区间”条件，但预演样例未解析出面积（请用包含尺寸/直径的 spec_text 重新预演）'
-    }
-    if (betweenToPayload(draftPerimeterBetween) && (lastPreviewSummary?.perimeter_m == null || lastPreviewSummary?.perimeter_m === '')) {
-      return '你配置了“周长区间”条件，但预演样例未解析出周长（请用包含尺寸/直径的 spec_text 重新预演）'
-    }
-
-    // 3) 同计量单位校验（拿不到单位也要阻止）
-    if (!baseUnitFromBom || !targetUnitFromItems) {
-      return '单位信息缺失：请先“保存清单”（让后端回填 unit_of_measure），并确保主数据单位已补齐；然后重新预演'
-    }
-    if (unitMismatch) {
-      return `单位不一致：基准行单位=${unitMismatch.base}，目标物料单位=${unitMismatch.target}（最稳形态仅允许同单位平替）`
-    }
-
-    return null
-  }, [draftItems, lastPreviewOk, previewStale, baseUnitFromBom, targetUnitFromItems, unitMismatch])
-
-  const handleToggleEnabled = (nextEnabled: boolean) => {
-    if (!nextEnabled) {
-      setDraftEnabled(false)
-      return
-    }
-    if (!selectedVariantId) {
-      message.warning('请先选择一条变体规则')
-      return
-    }
-    if (enableBlockReason) {
-      message.error(enableBlockReason)
-      setDraftEnabled(false)
-      return
-    }
-    setDraftEnabled(true)
-  }
-
-  const buildItemsPayloadFromDraft = (): LineVariantItemPayload[] =>
-    draftItems.map((r, idx) => ({
-      sequence_order: idx,
-      material_kind: (r.material_kind ?? 'real') as any,
-      material_ref_id: String(r.material_ref_id ?? '').trim() || null,
-      calculation_method: (r.calculation_method ?? 'count') as any,
-      base_quantity: toNumber(r.base_quantity, 0),
-      fixed_quantity: toNumber(r.fixed_quantity, 0),
-      coverage_ratio: toNumber(r.coverage_ratio, 1),
-      loss_rate: toNumber(r.loss_rate, 0),
-      metadata_json: (r.metadata_json ?? {}) as any,
-    }))
+  // legacy enableBlockReason removed; enable gate is now per-row in modalSaveMutation/onChange
 
   const handleTriggerTypeChange = (next: TriggerType) => {
     setDraftTriggerType(next)
-    // 强制单类型：切换时清空其它条件
-    setDraftContainsAny([])
-    setDraftContainsAll([])
-    setDraftWidthBetween(null)
-    setDraftHeightBetween(null)
-    setDraftAreaBetween(null)
-    setDraftPerimeterBetween(null)
-    setDraftWidthOp('off')
-    setDraftHeightOp('off')
-    setDraftAreaOp('off')
-    setDraftPerimeterOp('off')
-    if (next !== 'token') {
-      // 默认给一个常见运算符，用户再填值
-      if (next === 'width') setDraftWidthOp('gte')
-      if (next === 'height') setDraftHeightOp('gte')
-      if (next === 'area') setDraftAreaOp('gte')
-      if (next === 'perimeter') setDraftPerimeterOp('gte')
-    }
     // 预演结果会失效
     setLastPreviewOk(null)
     setLastPreviewAt(null)
@@ -467,80 +384,114 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
 
   const modalSaveMutation = useMutation({
     mutationFn: async () => {
-      // 1) 单触发类型必须有值
-      if (draftTriggerType === 'token') {
-        if (draftContainsAny.length === 0 && draftContainsAll.length === 0) {
-          throw new Error('请至少填写 1 个 token（any 或 all）')
+      const unitOfTrigger = draftTriggerType === 'area' ? 'm²' : draftTriggerType === 'perimeter' ? 'm' : 'cm'
+      const needDim =
+        draftTriggerType === 'width'
+          ? 'width_cm'
+          : draftTriggerType === 'height'
+            ? 'height_cm'
+            : draftTriggerType === 'area'
+              ? 'area_m2'
+              : draftTriggerType === 'perimeter'
+                ? 'perimeter_m'
+                : null
+
+      const itemPayloadFromRow = (it: EditableItemRow): LineVariantItemPayload => ({
+        sequence_order: 0,
+        material_kind: (it.material_kind ?? 'real') as any,
+        material_ref_id: String(it.material_ref_id ?? '').trim() || null,
+        calculation_method: (it.calculation_method ?? 'count') as any,
+        base_quantity: toNumber(it.base_quantity, 0),
+        fixed_quantity: toNumber(it.fixed_quantity, 0),
+        coverage_ratio: toNumber(it.coverage_ratio, 1),
+        loss_rate: toNumber(it.loss_rate, 0),
+        metadata_json: (it.metadata_json ?? {}) as any,
+      })
+
+      const enableGate = (row: ModalRuleRow): string | null => {
+        if (!row.enabled) return null
+        if (!lastPreviewOk) return '启用前必须先预演成功（spec/parse + bom/generate）'
+        if (needDim && (lastPreviewSummary as any)?.[needDim] == null) return `你选择了“${triggerLabel(draftTriggerType)}”，但预演样例未解析出对应数值，请换 spec_text 重新预演`
+        const ref = String(row.item.material_ref_id ?? '').trim()
+        if (!ref) return '请先填写替换物料 material_ref_id 并保存（让后端回填单位）'
+        if (!baseUnitFromBom || !normalizeUnit(row.item.unit_of_measure)) {
+          return '单位信息缺失：请先保存（让后端回填 unit_of_measure）并预演；主数据单位未补齐也会导致缺失'
         }
-      } else {
-        const active =
-          draftTriggerType === 'width'
-            ? { op: draftWidthOp, pair: draftWidthBetween, label: '宽度' }
-            : draftTriggerType === 'height'
-              ? { op: draftHeightOp, pair: draftHeightBetween, label: '高度' }
-              : draftTriggerType === 'area'
-                ? { op: draftAreaOp, pair: draftAreaBetween, label: '面积' }
-                : { op: draftPerimeterOp, pair: draftPerimeterBetween, label: '周长' }
-        if (active.op === 'off') throw new Error(`请为“${active.label}”选择运算符并填写值`)
-        const payload = betweenToPayload(active.pair)
-        if (!payload) throw new Error(`请为“${active.label}”填写数值（或区间）`)
+        const baseU = baseUnitFromBom
+        const targetU = normalizeUnit(row.item.unit_of_measure)
+        if (baseU && targetU && baseU !== targetU) return `单位不一致：基准=${baseU}，替换物料=${targetU}（只允许同单位平替）`
+        return null
       }
 
-      // 2) items 1→1（允许先不填，但启用时会被门槛挡住）
-      if (draftItems.length > 1) throw new Error('最稳形态只允许 1→1：不允许超过 1 行目标物料')
-      if (draftItems.length === 1 && !String(draftItems?.[0]?.material_ref_id ?? '').trim()) {
-        throw new Error('请填写目标物料 material_ref_id')
-      }
-
-      if (editMode === 'create') {
-        const payload: LineVariantCreateRequest = {
-          version_id: versionId,
-          base_line_id: baseLineId,
-          enabled: false,
-          priority: draftPriority,
-          action: FIXED_ACTION,
-          stop_on_hit: draftStopOnHit,
-          notes: draftNotes || '',
-          conditions: buildConditionsPayload(),
-          metadata_json: {},
-          items: buildItemsPayloadFromDraft(),
-          operator_id: 'planner-ui',
+      // validate rows first
+      for (const r of modalRows) {
+        if (draftTriggerType === 'token') {
+          if (r.token_any.length === 0 && r.token_all.length === 0) throw new Error('token 规则至少填写 1 个 token（any 或 all）')
+        } else {
+          if (r.op === 'between') {
+            if (r.min == null || r.max == null) throw new Error(`区间条件必须同时填写 min/max（单位 ${unitOfTrigger}）`)
+          } else if (r.op === 'gte' || r.op === 'eq') {
+            if (r.min == null) throw new Error(`条件值不能为空（单位 ${unitOfTrigger}）`)
+          } else if (r.op === 'lte') {
+            if (r.max == null) throw new Error(`条件值不能为空（单位 ${unitOfTrigger}）`)
+          }
         }
-        const created = await createLineVariant(versionId, payload)
-        // 若后端未回填单位信息，用户需要后续“保存清单”/补齐主数据再启用
-        if ((created as any)?.items) {
-          setDraftItems(buildEditableItems((created as any).items))
+        const gate = enableGate(r)
+        if (gate) throw new Error(gate)
+      }
+
+      // persist rows sequentially
+      for (let i = 0; i < modalRows.length; i++) {
+        const r = modalRows[i]
+        const conditions = rowToConditions(draftTriggerType, r)
+        const items = [itemPayloadFromRow(r.item)]
+        if (!r.id) {
+          const payload: LineVariantCreateRequest = {
+            version_id: versionId,
+            base_line_id: baseLineId,
+            enabled: !!r.enabled,
+            priority: 100,
+            action: FIXED_ACTION,
+            stop_on_hit: true,
+            notes: '',
+            conditions,
+            metadata_json: {},
+            items,
+            operator_id: 'planner-ui',
+          }
+          const created = await createLineVariant(versionId, payload)
+          const createdId = created.id
+          // refresh items with server filled fields
+          if (String(r.item.material_ref_id ?? '').trim()) {
+            const updated = await replaceLineVariantItems(createdId, { items })
+            const it0 = buildEditableItems((updated.items ?? []) as any[])[0]
+            setModalRows((prev) => prev.map((x) => (x.key === r.key ? { ...x, id: createdId, key: createdId, item: it0 ?? x.item } : x)))
+          } else {
+            setModalRows((prev) => prev.map((x) => (x.key === r.key ? { ...x, id: createdId, key: createdId } : x)))
+          }
+        } else {
+          const updatePayload: LineVariantUpdateRequest = {
+            enabled: !!r.enabled,
+            priority: 100,
+            action: FIXED_ACTION,
+            stop_on_hit: true,
+            notes: undefined,
+            conditions,
+            operator_id: 'planner-ui',
+          }
+          await updateLineVariant(r.id, updatePayload)
+          if (String(r.item.material_ref_id ?? '').trim()) {
+            const updated = await replaceLineVariantItems(r.id, { items })
+            const it0 = buildEditableItems((updated.items ?? []) as any[])[0]
+            if (it0) setModalRows((prev) => prev.map((x) => (x.key === r.key ? { ...x, item: it0 } : x)))
+          }
         }
-        setSelectedVariantId(created.id)
-        return { id: created.id }
       }
-
-      if (!selectedVariantId) throw new Error('请先选择一条变体规则')
-      if (draftEnabled && enableBlockReason) throw new Error(enableBlockReason)
-
-      const updatePayload: LineVariantUpdateRequest = {
-        enabled: draftEnabled,
-        priority: draftPriority,
-        action: FIXED_ACTION,
-        stop_on_hit: draftStopOnHit,
-        notes: draftNotes || undefined,
-        conditions: buildConditionsPayload(),
-        operator_id: 'planner-ui',
-      }
-      await updateLineVariant(selectedVariantId, updatePayload)
-
-      // items 保存（用于回填 unit_of_measure / code / name）
-      if (draftItems.length === 1) {
-        const updated = await replaceLineVariantItems(selectedVariantId, { items: buildItemsPayloadFromDraft() })
-        setDraftItems(buildEditableItems(updated.items as any))
-      }
-      return { id: selectedVariantId }
+      return true
     },
-    onSuccess: async ({ id }) => {
-      message.success(editMode === 'create' ? '已创建规则' : '已保存')
-      setEditModalOpen(false)
+    onSuccess: async () => {
+      message.success('已保存')
       await queryClient.invalidateQueries({ queryKey: ['lineVariants', versionId, baseLineId] })
-      setSelectedVariantId(id)
     },
     onError: (err: any) => message.error(err?.response?.data?.detail ?? err?.message ?? '保存失败'),
   })
@@ -576,7 +527,8 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
         const baseLine = lines.find((r) => String(r?.source_type) === 'base_line' && String(r?.base_line_id ?? '') === String(baseLineId))
         return normalizeUnit(baseLine?.unit_of_measure)
       })()
-      const targetU = normalizeUnit(draftItems?.[0]?.unit_of_measure)
+      const enabledRows = modalRows.filter((r) => r.enabled)
+      const targetU = normalizeUnit((enabledRows.length === 1 ? enabledRows[0].item?.unit_of_measure : modalRows[0]?.item?.unit_of_measure) ?? null)
       setLastPreviewAt(now)
       setLastPreviewOk(true)
       setLastPreviewError(null)
@@ -606,139 +558,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     },
   })
 
-  const itemColumns: ColumnsType<EditableItemRow> = [
-    {
-      title: '类型',
-      width: 90,
-      render: (_: any, r: any, idx) => (
-        <Select
-          size="small"
-          value={r.material_kind}
-          style={{ width: 84 }}
-          options={[
-            { label: 'real', value: 'real' },
-            { label: 'bom', value: 'bom' },
-            { label: 'virtual', value: 'virtual' },
-          ]}
-          onChange={(v) => {
-            const next = draftItems.slice()
-            next[idx] = { ...next[idx], material_kind: v as any }
-            setDraftItems(next)
-          }}
-        />
-      ),
-    },
-    {
-      title: '物料ID',
-      width: 220,
-      render: (_: any, r: any, idx) => (
-        <Input
-          size="small"
-          value={String(r.material_ref_id ?? '')}
-          placeholder="material_ref_id（后端会回填编码/名称）"
-          onChange={(e) => {
-            const next = draftItems.slice()
-            next[idx] = { ...next[idx], material_ref_id: e.target.value }
-            setDraftItems(next)
-          }}
-        />
-      ),
-    },
-    {
-      title: '编码/名称',
-      render: (_: any, r: any) => (
-        <Space size={6}>
-          {r.material_code ? <Tag>{String(r.material_code)}</Tag> : null}
-          <span>{String(r.material_name ?? '-')}</span>
-        </Space>
-      ),
-    },
-    {
-      title: '用量(β)',
-      width: 110,
-      render: (_: any, r: any, idx) => (
-        <InputNumber
-          size="small"
-          min={0}
-          value={toNumber(r.base_quantity, 0)}
-          onChange={(v) => {
-            const next = draftItems.slice()
-            next[idx] = { ...next[idx], base_quantity: toNumber(v, 0) }
-            setDraftItems(next)
-          }}
-          style={{ width: '100%' }}
-        />
-      ),
-    },
-    {
-      title: '固定(α)',
-      width: 110,
-      render: (_: any, r: any, idx) => (
-        <InputNumber
-          size="small"
-          min={0}
-          value={toNumber(r.fixed_quantity, 0)}
-          onChange={(v) => {
-            const next = draftItems.slice()
-            next[idx] = { ...next[idx], fixed_quantity: toNumber(v, 0) }
-            setDraftItems(next)
-          }}
-          style={{ width: '100%' }}
-        />
-      ),
-    },
-    {
-      title: '覆盖率',
-      width: 100,
-      render: (_: any, r: any, idx) => (
-        <InputNumber
-          size="small"
-          min={0}
-          max={1}
-          step={0.1}
-          value={toNumber(r.coverage_ratio, 1)}
-          onChange={(v) => {
-            const next = draftItems.slice()
-            next[idx] = { ...next[idx], coverage_ratio: toNumber(v, 1) }
-            setDraftItems(next)
-          }}
-          style={{ width: '100%' }}
-        />
-      ),
-    },
-    {
-      title: '损耗%',
-      width: 100,
-      render: (_: any, r: any, idx) => (
-        <InputNumber
-          size="small"
-          min={0}
-          max={100}
-          value={toNumber(r.loss_rate, 0)}
-          onChange={(v) => {
-            const next = draftItems.slice()
-            next[idx] = { ...next[idx], loss_rate: toNumber(v, 0) }
-            setDraftItems(next)
-          }}
-          style={{ width: '100%' }}
-        />
-      ),
-    },
-    {
-      title: '',
-      width: 44,
-      render: (_: any, __: any, idx) => (
-        <Button
-          size="small"
-          type="text"
-          danger
-          icon={<DeleteOutlined />}
-          title="删除行"
-          onClick={() => setDraftItems(draftItems.filter((_, i) => i !== idx))}
-        />
-      ),
-    },
-  ]
+  // (legacy) itemColumns removed: modal now edits per-row item inline
 
   const formatBetween = (pair: any, unit: string): string | null => {
     const b = asBetween(pair)
@@ -801,6 +621,38 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
       ),
     },
   ]
+
+  const updateModalRow = (key: string, patch: Partial<ModalRuleRow>) => {
+    setModalRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)))
+    invalidatePreview()
+  }
+
+  const removeModalRow = async (row: ModalRuleRow) => {
+    if (row.id) {
+      await deleteVariantMutation.mutateAsync(row.id)
+    } else {
+      setModalRows((prev) => prev.filter((r) => r.key !== row.key))
+    }
+    invalidatePreview()
+  }
+
+  const addModalRow = () => {
+    const key = `tmp-${Date.now()}-${Math.random().toString(16).slice(2)}`
+    setModalRows((prev) => [
+      ...prev,
+      {
+        key,
+        enabled: false,
+        op: 'gte',
+        min: null,
+        max: null,
+        token_any: [],
+        token_all: [],
+        item: blankItemRow(),
+      },
+    ])
+    invalidatePreview()
+  }
 
   return (
     <Drawer
@@ -890,57 +742,15 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                   <div>
                     <b>{STABLE_SHAPE_LABEL}</b>
                   </div>
-                  <div style={{ color: '#8c8c8c' }}>
-                    注意：单条规则只允许 1 种触发类型（token / 宽 / 高 / 面积 / 周长），避免 AND 组合造成歧义。
-                  </div>
+                  <div style={{ color: '#8c8c8c' }}>弹窗内按“同一触发类型”批量维护多条规则，每行=一条规则。</div>
                 </div>
               }
             />
-
-            <Card size="small" title="基本设置">
-              <Space wrap>
-                <Space>
-                  <Text>启用</Text>
-                  <Tooltip title={editMode === 'create' ? '新建规则默认不启用；请先保存→保存清单回填单位→预演通过→再启用' : undefined}>
-                    <Switch checked={draftEnabled} disabled={editMode === 'create'} onChange={(v) => handleToggleEnabled(v)} />
-                  </Tooltip>
-                </Space>
-                <Space>
-                  <Text>优先级</Text>
-                  <InputNumber min={0} value={draftPriority} onChange={(v) => setDraftPriority(toNumber(v, 100))} />
-                </Space>
-                <Space>
-                  <Text>动作</Text>
-                  <Tag color="blue" style={{ marginInlineStart: 0 }}>
-                    replace_self
-                  </Tag>
-                </Space>
-                <Space>
-                  <Text>命中后停止</Text>
-                  <Switch checked={draftStopOnHit} onChange={(v) => setDraftStopOnHit(v)} />
-                </Space>
-              </Space>
-
-              {draftEnabled && enableBlockReason ? (
-                <div style={{ marginTop: 8 }}>
-                  <Alert type="error" showIcon message="当前不满足启用门槛" description={enableBlockReason} />
-                </div>
-              ) : null}
-
-              <div style={{ marginTop: 8 }}>
-                <Input.TextArea
-                  value={draftNotes}
-                  onChange={(e) => setDraftNotes(e.target.value)}
-                  placeholder="备注（可选）"
-                  autoSize={{ minRows: 2, maxRows: 4 }}
-                />
-              </div>
-            </Card>
-
-            <Card size="small" title="触发条件（单类型）">
-              <Space direction="vertical" size={10} style={{ width: '100%' }}>
+            <Card
+              size="small"
+              title={
                 <Space wrap>
-                  <Text>触发类型</Text>
+                  <span>触发类型</span>
                   <Select
                     value={draftTriggerType}
                     style={{ width: 220 }}
@@ -953,168 +763,175 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                     ]}
                     onChange={(v) => handleTriggerTypeChange(v as any)}
                   />
-                </Space>
-
-                {draftTriggerType === 'token' ? (
-                  <Space wrap style={{ width: '100%' }}>
-                    <div style={{ width: 420 }}>
-                      <Text type="secondary">token(any)：命中任意（OR）</Text>
-                      <Select
-                        mode="tags"
-                        value={draftContainsAny}
-                        style={{ width: '100%' }}
-                        placeholder="例如：黑色、无框"
-                        onChange={(v) => setDraftContainsAny(v)}
-                      />
-                    </div>
-                    <div style={{ width: 420 }}>
-                      <Text type="secondary">token(all)：必须包含（AND）</Text>
-                      <Select
-                        mode="tags"
-                        value={draftContainsAll}
-                        style={{ width: '100%' }}
-                        placeholder="例如：加厚、防水"
-                        onChange={(v) => setDraftContainsAll(v)}
-                      />
-                    </div>
-                  </Space>
-                ) : (
-                  (() => {
-                    const unit = draftTriggerType === 'area' ? 'm²' : draftTriggerType === 'perimeter' ? 'm' : 'cm'
-                    const label = draftTriggerType === 'area' ? '面积' : draftTriggerType === 'perimeter' ? '周长' : draftTriggerType === 'height' ? '高度' : '宽度'
-                    const op =
-                      draftTriggerType === 'width'
-                        ? draftWidthOp
-                        : draftTriggerType === 'height'
-                          ? draftHeightOp
-                          : draftTriggerType === 'area'
-                            ? draftAreaOp
-                            : draftPerimeterOp
-                    const setOp =
-                      draftTriggerType === 'width'
-                        ? setDraftWidthOp
-                        : draftTriggerType === 'height'
-                          ? setDraftHeightOp
-                          : draftTriggerType === 'area'
-                            ? setDraftAreaOp
-                            : setDraftPerimeterOp
-                    const pair =
-                      draftTriggerType === 'width'
-                        ? draftWidthBetween
-                        : draftTriggerType === 'height'
-                          ? draftHeightBetween
-                          : draftTriggerType === 'area'
-                            ? draftAreaBetween
-                            : draftPerimeterBetween
-                    const setPair =
-                      draftTriggerType === 'width'
-                        ? setDraftWidthBetween
-                        : draftTriggerType === 'height'
-                          ? setDraftHeightBetween
-                          : draftTriggerType === 'area'
-                            ? setDraftAreaBetween
-                            : setDraftPerimeterBetween
-                    const min = pair?.[0] ?? null
-                    const max = pair?.[1] ?? null
-                    return (
-                      <Space wrap style={{ width: '100%' }}>
-                        <Text type="secondary">
-                          {label} 条件（来自 spec/parse，单位 {unit}）
-                        </Text>
-                        <Select
-                          value={op}
-                          style={{ width: 160 }}
-                          options={[
-                            { label: '≥', value: 'gte' },
-                            { label: '≤', value: 'lte' },
-                            { label: '=', value: 'eq' },
-                            { label: '区间', value: 'between' },
-                          ]}
-                          onChange={(v) => setOp(v as any)}
-                        />
-                        {op === 'between' ? (
-                          <Space wrap>
-                            <InputNumber placeholder="min" value={min} onChange={(v) => setPair([v == null ? null : Number(v), max])} />
-                            <Text type="secondary">到</Text>
-                            <InputNumber placeholder="max" value={max} onChange={(v) => setPair([min, v == null ? null : Number(v)])} />
-                            <Text type="secondary">{unit}</Text>
-                          </Space>
-                        ) : (
-                          <Space wrap>
-                            <InputNumber
-                              placeholder="value"
-                              value={op === 'lte' ? max : min}
-                              onChange={(v) => {
-                                const n = v == null ? null : Number(v)
-                                if (op === 'gte') setPair([n, null])
-                                if (op === 'lte') setPair([null, n])
-                                if (op === 'eq') setPair([n, n])
-                              }}
-                            />
-                            <Text type="secondary">{unit}</Text>
-                          </Space>
-                        )}
-                      </Space>
-                    )
-                  })()
-                )}
-
-                <Alert
-                  type="warning"
-                  showIcon
-                  message="个数/数量条件"
-                  description={
-                    <span style={{ fontSize: 12 }}>
-                      当前后端条件 schema 未提供数量区间字段（例如 quantity_between），因此 UI 暂无法写入规则条件。若必须支持“个数”，需要下一轮补后端字段；临时可用 token 离散化（如 QTY_1/QTY_2/QTY_GT_2）。
-                    </span>
-                  }
-                />
-              </Space>
-            </Card>
-
-            <Card
-              size="small"
-              title={
-                <Space size={8} wrap>
-                  <span>目标替换物料（1→1 同单位平替）</span>
-                  {baseUnitFromBom ? <Tag color="geekblue">基准单位：{baseUnitFromBom}</Tag> : <Tag>基准单位：未知</Tag>}
-                  {targetUnitFromItems ? <Tag color="geekblue">目标单位：{targetUnitFromItems}</Tag> : <Tag>目标单位：未知</Tag>}
-                  {unitMismatch ? <Tag color="red">单位不一致</Tag> : null}
+                  <Tag color="blue">action=replace_self</Tag>
                 </Space>
               }
               extra={
-                <Button
-                  size="small"
-                  disabled={draftItems.length >= 1}
-                  onClick={() => {
-                    if (draftItems.length >= 1) {
-                      message.warning('最稳形态只允许 1→1：不允许新增第 2 行')
-                      return
-                    }
-                    setDraftItems([
-                      {
-                        _tmpId: `tmp-${Date.now()}`,
-                        sequence_order: 0,
-                        material_kind: 'real' as any,
-                        material_ref_id: '',
-                        calculation_method: 'count' as any,
-                        base_quantity: 0,
-                        fixed_quantity: 0,
-                        coverage_ratio: 1,
-                        loss_rate: 0,
-                        metadata_json: {},
-                      },
-                    ])
-                  }}
-                >
-                  设置目标物料
+                <Button size="small" type="primary" onClick={addModalRow}>
+                  新增
                 </Button>
               }
             >
-              <Table rowKey={(r) => r._tmpId} size="small" pagination={false} dataSource={draftItems} columns={itemColumns} />
+              <Table
+                rowKey="key"
+                size="small"
+                pagination={false}
+                dataSource={modalRows}
+                columns={[
+                  {
+                    title: '启动',
+                    width: 70,
+                    render: (_: any, r: ModalRuleRow) => (
+                      <Switch
+                        checked={!!r.enabled}
+                        onChange={(v) => {
+                          if (v && (!lastPreviewOk || previewStale)) {
+                            message.error(previewStale ? '预演已过期：请先重新预演' : '启用前必须先预演成功')
+                            return
+                          }
+                          updateModalRow(r.key, { enabled: v })
+                        }}
+                      />
+                    ),
+                  },
+                  {
+                    title: '条件表达式',
+                    render: (_: any, r: ModalRuleRow) => {
+                      if (draftTriggerType === 'token') {
+                        const anyStr = (r.token_any ?? []).join(',')
+                        const allStr = (r.token_all ?? []).join(',')
+                        return (
+                          <Space wrap>
+                            <Input
+                              placeholder="token(any) 逗号分隔"
+                              value={anyStr}
+                              onChange={(e) => updateModalRow(r.key, { token_any: e.target.value.split(',').map((x) => x.trim()).filter(Boolean) })}
+                              style={{ width: 220 }}
+                            />
+                            <Input
+                              placeholder="token(all) 逗号分隔"
+                              value={allStr}
+                              onChange={(e) => updateModalRow(r.key, { token_all: e.target.value.split(',').map((x) => x.trim()).filter(Boolean) })}
+                              style={{ width: 220 }}
+                            />
+                          </Space>
+                        )
+                      }
+                      return (
+                        <Space wrap>
+                          <Select
+                            value={r.op}
+                            style={{ width: 120 }}
+                            options={[
+                              { label: '≥', value: 'gte' },
+                              { label: '≤', value: 'lte' },
+                              { label: '=', value: 'eq' },
+                              { label: '区间', value: 'between' },
+                            ]}
+                            onChange={(v) => updateModalRow(r.key, { op: v as any })}
+                          />
+                          {r.op === 'between' ? (
+                            <Space wrap>
+                              <InputNumber placeholder="min" value={r.min} onChange={(v) => updateModalRow(r.key, { min: v == null ? null : Number(v) })} />
+                              <Text type="secondary">到</Text>
+                              <InputNumber placeholder="max" value={r.max} onChange={(v) => updateModalRow(r.key, { max: v == null ? null : Number(v) })} />
+                            </Space>
+                          ) : (
+                            <InputNumber
+                              placeholder="value"
+                              value={r.op === 'lte' ? r.max : r.min}
+                              onChange={(v) => {
+                                const n = v == null ? null : Number(v)
+                                if (r.op === 'gte') updateModalRow(r.key, { min: n, max: null })
+                                if (r.op === 'lte') updateModalRow(r.key, { min: null, max: n })
+                                if (r.op === 'eq') updateModalRow(r.key, { min: n, max: n })
+                              }}
+                            />
+                          )}
+                        </Space>
+                      )
+                    },
+                  },
+                  {
+                    title: '替换物料',
+                    width: 260,
+                    render: (_: any, r: ModalRuleRow) => (
+                      <Space direction="vertical" size={0} style={{ width: '100%' }}>
+                        <Input
+                          placeholder="material_ref_id"
+                          value={String(r.item.material_ref_id ?? '')}
+                          onChange={(e) => updateModalRow(r.key, { item: { ...r.item, material_ref_id: e.target.value } })}
+                        />
+                        <Text type="secondary" style={{ fontSize: 12 }}>
+                          {r.item.material_code ?? '-'} {r.item.material_name ?? ''}
+                        </Text>
+                      </Space>
+                    ),
+                  },
+                  {
+                    title: '用量(β)',
+                    width: 110,
+                    render: (_: any, r: ModalRuleRow) => (
+                      <InputNumber
+                        size="small"
+                        min={0}
+                        value={toNumber(r.item.base_quantity, 0)}
+                        onChange={(v) => updateModalRow(r.key, { item: { ...r.item, base_quantity: toNumber(v, 0) } })}
+                      />
+                    ),
+                  },
+                  {
+                    title: '固定(α)',
+                    width: 110,
+                    render: (_: any, r: ModalRuleRow) => (
+                      <InputNumber
+                        size="small"
+                        min={0}
+                        value={toNumber(r.item.fixed_quantity, 0)}
+                        onChange={(v) => updateModalRow(r.key, { item: { ...r.item, fixed_quantity: toNumber(v, 0) } })}
+                      />
+                    ),
+                  },
+                  {
+                    title: '覆盖率',
+                    width: 110,
+                    render: (_: any, r: ModalRuleRow) => (
+                      <InputNumber
+                        size="small"
+                        min={0}
+                        max={1}
+                        step={0.1}
+                        value={toNumber(r.item.coverage_ratio, 1)}
+                        onChange={(v) => updateModalRow(r.key, { item: { ...r.item, coverage_ratio: toNumber(v, 1) } })}
+                      />
+                    ),
+                  },
+                  {
+                    title: '损耗%',
+                    width: 100,
+                    render: (_: any, r: ModalRuleRow) => (
+                      <InputNumber
+                        size="small"
+                        min={0}
+                        max={100}
+                        value={toNumber(r.item.loss_rate, 0)}
+                        onChange={(v) => updateModalRow(r.key, { item: { ...r.item, loss_rate: toNumber(v, 0) } })}
+                      />
+                    ),
+                  },
+                  {
+                    title: '',
+                    width: 44,
+                    render: (_: any, r: ModalRuleRow) => (
+                      <Button size="small" danger type="text" icon={<DeleteOutlined />} onClick={() => void removeModalRow(r)} />
+                    ),
+                  },
+                ]}
+                scroll={{ x: 1200 }}
+              />
               <div style={{ marginTop: 8 }}>
                 <Text type="secondary" style={{ fontSize: 12 }}>
-                  提示：启用前需要“保存（回填单位）→ 预演通过”。单位缺失会被启用门槛阻止。
+                  启用门槛：每行“启动”前必须先预演成功；保存会回填物料编码/名称/单位，并做同单位校验。
                 </Text>
               </div>
             </Card>

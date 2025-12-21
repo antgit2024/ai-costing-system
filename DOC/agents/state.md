@@ -1,6 +1,6 @@
 ## 当前状态（崩了也能继续）
 
-- **最近校对（北京时间 GMT+8）**：2025-12-21（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
+- **最近校对（北京时间 GMT+8）**：2025-12-21 16:05（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **分支**：`backup/20251214-1535`
 - **当前主任务（P0）**：把旧产品模型编辑器从 `frontend/src/pages/costing/CostingModelsPage.tsx` 迁移到 `frontend/src/components/costing/ProductModelEditorDrawer.tsx`，并接通两入口页。
 - **上下文隔离硬约束**：
@@ -29,6 +29,7 @@
 
 - **下一步闭环任务单（后端）**：`DOC/agents/briefings/backend_line_variants_mvp.md`（行级变体 overlay + spec/parse tokens + bom/generate MVP；ADD 挂锚点行）
 - **验收命令（派单文件存在）**：`grep -nF "# Backend 闭环任务单：行级变体（overlay）+ 规格解析（tokens）MVP" DOC/agents/briefings/backend_line_variants_mvp.md`
-
-
-
+- **本轮产物（Backend 行级变体 MVP）**：落库 `product_model_line_variants` + `product_model_line_variant_items` 表，新增 `Spec Parser`、`Line Variants`、`BOM Generate` 三类服务（FastAPI 路由 + Service + Alembic），行级变体允许 version-scoped 绑定、整组替换/删除/追加，`spec/parse` 输出 tokens + 尺寸 +解释，`bom/generate` 依据锚点/优先级套用 overlay 并返回 trace。README/Task Log/State 已同步说明。补充修复：审计日志 payload 现支持 Decimal/日期/UUID 序列化，变体 items 保存时自动回填引用物料编码/名称/单位/计量方式，确保 BOM 结果字段齐全。
+- **后端验收命令**：`pytest backend/tests/planner/test_line_variants_mvp.py -q`
+- **前端验收命令**：`npm -C frontend run build`
+- **下一步提醒**：1）前端接入行级变体面板 + 动态 BOM 预览；2）按派单要求将代码部署到 47.99.89.206（git pull → alembic upgrade head → systemctl restart → `curl http://47.99.89.206:8800/openapi.json` 确认 `/api/planner/processes` 与新接口可见）；3）若需读取更多文档，请先更新 `DOC/agents/workset.md`。

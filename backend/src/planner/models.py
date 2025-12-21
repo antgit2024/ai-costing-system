@@ -15,6 +15,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    and_,
 )
 from sqlalchemy.orm import Mapped, relationship
 
@@ -305,6 +306,7 @@ class Material(Base, TimestampMixin, SoftDeleteMixin):
     material_type: Mapped[str] = Column(String(32), nullable=False, default="raw")
     category: Mapped[str | None] = Column(String(128))
     model_category: Mapped[str | None] = Column(String(128))
+    calculation_method: Mapped[str] = Column(String(32), nullable=False, default="count")
     unit: Mapped[str | None] = Column(String(32))
     purchase_unit: Mapped[str | None] = Column(String(32))
     inventory_unit: Mapped[str | None] = Column(String(32))
@@ -315,6 +317,9 @@ class Material(Base, TimestampMixin, SoftDeleteMixin):
     supplier_name: Mapped[str | None] = Column(String(255))
     usage_scope: Mapped[str | None] = Column(String(255))
     bom_notes: Mapped[str | None] = Column(Text)
+    is_bom_material: Mapped[bool | None] = Column(Boolean, default=False, index=True)
+    conversion_purchase_to_bom: Mapped[float] = Column(Numeric(18, 6), default=1)
+    conversion_bom_to_inventory: Mapped[float] = Column(Numeric(18, 6), default=1)
     is_active: Mapped[bool] = Column(Boolean, nullable=False, default=True)
     status: Mapped[str] = Column(String(32), nullable=False, default="draft")
     source_created_at: Mapped[datetime | None] = Column(DateTime)
@@ -329,10 +334,10 @@ class VirtualMaterial(Base, TimestampMixin, SoftDeleteMixin):
     virtual_code: Mapped[str] = Column(String(64), unique=True, nullable=False)
     name: Mapped[str] = Column(String(255), nullable=False)
     description: Mapped[str | None] = Column(Text)
-    unit: Mapped[str | None] = Column(String(32))
+    category: Mapped[str | None] = Column(String(128))
+    unit: Mapped[str | None] = Column(String(32), nullable=False, default="套")
     status: Mapped[str] = Column(String(32), nullable=False, default="draft")
     version: Mapped[int] = Column(Integer, nullable=False, default=1)
-    notes: Mapped[str | None] = Column(Text)
     metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict)
 
 
@@ -356,6 +361,14 @@ class VirtualMaterialBinding(Base, TimestampMixin):
     material: Mapped[Material] = relationship("Material")
 
 
+class CodeCounter(Base):
+    __tablename__ = "code_counters"
+
+    prefix: Mapped[str] = Column(String(16), primary_key=True)
+    next_value: Mapped[int] = Column(Integer, nullable=False, default=1)
+    updated_at: Mapped[datetime | None] = Column(DateTime)
+
+
 class ProcessModule(Base, TimestampMixin, SoftDeleteMixin):
     __tablename__ = "process_modules"
 
@@ -368,6 +381,64 @@ class ProcessModule(Base, TimestampMixin, SoftDeleteMixin):
     version: Mapped[int] = Column(Integer, nullable=False, default=1)
     tags: Mapped[List[str]] = Column(JSON, default=list)
     metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict)
+    materials: Mapped[List["ProcessModuleMaterial"]] = relationship(
+        "ProcessModuleMaterial",
+        primaryjoin="and_(ProcessModule.id==ProcessModuleMaterial.module_id, ProcessModuleMaterial.is_archived.is_(False))",
+        order_by="ProcessModuleMaterial.sequence_order",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    steps: Mapped[List["ProcessModuleStep"]] = relationship(
+        "ProcessModuleStep",
+        primaryjoin="and_(ProcessModule.id==ProcessModuleStep.module_id, ProcessModuleStep.is_archived.is_(False))",
+        order_by="ProcessModuleStep.sequence_order",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class ProcessModuleMaterial(Base, TimestampMixin, SoftDeleteMixin):
+    __tablename__ = "process_module_materials"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    module_id: Mapped[str] = Column(
+        String(36), ForeignKey("process_modules.id", ondelete="CASCADE"), nullable=False
+    )
+    material_kind: Mapped[str] = Column(String(16), nullable=False, default="real")
+    material_ref_id: Mapped[str | None] = Column(String(36))
+    material_code: Mapped[str | None] = Column(String(64))
+    material_name: Mapped[str | None] = Column(String(255))
+    unit_of_measure: Mapped[str | None] = Column(String(32))
+    calculation_method: Mapped[str] = Column(String(32), nullable=False, default="count")
+    quantity: Mapped[float] = Column(Numeric(18, 6), nullable=False, default=0)
+    loss_rate: Mapped[float] = Column(Numeric(5, 2), nullable=False, default=0)
+    sequence_order: Mapped[int] = Column(Integer, nullable=False, default=0)
+    material_category: Mapped[str | None] = Column(String(128))
+    selection_notes: Mapped[str | None] = Column(Text)
+    loss_notes: Mapped[str | None] = Column(Text)
+    metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict)
+
+
+class ProcessModuleStep(Base, TimestampMixin, SoftDeleteMixin):
+    __tablename__ = "process_module_steps"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    module_id: Mapped[str] = Column(
+        String(36), ForeignKey("process_modules.id", ondelete="CASCADE"), nullable=False
+    )
+    process_id: Mapped[str | None] = Column(
+        String(36), ForeignKey("processes.id", ondelete="SET NULL")
+    )
+    sequence_order: Mapped[int] = Column(Integer, nullable=False, default=0)
+    team_name: Mapped[str | None] = Column(String(128))
+    pricing_method: Mapped[str] = Column(String(32), nullable=False, default="count")
+    work_minutes: Mapped[float] = Column(Numeric(10, 2), nullable=False, default=0)
+    unit_of_measure: Mapped[str | None] = Column(String(32))
+    description: Mapped[str | None] = Column(Text)
+    notes: Mapped[str | None] = Column(Text)
+    metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict)
+
+    process: Mapped[Process | None] = relationship("Process")
 
 
 class Process(Base, TimestampMixin, SoftDeleteMixin):
@@ -377,17 +448,14 @@ class Process(Base, TimestampMixin, SoftDeleteMixin):
     process_code: Mapped[str] = Column(String(64), unique=True, nullable=False)
     process_name: Mapped[str] = Column(String(255), nullable=False)
     description: Mapped[str | None] = Column(Text)
-    default_module_id: Mapped[str | None] = Column(
-        String(36), ForeignKey("process_modules.id", ondelete="SET NULL")
-    )
-    fixed_time_minutes: Mapped[float | None] = Column(Numeric(10, 2))
-    hourly_rate: Mapped[float | None] = Column(Numeric(18, 4))
-    piece_rate: Mapped[float | None] = Column(Numeric(18, 4))
-    piece_rate_formula: Mapped[str | None] = Column(Text)
+    category: Mapped[str | None] = Column(String(128))
+    team_name: Mapped[str | None] = Column(String(128))
+    charging_mode: Mapped[str] = Column(String(32), nullable=False, default="count")
+    standard_rate: Mapped[float | None] = Column(Numeric(18, 6))
+    unit_of_measure: Mapped[str | None] = Column(String(32))
     status: Mapped[str] = Column(String(32), nullable=False, default="draft")
+    is_active: Mapped[bool] = Column(Boolean, nullable=False, default=True)
     metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict)
-
-    default_module: Mapped[ProcessModule | None] = relationship("ProcessModule")
 
 
 class ProductModel(Base, TimestampMixin, SoftDeleteMixin):
@@ -406,6 +474,152 @@ class ProductModel(Base, TimestampMixin, SoftDeleteMixin):
     status: Mapped[str] = Column(String(32), nullable=False, default="draft")
     tags: Mapped[List[str]] = Column(JSON, default=list)
     metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict)
+
+
+class ProductModelVersion(Base, TimestampMixin, SoftDeleteMixin):
+    """
+    Version snapshot for a product model.
+
+    Semantics:
+    - `version_kind`: sample (打样/单品算价) or standard (标准 1m×1m 发布版本)
+    - `version_status`: draft/published/archived
+    - version-level metadata should freeze placeholder_mappings and spec, enabling reproducible preview.
+    """
+
+    __tablename__ = "product_model_versions"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    model_id: Mapped[str] = Column(
+        String(36), ForeignKey("product_models.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    version_kind: Mapped[str] = Column(String(32), nullable=False, default="sample")
+    version_status: Mapped[str] = Column(String(32), nullable=False, default="draft")
+    version_label: Mapped[str | None] = Column(String(64))
+    published_at: Mapped[datetime | None] = Column(DateTime)
+    published_by: Mapped[str | None] = Column(String(64))
+    metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict)
+
+    model: Mapped["ProductModel"] = relationship("ProductModel")
+
+
+class ModelVersionMaterial(Base, TimestampMixin, SoftDeleteMixin):
+    __tablename__ = "model_version_materials"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    version_id: Mapped[str] = Column(
+        String(36),
+        ForeignKey("product_model_versions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    material_type: Mapped[str] = Column(String(16), nullable=False, default="real")
+    material_ref_id: Mapped[str] = Column(String(36), nullable=False)
+    material_code: Mapped[str | None] = Column(String(64))
+    material_name: Mapped[str | None] = Column(String(255))
+    unit_of_measure: Mapped[str | None] = Column(String(32))
+    calculation_method: Mapped[str] = Column(String(32), nullable=False, default="count")
+    base_quantity: Mapped[float] = Column(Numeric(18, 6), nullable=False, default=0)
+    loss_rate: Mapped[float] = Column(Numeric(5, 2), nullable=False, default=0)
+    unit_cost: Mapped[float | None] = Column(Numeric(18, 4))
+    sequence_order: Mapped[int] = Column(Integer, nullable=False, default=0)
+    notes: Mapped[str | None] = Column(Text)
+    metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict)
+
+    version: Mapped["ProductModelVersion"] = relationship("ProductModelVersion")
+
+
+class ModelVersionProcess(Base, TimestampMixin, SoftDeleteMixin):
+    __tablename__ = "model_version_processes"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    version_id: Mapped[str] = Column(
+        String(36),
+        ForeignKey("product_model_versions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    process_id: Mapped[str] = Column(
+        String(36), ForeignKey("processes.id", ondelete="CASCADE"), nullable=False
+    )
+    sequence_order: Mapped[int] = Column(Integer, nullable=False, default=0)
+    notes: Mapped[str | None] = Column(Text)
+    metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict)
+
+    version: Mapped["ProductModelVersion"] = relationship("ProductModelVersion")
+    process: Mapped["Process"] = relationship("Process")
+
+
+class ProductModelLineVariant(Base, TimestampMixin, SoftDeleteMixin):
+    __tablename__ = "product_model_line_variants"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    version_id: Mapped[str] = Column(
+        String(36), ForeignKey("product_model_versions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    base_line_id: Mapped[str] = Column(
+        String(36), ForeignKey("model_version_materials.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    priority: Mapped[int] = Column(Integer, nullable=False, default=100)
+    enabled: Mapped[bool] = Column(Boolean, nullable=False, default=True)
+    action: Mapped[str] = Column(String(32), nullable=False, default="replace_bundle")
+    stop_on_hit: Mapped[bool] = Column(Boolean, nullable=False, default=True)
+    notes: Mapped[str | None] = Column(Text)
+    conditions_json: Mapped[Dict[str, Any]] = Column("conditions", JSON, default=dict)
+    metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict)
+
+    version: Mapped["ProductModelVersion"] = relationship("ProductModelVersion")
+    base_line: Mapped["ModelVersionMaterial"] = relationship("ModelVersionMaterial")
+    items: Mapped[List["ProductModelLineVariantItem"]] = relationship(
+        "ProductModelLineVariantItem",
+        primaryjoin="and_(ProductModelLineVariant.id==ProductModelLineVariantItem.variant_id, ProductModelLineVariantItem.is_archived.is_(False))",
+        order_by="ProductModelLineVariantItem.sequence_order",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class ProductModelLineVariantItem(Base, TimestampMixin, SoftDeleteMixin):
+    __tablename__ = "product_model_line_variant_items"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    variant_id: Mapped[str] = Column(
+        String(36), ForeignKey("product_model_line_variants.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    sequence_order: Mapped[int] = Column(Integer, nullable=False, default=0)
+    material_kind: Mapped[str] = Column(String(16), nullable=False, default="real")
+    material_ref_id: Mapped[str | None] = Column(String(36))
+    material_code: Mapped[str | None] = Column(String(64))
+    material_name: Mapped[str | None] = Column(String(255))
+    unit_of_measure: Mapped[str | None] = Column(String(32))
+    calculation_method: Mapped[str] = Column(String(32), nullable=False, default="count")
+    base_quantity: Mapped[float] = Column(Numeric(18, 6), nullable=False, default=0)
+    fixed_quantity: Mapped[float] = Column(Numeric(18, 6), nullable=False, default=0)
+    coverage_ratio: Mapped[float] = Column(Numeric(18, 6), nullable=False, default=1)
+    loss_rate: Mapped[float] = Column(Numeric(5, 2), nullable=False, default=0)
+    metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict)
+
+    variant: Mapped["ProductModelLineVariant"] = relationship("ProductModelLineVariant", back_populates="items")
+
+
+class ModelVersionModule(Base, TimestampMixin, SoftDeleteMixin):
+    __tablename__ = "model_version_modules"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    version_id: Mapped[str] = Column(
+        String(36),
+        ForeignKey("product_model_versions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    module_id: Mapped[str] = Column(
+        String(36), ForeignKey("process_modules.id", ondelete="CASCADE"), nullable=False
+    )
+    sequence_order: Mapped[int] = Column(Integer, nullable=False, default=0)
+    notes: Mapped[str | None] = Column(Text)
+    metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict)
+
+    version: Mapped["ProductModelVersion"] = relationship("ProductModelVersion")
+    module: Mapped["ProcessModule"] = relationship("ProcessModule")
 
 
 class ModelMaterial(Base, TimestampMixin, SoftDeleteMixin):
@@ -456,6 +670,10 @@ class ModelVariantRule(Base, TimestampMixin, SoftDeleteMixin):
     model_id: Mapped[str] = Column(
         String(36), ForeignKey("product_models.id", ondelete="CASCADE"), nullable=False
     )
+    # Optional: bind rules to a specific version for fully reproducible SKU pricing.
+    version_id: Mapped[str | None] = Column(
+        String(36), ForeignKey("product_model_versions.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     rule_name: Mapped[str] = Column(String(255), nullable=False)
     source_material_ref_id: Mapped[str | None] = Column(String(36))
     trigger_type: Mapped[str] = Column(String(32), nullable=False)
@@ -468,6 +686,7 @@ class ModelVariantRule(Base, TimestampMixin, SoftDeleteMixin):
     metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict)
 
     model: Mapped[ProductModel] = relationship("ProductModel")
+    version: Mapped["ProductModelVersion | None"] = relationship("ProductModelVersion")
 
 
 class SkuModelMapping(Base, TimestampMixin, SoftDeleteMixin):
@@ -483,6 +702,44 @@ class SkuModelMapping(Base, TimestampMixin, SoftDeleteMixin):
     metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict)
 
     model: Mapped[ProductModel] = relationship("ProductModel")
+
+
+class SkuModelVersionMapping(Base, TimestampMixin, SoftDeleteMixin):
+    __tablename__ = "sku_model_version_mapping"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    # Note: sku_code is NOT globally unique to support binding history.
+    # Uniqueness is enforced for active bindings via a partial unique index in migrations.
+    sku_code: Mapped[str] = Column(String(64), nullable=False, index=True)
+    model_version_id: Mapped[str] = Column(
+        String(36),
+        ForeignKey("product_model_versions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    source_system: Mapped[str | None] = Column(String(64))
+    is_active: Mapped[bool] = Column(Boolean, nullable=False, default=True)
+    metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict)
+
+    model_version: Mapped["ProductModelVersion"] = relationship("ProductModelVersion")
+
+
+class ModelProcessModule(Base, TimestampMixin, SoftDeleteMixin):
+    __tablename__ = "model_process_modules"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    model_id: Mapped[str] = Column(
+        String(36), ForeignKey("product_models.id", ondelete="CASCADE"), nullable=False
+    )
+    module_id: Mapped[str] = Column(
+        String(36), ForeignKey("process_modules.id", ondelete="CASCADE"), nullable=False
+    )
+    sequence_order: Mapped[int] = Column(Integer, nullable=False, default=0)
+    notes: Mapped[str | None] = Column(Text)
+    metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict)
+
+    model: Mapped[ProductModel] = relationship("ProductModel")
+    module: Mapped["ProcessModule"] = relationship("ProcessModule")
 
 
 class MaterialSyncJob(Base, TimestampMixin):

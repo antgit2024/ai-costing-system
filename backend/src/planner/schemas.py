@@ -2,9 +2,21 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
-from pydantic import BaseModel, Field
+import json
+
+from pydantic import BaseModel, Field, root_validator, validator
+from src.config import settings
+
+CalculationMethod = Literal["area", "perimeter", "count", "width", "height"]
+ProcessChargingMode = Literal["fixed", "count", "area", "perimeter", "width", "height"]
+LaborPricingMethod = Literal["fixed", "count", "area", "perimeter", "width", "height"]
+MaterialReferenceKind = Literal["real", "bom", "virtual"]
+ProductCalcMode = Literal["ratio", "fixed", "independent"]
+VariantTriggerType = Literal["sku_contains", "area_gte", "perimeter_gte"]
+VariantActionType = Literal["replace_material", "add_material"]
+LineVariantAction = Literal["replace_bundle", "replace_self", "remove_self", "add_siblings"]
 
 
 def _decimal_to_str(value: Decimal) -> str:
@@ -238,6 +250,7 @@ class MaterialRead(BaseModel):
     material_type: str
     category: Optional[str]
     model_category: Optional[str]
+    calculation_method: CalculationMethod
     unit: Optional[str]
     purchase_unit: Optional[str]
     inventory_unit: Optional[str]
@@ -247,10 +260,91 @@ class MaterialRead(BaseModel):
     supplier_name: Optional[str]
     status: str
     is_active: bool
+    is_bom_material: Optional[bool] = None
+    images: List[str] = Field(default_factory=list)
+    conversion_purchase_to_bom: Decimal
+    conversion_bom_to_inventory: Decimal
     usage_scope: Optional[str]
     bom_notes: Optional[str]
+    source_created_at: Optional[datetime]
+    source_updated_at: Optional[datetime]
     metadata: Dict[str, Any] = Field(alias="metadata_json")
     updated_at: datetime
+
+    @staticmethod
+    def _extract_image_sources(metadata: dict | None) -> list[str]:
+        if not metadata:
+            return []
+        candidates = metadata.get("images")
+        if not candidates:
+            candidates = (
+                metadata.get("imageField_lbef2r0b")
+                or (metadata.get("raw_form_data") or {}).get("imageField_lbef2r0b")
+            )
+        if not candidates:
+            return []
+        data: list[Any]
+        if isinstance(candidates, str):
+            try:
+                parsed = json.loads(candidates)
+            except json.JSONDecodeError:
+                return [candidates]
+            else:
+                data = parsed if isinstance(parsed, list) else [parsed]
+        elif isinstance(candidates, list):
+            data = candidates
+        else:
+            data = [candidates]
+
+        normalized: list[str] = []
+        for item in data:
+            if isinstance(item, str) and item:
+                normalized.append(item)
+            elif isinstance(item, dict):
+                url = (
+                    item.get("downloadUrl")
+                    or item.get("url")
+                    or item.get("previewUrl")
+                )
+                if isinstance(url, str) and url:
+                    normalized.append(url)
+        return normalized
+
+    @root_validator(pre=True)
+    def _populate_images(cls, values):
+        if not isinstance(values, dict):
+            values = dict(values)
+        metadata = values.get("metadata_json") or {}
+        raw_images = cls._extract_image_sources(metadata)
+        # Persist normalized list back so download endpoint can reuse it.
+        metadata["images"] = raw_images
+        values["metadata_json"] = metadata
+        material_id = values.get("id")
+        api_prefix = settings.planner_api_prefix.rstrip("/")
+        router_prefix = "/planner"
+        base_path = f"{api_prefix}{router_prefix}/base-config/materials"
+        if material_id and raw_images:
+            values["images"] = [
+                f"{base_path}/{material_id}/images/{idx}"
+                for idx, _ in enumerate(raw_images)
+            ]
+        else:
+            values["images"] = []
+        return values
+
+    @validator("conversion_purchase_to_bom", "conversion_bom_to_inventory", pre=True)
+    def _ensure_decimal(cls, value):
+        if value is None:
+            return Decimal("1")
+        if isinstance(value, Decimal):
+            return value
+        return Decimal(str(value))
+
+    def dict(self, *args, **kwargs):
+        data = super().dict(*args, **kwargs)
+        data["conversion_purchase_to_bom"] = _decimal_to_str(Decimal(str(data["conversion_purchase_to_bom"])))
+        data["conversion_bom_to_inventory"] = _decimal_to_str(Decimal(str(data["conversion_bom_to_inventory"])))
+        return data
 
     class Config:
         orm_mode = True
@@ -263,11 +357,20 @@ class PaginatedMaterialResponse(BaseModel):
     page: int
     page_size: int
     items: List[MaterialRead]
+    categories: List[str] = Field(default_factory=list)
 
 
 class MaterialUpdateRequest(BaseModel):
     is_active: Optional[bool] = None
     status: Optional[str] = Field(None, max_length=32)
+    is_bom_material: Optional[bool] = None
+    unit: Optional[str] = Field(None, max_length=32)
+    inventory_unit: Optional[str] = Field(None, max_length=32)
+    conversion_purchase_to_bom: Optional[Decimal] = Field(None, gt=0)
+    conversion_bom_to_inventory: Optional[Decimal] = Field(None, gt=0)
+    bom_unit_price: Optional[Decimal] = Field(None, ge=0)
+    calculation_method: Optional[CalculationMethod] = None
+    metadata: Optional[Dict[str, Any]] = Field(default=None, alias="metadata_json")
 
 
 class MaterialExportRequest(BaseModel):
@@ -277,6 +380,958 @@ class MaterialExportRequest(BaseModel):
     category: Optional[str] = None
     status: Optional[str] = None
     is_active: Optional[bool] = None
+    is_bom_material: Optional[bool] = None
+
+
+class VirtualMaterialCreateRequest(BaseModel):
+    virtual_code: str = Field(..., max_length=64)
+    name: str = Field(..., max_length=255)
+    description: Optional[str] = None
+    category: Optional[str] = Field(None, max_length=128)
+    virtual_kind: Literal["recipe", "kit", "placeholder"] = Field(
+        "kit",
+        description="虚拟物料类型：recipe=配方型(按比例且单位一致)，kit=套件型(按数量且子物料可不同单位)，placeholder=占位型(不绑定子物料，BOM单价为0)",
+    )
+    unit: Optional[str] = Field(None, max_length=32)
+    status: str = Field("draft", max_length=32)
+    metadata: Dict[str, Any] = Field(default_factory=dict, alias="metadata_json")
+
+    class Config:
+        allow_population_by_field_name = True
+
+
+class VirtualMaterialUpdateRequest(BaseModel):
+    name: Optional[str] = Field(None, max_length=255)
+    description: Optional[str] = None
+    category: Optional[str] = Field(None, max_length=128)
+    virtual_kind: Optional[Literal["recipe", "kit", "placeholder"]] = Field(
+        None,
+        description="虚拟物料类型：recipe=配方型(按比例且单位一致)，kit=套件型(按数量且子物料可不同单位)，placeholder=占位型(不绑定子物料，BOM单价为0)",
+    )
+    unit: Optional[str] = Field(None, max_length=32)
+    status: Optional[str] = Field(None, max_length=32)
+    metadata: Optional[Dict[str, Any]] = Field(default=None, alias="metadata_json")
+
+    class Config:
+        allow_population_by_field_name = True
+
+
+class VirtualMaterialBindingInput(BaseModel):
+    material_id: str
+    quantity_ratio: Decimal = Field(..., gt=0)
+    loss_rate: Decimal = Field(Decimal("0"), ge=0, le=100)
+    binding_type: Optional[Literal["ratio", "quantity"]] = Field("ratio")
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class VirtualMaterialBindingBatchRequest(BaseModel):
+    bindings: List[VirtualMaterialBindingInput] = Field(default_factory=list)
+
+
+class VirtualMaterialBindingRead(BaseModel):
+    material_id: str
+    material_code: str
+    material_name: str
+    unit: Optional[str]
+    quantity_ratio: Decimal
+    loss_rate: Decimal
+    currency: Optional[str]
+    purchase_unit_price: Optional[Decimal]
+    purchase_unit: Optional[str]
+    bom_unit_price: Optional[Decimal]
+    bom_unit: Optional[str]
+    image_url: Optional[str]
+    status: Optional[str]
+    is_active: Optional[bool]
+    binding_type: Literal["ratio", "quantity"]
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class VirtualMaterialRead(BaseModel):
+    id: str
+    virtual_code: str
+    name: str
+    description: Optional[str]
+    category: Optional[str]
+    virtual_kind: Literal["recipe", "kit", "placeholder"] = "kit"
+    unit: Optional[str]
+    status: str
+    version: int
+    notes: Optional[str]
+    metadata: Dict[str, Any] = Field(alias="metadata_json")
+    created_at: datetime
+    updated_at: datetime
+    bindings: List[VirtualMaterialBindingRead] = Field(default_factory=list)
+
+    @root_validator(pre=True)
+    def _fill_virtual_kind(cls, values):
+        # Backward compatible: old rows may not have metadata_json.virtual_kind.
+        data = dict(values)
+        meta = data.get("metadata_json") or data.get("metadata") or {}
+        kind = meta.get("virtual_kind") if isinstance(meta, dict) else None
+        data["virtual_kind"] = kind or data.get("virtual_kind") or "kit"
+        return data
+
+    class Config:
+        orm_mode = True
+        allow_population_by_field_name = True
+
+
+class PaginatedVirtualMaterialResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: List[VirtualMaterialRead]
+
+
+class VirtualMaterialReferenceRead(BaseModel):
+    virtual_material_id: str
+    virtual_code: str
+    virtual_name: str
+    status: str
+    quantity_ratio: Decimal
+    loss_rate: Decimal
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class VirtualMaterialInventoryRequest(BaseModel):
+    quantity: Decimal = Field(..., gt=0)
+    calculation_method: Optional[CalculationMethod] = Field(
+        None, description="调用方此次盘点的计算方式，示例：count/area/height 等"
+    )
+    usage_context: Optional[str] = Field(
+        None, max_length=64, description="调用方自定义场景标识（如产品 SKU/加工阶段）"
+    )
+
+    @root_validator
+    def _validate_context(cls, values):
+        calc = values.get("calculation_method")
+        context = values.get("usage_context")
+        if calc is None and (context is None or context == ""):
+            raise ValueError("calculation_method 或 usage_context 至少需要提供一个")
+        return values
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class VirtualMaterialInventoryItem(BaseModel):
+    material_id: str
+    material_code: str
+    material_name: str
+    unit: Optional[str]
+    quantity_ratio: Decimal
+    loss_rate: Decimal
+    required_quantity: Decimal
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class VirtualMaterialInventoryResponse(BaseModel):
+    virtual_material_id: str
+    virtual_code: str
+    virtual_name: str
+    requested_quantity: Decimal
+    calculation_method: Optional[CalculationMethod] = None
+    usage_context: Optional[str] = None
+    items: List[VirtualMaterialInventoryItem]
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ProcessModuleMaterialInput(BaseModel):
+    material_kind: MaterialReferenceKind = Field("real")
+    material_ref_id: Optional[str] = None
+    material_code: Optional[str] = None
+    material_name: Optional[str] = None
+    unit_of_measure: Optional[str] = Field(None, max_length=32)
+    calculation_method: CalculationMethod = Field("count")
+    quantity: Decimal = Field(..., gt=0)
+    loss_rate: Decimal = Field(Decimal("0"), ge=0, le=100)
+    sequence_order: Optional[int] = None
+    material_category: Optional[str] = Field(None, max_length=128)
+    selection_notes: Optional[str] = None
+    loss_notes: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict, alias="metadata_json")
+
+    class Config:
+        allow_population_by_field_name = True
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ProcessModuleMaterialRead(ProcessModuleMaterialInput):
+    id: str
+
+
+class ProcessReferenceRead(BaseModel):
+    id: str
+    process_code: str
+    process_name: str
+    charging_mode: ProcessChargingMode
+    standard_rate: Optional[Decimal]
+    unit_of_measure: Optional[str]
+    team_name: Optional[str]
+    category: Optional[str]
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ProcessModuleStepInput(BaseModel):
+    process_id: Optional[str] = None
+    sequence_order: Optional[int] = None
+    team_name: Optional[str] = Field(None, max_length=128)
+    pricing_method: LaborPricingMethod = Field("count")
+    work_minutes: Decimal = Field(Decimal("0"), ge=0)
+    unit_of_measure: Optional[str] = Field(None, max_length=32)
+    description: Optional[str] = None
+    notes: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict, alias="metadata_json")
+
+    class Config:
+        allow_population_by_field_name = True
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ModelProcessModuleInput(BaseModel):
+    module_id: str
+    sequence_order: Optional[int] = None
+    notes: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict, alias="metadata_json")
+
+    class Config:
+        allow_population_by_field_name = True
+
+
+class ModelProcessModuleRead(ModelProcessModuleInput):
+    id: str
+    # Avoid ForwardRef issues (schemas order); keep a lightweight embedded summary dict for UI.
+    module: Optional[Dict[str, Any]] = None
+
+
+class ProductModelCreateRequest(BaseModel):
+    model_code: Optional[str] = Field(None, max_length=64, description="模型编码；为空则系统自动生成")
+    model_name: str = Field(..., max_length=255)
+    description: Optional[str] = None
+    category: Optional[str] = Field(None, max_length=128)
+    calc_mode: ProductCalcMode = Field("ratio", description="产品模型计算模式：ratio=比例，一口价=fixed，独立=independent")
+    fixed_price: Optional[Decimal] = Field(
+        None, ge=0, description="一口价模式下的固定价格（单位：元）；非 fixed 模式可为空"
+    )
+    status: str = Field("draft", max_length=32)
+    tags: List[str] = Field(default_factory=list)
+    standard_width_mm: Optional[Decimal] = Field(None, ge=0)
+    standard_height_mm: Optional[Decimal] = Field(None, ge=0)
+    unit_of_measure: Optional[str] = Field(None, max_length=32)
+    metadata: Dict[str, Any] = Field(default_factory=dict, alias="metadata_json")
+    modules: List[ModelProcessModuleInput] = Field(default_factory=list)
+
+    @root_validator
+    def _validate_calc_mode(cls, values):
+        mode = values.get("calc_mode") or "ratio"
+        fixed_price = values.get("fixed_price")
+        if mode == "fixed" and fixed_price is None:
+            raise ValueError("calc_mode=fixed 时必须提供 fixed_price")
+        if mode != "fixed":
+            # Keep storage clean; fixed_price is only meaningful in fixed mode.
+            values["fixed_price"] = None
+        code = values.get("model_code")
+        if code is not None and str(code).strip() == "":
+            values["model_code"] = None
+        return values
+
+    class Config:
+        allow_population_by_field_name = True
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ProductModelUpdateRequest(BaseModel):
+    model_name: Optional[str] = Field(None, max_length=255)
+    description: Optional[str] = None
+    category: Optional[str] = Field(None, max_length=128)
+    calc_mode: Optional[ProductCalcMode] = Field(None, description="产品模型计算模式：ratio/fixed/independent")
+    fixed_price: Optional[Decimal] = Field(None, ge=0, description="一口价模式固定价格（元）")
+    status: Optional[str] = Field(None, max_length=32)
+    tags: Optional[List[str]] = None
+    standard_width_mm: Optional[Decimal] = Field(None, ge=0)
+    standard_height_mm: Optional[Decimal] = Field(None, ge=0)
+    unit_of_measure: Optional[str] = Field(None, max_length=32)
+    metadata: Optional[Dict[str, Any]] = Field(default=None, alias="metadata_json")
+    modules: Optional[List[ModelProcessModuleInput]] = None
+
+    @root_validator
+    def _validate_calc_mode(cls, values):
+        mode = values.get("calc_mode")
+        fixed_price = values.get("fixed_price")
+        if mode == "fixed" and fixed_price is None:
+            raise ValueError("calc_mode=fixed 时必须提供 fixed_price")
+        if mode is not None and mode != "fixed":
+            values["fixed_price"] = None
+        return values
+
+    class Config:
+        allow_population_by_field_name = True
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ProductModelRead(BaseModel):
+    id: str
+    model_code: str
+    model_name: str
+    description: Optional[str]
+    category: Optional[str]
+    calc_mode: str
+    fixed_price: Optional[Decimal]
+    standard_width_mm: Optional[Decimal]
+    standard_height_mm: Optional[Decimal]
+    unit_of_measure: Optional[str]
+    status: str
+    tags: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(alias="metadata_json")
+    created_at: datetime
+    updated_at: datetime
+    modules: List[ModelProcessModuleRead] = Field(default_factory=list)
+    # New: persisted model lines (editable at model layer)
+    materials: List[ProductModelMaterialLineRead] = Field(default_factory=list)
+    processes: List[ProductModelProcessLineRead] = Field(default_factory=list)
+    # New: version stats for list pages
+    sample_version_count: int = 0
+    standard_version_count: int = 0
+    current_published_standard_version_id: Optional[str] = None
+    current_published_standard_version_label: Optional[str] = None
+
+    class Config:
+        orm_mode = True
+        allow_population_by_field_name = True
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ProductModelVersionCreateRequest(BaseModel):
+    version_kind: Literal["sample", "standard"] = Field(
+        "sample", description="版本类型：sample=打样版本；standard=标准发布版本（1m×1m）"
+    )
+    metadata: Dict[str, Any] = Field(default_factory=dict, alias="metadata_json")
+
+    class Config:
+        allow_population_by_field_name = True
+
+
+class ProductModelVersionRead(BaseModel):
+    id: str
+    model_id: str
+    version_kind: str
+    version_status: str
+    version_label: Optional[str] = None
+    published_at: Optional[datetime] = None
+    published_by: Optional[str] = None
+    metadata: Dict[str, Any] = Field(alias="metadata_json")
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        orm_mode = True
+        allow_population_by_field_name = True
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ProductModelVersionListItem(BaseModel):
+    # model master
+    model_id: str
+    model_code: str
+    model_name: str
+    model_status: str
+    # version
+    version_id: str
+    version_kind: str
+    version_status: str
+    version_label: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    published_at: Optional[datetime] = None
+
+    class Config:
+        orm_mode = False
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class PaginatedProductModelVersionResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: List[ProductModelVersionListItem]
+
+
+class ProductModelVersionPublishRequest(BaseModel):
+    published_by: Optional[str] = Field(None, max_length=64)
+    note: Optional[str] = Field(None, max_length=255)
+
+
+class SkuModelVersionMappingCreateRequest(BaseModel):
+    sku_code: str = Field(..., max_length=64)
+    model_version_id: str
+    source_system: Optional[str] = Field(None, max_length=64)
+    is_active: bool = True
+    metadata: Dict[str, Any] = Field(default_factory=dict, alias="metadata_json")
+
+    class Config:
+        allow_population_by_field_name = True
+
+
+class SkuModelVersionMappingRead(SkuModelVersionMappingCreateRequest):
+    id: str
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        orm_mode = True
+        allow_population_by_field_name = True
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class PaginatedProductModelResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: List[ProductModelRead]
+
+
+class ProductModelPreviewRequest(BaseModel):
+    width_mm: Decimal = Field(..., ge=0, description="产品宽度（mm）")
+    height_mm: Decimal = Field(..., ge=0, description="产品高度（mm）")
+    quantity: Decimal = Field(Decimal("1"), gt=0, description="数量（个）")
+    sku_hint: Optional[str] = Field(None, max_length=128, description="用于 sku_contains 触发的 SKU/特征串（可选）")
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ProductModelPreviewMaterialLine(BaseModel):
+    module_id: Optional[str] = None
+    module_code: Optional[str] = None
+    module_name: Optional[str] = None
+    source_kind: Literal["real", "bom", "virtual", "placeholder"] = "real"
+    source_ref_id: Optional[str] = None
+    resolved_kind: Optional[Literal["real", "bom", "virtual"]] = None
+    resolved_ref_id: Optional[str] = None
+    material_id: Optional[str] = None
+    material_code: Optional[str] = None
+    material_name: Optional[str] = None
+    category: Optional[str] = None
+    calculation_method: CalculationMethod
+    base_quantity: Decimal
+    loss_rate: Decimal
+    used_quantity: Decimal
+    unit: Optional[str] = None
+    bom_unit_price: Optional[Decimal] = None
+    total_cost: Optional[Decimal] = None
+    warnings: List[str] = Field(default_factory=list)
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ProductModelPreviewLaborLine(BaseModel):
+    module_id: Optional[str] = None
+    module_code: Optional[str] = None
+    module_name: Optional[str] = None
+    process_id: Optional[str] = None
+    process_code: Optional[str] = None
+    process_name: Optional[str] = None
+    team_name: Optional[str] = None
+    pricing_method: LaborPricingMethod
+    measure_quantity: Decimal
+    cost_type: Optional[Literal["time", "piece"]] = None
+    base_minutes: Decimal = Decimal("0")
+    unit_minutes: Decimal = Decimal("0")
+    rate_per_minute: Optional[Decimal] = None
+    piece_rate: Optional[Decimal] = None
+    total_minutes: Optional[Decimal] = None
+    total_cost: Optional[Decimal] = None
+    warnings: List[str] = Field(default_factory=list)
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ProductModelPreviewResponse(BaseModel):
+    width_mm: Decimal
+    height_mm: Decimal
+    quantity: Decimal
+    material_lines: List[ProductModelPreviewMaterialLine] = Field(default_factory=list)
+    labor_lines: List[ProductModelPreviewLaborLine] = Field(default_factory=list)
+    totals: Dict[str, Decimal] = Field(default_factory=dict)
+    errors: List[str] = Field(default_factory=list)
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ProductModelSkuPreviewRequest(BaseModel):
+    """
+    Preview by SKU:
+    - Parse model_code / version token / dimensions / variant tokens from sku_code
+    - Resolve to an active SKU binding (preferred) or fallback to latest published standard version of model_code
+    """
+
+    sku_code: str = Field(..., max_length=128)
+    # optional overrides (when SKU missing or ambiguous)
+    width_mm: Optional[Decimal] = Field(None, ge=0)
+    height_mm: Optional[Decimal] = Field(None, ge=0)
+    quantity: Optional[Decimal] = Field(None, gt=0)
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ProductModelSkuPreviewResponse(ProductModelPreviewResponse):
+    sku_code: str
+    model_id: str
+    model_code: str
+    version_id: str
+    version_label: Optional[str] = None
+    parsed: Dict[str, Any] = Field(default_factory=dict)
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+# -----------------------------
+# Standard derivation templates
+# -----------------------------
+
+class DeriveRoundRule(BaseModel):
+    """
+    Rounding rule for derived quantities/minutes.
+    step: e.g. 0.01 / 0.1 / 1
+    mode: round/floor/ceil
+    """
+
+    step: Decimal = Field(Decimal("1"), gt=0)
+    mode: Literal["round", "floor", "ceil"] = "round"
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class DeriveTemplateBase(BaseModel):
+    template_kind: Literal["linear"] = Field("linear", description="当前仅支持 linear 模板（后续可扩展 piecewise 等）")
+    calibrate_from_sample: bool = Field(
+        False,
+        description="是否用打样数据校准（当 coefficient/单位系数为空时，由 sample_used 或 sample_minutes 反推）",
+    )
+    fixed_quantity: Optional[Decimal] = Field(None, ge=0, description="固定用量/起步（未计损耗）")
+    coverage_ratio: Optional[Decimal] = Field(None, ge=0, le=1, description="覆盖率（默认=1）")
+    min_total: Optional[Decimal] = Field(None, ge=0, description="最小起步（作用于标准 1×1 的最终用量/分钟）")
+    max_total: Optional[Decimal] = Field(None, ge=0, description="封顶（作用于标准 1×1 的最终用量/分钟）")
+    rounding: Optional[DeriveRoundRule] = None
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class DeriveTemplateMaterial(DeriveTemplateBase):
+    coefficient: Optional[Decimal] = Field(None, ge=0, description="单位计量系数 β（用于 base_quantity）")
+
+
+class DeriveTemplateProcess(DeriveTemplateBase):
+    coefficient: Optional[Decimal] = Field(None, ge=0, description="单位计量分钟系数（用于 unit_minutes）")
+    base_minutes: Optional[Decimal] = Field(None, ge=0, description="基础分钟（用于 base_minutes）")
+
+
+class DeriveStandardRequest(BaseModel):
+    target_mode: Literal["create_new", "overwrite_draft"] = "create_new"
+    target_standard_version_id: Optional[str] = None
+    apply_to: Literal["materials", "processes", "both"] = "both"
+
+
+class DeriveStandardResponse(BaseModel):
+    standard_version_id: str
+    created: bool = True
+    overwritten: bool = False
+    line_stats: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ProductModelSampleSpec(BaseModel):
+    width_mm: Decimal = Field(..., ge=0)
+    height_mm: Decimal = Field(..., ge=0)
+    quantity: Decimal = Field(Decimal("1"), gt=0)
+    unit_label: str = Field("幅", max_length=16)
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ProductModelMaterialLineInput(BaseModel):
+    id: Optional[str] = None
+    source_module_id: Optional[str] = None
+    source_module_code: Optional[str] = None
+    source_module_name: Optional[str] = None
+
+    material_kind: MaterialReferenceKind = Field("real")
+    material_ref_id: str
+    material_code: Optional[str] = None
+    material_name: Optional[str] = None
+    calculation_method: CalculationMethod = Field("count")
+    # sample & standard are persisted in metadata_json for traceability
+    sample_used_quantity: Optional[Decimal] = Field(None, ge=0, description="打样尺寸下的实际用量（未计损耗）")
+    standard_used_quantity: Optional[Decimal] = Field(None, ge=0, description="标准尺寸下的实际用量（未计损耗）")
+    fixed_quantity: Optional[Decimal] = Field(
+        None,
+        ge=0,
+        description="固定用量α（起步损耗/边料等，独立于计量值；未计损耗）",
+    )
+    coverage_ratio: Optional[Decimal] = Field(
+        None,
+        ge=0,
+        le=1,
+        description="覆盖率/占比（0~1），用于局部材料：用量 = α + β×M×coverage_ratio；默认=1",
+    )
+    base_quantity: Optional[Decimal] = Field(None, ge=0, description="单位用量系数（用于比例缩放）")
+    loss_rate: Decimal = Field(Decimal("0"), ge=0, le=100)
+    notes: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict, alias="metadata_json")
+
+    class Config:
+        allow_population_by_field_name = True
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ProductModelMaterialLineRead(ProductModelMaterialLineInput):
+    id: str
+
+
+class ProductModelProcessLineInput(BaseModel):
+    id: Optional[str] = None
+    source_module_id: Optional[str] = None
+    source_module_code: Optional[str] = None
+    source_module_name: Optional[str] = None
+
+    process_id: str
+    process_code: Optional[str] = None
+    process_name: Optional[str] = None
+    team_name: Optional[str] = None
+    pricing_method: LaborPricingMethod = Field("count")
+    # sample & standard are persisted in metadata_json for traceability
+    sample_minutes: Optional[Decimal] = Field(None, ge=0, description="打样尺寸下的实际用时（分钟）")
+    standard_minutes: Optional[Decimal] = Field(None, ge=0, description="标准尺寸下的实际用时（分钟）")
+    base_minutes: Decimal = Field(Decimal("0"), ge=0)
+    unit_minutes: Decimal = Field(Decimal("0"), ge=0)
+    rate_per_minute: Optional[Decimal] = Field(None, ge=0)
+    piece_rate: Optional[Decimal] = Field(None, ge=0)
+    cost_type: Optional[Literal["time", "piece"]] = None
+    notes: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict, alias="metadata_json")
+
+    class Config:
+        allow_population_by_field_name = True
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ProductModelProcessLineRead(ProductModelProcessLineInput):
+    id: str
+
+
+class ProductModelLinesResponse(BaseModel):
+    sample: ProductModelSampleSpec
+    standard: ProductModelSampleSpec
+    materials: List[ProductModelMaterialLineRead] = Field(default_factory=list)
+    processes: List[ProductModelProcessLineRead] = Field(default_factory=list)
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ProductModelSyncFromModulesRequest(BaseModel):
+    keep_overrides: bool = Field(True, description="同步时保留模型层已调整的参数")
+
+
+class ProductModelLinesUpdateRequest(BaseModel):
+    sample: ProductModelSampleSpec
+    standard: ProductModelSampleSpec
+    materials: List[ProductModelMaterialLineInput] = Field(default_factory=list)
+    processes: List[ProductModelProcessLineInput] = Field(default_factory=list)
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+
+class ModelVariantRuleBase(BaseModel):
+    rule_name: str = Field(..., max_length=255)
+    source_material_ref_id: Optional[str] = Field(
+        None, description="规则作用的源物料ID（必须是模型展开后能找到的物料ID，作为兜底基础）"
+    )
+    trigger_type: VariantTriggerType
+    trigger_value: Optional[str] = Field(None, max_length=255, description="触发值：sku_contains 用字符串；area/perimeter 用数值字符串")
+    action_type: VariantActionType
+    target_material_ref_id: Optional[str] = Field(None, description="目标物料ID（replace/add）")
+    quantity_delta: Optional[Decimal] = Field(None, ge=0, description="add_material 时额外用量（按模块行同口径折算）")
+    status: str = Field("active", max_length=32)
+    metadata: Dict[str, Any] = Field(default_factory=dict, alias="metadata_json")
+
+    @root_validator
+    def _validate_rule(cls, values):
+        action = values.get("action_type")
+        source_id = values.get("source_material_ref_id")
+        target_id = values.get("target_material_ref_id")
+        trig = values.get("trigger_type")
+        trig_value = values.get("trigger_value")
+        qty_delta = values.get("quantity_delta")
+
+        if not source_id:
+            raise ValueError("source_material_ref_id 必填（用于兜底：未命中规则时回落源物料）")
+
+        if action in ("replace_material", "add_material") and not target_id:
+            raise ValueError("target_material_ref_id 必填")
+
+        if action == "add_material" and (qty_delta is None or Decimal(str(qty_delta)) <= 0):
+            raise ValueError("add_material 必须提供 quantity_delta > 0")
+
+        if trig == "sku_contains":
+            if not trig_value or not str(trig_value).strip():
+                raise ValueError("sku_contains 需要 trigger_value（字符串）")
+        else:
+            # area_gte / perimeter_gte
+            if trig_value in (None, ""):
+                raise ValueError(f"{trig} 需要 trigger_value（数值）")
+            try:
+                if Decimal(str(trig_value)) <= 0:
+                    raise ValueError
+            except Exception:  # noqa: BLE001
+                raise ValueError(f"{trig} 的 trigger_value 必须是 >0 的数值字符串")
+
+        if target_id and source_id and str(target_id) == str(source_id) and action == "replace_material":
+            raise ValueError("replace_material 不允许目标物料与源物料相同")
+
+        return values
+
+    class Config:
+        allow_population_by_field_name = True
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ModelVariantRuleCreateRequest(ModelVariantRuleBase):
+    pass
+
+
+class ModelVariantRuleUpdateRequest(BaseModel):
+    rule_name: Optional[str] = Field(None, max_length=255)
+    trigger_type: Optional[VariantTriggerType] = None
+    trigger_value: Optional[str] = Field(None, max_length=255)
+    action_type: Optional[VariantActionType] = None
+    target_material_ref_id: Optional[str] = None
+    quantity_delta: Optional[Decimal] = Field(None, ge=0)
+    status: Optional[str] = Field(None, max_length=32)
+    metadata: Optional[Dict[str, Any]] = Field(default=None, alias="metadata_json")
+
+    class Config:
+        allow_population_by_field_name = True
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ModelVariantRuleRead(ModelVariantRuleBase):
+    id: str
+    model_id: str
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        orm_mode = True
+        allow_population_by_field_name = True
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ProcessModuleStepRead(ProcessModuleStepInput):
+    id: str
+    process: Optional[ProcessReferenceRead] = None
+
+
+class ProcessModuleCreateRequest(BaseModel):
+    module_code: str = Field(..., max_length=64)
+    module_name: str = Field(..., max_length=255)
+    description: Optional[str] = None
+    category: Optional[str] = Field(None, max_length=128)
+    status: Optional[str] = Field("draft", max_length=32)
+    tags: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict, alias="metadata_json")
+    materials: List[ProcessModuleMaterialInput] = Field(default_factory=list)
+    steps: List[ProcessModuleStepInput] = Field(default_factory=list)
+    operator_id: Optional[str] = Field("system", max_length=64)
+
+    class Config:
+        allow_population_by_field_name = True
+
+
+class ProcessModuleUpdateRequest(BaseModel):
+    module_name: Optional[str] = Field(None, max_length=255)
+    description: Optional[str] = None
+    category: Optional[str] = Field(None, max_length=128)
+    status: Optional[str] = Field(None, max_length=32)
+    tags: Optional[List[str]] = None
+    metadata: Optional[Dict[str, Any]] = Field(default=None, alias="metadata_json")
+    materials: Optional[List[ProcessModuleMaterialInput]] = None
+    steps: Optional[List[ProcessModuleStepInput]] = None
+    operator_id: Optional[str] = Field("system", max_length=64)
+
+    class Config:
+        allow_population_by_field_name = True
+
+
+class ProcessModuleCopyRequest(BaseModel):
+    module_code: str = Field(..., max_length=64)
+    module_name: str = Field(..., max_length=255)
+    status: Optional[str] = Field(None, max_length=32)
+    operator_id: Optional[str] = Field("system", max_length=64)
+
+
+class ProcessModuleSummaryRead(BaseModel):
+    id: str
+    module_code: str
+    module_name: str
+    description: Optional[str]
+    category: Optional[str]
+    status: str
+    version: int
+    tags: List[str]
+    metadata: Dict[str, Any] = Field(alias="metadata_json")
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        orm_mode = True
+        allow_population_by_field_name = True
+
+
+class ProcessModuleDetailRead(ProcessModuleSummaryRead):
+    materials: List[ProcessModuleMaterialRead] = Field(default_factory=list)
+    steps: List[ProcessModuleStepRead] = Field(default_factory=list)
+
+
+class PaginatedProcessModuleResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: List[ProcessModuleSummaryRead]
+
+
+class ProcessModuleReferenceResponse(BaseModel):
+    total: int
+    items: List[ProcessModuleDetailRead]
+
+
+class ProcessCreateRequest(BaseModel):
+    process_code: str = Field(..., max_length=64)
+    process_name: str = Field(..., max_length=255)
+    description: Optional[str] = None
+    category: Optional[str] = Field(None, max_length=128)
+    team_name: Optional[str] = Field(None, max_length=128)
+    charging_mode: ProcessChargingMode = Field("count")
+    standard_rate: Optional[Decimal] = Field(None, ge=0)
+    unit_of_measure: Optional[str] = Field(None, max_length=32)
+    status: Optional[str] = Field("draft", max_length=32)
+    metadata: Dict[str, Any] = Field(default_factory=dict, alias="metadata_json")
+    operator_id: Optional[str] = Field("system", max_length=64)
+
+    class Config:
+        allow_population_by_field_name = True
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ProcessUpdateRequest(BaseModel):
+    process_name: Optional[str] = Field(None, max_length=255)
+    description: Optional[str] = None
+    category: Optional[str] = Field(None, max_length=128)
+    team_name: Optional[str] = Field(None, max_length=128)
+    charging_mode: Optional[ProcessChargingMode] = None
+    standard_rate: Optional[Decimal] = Field(None, ge=0)
+    unit_of_measure: Optional[str] = Field(None, max_length=32)
+    status: Optional[str] = Field(None, max_length=32)
+    metadata: Optional[Dict[str, Any]] = Field(default=None, alias="metadata_json")
+    operator_id: Optional[str] = Field("system", max_length=64)
+
+    class Config:
+        allow_population_by_field_name = True
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ProcessCopyRequest(BaseModel):
+    process_code: str = Field(..., max_length=64)
+    process_name: str = Field(..., max_length=255)
+    status: Optional[str] = Field(None, max_length=32)
+    operator_id: Optional[str] = Field("system", max_length=64)
+
+
+class ProcessBatchStatusRequest(BaseModel):
+    ids: List[str] = Field(default_factory=list)
+    status: str = Field(..., max_length=32)
+    operator_id: Optional[str] = Field("system", max_length=64)
+
+
+class ProcessBatchStatusResponse(BaseModel):
+    updated: int
+
+
+class ProcessSummaryRead(BaseModel):
+    id: str
+    process_code: str
+    process_name: str
+    description: Optional[str]
+    category: Optional[str]
+    team_name: Optional[str]
+    charging_mode: ProcessChargingMode
+    standard_rate: Optional[Decimal]
+    unit_of_measure: Optional[str]
+    status: str
+    is_active: bool
+    metadata: Dict[str, Any] = Field(alias="metadata_json")
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        orm_mode = True
+        allow_population_by_field_name = True
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ProcessDetailRead(ProcessSummaryRead):
+    pass
+
+
+class PaginatedProcessResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: List[ProcessSummaryRead]
+
+
+class CodeGenerateRequest(BaseModel):
+    prefix: str = Field(..., max_length=16)
+    width: int = Field(5, ge=1, le=16)
+
+
+class CodeGenerateResponse(BaseModel):
+    code: str
+
+
+class RandomCodeGenerateRequest(BaseModel):
+    kind: Literal["product_model"] = Field("product_model", description="编码类型")
+    length: int = Field(3, ge=2, le=12, description="编码长度")
+
+
+class RandomCodeGenerateResponse(BaseModel):
+    code: str
+
+
+# Resolve ForwardRefs for models that reference types defined later in this module.
+ProductModelRead.update_forward_refs()
 
 
 class AssumptionBase(BaseModel):
@@ -477,3 +1532,168 @@ class ProcessSyncResponse(BaseModel):
     @classmethod
     def from_result(cls, result: Any) -> "ProcessSyncResponse":
         return cls(**result.dict())
+
+
+class SpecTokenExplanation(BaseModel):
+    token: str
+    source: str
+    rule: str
+
+
+class SpecParseRequest(BaseModel):
+    spec_text: str
+    sku_code: Optional[str] = None
+
+
+class SpecParseResponse(BaseModel):
+    tokens: List[str] = Field(default_factory=list)
+    width_cm: Optional[Decimal] = None
+    height_cm: Optional[Decimal] = None
+    diameter_cm: Optional[Decimal] = None
+    area_m2: Optional[Decimal] = None
+    perimeter_m: Optional[Decimal] = None
+    explanations: List[SpecTokenExplanation] = Field(default_factory=list)
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class LineVariantCondition(BaseModel):
+    spec_contains_any: Optional[List[str]] = None
+    spec_contains_all: Optional[List[str]] = None
+    width_between: Optional[Tuple[Optional[Decimal], Optional[Decimal]]] = None
+    height_between: Optional[Tuple[Optional[Decimal], Optional[Decimal]]] = None
+    area_between: Optional[Tuple[Optional[Decimal], Optional[Decimal]]] = None
+    perimeter_between: Optional[Tuple[Optional[Decimal], Optional[Decimal]]] = None
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class LineVariantItemPayload(BaseModel):
+    sequence_order: Optional[int] = Field(None, ge=0)
+    material_kind: MaterialReferenceKind = Field("real")
+    material_ref_id: Optional[str] = None
+    material_code: Optional[str] = None
+    material_name: Optional[str] = None
+    unit_of_measure: Optional[str] = None
+    calculation_method: CalculationMethod = Field("count")
+    base_quantity: Decimal = Field(Decimal("0"), ge=0)
+    fixed_quantity: Decimal = Field(Decimal("0"), ge=0)
+    coverage_ratio: Decimal = Field(Decimal("1"), ge=0)
+    loss_rate: Decimal = Field(Decimal("0"), ge=0, le=100)
+    metadata: Dict[str, Any] = Field(default_factory=dict, alias="metadata_json")
+
+    class Config:
+        allow_population_by_field_name = True
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class LineVariantItemRead(LineVariantItemPayload):
+    id: str
+    sequence_order: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class LineVariantCreateRequest(BaseModel):
+    version_id: str
+    base_line_id: str
+    priority: int = Field(100, ge=0)
+    enabled: bool = True
+    action: LineVariantAction = Field("replace_bundle")
+    stop_on_hit: bool = True
+    notes: Optional[str] = None
+    conditions: LineVariantCondition = Field(default_factory=LineVariantCondition)
+    metadata: Dict[str, Any] = Field(default_factory=dict, alias="metadata_json")
+    items: List[LineVariantItemPayload] = Field(default_factory=list)
+    operator_id: Optional[str] = Field("system", max_length=64)
+
+    class Config:
+        allow_population_by_field_name = True
+
+
+class LineVariantUpdateRequest(BaseModel):
+    base_line_id: Optional[str] = None
+    priority: Optional[int] = Field(None, ge=0)
+    enabled: Optional[bool] = None
+    action: Optional[LineVariantAction] = None
+    stop_on_hit: Optional[bool] = None
+    notes: Optional[str] = None
+    conditions: Optional[LineVariantCondition] = None
+    metadata: Optional[Dict[str, Any]] = Field(default=None, alias="metadata_json")
+    operator_id: Optional[str] = Field("system", max_length=64)
+
+    class Config:
+        allow_population_by_field_name = True
+
+
+class LineVariantItemsReplaceRequest(BaseModel):
+    items: List[LineVariantItemPayload] = Field(default_factory=list)
+
+
+class LineVariantDetailRead(BaseModel):
+    id: str
+    version_id: str
+    base_line_id: str
+    priority: int
+    enabled: bool
+    action: LineVariantAction
+    stop_on_hit: bool
+    notes: Optional[str] = None
+    conditions: Dict[str, Any] = Field(default_factory=dict)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    items: List[LineVariantItemRead] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class BomLineRead(BaseModel):
+    line_index: int
+    source_type: Literal["base_line", "variant_item"]
+    base_line_id: Optional[str]
+    variant_id: Optional[str]
+    variant_item_id: Optional[str]
+    material_kind: str
+    material_ref_id: Optional[str]
+    material_code: Optional[str]
+    material_name: Optional[str]
+    unit_of_measure: Optional[str]
+    calculation_method: CalculationMethod
+    base_quantity: Decimal
+    fixed_quantity: Decimal
+    coverage_ratio: Decimal
+    loss_rate: Decimal
+    computed_quantity: Decimal
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class BomGenerateRequest(BaseModel):
+    spec_text: str
+    model_version_id: Optional[str] = None
+    sku_code: Optional[str] = None
+    quantity: Optional[Decimal] = Field(None, gt=0)
+    operator_id: Optional[str] = Field("system", max_length=64)
+
+    @root_validator
+    def _ensure_scope(cls, values):
+        if not values.get("model_version_id") and not values.get("sku_code"):
+            raise ValueError("model_version_id 或 sku_code 至少提供一个")
+        return values
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class BomGenerateResponse(BaseModel):
+    final_material_lines: List[BomLineRead] = Field(default_factory=list)
+    trace: Dict[str, Any] = Field(default_factory=dict)
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}

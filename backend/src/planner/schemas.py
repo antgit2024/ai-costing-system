@@ -1697,3 +1697,59 @@ class BomGenerateResponse(BaseModel):
 
     class Config:
         json_encoders = {Decimal: _decimal_to_str}
+
+
+class ShipmentImportBatchRead(BaseModel):
+    id: str
+    file_name: Optional[str] = None
+    file_hash: str
+    export_date: Optional[str] = None
+    requested_by: Optional[str] = None
+    status: str
+    total_rows: int
+    inserted_rows: int
+    skipped_rows: int
+    exception_rows: int
+    warnings: List[Dict[str, Any]] = Field(default_factory=list, alias="warnings_json")
+    result: Dict[str, Any] = Field(default_factory=dict, alias="result_json")
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        orm_mode = True
+        allow_population_by_field_name = True
+
+
+class ShipmentExceptionRead(BaseModel):
+    id: str
+    batch_id: str
+    shipment_line_id: Optional[str] = None
+    reason: str
+    message: Optional[str] = None
+    payload: Dict[str, Any] = Field(default_factory=dict, alias="payload_json")
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        orm_mode = True
+        allow_population_by_field_name = True
+
+
+class BomSnapshotRead(BaseModel):
+    id: str
+    batch_id: str
+    shipment_line_id: str
+    shipment_no: Optional[str] = None
+    sku_code: Optional[str] = None
+    model_version_id: Optional[str] = None
+    spec_hash: Optional[str] = None
+    qty: Optional[Decimal] = None
+    final_material_lines: List[Dict[str, Any]] = Field(default_factory=list)
+    trace: Dict[str, Any] = Field(default_factory=dict)
+    generated_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        orm_mode = True
+        allow_population_by_field_name = True

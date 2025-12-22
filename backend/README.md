@@ -164,6 +164,17 @@ YiDa 对接与同步：
 
 - `POST /api/planner/bom/generate`：输入 `model_version_id`（或 `sku_code`）、`spec_text`、`quantity`，内部会先解析规格 → 拉取标准版本行 → 按锚点/优先级执行行级变体 → 输出 `final_material_lines`（含来源、计量、最终计算数量）和 `trace`（命中规则及顺序）。ADD 类变体默认插在锚点行之后；replace/remove 会替换或删掉锚点行。
 
+##### 发货单导入与 BOM 快照（Shipments Import & BOM Snapshots）API
+
+- `POST /api/planner/shipments/import`：上传发货单 xlsx（multipart form-data），导入后会：
+  - 落 `shipment_import_batches`（file_hash=sha1(file_bytes) 文件级幂等）
+  - 标准化为 `shipment_lines`（external_line_key_hash 行级幂等）
+  - 对 `spec_text` 生成/复用 `spec_parse_snapshots`（spec_hash 缓存）
+  - 对已绑定 SKU 的行生成 `bom_snapshots`（包含 `final_material_lines + trace`），未绑定/缺规格写入 `shipment_exception_queue`
+- `GET /api/planner/shipments/import-batches/{batch_id}`：查询批次状态与统计
+- `GET /api/planner/shipments/exceptions?batch_id=...`：查询异常队列（例如 `SKU_NOT_BOUND`、`SPEC_EMPTY`）
+- `GET /api/planner/shipments/bom-snapshots?batch_id=...`：查询该批次生成的 BOM 快照（用于后续扣库/核算对账）
+
 ##### 编码生成器（Codes API）
 
 - `POST /api/planner/codes/next`：传入 `prefix`（<=16 字符）与 `width`（默认 5，最大 16），原子性地分配下一个编码，例如 `{ "prefix": "VM", "width": 5 }` → `VM00001`。

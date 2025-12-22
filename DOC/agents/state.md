@@ -1,6 +1,6 @@
 ## 当前状态（崩了也能继续）
 
-- **最近校对（北京时间 GMT+8）**：2025-12-22 00:10（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
+- **最近校对（北京时间 GMT+8）**：2025-12-22 01:20（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **分支**：`backup/20251214-1535`
 
 - **本轮闭环产物（Frontend / 行级变体收口：ERP 最稳第一步）**：
@@ -78,6 +78,19 @@
 - **验收命令（派单文件存在）**：`grep -nF "# Backend 闭环任务单：SKU 绑定 + 规格解析尺寸/条件 + 生成库存扣料清单（BOM 快照）MVP" DOC/agents/briefings/backend_sku_binding_inventory_mvp.md`
 - **下一步闭环任务单（发货单导入→BOM快照）**：`DOC/agents/briefings/backend_shipment_import_bom_snapshots_mvp.md`
 - **验收命令（派单文件存在）**：`grep -nF "# Backend 闭环任务单：发货单 Excel 导入 → spec_hash 缓存解析 → BOM 快照生成 + 异常队列（MVP）" DOC/agents/briefings/backend_shipment_import_bom_snapshots_mvp.md`
+
+- **本轮闭环产物（Backend / 发货单导入→spec_hash缓存→BOM快照 + 异常队列 MVP）**：
+  - 新增落库表：`shipment_import_batches`、`shipment_lines`、`spec_parse_snapshots`、`bom_snapshots`、`shipment_exception_queue`
+  - 新增接口：
+    - `POST /api/planner/shipments/import`（xlsx 导入→标准化→幂等→生成快照/入异常）
+    - `GET /api/planner/shipments/import-batches/{batch_id}`
+    - `GET /api/planner/shipments/exceptions?batch_id=...`
+    - `GET /api/planner/shipments/bom-snapshots?batch_id=...`
+  - 幂等口径：
+    - 文件级：`file_hash=sha1(xlsx_bytes)`（同文件重复导入直接返回已成功 batch）
+    - 行级：`external_line_key_hash=sha1(shipment_no|sku_code|spec_text|qty|revenue_amount)`（跨批次重复不重复生成 shipment_line/bom_snapshot）
+  - 关键输出：`bom_snapshots.trace` 中回填 `bound_version_id + spec_hash + batch_id + shipment_line_id`
+  - 本轮验收命令（必须）：`pytest backend/tests/planner/test_shipment_import_bom_snapshots_mvp.py -q`
 
 - **本轮方案产物（SKU→BOM→发货/扣库/核算对账）**：`DOC/costing/blueprints/sku_binding_bom_shipment_plan.md`
 - **本轮提炼件（发货单样例）**：`DOC/index/extracted/shipment_xlsx_extracted_20251222T000000+0800.md`

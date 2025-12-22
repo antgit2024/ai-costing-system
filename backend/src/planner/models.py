@@ -758,3 +758,128 @@ class MaterialSyncJob(Base, TimestampMixin):
     error_message: Mapped[str | None] = Column(Text)
     started_at: Mapped[datetime | None] = Column(DateTime)
     finished_at: Mapped[datetime | None] = Column(DateTime)
+
+
+class ShipmentImportBatch(Base, TimestampMixin):
+    __tablename__ = "shipment_import_batches"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    file_name: Mapped[str | None] = Column(String(255))
+    file_hash: Mapped[str] = Column(String(64), nullable=False, unique=True, index=True)
+    export_date: Mapped[str | None] = Column(String(32))
+    requested_by: Mapped[str | None] = Column(String(64))
+    status: Mapped[str] = Column(String(32), nullable=False, default="processing")
+    total_rows: Mapped[int] = Column(Integer, nullable=False, default=0)
+    inserted_rows: Mapped[int] = Column(Integer, nullable=False, default=0)
+    skipped_rows: Mapped[int] = Column(Integer, nullable=False, default=0)
+    exception_rows: Mapped[int] = Column(Integer, nullable=False, default=0)
+    warnings_json: Mapped[List[Dict[str, Any]]] = Column("warnings", JSON, default=list)
+    result_json: Mapped[Dict[str, Any]] = Column("result", JSON, default=dict)
+
+    lines: Mapped[List["ShipmentLine"]] = relationship(
+        "ShipmentLine",
+        primaryjoin="ShipmentImportBatch.id==ShipmentLine.batch_id",
+        back_populates="batch",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    exceptions: Mapped[List["ShipmentExceptionQueue"]] = relationship(
+        "ShipmentExceptionQueue",
+        primaryjoin="ShipmentImportBatch.id==ShipmentExceptionQueue.batch_id",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    bom_snapshots: Mapped[List["BomSnapshot"]] = relationship(
+        "BomSnapshot",
+        primaryjoin="ShipmentImportBatch.id==BomSnapshot.batch_id",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class ShipmentLine(Base, TimestampMixin, SoftDeleteMixin):
+    __tablename__ = "shipment_lines"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    batch_id: Mapped[str] = Column(
+        String(36), ForeignKey("shipment_import_batches.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    row_index: Mapped[int] = Column(Integer, nullable=False, default=0)
+
+    shipment_no: Mapped[str | None] = Column(String(64), index=True)
+    completed_at: Mapped[datetime | None] = Column(DateTime, index=True)
+    channel: Mapped[str | None] = Column(String(128))
+    sku_code: Mapped[str | None] = Column(String(64), index=True)
+    spec_text: Mapped[str | None] = Column(Text)
+    spec_hash: Mapped[str | None] = Column(String(64), index=True)
+    qty: Mapped[float | None] = Column(Numeric(18, 6))
+    revenue_amount: Mapped[float | None] = Column(Numeric(18, 6))
+
+    external_line_key_hash: Mapped[str] = Column(String(64), nullable=False, unique=True, index=True)
+    revision_group_hash: Mapped[str | None] = Column(String(64), index=True)
+    revision_no: Mapped[int] = Column(Integer, nullable=False, default=1)
+    superseded_by_id: Mapped[str | None] = Column(String(36), ForeignKey("shipment_lines.id"))
+    is_active: Mapped[bool] = Column(Boolean, nullable=False, default=True)
+
+    raw_row_json: Mapped[Dict[str, Any]] = Column("raw_row", JSON, default=dict)
+    normalize_warnings_json: Mapped[List[Dict[str, Any]]] = Column("normalize_warnings", JSON, default=list)
+    metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict)
+
+    batch: Mapped["ShipmentImportBatch"] = relationship("ShipmentImportBatch", back_populates="lines")
+
+
+class SpecParseSnapshot(Base, TimestampMixin):
+    __tablename__ = "spec_parse_snapshots"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    spec_hash: Mapped[str] = Column(String(64), nullable=False, unique=True, index=True)
+    spec_text: Mapped[str] = Column(Text, nullable=False)
+    tokens_json: Mapped[List[str]] = Column("tokens", JSON, default=list)
+    dimensions_json: Mapped[Dict[str, Any]] = Column("dimensions", JSON, default=dict)
+    parser_version: Mapped[str] = Column(String(32), nullable=False, default="v1")
+    parse_json: Mapped[Dict[str, Any]] = Column("parse", JSON, default=dict)
+
+
+class BomSnapshot(Base, TimestampMixin):
+    __tablename__ = "bom_snapshots"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    batch_id: Mapped[str] = Column(
+        String(36), ForeignKey("shipment_import_batches.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    shipment_line_id: Mapped[str] = Column(
+        String(36), ForeignKey("shipment_lines.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    shipment_no: Mapped[str | None] = Column(String(64), index=True)
+    sku_code: Mapped[str | None] = Column(String(64), index=True)
+    model_version_id: Mapped[str | None] = Column(String(36), ForeignKey("product_model_versions.id"))
+    spec_hash: Mapped[str | None] = Column(String(64), index=True)
+    qty: Mapped[float | None] = Column(Numeric(18, 6))
+    final_lines_json: Mapped[List[Dict[str, Any]]] = Column("final_lines", JSON, default=list)
+    trace_json: Mapped[Dict[str, Any]] = Column("trace", JSON, default=dict)
+    generated_at: Mapped[datetime | None] = Column(DateTime, default=utcnow)
+
+    @property
+    def final_material_lines(self) -> List[Dict[str, Any]]:
+        return list(self.final_lines_json or [])
+
+    @property
+    def trace(self) -> Dict[str, Any]:
+        return dict(self.trace_json or {})
+
+
+class ShipmentExceptionQueue(Base, TimestampMixin):
+    __tablename__ = "shipment_exception_queue"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    batch_id: Mapped[str] = Column(
+        String(36), ForeignKey("shipment_import_batches.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    shipment_line_id: Mapped[str | None] = Column(
+        String(36), ForeignKey("shipment_lines.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    reason: Mapped[str] = Column(String(64), nullable=False, index=True)
+    message: Mapped[str | None] = Column(Text)
+    payload_json: Mapped[Dict[str, Any]] = Column("payload", JSON, default=dict)
+    resolved_at: Mapped[datetime | None] = Column(DateTime)
+

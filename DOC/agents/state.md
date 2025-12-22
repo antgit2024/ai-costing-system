@@ -83,3 +83,4 @@
   - `grep -nF "# 提炼：发货单-理.xlsx（表头/前几行样例，基于xlsx-xml解析）" DOC/index/extracted/shipment_xlsx_extracted_20251222T000000+0800.md`
   - `grep -nF "SKU 绑定 → 规格解析 → 动态 BOM → 发货/扣库/核算对账" DOC/costing/blueprints/sku_binding_bom_shipment_plan.md`
   - `grep -nF "external_line_key" DOC/costing/blueprints/sku_binding_bom_shipment_plan.md`
+  - `grep -nF "交易规格（spec_text）变更" DOC/costing/blueprints/sku_binding_bom_shipment_plan.md`

@@ -76,6 +76,7 @@ def generate_bom(
                 produced = [
                     _materialize_variant_item(
                         item,
+                        base_row=row,
                         measurement=measurement,
                         variant_id=variant.id,
                         base_line_id=row.id,
@@ -231,10 +232,28 @@ def _materialize_base_line(
 def _materialize_variant_item(
     item: models.ProductModelLineVariantItem,
     *,
+    base_row: models.ModelVersionMaterial,
     measurement: Dict[str, Decimal],
     variant_id: str,
     base_line_id: str,
 ) -> Dict[str, Any]:
+    # ERP 最稳第一步：replace_self 同单位 1→1。
+    # 历史数据里经常出现：替换物料的 calculation_method/base_quantity 没填或为 0，导致 computed_quantity=0。
+    # 这里做兜底：替换行继承基准行的计量方式/β/单位（若替换行自身缺失或为 0）。
+    base_method = str(getattr(base_row, "calculation_method", None) or "count")
+    base_uom = getattr(base_row, "unit_of_measure", None)
+    base_beta = _to_decimal(getattr(base_row, "base_quantity", None), Decimal("1"))
+
+    item_method = str(getattr(item, "calculation_method", None) or "").strip()
+    # 如果替换行仍是默认 count，但基准行是 area/perimeter/...，则优先继承基准行（避免替换后数量变成“按个数=1”的假象）。
+    if (not item_method or item_method == "count") and base_method and base_method != "count":
+        method = base_method
+    else:
+        method = item_method or base_method or "count"
+    beta = _to_decimal(getattr(item, "base_quantity", None), Decimal("0"))
+    if beta <= 0:
+        beta = base_beta if base_beta > 0 else Decimal("1")
+    uom = getattr(item, "unit_of_measure", None) or base_uom
     return _build_line_payload(
         measurement=measurement,
         source_type="variant_item",
@@ -245,9 +264,9 @@ def _materialize_variant_item(
         material_ref_id=item.material_ref_id,
         material_code=item.material_code,
         material_name=item.material_name,
-        unit_of_measure=item.unit_of_measure,
-        calculation_method=item.calculation_method or "count",
-        base_quantity=_to_decimal(item.base_quantity),
+        unit_of_measure=uom,
+        calculation_method=method,
+        base_quantity=beta,
         fixed_quantity=_to_decimal(item.fixed_quantity),
         coverage_ratio=_to_decimal(item.coverage_ratio, Decimal("1")),
         loss_rate=_to_decimal(item.loss_rate),

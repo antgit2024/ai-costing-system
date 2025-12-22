@@ -40,10 +40,13 @@
 ### 3.1) 业务输入（基础表单/场景说明，仅限本轮变体方案）
 
 - `DOC/基础表单/BOM动态生成引擎业务需求说明.md`（标准模型变体/动态 BOM 业务逻辑与场景说明）
+- `DOC/基础表单/SKU绑定与BOM生成业务逻辑说明文档.md`（SKU 绑定/规格解析/BOM 生成主链路业务说明）
+- `DOC/基础表单/发货单-理.xlsx`（发货单样例：对账字段/扣库清单落地参考）
 
 ### 3.2) 方案产出（本轮交付物）
 
 - `DOC/costing/blueprints/standard_model_variants_plan.md`（标准模型：变体/动态 BOM 功能方案）
+ - `DOC/costing/blueprints/sku_binding_bom_shipment_plan.md`（SKU 绑定→BOM 快照→发货/扣库对账：ERP 方案与计划）
 
 ### 3.3) 派单任务单（供执行 Agent 闭环）
 

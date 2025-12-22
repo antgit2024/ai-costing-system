@@ -59,6 +59,7 @@ import {
   fetchProductModelVersions,
   fetchProcessModules,
   fetchProcesses,
+  listLineVariants,
   publishProductModelVersion,
   refreshProductModelMaterialPrices,
   syncProductModelVersionFromModules,
@@ -411,6 +412,24 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     queryFn: () => fetchProductModelVersionLines(selectedVersionId as string),
     enabled: open && !!selectedVersionId,
   })
+
+  // 标准模型：行级变体（Overlay）提示（仅用于 UI 标记，不影响逻辑）
+  const lineVariantsForVersionQuery = useQuery({
+    queryKey: ['lineVariantsForVersion', selectedVersionId],
+    queryFn: () => listLineVariants({ version_id: selectedVersionId as string }),
+    enabled: open && entryContext === 'standard' && activeTab === 'lines' && !!selectedVersionId,
+  })
+
+  const lineVariantCountByBaseLineId = useMemo(() => {
+    const map = new Map<string, number>()
+    const items = (lineVariantsForVersionQuery.data ?? []) as any[]
+    for (const v of items) {
+      const bid = String(v?.base_line_id ?? '').trim()
+      if (!bid) continue
+      map.set(bid, (map.get(bid) ?? 0) + 1)
+    }
+    return map
+  }, [lineVariantsForVersionQuery.data])
 
   const filteredVersions = useMemo(
     () => (versions ?? []).filter((v) => String(v.version_kind) === desiredKind),
@@ -2517,7 +2536,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                           {
                             title: '操作',
                             width: 120,
-                            render: (_: any, __: any, idx: number) => (
+                            render: (_: any, row: any, idx: number) => {
+                              const baseLineId = String(row?.id ?? '').trim()
+                              const hasVariants = baseLineId ? (lineVariantCountByBaseLineId.get(baseLineId) ?? 0) > 0 : false
+                              return (
                               <Space size={2}>
                                 <Button size="small" type="text" icon={<SwapOutlined />} title="替换" onClick={() => openMaterialPickerForRow(idx)} />
                                 {entryContext === 'standard' ? (
@@ -2525,7 +2547,17 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                     size="small"
                                     type="text"
                                     icon={<BranchesOutlined />}
-                                    title="变体（Overlay）"
+                                    title={hasVariants ? '变体（Overlay）：已配置' : '变体（Overlay）'}
+                                    style={
+                                      hasVariants
+                                        ? {
+                                            background: '#fff7e6',
+                                            border: '1px solid #ffe58f',
+                                            borderRadius: 6,
+                                            color: '#ad6800',
+                                          }
+                                        : undefined
+                                    }
                                     onClick={() => openLineVariantDrawerForMaterialRow((materials as any[])[idx])}
                                   />
                                 ) : null}
@@ -2537,7 +2569,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                   onClick={() => openTuningPanelForMaterial(idx)}
                                 />
                               </Space>
-                            ),
+                              )
+                            },
                           },
                           {
                             title: '本品用量',

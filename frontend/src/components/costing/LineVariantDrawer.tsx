@@ -5,6 +5,7 @@ import { DeleteOutlined, EditOutlined, PlayCircleOutlined } from '@ant-design/ic
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { createLineVariant, deleteLineVariant, generateBom, listLineVariants, parseSpec, replaceLineVariantItems, updateLineVariant } from '@/services/planner'
+import MaterialSelectModal from './MaterialSelectModal'
 import type {
   BomGenerateResponse,
   LineVariantAction,
@@ -116,6 +117,8 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
   const [draftTriggerType, setDraftTriggerType] = useState<TriggerType>('token')
 
   const [editModalOpen, setEditModalOpen] = useState(false)
+  const [materialPickerOpen, setMaterialPickerOpen] = useState(false)
+  const [materialPickerRowKey, setMaterialPickerRowKey] = useState<string | null>(null)
   const [editMode, setEditMode] = useState<'create' | 'edit'>('edit')
   const [modalRows, setModalRows] = useState<ModalRuleRow[]>([])
 
@@ -413,7 +416,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
         if (!lastPreviewOk) return '启用前必须先预演成功（spec/parse + bom/generate）'
         if (needDim && (lastPreviewSummary as any)?.[needDim] == null) return `你选择了“${triggerLabel(draftTriggerType)}”，但预演样例未解析出对应数值，请换 spec_text 重新预演`
         const ref = String(row.item.material_ref_id ?? '').trim()
-        if (!ref) return '请先填写替换物料 material_ref_id 并保存（让后端回填单位）'
+        if (!ref) return '请先选择替换物料并保存（让后端回填单位）'
         if (!baseUnitFromBom || !normalizeUnit(row.item.unit_of_measure)) {
           return '单位信息缺失：请先保存（让后端回填 unit_of_measure）并预演；主数据单位未补齐也会导致缺失'
         }
@@ -857,13 +860,44 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                     width: 260,
                     render: (_: any, r: ModalRuleRow) => (
                       <Space direction="vertical" size={0} style={{ width: '100%' }}>
-                        <Input
-                          placeholder="material_ref_id"
-                          value={String(r.item.material_ref_id ?? '')}
-                          onChange={(e) => updateModalRow(r.key, { item: { ...r.item, material_ref_id: e.target.value } })}
-                        />
+                        <Space.Compact style={{ width: '100%' }}>
+                          <Input
+                            readOnly
+                            placeholder="点击右侧“选择”"
+                            value={String(r.item.material_code ?? '') || String(r.item.material_ref_id ?? '') || ''}
+                          />
+                          <Button
+                            size="small"
+                            onClick={() => {
+                              setMaterialPickerRowKey(r.key)
+                              setMaterialPickerOpen(true)
+                            }}
+                          >
+                            选择
+                          </Button>
+                          <Button
+                            size="small"
+                            danger
+                            onClick={() =>
+                              updateModalRow(r.key, {
+                                item: {
+                                  ...r.item,
+                                  material_ref_id: '',
+                                  material_code: null,
+                                  material_name: null,
+                                  unit_of_measure: null,
+                                },
+                              })
+                            }
+                          >
+                            清空
+                          </Button>
+                        </Space.Compact>
                         <Text type="secondary" style={{ fontSize: 12 }}>
                           {r.item.material_code ?? '-'} {r.item.material_name ?? ''}
+                        </Text>
+                        <Text type="secondary" style={{ fontSize: 12 }}>
+                          单位：{r.item.unit_of_measure ?? '-'}
                         </Text>
                       </Space>
                     ),
@@ -1058,6 +1092,29 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
             </Card>
           </Space>
         </Modal>
+
+        <MaterialSelectModal
+          open={materialPickerOpen}
+          onClose={() => {
+            setMaterialPickerOpen(false)
+            setMaterialPickerRowKey(null)
+          }}
+          title="选择替换物料（同单位平替）"
+          onlyBom
+          onSelect={(m) => {
+            const key = materialPickerRowKey
+            if (!key) return
+            updateModalRow(key, {
+              item: {
+                ...(modalRows.find((x) => x.key === key)?.item ?? ({} as any)),
+                material_ref_id: m.id,
+                material_code: m.material_code,
+                material_name: m.material_name,
+                unit_of_measure: m.unit ?? null,
+              } as any,
+            })
+          }}
+        />
       </Space>
     </Drawer>
   )

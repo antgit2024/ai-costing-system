@@ -729,9 +729,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
           open={editModalOpen}
           onCancel={() => setEditModalOpen(false)}
           width={980}
-          okText={editMode === 'create' ? '创建并保存' : '保存'}
-          confirmLoading={modalSaveMutation.isPending}
-          onOk={() => modalSaveMutation.mutate()}
+          footer={null}
           bodyStyle={{ maxHeight: '72vh', overflowY: 'auto' }}
           destroyOnClose
         >
@@ -746,6 +744,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                     <b>{STABLE_SHAPE_LABEL}</b>
                   </div>
                   <div style={{ color: '#8c8c8c' }}>弹窗内按“同一触发类型”批量维护多条规则，每行=一条规则。</div>
+                  <div style={{ color: '#8c8c8c' }}>重要：预演只会读取“已保存入库”的规则；因此请先点“创建并保存/保存”，再点右侧“预演”。</div>
                 </div>
               }
             />
@@ -770,9 +769,19 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                 </Space>
               }
               extra={
-                <Button size="small" type="primary" onClick={addModalRow}>
-                  新增
-                </Button>
+                <Space size={8}>
+                  <Button size="small" type="primary" onClick={addModalRow}>
+                    新增
+                  </Button>
+                  <Button
+                    size="small"
+                    type="primary"
+                    loading={modalSaveMutation.isPending}
+                    onClick={() => modalSaveMutation.mutate()}
+                  >
+                    {editMode === 'create' ? '创建并保存' : '保存'}
+                  </Button>
+                </Space>
               }
             >
               <Table
@@ -791,6 +800,40 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                           if (v && (!lastPreviewOk || previewStale)) {
                             message.error(previewStale ? '预演已过期：请先重新预演' : '启用前必须先预演成功')
                             return
+                          }
+                          if (v) {
+                            const needDim =
+                              draftTriggerType === 'width'
+                                ? 'width_cm'
+                                : draftTriggerType === 'height'
+                                  ? 'height_cm'
+                                  : draftTriggerType === 'area'
+                                    ? 'area_m2'
+                                    : draftTriggerType === 'perimeter'
+                                      ? 'perimeter_m'
+                                      : null
+                            if (needDim && (lastPreviewSummary as any)?.[needDim] == null) {
+                              message.error(`你选择了“${triggerLabel(draftTriggerType)}”，但预演样例未解析出对应数值，请换 spec_text 重新预演`)
+                              return
+                            }
+                            const ref = String(r.item.material_ref_id ?? '').trim()
+                            if (!ref) {
+                              message.error('请先选择替换物料并保存（让后端回填单位）')
+                              return
+                            }
+                            if (!baseUnitFromBom) {
+                              message.error('基准行单位缺失：请先补齐主数据单位并“保存清单”，再回来启用规则')
+                              return
+                            }
+                            const targetU = normalizeUnit(r.item.unit_of_measure)
+                            if (!targetU) {
+                              message.error('替换物料单位缺失：请先保存（让后端回填 unit_of_measure）')
+                              return
+                            }
+                            if (targetU !== baseUnitFromBom) {
+                              message.error(`单位不一致：基准=${baseUnitFromBom}，替换物料=${targetU}（只允许同单位平替）`)
+                              return
+                            }
                           }
                           updateModalRow(r.key, { enabled: v })
                         }}

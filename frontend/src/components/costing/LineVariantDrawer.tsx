@@ -1150,7 +1150,12 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                           dataIndex: 'computed_quantity',
                           render: (v) => (v != null ? String(v) : '-'),
                         },
-                        { title: '单位', width: 80, dataIndex: 'unit_of_measure', render: (v) => v ?? '-' },
+                        {
+                          title: '单位',
+                          width: 80,
+                          dataIndex: 'unit_of_measure',
+                          render: (v) => normalizeUnit(v) ?? '-',
+                        },
                       ]}
                     />
                   ) : (

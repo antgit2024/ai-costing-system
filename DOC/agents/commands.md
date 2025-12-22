@@ -15,6 +15,10 @@
 
 - 行级变体运营规范文档存在性：
   - `grep -nF "## 标准模型：行级变体（Overlay）运营/实施规范（v0.1）" DOC/costing/manuals/standard_model_variants_ops_rules.md`
+- 发货时再解析（spec_hash 缓存）评审稿存在性：
+  - `grep -nF "发货时再解析（spec_hash 缓存）+ SKU→已发布标准版本绑定：优化方案评审稿（Phase0/Phase1）" DOC/costing/reviews/shipment_time_parse_review_phase0_phase1_20251222.md`
+- ERP 口径补强清单存在性：
+  - `grep -nF "ERP 口径补强清单（Guardrails Addendum）— 发货时再解析主链优先" DOC/costing/reviews/erp_guardrails_addendum_20251222.md`
 
 ### 2) 本地联调（可选，但强烈建议）
 

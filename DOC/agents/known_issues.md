@@ -35,5 +35,23 @@
 - 现象：在 SSH/非交互环境执行 `systemctl --user restart planner-costing.service` 报错（无法连接 user bus / 找不到 runtime dir），导致服务无法重启。
 - 处理：先执行 `export XDG_RUNTIME_DIR=/run/user/$(id -u)`，再运行 `systemctl --user ...`。
 
+### 7) `SKU_NOT_BOUND` 的业务含义（对外文案必须解释清楚）
+
+- **含义口径**：导入发货行时，`sku_code` 无法解析到一个“可用且已发布的标准版本（published standard version）”。
+- **常见根因**：
+  - 未建立 SKU→标准版本绑定
+  - 绑定存在但版本未发布/被禁用（不可用于生产计算）
+  - 绑定到草稿/打样版本（口径错误）
+- **UI 建议**：异常队列主表按 Excel 列展示；系统字段（`bound_version_id/spec_hash/parser_version/trace`）进抽屉；`SKU_NOT_BOUND` 提示“去绑定/重试异常”。
+
+### 8) “幂等”和“重跑”的语义容易被误解（必须提前写死）
+
+- **误区**：做了幂等后，运营补齐绑定/升级规则，仍然“导入同文件=不再生成结果”，业务误以为系统坏了。
+- **口径**：
+  - 幂等只保证“不重复写同一份结果”
+  - 重跑/重算必须显式触发，并产出**新快照**（不回写历史快照）
+- **建议**：统一采用 3 种动作语义（见 `DOC/costing/reviews/erp_guardrails_addendum_20251222.md`）：
+  - Retry Exceptions / Rerun Batch / Rebuild Snapshot（单行）
+
 
 

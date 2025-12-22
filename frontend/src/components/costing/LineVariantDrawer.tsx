@@ -320,7 +320,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     () =>
       modalRows.map((r) => ({
         id: r.id ?? null,
-        enabled: !!r.enabled,
+        // 注意：fingerprint 不包含 enabled，否则“预演通过 → 打开启动”会被判定为预演过期（逻辑冲突）
         op: r.op,
         min: r.min ?? null,
         max: r.max ?? null,
@@ -627,7 +627,10 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
 
   const updateModalRow = (key: string, patch: Partial<ModalRuleRow>) => {
     setModalRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)))
-    invalidatePreview()
+    // 仅切换“启动(enabled)”不应使预演失效，否则会出现：预演通过→打开启动→保存时又提示必须预演 的冲突
+    const keys = Object.keys(patch ?? {})
+    const onlyEnabledToggle = keys.length === 1 && keys[0] === 'enabled'
+    if (!onlyEnabledToggle) invalidatePreview()
   }
 
   const removeModalRow = async (row: ModalRuleRow) => {
@@ -703,6 +706,20 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
             </Space>
           }
         >
+          {variants.length === 0 ? (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message="该行暂无规则"
+              description={
+                <span style={{ fontSize: 12 }}>
+                  如果你之前建过规则但这里为空，通常是 <b>base_line_id 变化</b>（例如未“保存清单/同步清单”导致行ID不稳定）。
+                  建议：先在主抽屉里保存清单，再回来创建/查看行级变体。
+                </span>
+              }
+            />
+          ) : null}
           <Table
             rowKey="id"
             size="small"

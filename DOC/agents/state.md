@@ -73,3 +73,6 @@
 
 - **下一步闭环任务单（前端 UX 细化）**：`DOC/agents/briefings/frontend_line_variants_material_picker_mvp.md`（替换物料选择器：替代手输ID）
 - **验收命令（派单文件存在）**：`grep -nF "# Frontend 闭环任务单：行级变体“替换物料”不再手输ID（选择器 + 自动回填 + 同单位校验）" DOC/agents/briefings/frontend_line_variants_material_picker_mvp.md`
+
+- **下一步闭环任务单（SKU→库存扣料清单）**：`DOC/agents/briefings/backend_sku_binding_inventory_mvp.md`
+- **验收命令（派单文件存在）**：`grep -nF "# Backend 闭环任务单：SKU 绑定 + 规格解析尺寸/条件 + 生成库存扣料清单（BOM 快照）MVP" DOC/agents/briefings/backend_sku_binding_inventory_mvp.md`

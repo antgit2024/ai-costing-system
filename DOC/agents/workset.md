@@ -48,6 +48,7 @@
 ### 3.3) 派单任务单（供执行 Agent 闭环）
 
 - `DOC/agents/briefings/backend_line_variants_mvp.md`（后端闭环：行级变体 overlay + spec/parse tokens + bom/generate MVP）
+- `DOC/agents/briefings/backend_sku_binding_inventory_mvp.md`（后端闭环：SKU绑定 + spec解析 + 生成库存扣料清单（BOM快照））
 - `DOC/agents/briefings/frontend_line_variants_panel_mvp.md`（前端闭环：物料行变体按钮 + overlay Drawer + 预演对接）
 - `DOC/agents/briefings/frontend_line_variants_material_picker_mvp.md`（前端闭环：变体替换物料选择器，替代手输ID）
 - `DOC/agents/briefings/ops_deploy_line_variants_to_4799.md`（运维闭环：部署行级变体到 47.99.89.206 + curl 验收）

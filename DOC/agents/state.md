@@ -78,6 +78,8 @@
 - **验收命令（派单文件存在）**：`grep -nF "# Ops/Backend Ops 闭环任务单：部署“行级变体（overlay）”到 47.99.89.206" DOC/agents/briefings/ops_deploy_line_variants_to_4799.md`
 - **下一步闭环任务单（运维/上线：发货单导入→BOM快照）**：`DOC/agents/briefings/ops_deploy_shipment_import_bom_snapshots_to_4799.md`
 - **验收命令（派单文件存在）**：`grep -nF "# Ops/Backend Ops 闭环任务单：部署“发货单导入→spec_cache→BOM快照”到 47.99.89.206（MVP）" DOC/agents/briefings/ops_deploy_shipment_import_bom_snapshots_to_4799.md`
+- **下一步闭环任务单（运维/上线：前端发货单上传入口）**：`DOC/agents/briefings/ops_deploy_frontend_shipments_upload_to_4799.md`
+- **验收命令（派单文件存在）**：`grep -nF "# Ops 闭环任务单：部署前端“发货单上传导入入口”到 47.99.89.206（/costing/shipments）" DOC/agents/briefings/ops_deploy_frontend_shipments_upload_to_4799.md`
 - **最新部署（2025-12-22 21:10 CST）**：
   - `47.99.89.206` 已执行 `git pull --ff-only`、`alembic upgrade heads`（存在 `0016_line_variants_mvp` 与 `0754ad7d6c3f` 双 head，采用 `heads` 选项同步）
   - `systemctl --user restart planner-costing.service`（需要 `export XDG_RUNTIME_DIR=/run/user/$(id -u)`）后，`curl http://127.0.0.1:8800/api/planner/health` 返回 `{"status":"ok"}`

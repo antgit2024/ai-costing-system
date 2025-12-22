@@ -59,6 +59,7 @@
 - `DOC/agents/briefings/frontend_line_variants_material_picker_mvp.md`（前端闭环：变体替换物料选择器，替代手输ID）
 - `DOC/agents/briefings/ops_deploy_line_variants_to_4799.md`（运维闭环：部署行级变体到 47.99.89.206 + curl 验收）
 - `DOC/agents/briefings/ops_deploy_shipment_import_bom_snapshots_to_4799.md`（运维闭环：部署发货单导入→BOM快照到 47.99.89.206 + curl/pytest 验收）
+- `DOC/agents/briefings/ops_deploy_frontend_shipments_upload_to_4799.md`（运维闭环：部署前端发货单上传入口到 47.99.89.206）
 
 ### 4) 质量门槛（可运行/可验收）
 

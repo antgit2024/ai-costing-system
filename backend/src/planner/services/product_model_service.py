@@ -914,6 +914,19 @@ def replace_model_lines(
         meta_line["standard_used_quantity"] = str(_decimal(standard_used, Decimal("0")))
         meta_line["fixed_quantity"] = str(fixed)
         meta_line["coverage_ratio"] = str(cov)
+
+        # IMPORTANT: Persist unit_of_measure on ledger lines (preview/BOM reads this field).
+        # Otherwise UI may show unit from master, but BOM will always display '-' (None).
+        uom: Optional[str] = None
+        if ref_id:
+            if kind in ("real", "material"):
+                mat = db.get(models.Material, ref_id)
+                if mat and not mat.is_archived:
+                    uom = getattr(mat, "unit", None)
+            elif kind == "virtual":
+                vm2 = db.get(models.VirtualMaterial, ref_id)
+                if vm2 and not vm2.is_archived:
+                    uom = getattr(vm2, "unit", None)
         db.add(
             models.ModelMaterial(
                 model_id=model.id,
@@ -921,7 +934,7 @@ def replace_model_lines(
                 material_ref_id=ref_id,
                 material_code=item.get("material_code"),
                 material_name=item.get("material_name"),
-                unit_of_measure=None,
+                unit_of_measure=uom,
                 calculation_method=method,
                 base_quantity=base,
                 loss_rate=loss_rate,
@@ -1058,6 +1071,19 @@ def replace_version_lines(
         meta_line["fixed_quantity"] = str(fixed)
         meta_line["coverage_ratio"] = str(cov)
 
+        # IMPORTANT: Persist unit_of_measure on version ledger lines (bom/generate reads ModelVersionMaterial.unit_of_measure).
+        # Otherwise preview BOM will always display '-' even if material master has unit (e.g. WH05009: 平米).
+        uom: Optional[str] = None
+        if ref_id:
+            if kind in ("real", "material"):
+                mat = db.get(models.Material, ref_id)
+                if mat and not mat.is_archived:
+                    uom = getattr(mat, "unit", None)
+            elif kind == "virtual":
+                vm2 = db.get(models.VirtualMaterial, ref_id)
+                if vm2 and not vm2.is_archived:
+                    uom = getattr(vm2, "unit", None)
+
         db.add(
             models.ModelVersionMaterial(
                 version_id=version.id,
@@ -1065,7 +1091,7 @@ def replace_version_lines(
                 material_ref_id=ref_id,
                 material_code=item.get("material_code"),
                 material_name=item.get("material_name"),
-                unit_of_measure=None,
+                unit_of_measure=uom,
                 calculation_method=method,
                 base_quantity=base,
                 loss_rate=_decimal(item.get("loss_rate"), Decimal("0")),

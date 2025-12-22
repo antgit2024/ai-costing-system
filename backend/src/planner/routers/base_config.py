@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import csv
 import io
+import json
+import logging
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -18,6 +20,8 @@ from ...config import settings
 from ...database import get_db
 from .. import models, schemas
 from ..services import material_service
+from ..services import material_image_storage
+from ..services.dingtalk_client import get_dingtalk_client
 from ..services.yida_sync import (
     ProcessSyncService,
     YidaConfig,
@@ -27,6 +31,7 @@ from ..services.yida_sync import (
 from openpyxl import Workbook
 
 router = APIRouter(prefix="/base-config", tags=["base-config"])
+logger = logging.getLogger(__name__)
 
 
 class YidaMaterialSyncRequest(BaseModel):
@@ -168,6 +173,83 @@ def get_material(material_id: str, db: Session = Depends(get_db)) -> schemas.Mat
     if not material or material.is_archived:
         raise HTTPException(status_code=404, detail="Material not found")
     return schemas.MaterialRead.from_orm(material)
+
+
+@router.get(
+    "/materials/{material_id}/images/{image_index}",
+    response_class=StreamingResponse,
+)
+def download_material_image(
+    material_id: str,
+    image_index: int,
+    size: Optional[int] = Query(None, ge=32, le=512),
+    db: Session = Depends(get_db),
+) -> StreamingResponse:
+    """
+    Image proxy for materials.
+
+    Order:
+    1) Serve from metadata_json.local_images if present and file exists
+    2) Otherwise download from DingTalk using metadata_json.images (ossFileHandle) and persist locally (best-effort)
+    """
+    material = db.get(models.Material, material_id)
+    if not material or material.is_archived:
+        raise HTTPException(status_code=404, detail="Material not found")
+    metadata = dict(material.metadata_json or {})
+    image_sources = metadata.get("images") or []
+    if not isinstance(image_sources, list):
+        image_sources = []
+    if image_index < 0 or image_index >= len(image_sources):
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    # 1) local
+    local_ref = material_image_storage.get_local_image_ref(metadata, image_index)
+    if local_ref is not None:
+        try:
+            content = material_image_storage.read_local_bytes(local_ref)
+            media_type = local_ref.content_type or "application/octet-stream"
+            # NOTE: we currently ignore thumbnail resize (no Pillow dependency); return original.
+            return StreamingResponse(io.BytesIO(content), media_type=media_type)
+        except FileNotFoundError:
+            # fallthrough to dingtalk download
+            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to read local material image (material=%s idx=%s): %s", material_id, image_index, exc)
+
+    # 2) DingTalk download
+    try:
+        client = get_dingtalk_client()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    try:
+        attachment = client.download_attachment(str(image_sources[image_index]))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"DingTalk download failed: {exc}") from exc
+
+    content_type = attachment.headers.get("Content-Type")
+
+    # Best-effort: persist locally so future loads don't depend on DingTalk.
+    if settings.planner_persist_material_images:
+        try:
+            ref = material_image_storage.persist_bytes(
+                material_id=material_id,
+                image_index=image_index,
+                source_url=str(image_sources[image_index]),
+                content=attachment.content,
+                content_type=content_type,
+            )
+            # Deep-copy to avoid SQLAlchemy JSON change-tracking pitfalls on nested mutables.
+            metadata2 = json.loads(json.dumps(material.metadata_json or {}, ensure_ascii=False))
+            material_image_storage.set_local_image_ref(metadata2, image_index, ref)
+            material.metadata_json = metadata2
+            db.commit()
+        except Exception as exc:  # noqa: BLE001
+            db.rollback()
+            logger.warning("Failed to persist material image locally (material=%s idx=%s): %s", material_id, image_index, exc)
+
+    # Thumbnail resize not implemented; return original
+    media_type = content_type or "application/octet-stream"
+    return StreamingResponse(io.BytesIO(attachment.content), media_type=media_type)
 
 
 @router.patch(

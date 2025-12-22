@@ -37,6 +37,16 @@ class Settings(BaseSettings):
         env="YIDA_PROCESSES_CONFIG_PATH",
     )
 
+    # Media storage (material images)
+    planner_media_dir: str = Field(
+        default=str(BASE_DIR / "backend" / "media"),
+        env="PLANNER_MEDIA_DIR",
+    )
+    planner_persist_material_images: bool = Field(
+        default=True,
+        env="PLANNER_PERSIST_MATERIAL_IMAGES",
+    )
+
     class Config:
         env_file = str(ENV_FILE)
         env_file_encoding = "utf-8"

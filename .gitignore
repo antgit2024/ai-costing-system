@@ -18,6 +18,9 @@ coverage.xml
 **/*.sqlite
 **/*.sqlite3
 
+# Local media / persisted downloads (never commit)
+backend/media/
+
 
 
 

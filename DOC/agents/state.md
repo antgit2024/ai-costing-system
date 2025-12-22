@@ -1,6 +1,6 @@
 ## 当前状态（崩了也能继续）
 
-- **最近校对（北京时间 GMT+8）**：2025-12-21 22:40（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
+- **最近校对（北京时间 GMT+8）**：2025-12-21 23:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **分支**：`backup/20251214-1535`
 
 - **本轮闭环产物（Frontend / 行级变体收口：ERP 最稳第一步）**：
@@ -34,6 +34,12 @@
   - `LineVariantDrawer` 的“编辑”弹窗改为 **多条规则表格**（同一触发类型下批量维护）：列为 启动/条件表达式/替换物料/β/α/覆盖率/损耗% + 新增/删除
   - 启用拦截：未预演成功或预演已过期时，不允许打开“启动”（前端直接提示）
   - 说明：当前版本仍按“同一触发类型”批量维护；若未来要允许每行触发类型不同，需要单独迭代 UI/保存/门槛（本轮暂停）
+
+- **本轮补充（Backend / 缩略图恢复）**：
+  - 恢复图片代理接口：`GET /api/planner/base-config/materials/{id}/images/{idx}`
+  - 行为：优先读取 `metadata_json.local_images` 的本地文件；若缺失则从钉钉下载并落盘到 `PLANNER_MEDIA_DIR`，并回写 `metadata_json.local_images`
+  - 纠偏：钉钉 `temporaryUrls` 在当前环境为 **GET** 且 `appType` 在路径里（非 POST）
+  - 本地媒体目录默认：`backend/media`（已加入 `.gitignore`，避免误提交）
 
 - **下一步（不在本轮范围）**：
   - 若要允许“每行不同触发类型（token/宽/高/面积/周长混合）”并保持启用门槛正确：需要把触发类型下放到每行，并按行计算维度缺失/单位回填/预演样例覆盖

@@ -93,6 +93,9 @@ import type {
   LineVariantUpdateRequest,
   BomGenerateRequest,
   BomGenerateResponse,
+  BomSnapshot,
+  ShipmentException,
+  ShipmentImportBatchListResponse,
 } from '@/types/planner'
 
 const resolvePlannerApiBase = (raw?: string): string => {
@@ -904,4 +907,31 @@ export const approveScenario = (payload: ApprovalApprovePayload) =>
 
 export const rejectScenario = (payload: ApprovalRejectPayload) =>
   postApproval('/approvals/reject', payload)
+
+export const fetchShipmentImportBatches = async (
+  params: { page?: number; page_size?: number } = {},
+): Promise<ShipmentImportBatchListResponse> => {
+  const response = await plannerClient.get('/shipments/import-batches', { params: sanitizeParams(params) })
+  return response.data
+}
+
+export const fetchShipmentExceptions = async (
+  params: { batch_id?: string; resolved?: boolean; limit?: number } = {},
+): Promise<ShipmentException[]> => {
+  const response = await plannerClient.get('/shipments/exceptions', { params: sanitizeParams(params) })
+  return response.data
+}
+
+export const fetchShipmentBomSnapshots = async (
+  params: {
+    batch_id?: string
+    sku_code?: string
+    shipment_no?: string
+    spec_hash?: string
+    limit?: number
+  } = {},
+): Promise<BomSnapshot[]> => {
+  const response = await plannerClient.get('/shipments/bom-snapshots', { params: sanitizeParams(params) })
+  return response.data
+}
 

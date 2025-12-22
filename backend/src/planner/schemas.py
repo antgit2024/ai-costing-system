@@ -1720,6 +1720,13 @@ class ShipmentImportBatchRead(BaseModel):
         allow_population_by_field_name = True
 
 
+class PaginatedShipmentImportBatchResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: List[ShipmentImportBatchRead]
+
+
 class ShipmentExceptionRead(BaseModel):
     id: str
     batch_id: str

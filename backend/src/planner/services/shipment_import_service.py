@@ -471,21 +471,57 @@ def get_batch(db: Session, batch_id: str) -> Optional[models.ShipmentImportBatch
     return db.get(models.ShipmentImportBatch, batch_id)
 
 
-def list_exceptions(db: Session, *, batch_id: str) -> List[models.ShipmentExceptionQueue]:
-    return (
-        db.query(models.ShipmentExceptionQueue)
-        .filter(models.ShipmentExceptionQueue.batch_id == batch_id)
-        .order_by(models.ShipmentExceptionQueue.created_at.asc())
-        .all()
-    )
+def list_batches(
+    db: Session,
+    *,
+    page: int = 1,
+    page_size: int = 20,
+) -> Tuple[int, List[models.ShipmentImportBatch]]:
+    page = max(int(page or 1), 1)
+    page_size = max(min(int(page_size or 20), 200), 1)
+    query = db.query(models.ShipmentImportBatch).order_by(models.ShipmentImportBatch.created_at.desc())
+    total = query.count()
+    items = query.offset((page - 1) * page_size).limit(page_size).all()
+    return total, items
 
 
-def list_bom_snapshots(db: Session, *, batch_id: str) -> List[models.BomSnapshot]:
-    return (
-        db.query(models.BomSnapshot)
-        .filter(models.BomSnapshot.batch_id == batch_id)
-        .order_by(models.BomSnapshot.created_at.asc())
-        .all()
-    )
+def list_exceptions(
+    db: Session,
+    *,
+    batch_id: Optional[str] = None,
+    resolved: Optional[bool] = None,
+    limit: int = 200,
+) -> List[models.ShipmentExceptionQueue]:
+    limit = max(min(int(limit or 200), 1000), 1)
+    query = db.query(models.ShipmentExceptionQueue)
+    if batch_id:
+        query = query.filter(models.ShipmentExceptionQueue.batch_id == batch_id)
+    if resolved is True:
+        query = query.filter(models.ShipmentExceptionQueue.resolved_at.isnot(None))
+    elif resolved is False:
+        query = query.filter(models.ShipmentExceptionQueue.resolved_at.is_(None))
+    return query.order_by(models.ShipmentExceptionQueue.created_at.desc()).limit(limit).all()
+
+
+def list_bom_snapshots(
+    db: Session,
+    *,
+    batch_id: Optional[str] = None,
+    sku_code: Optional[str] = None,
+    shipment_no: Optional[str] = None,
+    spec_hash: Optional[str] = None,
+    limit: int = 200,
+) -> List[models.BomSnapshot]:
+    limit = max(min(int(limit or 200), 1000), 1)
+    query = db.query(models.BomSnapshot)
+    if batch_id:
+        query = query.filter(models.BomSnapshot.batch_id == batch_id)
+    if sku_code:
+        query = query.filter(models.BomSnapshot.sku_code == sku_code)
+    if shipment_no:
+        query = query.filter(models.BomSnapshot.shipment_no == shipment_no)
+    if spec_hash:
+        query = query.filter(models.BomSnapshot.spec_hash == spec_hash)
+    return query.order_by(models.BomSnapshot.created_at.desc()).limit(limit).all()
 
 

@@ -1243,3 +1243,49 @@ export interface CodeGenerateResponse {
   code: string
 }
 
+export interface ShipmentImportBatch {
+  id: string
+  file_name?: string | null
+  file_hash: string
+  export_date?: string | null
+  requested_by?: string | null
+  status: string
+  total_rows: number
+  inserted_rows: number
+  skipped_rows: number
+  exception_rows: number
+  warnings_json?: Array<Record<string, unknown>>
+  result_json?: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export interface ShipmentImportBatchListResponse extends PaginatedResponse<ShipmentImportBatch> {}
+
+export interface ShipmentException {
+  id: string
+  batch_id: string
+  shipment_line_id?: string | null
+  reason: string
+  message?: string | null
+  payload_json?: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export interface BomSnapshot {
+  id: string
+  batch_id: string
+  shipment_line_id: string
+  shipment_no?: string | null
+  sku_code?: string | null
+  model_version_id?: string | null
+  spec_hash?: string | null
+  qty?: string | null
+  final_material_lines: Array<Record<string, unknown>>
+  trace: Record<string, unknown>
+  generated_at?: string | null
+  created_at: string
+  updated_at: string
+}
+

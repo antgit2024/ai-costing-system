@@ -21,6 +21,7 @@
 - 访问页面：
   - 打样模型：`/costing/sample-models`
   - 标准模型：`/costing/standard-models`
+  - 发货批次/BOM快照（只读）：`/costing/shipments`
 
 ### 3) 后端接口 smoke（可选）
 

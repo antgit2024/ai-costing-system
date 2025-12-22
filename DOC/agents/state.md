@@ -1,6 +1,6 @@
 ## 当前状态（崩了也能继续）
 
-- **最近校对（北京时间 GMT+8）**：2025-12-22 21:15（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
+- **最近校对（北京时间 GMT+8）**：2025-12-22 22:40（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **分支**：`backup/20251214-1535`
 
 - **本轮闭环产物（Frontend / 行级变体收口：ERP 最稳第一步）**：
@@ -24,12 +24,30 @@
   - `frontend/src/components/costing/LineVariantDrawer.tsx`
   - `frontend/src/services/planner.ts`
   - `frontend/src/types/planner.ts`
+  - `frontend/src/pages/costing/ShipmentMonitorPage.tsx`
+  - `backend/src/planner/routers/shipments.py`
+  - `backend/src/planner/services/shipment_import_service.py`
+  - `backend/src/planner/schemas.py`
 
 - **已确认正确版本快照（请勿覆盖）**：
   - `DOC/index/extracted/ProductModelEditorDrawer_confirmed_20251221T042643Z.tsx`
   - 校验和：`DOC/index/extracted/ProductModelEditorDrawer_confirmed_20251221T042643Z.sha256`
 
 - **本轮验收命令（必须）**：`npm -C frontend run build`（已通过）
+
+- **本轮闭环产物（Frontend / 只读：发货批次列表 + 异常队列 + BOM 快照查询）**：
+  - 新增页面：`/costing/shipments`（只读）
+  - 页面包含 3 块：
+    - 发货批次列表（分页，点击行设置当前 batch_id）
+    - 异常队列（支持 batch_id/解决状态/limit 过滤）
+    - BOM 快照查询（支持 batch_id/SKU/发货单号/spec_hash/limit 过滤，支持抽屉查看 trace + 最终 BOM 行摘要）
+  - 依赖接口（后端已补齐最小查询能力）：
+    - `GET /api/planner/shipments/import-batches?page=1&page_size=20`
+    - `GET /api/planner/shipments/exceptions?batch_id=...&resolved=...&limit=...`
+    - `GET /api/planner/shipments/bom-snapshots?batch_id=...&sku_code=...&shipment_no=...&spec_hash=...&limit=...`
+  - 本轮验收命令（补充）：
+    - Docs：`grep -nF "## 标准模型：行级变体（Overlay）运营/实施规范（v0.1）" DOC/costing/manuals/standard_model_variants_ops_rules.md`
+    - Backend smoke：`curl -sS "http://127.0.0.1:8800/api/planner/product-model-versions?version_kind=standard&page=1&page_size=1" | python -m json.tool`
 
 - **本轮补充（Frontend / 替换物料选择器 MVP）**：
   - 位置：`LineVariantDrawer` 编辑弹窗的“替换物料”列

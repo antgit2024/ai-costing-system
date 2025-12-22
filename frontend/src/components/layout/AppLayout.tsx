@@ -65,6 +65,10 @@ const menuItems: MenuProps['items'] = [
         key: '/costing/pricing-tools',
         label: <Link to="/costing/pricing-tools">核价工具</Link>,
       },
+      {
+        key: '/costing/shipments',
+        label: <Link to="/costing/shipments">发货批次 / BOM快照</Link>,
+      },
     ],
   },
   {
@@ -113,6 +117,9 @@ const AppLayout = ({ children }: AppLayoutProps) => {
       }
       if (location.pathname.startsWith('/costing/pricing-tools')) {
         return ['/costing/pricing-tools']
+      }
+      if (location.pathname.startsWith('/costing/shipments')) {
+        return ['/costing/shipments']
       }
       return ['/costing']
     }

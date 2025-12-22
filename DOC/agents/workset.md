@@ -2,7 +2,7 @@
 
 > 目的：把“上下文”从聊天迁到可引用的工作集；新 Agent 只需读这些，不要全仓扫描。
 
-> 最近校对（北京时间 GMT+8）：2025-12-21
+> 最近校对（北京时间 GMT+8）：2025-12-22
 
 ### 1) 前端：产品模型（迁移编辑器的核心工作区）
 
@@ -15,6 +15,7 @@
 - `frontend/src/pages/costing/CostingModelsPage.tsx`（旧编辑器来源：迁移参考）
 - `frontend/src/pages/costing/SampleModelsPage.tsx`（打样模型入口：entryContext="sample"）
 - `frontend/src/pages/costing/StandardModelsPage.tsx`（标准模型入口：entryContext="standard" + initialVersionId）
+- `frontend/src/pages/costing/ShipmentMonitorPage.tsx`（发货批次/异常队列/BOM快照只读页：/costing/shipments）
 - `frontend/src/services/planner.ts`（前端接口单一真相）
 - `frontend/src/types/planner.ts`（前端类型单一真相）
 - `frontend/src/App.tsx`（路由：/costing/sample-models & /costing/standard-models）
@@ -26,6 +27,7 @@
 - `backend/src/planner/routers/specs.py`（spec/parse：规格解析 tokens）
 - `backend/src/planner/routers/bom.py`（bom/generate：动态 BOM 预演）
 - `backend/src/planner/routers/line_variants.py`（version-scoped 行级变体 CRUD）
+- `backend/src/planner/routers/shipments.py`（发货导入/批次/异常队列/BOM快照：/api/planner/shipments/*）
 - `backend/src/planner/schemas.py`（如需核对字段名/response 结构）
 - `backend/src/planner/services/bom_generation_service.py`（动态 BOM 生成：overlay 套用与 replace_bundle 语义）
 - `backend/src/planner/services/line_variant_service.py`（行级变体：bundle 选择范围与 CRUD 细节）

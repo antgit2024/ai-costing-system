@@ -96,6 +96,7 @@ import type {
   BomSnapshot,
   ShipmentException,
   ShipmentImportBatchListResponse,
+  ShipmentImportBatch,
 } from '@/types/planner'
 
 const resolvePlannerApiBase = (raw?: string): string => {
@@ -912,6 +913,21 @@ export const fetchShipmentImportBatches = async (
   params: { page?: number; page_size?: number } = {},
 ): Promise<ShipmentImportBatchListResponse> => {
   const response = await plannerClient.get('/shipments/import-batches', { params: sanitizeParams(params) })
+  return response.data
+}
+
+export const importShipmentsXlsx = async (params: {
+  file: File
+  export_date?: string
+  requested_by?: string
+}): Promise<ShipmentImportBatch> => {
+  const formData = new FormData()
+  formData.append('file', params.file)
+  if (params.export_date) formData.append('export_date', params.export_date)
+  if (params.requested_by) formData.append('requested_by', params.requested_by)
+  const response = await plannerClient.post('/shipments/import', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
   return response.data
 }
 

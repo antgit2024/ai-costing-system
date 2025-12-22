@@ -3,10 +3,12 @@ import {
   Button,
   Card,
   Col,
+  DatePicker,
   Descriptions,
   Drawer,
   Form,
   Input,
+  message,
   Row,
   Segmented,
   Space,
@@ -14,13 +16,14 @@ import {
   Tabs,
   Tag,
   Typography,
+  Upload,
 } from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { useMemo, useState } from 'react'
-import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { fetchShipmentBomSnapshots, fetchShipmentExceptions, fetchShipmentImportBatches } from '@/services/planner'
+import { fetchShipmentBomSnapshots, fetchShipmentExceptions, fetchShipmentImportBatches, importShipmentsXlsx } from '@/services/planner'
 import type { BomSnapshot, ShipmentException, ShipmentImportBatch } from '@/types/planner'
 
 const { Title, Text } = Typography
@@ -59,10 +62,18 @@ const guessLineUnit = (line: Record<string, unknown>) =>
   safeString(line.unit ?? line.unit_of_measure ?? line.unitOfMeasure ?? line.bom_unit)
 
 const ShipmentMonitorPage = () => {
+  const queryClient = useQueryClient()
   const [batchPage, setBatchPage] = useState(1)
   const [batchPageSize, setBatchPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<'batches' | 'exceptions' | 'snapshots'>('batches')
+
+  const [uploading, setUploading] = useState(false)
+  const [uploadFile, setUploadFile] = useState<File | null>(null)
+  const [uploadExportDate, setUploadExportDate] = useState<string | undefined>(
+    dayjs().format('YYYY-MM-DD'),
+  )
+  const [uploadRequestedBy, setUploadRequestedBy] = useState<string>('planner_user')
 
   const [exceptionResolved, setExceptionResolved] = useState<'unresolved' | 'resolved' | 'all'>(
     'unresolved',
@@ -281,6 +292,30 @@ const ShipmentMonitorPage = () => {
     setBatchPageSize(nextSize)
   }
 
+  const handleUploadImport = async () => {
+    if (!uploadFile) {
+      message.warning('请先选择一个 .xlsx 文件')
+      return
+    }
+    try {
+      setUploading(true)
+      const batch = await importShipmentsXlsx({
+        file: uploadFile,
+        export_date: uploadExportDate,
+        requested_by: uploadRequestedBy?.trim() || undefined,
+      })
+      message.success(`导入完成：batch=${batch.id}（inserted=${batch.inserted_rows}, skipped=${batch.skipped_rows}, exceptions=${batch.exception_rows}）`)
+      setSelectedBatchId(batch.id)
+      setActiveTab('batches')
+      setBatchPage(1)
+      queryClient.invalidateQueries({ queryKey: ['shipments'] })
+    } catch (err: any) {
+      message.error(`导入失败：${err?.response?.data?.detail ?? err?.message ?? 'unknown error'}`)
+    } finally {
+      setUploading(false)
+    }
+  }
+
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
@@ -306,6 +341,59 @@ const ShipmentMonitorPage = () => {
             刷新
           </Button>
         </Space>
+      </div>
+
+      <div style={{ marginTop: 16 }}>
+        <Card title="上传发货单（xlsx 导入）" size="small">
+          <Row gutter={[16, 16]} align="middle">
+            <Col xs={24} lg={10}>
+              <Upload
+                accept=".xlsx"
+                maxCount={1}
+                beforeUpload={(file) => {
+                  setUploadFile(file as any)
+                  return false
+                }}
+                onRemove={() => {
+                  setUploadFile(null)
+                }}
+              >
+                <Button disabled={uploading}>选择文件（.xlsx）</Button>
+                <Text type="secondary" style={{ marginLeft: 12 }}>
+                  {uploadFile ? uploadFile.name : '未选择'}
+                </Text>
+              </Upload>
+            </Col>
+            <Col xs={24} lg={6}>
+              <Space>
+                <Text>导出日期</Text>
+                <DatePicker
+                  allowClear
+                  value={uploadExportDate ? dayjs(uploadExportDate) : null}
+                  format="YYYY-MM-DD"
+                  onChange={(d) => setUploadExportDate(d ? d.format('YYYY-MM-DD') : undefined)}
+                />
+              </Space>
+            </Col>
+            <Col xs={24} lg={5}>
+              <Input
+                placeholder="requested_by（可空）"
+                value={uploadRequestedBy}
+                onChange={(e) => setUploadRequestedBy(e.target.value)}
+              />
+            </Col>
+            <Col xs={24} lg={3}>
+              <Button type="primary" loading={uploading} onClick={handleUploadImport} block>
+                上传并导入
+              </Button>
+            </Col>
+          </Row>
+          <div style={{ marginTop: 8 }}>
+            <Text type="secondary">
+              说明：后端按 file_hash 做文件级幂等；重复上传同文件会直接返回已成功的 batch。
+            </Text>
+          </div>
+        </Card>
       </div>
 
       <div style={{ marginTop: 16 }}>

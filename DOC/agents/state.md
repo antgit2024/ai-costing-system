@@ -37,6 +37,7 @@
 
 - **本轮闭环产物（Frontend / 只读：发货批次列表 + 异常队列 + BOM 快照查询）**：
   - 新增页面：`/costing/shipments`（只读）
+  - 页面顶部新增：上传发货单（xlsx 导入）→ 调用 `POST /api/planner/shipments/import`，导入成功后自动选中 batch 并刷新列表/异常/快照
   - 页面包含 3 块：
     - 发货批次列表（分页，点击行设置当前 batch_id）
     - 异常队列（支持 batch_id/解决状态/limit 过滤）

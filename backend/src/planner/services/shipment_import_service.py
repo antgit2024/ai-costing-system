@@ -500,7 +500,33 @@ def list_exceptions(
         query = query.filter(models.ShipmentExceptionQueue.resolved_at.isnot(None))
     elif resolved is False:
         query = query.filter(models.ShipmentExceptionQueue.resolved_at.is_(None))
-    return query.order_by(models.ShipmentExceptionQueue.created_at.desc()).limit(limit).all()
+    items = query.order_by(models.ShipmentExceptionQueue.created_at.desc()).limit(limit).all()
+
+    # Attach shipment line fields for readability (Excel-like columns)
+    line_ids = [x.shipment_line_id for x in items if getattr(x, "shipment_line_id", None)]
+    if not line_ids:
+        return items
+    lines = (
+        db.query(models.ShipmentLine)
+        .filter(models.ShipmentLine.id.in_(list(set(line_ids))))
+        .all()
+    )
+    by_id = {l.id: l for l in lines}
+    for exc in items:
+        line = by_id.get(getattr(exc, "shipment_line_id", None))
+        if not line:
+            continue
+        # Pydantic orm_mode will read these dynamic attributes
+        exc.row_index = getattr(line, "row_index", None)
+        exc.shipment_no = getattr(line, "shipment_no", None)
+        exc.completed_at = getattr(line, "completed_at", None)
+        exc.channel = getattr(line, "channel", None)
+        exc.sku_code = getattr(line, "sku_code", None)
+        exc.spec_text = getattr(line, "spec_text", None)
+        exc.spec_hash = getattr(line, "spec_hash", None)
+        exc.qty = getattr(line, "qty", None)
+        exc.revenue_amount = getattr(line, "revenue_amount", None)
+    return items
 
 
 def list_bom_snapshots(

@@ -1266,6 +1266,15 @@ export interface ShipmentException {
   id: string
   batch_id: string
   shipment_line_id?: string | null
+  row_index?: number | null
+  shipment_no?: string | null
+  completed_at?: string | null
+  channel?: string | null
+  sku_code?: string | null
+  spec_text?: string | null
+  spec_hash?: string | null
+  qty?: string | null
+  revenue_amount?: string | null
   reason: string
   message?: string | null
   payload_json?: Record<string, unknown>

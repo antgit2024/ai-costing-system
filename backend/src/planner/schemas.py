@@ -1731,6 +1731,16 @@ class ShipmentExceptionRead(BaseModel):
     id: str
     batch_id: str
     shipment_line_id: Optional[str] = None
+    # fields mirrored from shipment_lines for readability (Excel-like columns)
+    row_index: Optional[int] = None
+    shipment_no: Optional[str] = None
+    completed_at: Optional[datetime] = None
+    channel: Optional[str] = None
+    sku_code: Optional[str] = None
+    spec_text: Optional[str] = None
+    spec_hash: Optional[str] = None
+    qty: Optional[Decimal] = None
+    revenue_amount: Optional[Decimal] = None
     reason: str
     message: Optional[str] = None
     payload: Dict[str, Any] = Field(default_factory=dict, alias="payload_json")

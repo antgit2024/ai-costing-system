@@ -182,6 +182,38 @@ const ShipmentMonitorPage = () => {
       render: (v) => formatTime(v),
     },
     {
+      title: '发货单号',
+      dataIndex: 'shipment_no',
+      width: 160,
+      ellipsis: true,
+      render: (v) => safeString(v) || '-',
+    },
+    {
+      title: '货品条码(SKU)',
+      dataIndex: 'sku_code',
+      width: 160,
+      ellipsis: true,
+      render: (v) => safeString(v) || '-',
+    },
+    {
+      title: '交易规格',
+      dataIndex: 'spec_text',
+      ellipsis: true,
+      render: (v) => safeString(v) || '-',
+    },
+    {
+      title: '数量',
+      dataIndex: 'qty',
+      width: 90,
+      render: (v) => safeString(v) || '-',
+    },
+    {
+      title: '金额',
+      dataIndex: 'revenue_amount',
+      width: 110,
+      render: (v) => safeString(v) || '-',
+    },
+    {
       title: '原因',
       dataIndex: 'reason',
       width: 180,
@@ -190,13 +222,6 @@ const ShipmentMonitorPage = () => {
     {
       title: '消息',
       dataIndex: 'message',
-      ellipsis: true,
-      render: (v) => safeString(v) || '-',
-    },
-    {
-      title: 'batch_id',
-      dataIndex: 'batch_id',
-      width: 220,
       ellipsis: true,
       render: (v) => safeString(v) || '-',
     },

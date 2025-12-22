@@ -1,6 +1,6 @@
 ## 当前状态（崩了也能继续）
 
-- **最近校对（北京时间 GMT+8）**：2025-12-21 23:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
+- **最近校对（北京时间 GMT+8）**：2025-12-22 00:10（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **分支**：`backup/20251214-1535`
 
 - **本轮闭环产物（Frontend / 行级变体收口：ERP 最稳第一步）**：
@@ -30,6 +30,12 @@
   - 校验和：`DOC/index/extracted/ProductModelEditorDrawer_confirmed_20251221T042643Z.sha256`
 
 - **本轮验收命令（必须）**：`npm -C frontend run build`（已通过）
+
+- **本轮补充（Frontend / 替换物料选择器 MVP）**：
+  - 位置：`LineVariantDrawer` 编辑弹窗的“替换物料”列
+  - 行为：不再手输 `material_ref_id`；改为 **打开选择器 → 搜索（编码/名称）→ 选择**
+  - 选择后回填：`material_ref_id + material_code/material_name/unit_of_measure`（用于可读展示 + 同单位校验）
+  - 组件：新增 `frontend/src/components/costing/MaterialSelectModal.tsx`（复用 `/base-config/materials` 搜索接口，默认仅 BOM 物料）
 - **本轮补充（Frontend / 变体规则录入体验收口）**：
   - `LineVariantDrawer` 的“编辑”弹窗改为 **多条规则表格**（同一触发类型下批量维护）：列为 启动/条件表达式/替换物料/β/α/覆盖率/损耗% + 新增/删除
   - 启用拦截：未预演成功或预演已过期时，不允许打开“启动”（前端直接提示）

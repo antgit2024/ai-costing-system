@@ -32,7 +32,11 @@ alembic upgrade heads
 
 ### 1.3 重启服务
 
+> 注意：在 SSH/非交互环境中，`systemctl --user` 可能因缺少 `XDG_RUNTIME_DIR` 而失败（例如提示无法连接 bus）。
+> 可先执行：`export XDG_RUNTIME_DIR=/run/user/$(id -u)` 再重启。
+
 ```bash
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
 systemctl --user restart planner-costing.service
 systemctl --user status planner-costing.service --no-pager
 ```
@@ -79,6 +83,7 @@ cd backend
 alembic heads
 alembic upgrade heads
 
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
 systemctl --user restart planner-costing.service
 systemctl --user status planner-costing.service --no-pager
 curl -sS http://127.0.0.1:8800/api/planner/health

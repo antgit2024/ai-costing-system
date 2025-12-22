@@ -1,6 +1,6 @@
 ## 已知坑（新 Agent 必读）
 
-> 最近校对（北京时间 GMT+8）：2025-12-21（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
+> 最近校对（北京时间 GMT+8）：2025-12-22（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 
 ### 1) API_BASE 与跨域
 
@@ -29,6 +29,11 @@
 - “变体（Overlay）”是 **version-scoped + base_line_id-scoped**：只有当版本清单行已落库（物料行有 `id`）才能创建/绑定变体规则。
 - 现象：刚新增的物料行（尚未“保存清单”）点击“变体”会提示缺少 base_line_id。
 - 处理：先点一次“保存清单”（PUT version lines）再配置变体。
+
+### 6) 目标机 SSH 场景下 systemctl --user 需要 XDG_RUNTIME_DIR
+
+- 现象：在 SSH/非交互环境执行 `systemctl --user restart planner-costing.service` 报错（无法连接 user bus / 找不到 runtime dir），导致服务无法重启。
+- 处理：先执行 `export XDG_RUNTIME_DIR=/run/user/$(id -u)`，再运行 `systemctl --user ...`。
 
 
 

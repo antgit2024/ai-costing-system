@@ -6,6 +6,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { createLineVariant, deleteLineVariant, generateBom, listLineVariants, parseSpec, replaceLineVariantItems, updateLineVariant } from '@/services/planner'
 import MaterialSelectModal from './MaterialSelectModal'
+import { normalizeUnit as normalizeUnitText } from '@/utils/unit'
 import type {
   BomGenerateResponse,
   LineVariantAction,
@@ -58,7 +59,7 @@ const toNumber = (v: any, fallback = 0): number => {
 }
 
 const normalizeUnit = (u: unknown): string | null => {
-  const s = String(u ?? '').trim()
+  const s = normalizeUnitText(String(u ?? ''))
   return s ? s : null
 }
 
@@ -183,7 +184,8 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     material_name: null,
     unit_of_measure: null,
     calculation_method: 'count' as any,
-    base_quantity: 0,
+    // 避免默认=0 导致 preview 出现 “替换物料用量=0”的误导；用户仍可手工改回 0，但主路径不应是 0。
+    base_quantity: 1,
     fixed_quantity: 0,
     coverage_ratio: 1,
     loss_rate: 0,
@@ -373,6 +375,17 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     return normalizeUnit(baseLine?.unit_of_measure)
   }, [bomPreview, baseLineId])
 
+  const baseLineParamsFromBom = useMemo(() => {
+    const lines = (bomPreview?.final_material_lines ?? []) as any[]
+    const baseLine = lines.find(
+      (r) => String(r?.source_type) === 'base_line' && String(r?.base_line_id ?? '') === String(baseLineId),
+    )
+    return {
+      calculation_method: (baseLine?.calculation_method ?? null) as any,
+      base_quantity: baseLine?.base_quantity != null ? Number(baseLine.base_quantity) : null,
+    }
+  }, [bomPreview, baseLineId])
+
   // legacy enableBlockReason removed; enable gate is now per-row in modalSaveMutation/onChange
 
   const handleTriggerTypeChange = (next: TriggerType) => {
@@ -403,8 +416,14 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
         sequence_order: 0,
         material_kind: (it.material_kind ?? 'real') as any,
         material_ref_id: String(it.material_ref_id ?? '').trim() || null,
-        calculation_method: (it.calculation_method ?? 'count') as any,
-        base_quantity: toNumber(it.base_quantity, 0),
+        calculation_method: ((it.calculation_method ?? 'count') as any) ?? 'count',
+        // 主路径：替换物料的 β 不应为 0（否则会导致 computed_quantity=0）；若用户没填/还是 0，则继承基准行 β
+        base_quantity:
+          toNumber(it.base_quantity, 0) > 0
+            ? toNumber(it.base_quantity, 0)
+            : baseLineParamsFromBom.base_quantity != null
+              ? Number(baseLineParamsFromBom.base_quantity)
+              : 1,
         fixed_quantity: toNumber(it.fixed_quantity, 0),
         coverage_ratio: toNumber(it.coverage_ratio, 1),
         loss_rate: toNumber(it.loss_rate, 0),
@@ -1164,6 +1183,8 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
           onSelect={(m) => {
             const key = materialPickerRowKey
             if (!key) return
+          const inheritedMethod = baseLineParamsFromBom.calculation_method
+          const inheritedBaseQty = baseLineParamsFromBom.base_quantity
             updateModalRow(key, {
               item: {
                 ...(modalRows.find((x) => x.key === key)?.item ?? ({} as any)),
@@ -1171,6 +1192,12 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                 material_code: m.material_code,
                 material_name: m.material_name,
                 unit_of_measure: m.unit ?? null,
+              // 关键：替换物料默认继承基准行的计量方式与 β，避免出现替换后 computed_quantity=0 的误导
+              calculation_method: inheritedMethod ?? ((modalRows.find((x) => x.key === key)?.item as any)?.calculation_method ?? 'count'),
+              base_quantity:
+                inheritedBaseQty != null && Number.isFinite(inheritedBaseQty)
+                  ? inheritedBaseQty
+                  : ((modalRows.find((x) => x.key === key)?.item as any)?.base_quantity ?? 1),
               } as any,
             })
           }}

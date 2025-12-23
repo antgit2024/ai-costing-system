@@ -49,6 +49,7 @@ import LineVariantDrawer from '@/components/costing/LineVariantDrawer'
 
 import {
   bindSkuModelVersion,
+  createLineVariant,
   createProductModelVersion,
   deleteProductModelVersion,
   deriveStandardFromSampleVersion,
@@ -1691,14 +1692,74 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     setVersionOpLoading(true)
     try {
       const name = versionOpName.trim()
+      const srcVersion = versionOpMode === 'copy' ? (versions ?? []).find((v) => v.id === versionOpSourceId) : null
+      const srcMeta = ((srcVersion as any)?.metadata_json ?? {}) as any
+      const createdMeta =
+        versionOpMode === 'copy'
+          ? {
+              ...srcMeta,
+              ...(name
+                ? { ui_label: name }
+                : srcMeta?.ui_label
+                  ? { ui_label: `${String(srcMeta.ui_label)}（复制）` }
+                  : {}),
+            }
+          : name
+            ? { ui_label: name }
+            : {}
       const created = await createProductModelVersion(modelId, {
         version_kind: desiredKind as any,
-        metadata_json: name ? { ui_label: name } : {},
+        metadata_json: createdMeta,
       } as any)
 
       if (versionOpMode === 'copy' && versionOpSourceId) {
         const srcLines = await fetchProductModelVersionLines(versionOpSourceId)
-        await updateProductModelVersionLines(created.id, srcLines as any)
+        // 1) copy lines (materials/processes/spec) including advanced formula metadata_json
+        const createdLines = await updateProductModelVersionLines(created.id, srcLines as any)
+
+        // 2) copy line variants (Overlay) and remap base_line_id (material line id)
+        try {
+          const srcVariants = await listLineVariants({ version_id: versionOpSourceId })
+          const srcMats = ((srcLines as any)?.materials ?? []) as any[]
+          const dstMats = ((createdLines as any)?.materials ?? []) as any[]
+          const idMap = new Map<string, string>()
+          for (let i = 0; i < Math.min(srcMats.length, dstMats.length); i += 1) {
+            const sid = String(srcMats[i]?.id ?? '').trim()
+            const did = String(dstMats[i]?.id ?? '').trim()
+            if (sid && did) idMap.set(sid, did)
+          }
+
+          for (const v of srcVariants as any[]) {
+            const oldBase = String(v?.base_line_id ?? '').trim()
+            const newBase = idMap.get(oldBase) ?? ''
+            if (!newBase) continue
+            await createLineVariant(created.id, {
+              base_line_id: newBase,
+              action: v.action,
+              enabled: v.enabled,
+              trigger_type: v.trigger_type,
+              conditions: v.conditions ?? {},
+              items: (v.items ?? []).map((it: any) => ({
+                action: it.action,
+                material_kind: it.material_kind,
+                material_ref_id: it.material_ref_id,
+                material_code: it.material_code,
+                material_name: it.material_name,
+                unit_of_measure: it.unit_of_measure,
+                calculation_method: it.calculation_method,
+                base_quantity: it.base_quantity,
+                fixed_quantity: it.fixed_quantity,
+                coverage_ratio: it.coverage_ratio,
+                loss_rate: it.loss_rate,
+                metadata_json: it.metadata_json ?? {},
+              })),
+              metadata_json: v.metadata_json ?? {},
+            } as any)
+          }
+        } catch (err: any) {
+          // 复制版本不应因为 Overlay 复制失败而中断；给出提示即可
+          message.warning(err?.response?.data?.detail ?? '复制变体（Overlay）失败：已复制清单，但变体未复制')
+        }
       }
 
       await versionsQuery.refetch()
@@ -2278,6 +2339,13 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                 }}
                               >
                                 发布
+                              </Button>
+                              <Button
+                                size="small"
+                                onClick={() => openCopyVersionModal(v.id)}
+                                disabled={String(v.version_status) === 'archived'}
+                              >
+                                复制
                               </Button>
                               <Button
                                 size="small"

@@ -877,14 +877,14 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   }
 
   const allowedCalcMethodsByBomUnit = (unitRaw: unknown): CalcMethod[] => {
-    const u = String(unitRaw ?? '').trim().toLowerCase()
+    // 【重要口径】必须先 normalizeUnit 再判断，否则“平米”会被误判为“米”（因为包含“米”字）
+    const raw = String(unitRaw ?? '').trim()
+    const u = normalizeUnit(raw) || raw
     if (!u) return ['count', 'area', 'perimeter', 'width', 'height']
-    // square units
-    if (u.includes('㎡') || u.includes('m2') || u.includes('平方')) return ['area']
-    // piece/count units
-    if (u.includes('个') || u.includes('pcs') || u.includes('pc')) return ['count']
-    // linear units
-    if (u === 'm' || u.includes('米') || (u.endsWith('m') && !u.includes('m2'))) return ['perimeter', 'width', 'height']
+    if (u === '平米') return ['area']
+    if (u === '米') return ['perimeter', 'width', 'height']
+    if (u === '个' || u === '套') return ['count']
+    // unknown: allow all to avoid breaking rare units
     return ['count', 'area', 'perimeter', 'width', 'height']
   }
 
@@ -2674,8 +2674,30 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                   style={{ width: 78 }}
                                   options={(() => {
                                     const bomUnit = getBomUnitForRow(r)
-                                    const allowed = new Set(allowedCalcMethodsByBomUnit(bomUnit))
+                                    const allowedList = allowedCalcMethodsByBomUnit(bomUnit)
+                                    const allowed = new Set(allowedList)
                                     const cur = String(r.calculation_method ?? '').trim() as CalcMethod
+                                    // 若当前值不合法：自动纠偏到该单位允许的默认值（只影响前端编辑态，保存才落库）
+                                    if (cur && !allowed.has(cur) && allowedList.length) {
+                                      queueMicrotask(() => {
+                                        const next = (materials as any[]).slice()
+                                        const baseQty = Number(next[idx].base_quantity ?? 0)
+                                        const fixedQty = Number(next[idx].fixed_quantity ?? 0)
+                                        const cov = Number(next[idx].coverage_ratio ?? 1)
+                                        const v = allowedList[0]!
+                                        const mqSample = Math.max(0, measureQty(v, sampleSpec))
+                                        const mqStandard = Math.max(0, measureQty(v, standardSpec))
+                                        const sampleUsed = fixedQty + mqSample * baseQty * cov
+                                        const standardUsed = fixedQty + mqStandard * baseQty * cov
+                                        next[idx] = {
+                                          ...next[idx],
+                                          calculation_method: v,
+                                          sample_used_quantity: sampleUsed,
+                                          standard_used_quantity: standardUsed,
+                                        }
+                                        setMaterials(next as any)
+                                      })
+                                    }
                                     // 只展示允许的项；若历史数据不兼容，保留一个 legacy 选项避免回显为空
                                     const base = ALL_CALC_METHOD_OPTIONS.filter((o) => allowed.has(o.value))
                                     if (cur && !allowed.has(cur) && ALL_CALC_METHOD_OPTIONS.some((o) => o.value === cur)) {

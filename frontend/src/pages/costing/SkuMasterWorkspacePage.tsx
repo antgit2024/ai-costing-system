@@ -77,7 +77,7 @@ const SkuMasterWorkspacePage = () => {
   const [specKeyword, setSpecKeyword] = useState<string>('') // MVP: client-side filter on current page
   const [channel, setChannel] = useState<string | undefined>(undefined)
   const [matchStatus, setMatchStatus] = useState<string | undefined>(undefined)
-  const [listTab, setListTab] = useState<'all' | 'unbound' | 'bound' | 'mismatch'>('all')
+  const [listTab, setListTab] = useState<'all' | 'unbound' | 'bound'>('all')
   const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([])
 
   const [uploading, setUploading] = useState(false)
@@ -118,7 +118,6 @@ const SkuMasterWorkspacePage = () => {
         channel,
         match_status: matchStatus,
         bound_state: listTab === 'bound' ? 'bound' : listTab === 'unbound' ? 'unbound' : undefined,
-        spec_mismatch: listTab === 'mismatch' ? true : undefined,
       }),
     placeholderData: keepPreviousData,
     enabled: !autoCandidatesOnly, // 命中候选视图时不依赖服务端分页列表
@@ -606,19 +605,7 @@ const SkuMasterWorkspacePage = () => {
                   本页：{pageStats.totalRows} ERP匹配填充率：{pageStats.erpMatchedRate} 对接就绪率：
                   {pageStats.linkedRate} 字段齐全率：{pageStats.completeRate}
                 </Tag>
-                {autoCandidatesOnly ? (
-                  <Button
-                    onClick={() => {
-                      setAutoCandidatesOnly(false)
-                      setAutoPreviewCandidates([])
-                      setSelectedRowKeys([])
-                      setPage(1)
-                      message.info('已退出“命中候选视图”')
-                    }}
-                  >
-                    退出候选视图
-                  </Button>
-                ) : null}
+                {/* exit button moved to tabs (after 已绑定) */}
               </Space>
             }
           >
@@ -627,7 +614,7 @@ const SkuMasterWorkspacePage = () => {
                 type="info"
                 showIcon
                 style={{ marginBottom: 8 }}
-                message="当前为“命中候选视图”：仅展示自动预览命中的候选记录；要看全部/未绑定/已绑定/规格差异，请点击右上角“退出候选视图”。"
+                message="当前为“命中候选视图”：仅展示自动预览命中的候选记录；要看全部/未绑定/已绑定，请点击右上角“退出候选视图”。"
               />
             ) : null}
             <Tabs
@@ -637,10 +624,23 @@ const SkuMasterWorkspacePage = () => {
                 { key: 'all', label: '全部', children: null },
                 { key: 'unbound', label: '未绑定', children: null },
                 { key: 'bound', label: '已绑定', children: null },
-                { key: 'mismatch', label: '规格差异', children: null },
               ]}
               tabBarExtraContent={
-                autoCandidatesOnly ? <Text type="secondary">（候选视图下 TAB 暂停）</Text> : undefined
+                autoCandidatesOnly ? (
+                  <Button
+                    size="small"
+                    type="link"
+                    onClick={() => {
+                      setAutoCandidatesOnly(false)
+                      setAutoPreviewCandidates([])
+                      setSelectedRowKeys([])
+                      setPage(1)
+                      message.info('已退出“命中候选视图”')
+                    }}
+                  >
+                    退出命中候选视图
+                  </Button>
+                ) : null
               }
             />
             <Table

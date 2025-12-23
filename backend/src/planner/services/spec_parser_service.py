@@ -17,6 +17,13 @@ DIAMETER_PATTERN = re.compile(
 )
 TOKEN_SPLIT_PATTERN = re.compile(r"[;\n\r,，/\\\+|、]+")
 
+# e.g. "竖120CM*横150CM" / "横150*竖120" / "宽120×高150"
+LABELED_DIMENSION_PATTERN = re.compile(
+    r"(?P<label1>竖|横|宽|高|长)\s*(?P<v1>\d{1,4}(?:\.\d+)?)\s*(?P<u1>cm|厘米|mm|毫米|m|米)?\s*"
+    r"(?:[xX×\*＊]\s*(?P<label2>竖|横|宽|高|长)\s*(?P<v2>\d{1,4}(?:\.\d+)?)\s*(?P<u2>cm|厘米|mm|毫米|m|米)?)",
+    re.IGNORECASE,
+)
+
 
 def _to_decimal(value: Any) -> Decimal | None:
     if value in (None, ""):
@@ -62,17 +69,52 @@ def parse_spec(spec_text: str) -> Dict[str, Any]:
     height_cm: Decimal | None = None
     diameter_cm: Decimal | None = None
 
+    def _is_height_label(lbl: str) -> bool:
+        return (lbl or "").strip() in ("竖", "高")
+
+    def _is_width_label(lbl: str) -> bool:
+        return (lbl or "").strip() in ("横", "宽", "长")
+
+    labeled = LABELED_DIMENSION_PATTERN.search(text)
+    if labeled:
+        l1 = (labeled.group("label1") or "").strip()
+        l2 = (labeled.group("label2") or "").strip()
+        v1 = _to_decimal(labeled.group("v1"))
+        v2 = _to_decimal(labeled.group("v2"))
+        u1 = labeled.group("u1")
+        u2 = labeled.group("u2")
+        v1_cm = _normalize_to_cm(v1, u1) if v1 is not None else None
+        v2_cm = _normalize_to_cm(v2, u2) if v2 is not None else None
+
+        if v1_cm is not None and _is_height_label(l1):
+            height_cm = v1_cm
+        if v1_cm is not None and _is_width_label(l1):
+            width_cm = v1_cm
+        if v2_cm is not None and _is_height_label(l2):
+            height_cm = v2_cm
+        if v2_cm is not None and _is_width_label(l2):
+            width_cm = v2_cm
+
+        # Fallback if labels are ambiguous/missing mapping
+        if width_cm is None and v1_cm is not None:
+            width_cm = v1_cm
+        if height_cm is None and v2_cm is not None:
+            height_cm = v2_cm
+
+        explanations.append({"token": f"{width_cm}", "source": labeled.group(0), "rule": "labeled_width_height"})
+        explanations.append({"token": f"{height_cm}", "source": labeled.group(0), "rule": "labeled_width_height"})
+
     dim_match = DIMENSION_PATTERN.search(text)
     if dim_match:
         width_val = _to_decimal(dim_match.group("width"))
         height_val = _to_decimal(dim_match.group("height"))
         unit = dim_match.group("unit")
-        if width_val is not None:
+        if width_cm is None and width_val is not None:
             width_cm = _normalize_to_cm(width_val, unit)
             explanations.append(
                 {"token": f"{width_cm}", "source": dim_match.group(0), "rule": "width_height"}
             )
-        if height_val is not None:
+        if height_cm is None and height_val is not None:
             height_cm = _normalize_to_cm(height_val, unit)
             explanations.append(
                 {"token": f"{height_cm}", "source": dim_match.group(0), "rule": "width_height"}

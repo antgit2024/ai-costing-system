@@ -223,6 +223,12 @@ export default function SkuSpecMatchingPage() {
                     onChange={(e) => setSpecTextDraft(e.target.value)}
                     placeholder="优先发货规格，其次网店规格；你也可以在这里粘贴一段规格文本进行解析"
                   />
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="提示：系统会识别“竖/横/宽/高/长”这类带方向的尺寸写法，例如：竖120CM*横150CM → 高=120cm，宽=150cm。"
+                    style={{ marginTop: 8 }}
+                  />
                   <Descriptions bordered size="small" column={2} style={{ marginTop: 8 }}>
                     <Descriptions.Item label="宽(cm)">{specParsed?.width_cm ?? '-'}</Descriptions.Item>
                     <Descriptions.Item label="高(cm)">{specParsed?.height_cm ?? '-'}</Descriptions.Item>
@@ -231,6 +237,14 @@ export default function SkuSpecMatchingPage() {
                     <Descriptions.Item label="周长(m)">{specParsed?.perimeter_m ?? '-'}</Descriptions.Item>
                     <Descriptions.Item label="tokens数">{(specParsed?.tokens ?? []).length}</Descriptions.Item>
                   </Descriptions>
+                  <Card size="small" title="解析 tokens（原始分段）" style={{ marginTop: 8 }}>
+                    <div style={{ whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.2 }}>
+                      {(specParsed?.tokens ?? []).slice(0, 50).map((t, idx) => (
+                        <Tag key={`${t}-${idx}`}>{t}</Tag>
+                      ))}
+                      {(specParsed?.tokens ?? []).length > 50 ? <Tag>…</Tag> : null}
+                    </div>
+                  </Card>
                   {parseMutation.isPending ? <Text type="secondary">解析中…</Text> : null}
                 </Space>
               )}

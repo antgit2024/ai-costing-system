@@ -21,6 +21,7 @@ from .routers import (
     product_model_versions,
     scenarios,
     shipments,
+    sku_master,
     specs,
 )
 
@@ -45,5 +46,6 @@ router.include_router(product_models.router)
 router.include_router(product_model_versions.router)
 router.include_router(line_variants.router)
 router.include_router(shipments.router)
+router.include_router(sku_master.router)
 router.include_router(specs.router)
 router.include_router(bom.router)

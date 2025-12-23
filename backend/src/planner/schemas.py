@@ -1770,3 +1770,39 @@ class BomSnapshotRead(BaseModel):
     class Config:
         orm_mode = True
         allow_population_by_field_name = True
+
+
+class SkuMasterRead(BaseModel):
+    id: str
+    erp_sku_barcode: str
+    platform_product_id: Optional[str] = None
+    platform_sku_id: Optional[str] = None
+    channel: Optional[str] = None
+    product_name: Optional[str] = None
+    product_code: Optional[str] = None
+    spec_text: Optional[str] = None
+    images: Dict[str, Any] = Field(default_factory=dict, alias="images_json")
+    match_status: Optional[str] = None
+    source_updated_at: Optional[datetime] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict, alias="metadata_json")
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        orm_mode = True
+        allow_population_by_field_name = True
+
+
+class PaginatedSkuMasterResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: List[SkuMasterRead]
+
+
+class SkuMasterImportResponse(BaseModel):
+    total: int
+    inserted: int
+    updated: int
+    skipped: int
+    errors: List[Dict[str, Any]] = Field(default_factory=list)

@@ -11,7 +11,7 @@ from openpyxl.utils.datetime import from_excel
 from sqlalchemy.orm import Session
 
 from .. import models
-from . import bom_generation_service, product_model_service, spec_parser_service
+from . import bom_generation_service, product_model_service, spec_parser_service, sku_master_service
 
 
 PARSER_VERSION = "v1"
@@ -420,6 +420,21 @@ def import_shipment_xlsx(
         )
         db.add(line)
         db.flush()
+
+        # SKU master autobackfill (MVP): if barcode not in sku_master, create minimal record for next imports.
+        sku_master_service.ensure_from_shipment(
+            db,
+            erp_sku_barcode=sku_code or "",
+            spec_text=spec_text,
+            channel=payload.get("channel"),
+            metadata={
+                "source": "shipment_autobackfill",
+                "shipment_import_batch_id": batch.id,
+                "shipment_line_id": line.id,
+                "shipment_no": shipment_no,
+                "spec_hash": _sha1_text(spec_text) if spec_text else None,
+            },
+        )
 
         # revision chain: if same (shipment_no, sku_code, spec_text) but different qty/amount, mark old active as superseded
         prevs = (

@@ -883,3 +883,20 @@ class ShipmentExceptionQueue(Base, TimestampMixin):
     payload_json: Mapped[Dict[str, Any]] = Column("payload", JSON, default=dict)
     resolved_at: Mapped[datetime | None] = Column(DateTime)
 
+
+class SkuMaster(Base, TimestampMixin, SoftDeleteMixin):
+    __tablename__ = "sku_master"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    erp_sku_barcode: Mapped[str] = Column(String(64), nullable=False, unique=True, index=True)
+    platform_product_id: Mapped[str | None] = Column(String(64))
+    platform_sku_id: Mapped[str | None] = Column(String(64))
+    channel: Mapped[str | None] = Column(String(128))
+    product_name: Mapped[str | None] = Column(String(255))
+    product_code: Mapped[str | None] = Column(String(128))
+    spec_text: Mapped[str | None] = Column(Text)
+    images_json: Mapped[Dict[str, Any]] = Column("images", JSON, default=dict)
+    match_status: Mapped[str | None] = Column(String(64))
+    source_updated_at: Mapped[datetime | None] = Column(DateTime)
+    metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict)
+

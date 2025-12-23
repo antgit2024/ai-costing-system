@@ -161,19 +161,6 @@ const SkuMasterWorkspacePage = () => {
       render: (v) => safeString(v) || '-',
     },
     {
-      title: '商品名称（网店）',
-      dataIndex: 'product_name',
-      ellipsis: true,
-      render: (v) => safeString(v) || '-',
-    },
-    {
-      title: '商品编码（网店）',
-      dataIndex: 'product_code',
-      width: 140,
-      ellipsis: true,
-      render: (v) => safeString(v) || '-',
-    },
-    {
       title: '商品规格（网店）',
       dataIndex: 'spec_text',
       width: 220,
@@ -181,23 +168,16 @@ const SkuMasterWorkspacePage = () => {
       render: (v) => safeString(v) || '-',
     },
     {
-      title: '平台商品Id（网店）',
-      dataIndex: 'platform_product_id',
-      width: 160,
-      ellipsis: true,
-      render: (v) => safeString(v) || '-',
-    },
-    {
-      title: '平台规格Id（网店）',
-      dataIndex: 'platform_sku_id',
-      width: 160,
+      title: '模型提示',
+      dataIndex: 'model_code_hint',
+      width: 120,
       ellipsis: true,
       render: (v) => safeString(v) || '-',
     },
     {
       title: '对接状态（本系统）',
       dataIndex: 'active_model_version_id',
-      width: 160,
+      width: 240,
       render: (v, record) => {
         const bound = isFilled(v as any)
         const source = safeString((record.metadata_json as any)?.source)
@@ -207,6 +187,7 @@ const SkuMasterWorkspacePage = () => {
           <Space size={6}>
             {bound ? <Tag color="green">已绑定</Tag> : <Tag color="red">未绑定</Tag>}
             {record.spec_mismatch ? <Tag color="orange">规格差异</Tag> : null}
+            {record.bound_model_code ? <Tag color="blue">{record.bound_model_code}</Tag> : null}
             {srcTag}
           </Space>
         )
@@ -399,11 +380,20 @@ const SkuMasterWorkspacePage = () => {
                   {detailQuery.data.erp_sku_barcode}
                 </Descriptions.Item>
                 <Descriptions.Item label="channel">{detailQuery.data.channel ?? '-'}</Descriptions.Item>
-                <Descriptions.Item label="product_name">
+                <Descriptions.Item label="商品名称（网店）" span={2}>
                   {detailQuery.data.product_name ?? '-'}
                 </Descriptions.Item>
-                <Descriptions.Item label="product_code">
+                <Descriptions.Item label="商品编码（网店）">
                   {detailQuery.data.product_code ?? '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="平台商品Id（网店）">
+                  {detailQuery.data.platform_product_id ?? '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="平台规格Id（网店）">
+                  {detailQuery.data.platform_sku_id ?? '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="ERP匹配状态（网店↔ERP）">
+                  {detailQuery.data.match_status ?? '-'}
                 </Descriptions.Item>
                 <Descriptions.Item label="spec_text" span={2}>
                   {detailQuery.data.spec_text ?? '-'}
@@ -413,12 +403,6 @@ const SkuMasterWorkspacePage = () => {
                 </Descriptions.Item>
                 <Descriptions.Item label="erp_spec_hash">
                   {detailQuery.data.erp_spec_hash ?? '-'}
-                </Descriptions.Item>
-                <Descriptions.Item label="platform_product_id">
-                  {detailQuery.data.platform_product_id ?? '-'}
-                </Descriptions.Item>
-                <Descriptions.Item label="platform_sku_id">
-                  {detailQuery.data.platform_sku_id ?? '-'}
                 </Descriptions.Item>
                 <Descriptions.Item label="对接状态（本系统）">
                   {detailQuery.data.active_model_version_id ? (
@@ -430,8 +414,28 @@ const SkuMasterWorkspacePage = () => {
                 <Descriptions.Item label="active_model_version_id">
                   {detailQuery.data.active_model_version_id ?? '-'}
                 </Descriptions.Item>
-                <Descriptions.Item label="match_status">
-                  {detailQuery.data.match_status ?? '-'}
+                <Descriptions.Item label="已绑定模型">
+                  {detailQuery.data.bound_model_code ? (
+                    <Space size={6}>
+                      <Tag color="blue">{detailQuery.data.bound_model_code}</Tag>
+                      <span>{detailQuery.data.bound_model_name || ''}</span>
+                    </Space>
+                  ) : (
+                    '-'
+                  )}
+                </Descriptions.Item>
+                <Descriptions.Item label="已绑定版本">
+                  {detailQuery.data.bound_version_label || detailQuery.data.bound_version_kind ? (
+                    <Space size={6}>
+                      {detailQuery.data.bound_version_kind ? <Tag>{detailQuery.data.bound_version_kind}</Tag> : null}
+                      {detailQuery.data.bound_version_status ? (
+                        <Tag>{detailQuery.data.bound_version_status}</Tag>
+                      ) : null}
+                      <span>{detailQuery.data.bound_version_label || '-'}</span>
+                    </Space>
+                  ) : (
+                    '-'
+                  )}
                 </Descriptions.Item>
                 <Descriptions.Item label="规格差异（ERP vs 最近发货）">
                   {detailQuery.data.spec_mismatch ? <Tag color="orange">有差异</Tag> : <Tag>无</Tag>}

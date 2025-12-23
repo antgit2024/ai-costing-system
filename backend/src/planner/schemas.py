@@ -1786,6 +1786,11 @@ class SkuMasterRead(BaseModel):
     # Costing integration summary (computed fields; avoid N+1 on frontend)
     active_version_binding_id: Optional[str] = None
     active_model_version_id: Optional[str] = None
+    bound_model_code: Optional[str] = None
+    bound_model_name: Optional[str] = None
+    bound_version_label: Optional[str] = None
+    bound_version_kind: Optional[str] = None
+    bound_version_status: Optional[str] = None
     # Parsed spec cache & hints (computed fields; stored in metadata_json)
     model_code_hint: Optional[str] = None
     erp_spec_hash: Optional[str] = None

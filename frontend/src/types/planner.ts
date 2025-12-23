@@ -1311,6 +1311,11 @@ export interface SkuMaster {
   match_status?: string | null
   active_version_binding_id?: string | null
   active_model_version_id?: string | null
+  bound_model_code?: string | null
+  bound_model_name?: string | null
+  bound_version_label?: string | null
+  bound_version_kind?: string | null
+  bound_version_status?: string | null
   model_code_hint?: string | null
   erp_spec_hash?: string | null
   erp_parser_version?: string | null

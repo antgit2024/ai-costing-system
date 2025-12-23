@@ -368,9 +368,45 @@ def _attach_active_version_bindings(db: Session, rows: List[models.SkuMaster]) -
         if not m:
             r.active_version_binding_id = None
             r.active_model_version_id = None
+            r.bound_model_code = None
+            r.bound_model_name = None
+            r.bound_version_label = None
+            r.bound_version_kind = None
+            r.bound_version_status = None
         else:
             r.active_version_binding_id = m.id
             r.active_model_version_id = m.model_version_id
+            # fill after we load version/model
+
+    version_ids = [r.active_model_version_id for r in rows if getattr(r, "active_model_version_id", None)]
+    if not version_ids:
+        return
+    versions = (
+        db.query(models.ProductModelVersion)
+        .join(models.ProductModel, models.ProductModel.id == models.ProductModelVersion.model_id)
+        .filter(
+            models.ProductModelVersion.id.in_(list(set(version_ids))),
+            models.ProductModelVersion.is_archived.is_(False),
+        )
+        .all()
+    )
+    by_id: Dict[str, models.ProductModelVersion] = {v.id: v for v in versions}
+    for r in rows:
+        vid = getattr(r, "active_model_version_id", None)
+        v = by_id.get(vid)
+        if not v:
+            r.bound_model_code = None
+            r.bound_model_name = None
+            r.bound_version_label = None
+            r.bound_version_kind = None
+            r.bound_version_status = None
+            continue
+        model = getattr(v, "model", None)
+        r.bound_model_code = getattr(model, "model_code", None)
+        r.bound_model_name = getattr(model, "model_name", None)
+        r.bound_version_label = getattr(v, "version_label", None)
+        r.bound_version_kind = getattr(v, "version_kind", None)
+        r.bound_version_status = getattr(v, "version_status", None)
 
 
 def _update_erp_parsed_cache(row: models.SkuMaster, *, requested_by: Optional[str]) -> None:

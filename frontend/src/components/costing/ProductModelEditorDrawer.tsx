@@ -2042,9 +2042,6 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                         <Button size="small" type="primary" onClick={openCreateVersionModal} disabled={!modelId}>
                           新增版本
                         </Button>
-                        <Button size="small" onClick={() => openCopyVersionModal(selectedVersionId)} disabled={!selectedVersionId}>
-                          复制版本
-                        </Button>
                         <Button size="small" onClick={() => versionsQuery.refetch()} disabled={!modelId} icon={<ReloadOutlined />}>
                           刷新
                         </Button>
@@ -2198,56 +2195,12 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                         <Button size="small" type="primary" onClick={openCreateVersionModal} disabled={!modelId}>
                           新增版本
                         </Button>
-                        <Button size="small" onClick={() => openCopyVersionModal(selectedVersionId)} disabled={!selectedVersionId}>
-                          复制版本
-                        </Button>
                         <Button size="small" onClick={() => versionsQuery.refetch()} disabled={!modelId} icon={<ReloadOutlined />}>
                           刷新
                         </Button>
                       </Space>
                     }
                   >
-                    <Space wrap style={{ marginBottom: 8 }}>
-                      <Tag>
-                        物料数：
-                        {selectedVersionId ? (versionStatsById[selectedVersionId]?.material_count ?? '-') : '-'}
-                      </Tag>
-                      <Tag>
-                        工序数：
-                        {selectedVersionId ? (versionStatsById[selectedVersionId]?.process_count ?? '-') : '-'}
-                      </Tag>
-                      <Tag color="blue">
-                        物料价：
-                        {selectedVersionId && versionStatsById[selectedVersionId]?.material_cost != null
-                          ? Number(versionStatsById[selectedVersionId].material_cost).toFixed(2)
-                          : '-'}
-                      </Tag>
-                      <Tag color="purple">
-                        工序价：
-                        {selectedVersionId && versionStatsById[selectedVersionId]?.labor_cost != null
-                          ? Number(versionStatsById[selectedVersionId].labor_cost).toFixed(2)
-                          : '-'}
-                      </Tag>
-                      <Tag color="orange">
-                        制造费：
-                        {selectedVersionId && versionStatsById[selectedVersionId]?.manufacturing_fee != null
-                          ? Number(versionStatsById[selectedVersionId].manufacturing_fee).toFixed(2)
-                          : '-'}
-                      </Tag>
-                      <Tag color="green">
-                        合计价：
-                        {(() => {
-                          if (!selectedVersionId) return '-'
-                          const s = versionStatsById[selectedVersionId] ?? {}
-                          const total =
-                            s.total_cost != null
-                              ? Number(s.total_cost)
-                              : Number(s.material_cost ?? 0) + Number(s.labor_cost ?? 0) + Number(s.manufacturing_fee ?? 0)
-                          return Number.isFinite(total) && total > 0 ? total.toFixed(2) : '-'
-                        })()}
-                      </Tag>
-                      <Text type="secondary">提示：保存清单后会自动刷新这些汇总。</Text>
-                    </Space>
                     <Table
                       rowKey="id"
                       size="small"
@@ -2405,9 +2358,6 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                         绑定SKU
                       </Button>
                     </Space>
-                    <div style={{ marginTop: 8 }}>
-                      <Tag color="blue">口径固定：{formatCm(1000)}×{formatCm(1000)}×1（cm）</Tag>
-                    </div>
                   </Card>
                 )}
               </Space>

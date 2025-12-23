@@ -26,6 +26,7 @@
   - 打样模型：`/costing/sample-models`
   - 标准模型：`/costing/standard-models`
   - 发货批次/BOM快照（只读）：`/costing/shipments`
+  - SKU 主档工作台：`/costing/sku-master`
 
 ### 3) 后端接口 smoke（可选）
 

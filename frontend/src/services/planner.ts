@@ -97,6 +97,9 @@ import type {
   ShipmentException,
   ShipmentImportBatchListResponse,
   ShipmentImportBatch,
+  SkuMaster,
+  SkuMasterImportResponse,
+  SkuMasterListResponse,
 } from '@/types/planner'
 
 const resolvePlannerApiBase = (raw?: string): string => {
@@ -948,6 +951,37 @@ export const fetchShipmentBomSnapshots = async (
   } = {},
 ): Promise<BomSnapshot[]> => {
   const response = await plannerClient.get('/shipments/bom-snapshots', { params: sanitizeParams(params) })
+  return response.data
+}
+
+export const importSkuMasterXlsx = async (params: {
+  file: File
+  requested_by?: string
+}): Promise<SkuMasterImportResponse> => {
+  const formData = new FormData()
+  formData.append('file', params.file)
+  if (params.requested_by) formData.append('requested_by', params.requested_by)
+  const response = await plannerClient.post('/sku-master/import', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+  return response.data
+}
+
+export const fetchSkuMaster = async (
+  params: {
+    page?: number
+    page_size?: number
+    search?: string
+    channel?: string
+    match_status?: string
+  } = {},
+): Promise<SkuMasterListResponse> => {
+  const response = await plannerClient.get('/sku-master', { params: sanitizeParams(params) })
+  return response.data
+}
+
+export const fetchSkuMasterDetail = async (skuId: string): Promise<SkuMaster> => {
+  const response = await plannerClient.get(`/sku-master/${skuId}`)
   return response.data
 }
 

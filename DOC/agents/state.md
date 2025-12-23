@@ -32,6 +32,7 @@
   - `frontend/src/services/planner.ts`
   - `frontend/src/types/planner.ts`
   - `frontend/src/pages/costing/ShipmentMonitorPage.tsx`
+  - `frontend/src/pages/costing/SkuMasterWorkspacePage.tsx`
   - `backend/src/planner/routers/shipments.py`
   - `backend/src/planner/services/shipment_import_service.py`
   - `backend/src/planner/schemas.py`
@@ -134,6 +135,15 @@
     - `GET /api/planner/sku-master/{id}`
   - 发货导入增强：`POST /api/planner/shipments/import` 若 barcode 未命中 `sku_master`，则创建最小主档（`metadata.source="shipment_autobackfill"`；不覆盖已存在主档）
   - 本轮验收命令（必须）：`pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+
+- **本轮闭环产物（Frontend / SKU 主档工作台 MVP）**：
+  - 新增页面：`/costing/sku-master`（成本核算菜单下新增入口：SKU 主档 / 商品关联）
+  - 功能（MVP）：
+    - 上传导入：调用 `POST /api/planner/sku-master/import`（xlsx + requested_by）
+    - 列表分页：调用 `GET /api/planner/sku-master`（search/channel/match_status/page/page_size）
+    - 详情抽屉：调用 `GET /api/planner/sku-master/{id}`（展示原始字段 + 图片预览 URL + metadata_json）
+    - 命中率/字段齐全（MVP）：在页面按“当前页”聚合展示
+  - 本轮验收命令（必须）：`npm -C frontend run build`（已通过）
 
 - **本轮方案产物（SKU→BOM→发货/扣库/核算对账）**：`DOC/costing/blueprints/sku_binding_bom_shipment_plan.md`
 - **本轮提炼件（发货单样例）**：`DOC/index/extracted/shipment_xlsx_extracted_20251222T000000+0800.md`

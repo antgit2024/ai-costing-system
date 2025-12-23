@@ -14,6 +14,7 @@ const ProcessModulesPage = lazy(() => import('./pages/costing/ProcessModulesPage
 const ProcessesPage = lazy(() => import('./pages/costing/ProcessesPage'))
 const PricingToolsPage = lazy(() => import('./pages/costing/PricingToolsPage'))
 const ShipmentMonitorPage = lazy(() => import('./pages/costing/ShipmentMonitorPage'))
+const SkuMasterWorkspacePage = lazy(() => import('./pages/costing/SkuMasterWorkspacePage'))
 
 const App = () => {
   return (
@@ -39,6 +40,7 @@ const App = () => {
           <Route path="/costing/processes" element={<ProcessesPage />} />
           <Route path="/costing/pricing-tools" element={<PricingToolsPage />} />
           <Route path="/costing/shipments" element={<ShipmentMonitorPage />} />
+          <Route path="/costing/sku-master" element={<SkuMasterWorkspacePage />} />
           <Route path="*" element={<Navigate to="/planner" replace />} />
         </Routes>
       </Suspense>

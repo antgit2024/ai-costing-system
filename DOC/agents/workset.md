@@ -2,7 +2,7 @@
 
 > 目的：把“上下文”从聊天迁到可引用的工作集；新 Agent 只需读这些，不要全仓扫描。
 
-> 最近校对（北京时间 GMT+8）：2025-12-22
+> 最近校对（北京时间 GMT+8）：2025-12-23
 
 ### 1) 前端：产品模型（迁移编辑器的核心工作区）
 
@@ -16,6 +16,7 @@
 - `frontend/src/pages/costing/SampleModelsPage.tsx`（打样模型入口：entryContext="sample"）
 - `frontend/src/pages/costing/StandardModelsPage.tsx`（标准模型入口：entryContext="standard" + initialVersionId）
 - `frontend/src/pages/costing/ShipmentMonitorPage.tsx`（发货批次/异常队列/BOM快照只读页：/costing/shipments）
+- `frontend/src/pages/costing/SkuMasterWorkspacePage.tsx`（SKU 主档工作台：/costing/sku-master）
 - `frontend/src/services/planner.ts`（前端接口单一真相）
 - `frontend/src/types/planner.ts`（前端类型单一真相）
 - `frontend/src/App.tsx`（路由：/costing/sample-models & /costing/standard-models）

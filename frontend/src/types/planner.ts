@@ -1298,3 +1298,30 @@ export interface BomSnapshot {
   updated_at: string
 }
 
+export interface SkuMaster {
+  id: string
+  erp_sku_barcode: string
+  platform_product_id?: string | null
+  platform_sku_id?: string | null
+  channel?: string | null
+  product_name?: string | null
+  product_code?: string | null
+  spec_text?: string | null
+  images_json?: Record<string, unknown>
+  match_status?: string | null
+  source_updated_at?: string | null
+  metadata_json?: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export interface SkuMasterListResponse extends PaginatedResponse<SkuMaster> {}
+
+export interface SkuMasterImportResponse {
+  total: number
+  inserted: number
+  updated: number
+  skipped: number
+  errors: Array<Record<string, unknown>>
+}
+

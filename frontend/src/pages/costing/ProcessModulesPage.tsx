@@ -44,6 +44,7 @@ import {
   deactivateProcessModule,
   fetchMaterial,
   fetchMaterials,
+  fetchProcess,
   fetchVirtualMaterial,
   fetchProcessModule,
   fetchProcessModuleReferences,
@@ -219,7 +220,8 @@ const createEmptyStep = (order = 1): ProcessModuleStepInput => ({
     cost_type: 'piece', // 'time' | 'piece'
     base_minutes: 0,
     unit_minutes: 0,
-    measure_unit: '个', // '㎡' | 'm' | '个'
+    // 【单位口径】与 normalizeUnit() 一致：平米/米/个/套（避免 Select 回显掉值）
+    measure_unit: '个',
     rate_per_minute: null,
     piece_rate: null,
   },
@@ -1100,9 +1102,11 @@ const ProcessModulesPage = () => {
         >
           <Select
             options={[
-              { label: '㎡', value: '㎡' },
-              { label: 'm', value: 'm' },
+              // 【单位口径-禁止随意改动】value 必须与 normalizeUnit() 返回一致，否则会出现回显为空/掉值
+              { label: '平米（㎡）', value: '平米' },
+              { label: '米（m）', value: '米' },
               { label: '个', value: '个' },
+              { label: '套', value: '套' },
             ]}
           />
         </Form.Item>
@@ -1169,6 +1173,7 @@ const ProcessModulesPage = () => {
       if (ctx?.targetIndex !== undefined) {
         const next = [...prev]
         const bomUnitPrice = deriveBomUnitPrice(records[0])
+        const calcMethod = (records[0].calculation_method as any) ?? 'count'
         next[ctx.targetIndex] = {
           ...(next[ctx.targetIndex] ?? createEmptyMaterial()),
           material_kind: kind as MaterialReferenceKind,
@@ -1176,6 +1181,9 @@ const ProcessModulesPage = () => {
           material_code: records[0].material_code,
           material_name: records[0].material_name,
           unit_of_measure: normalizeUnit(records[0].unit || records[0].purchase_unit) || '',
+          calculation_method: (next[ctx.targetIndex]?.calculation_method as any) ?? calcMethod,
+          quantity: safeNum((next[ctx.targetIndex] as any)?.quantity, 1) || 1,
+          loss_rate: safeNum((next[ctx.targetIndex] as any)?.loss_rate, 0) || 0,
           material_category: records[0].category || undefined,
           metadata_json: {
             ...(((next[ctx.targetIndex] ?? {}) as any).metadata_json ?? {}),
@@ -1193,6 +1201,7 @@ const ProcessModulesPage = () => {
         material_code: record.material_code,
         material_name: record.material_name,
         unit_of_measure: normalizeUnit(record.unit || record.purchase_unit) || '',
+        calculation_method: (record.calculation_method as any) ?? 'count',
         material_category: record.category || undefined,
         metadata_json: {
           bom_unit_price: deriveBomUnitPrice(record),
@@ -1299,41 +1308,77 @@ const ProcessModulesPage = () => {
   const handleProcessConfirm = (process: ProcessReference) => {
     const ctx = processSelectContext
     setProcessSelectContext(null)
-    updateSteps((prev) => {
-      const targetIndex = ctx?.targetIndex
-      if (targetIndex !== undefined) {
-        const next = [...prev]
-        const current = next[targetIndex] ?? (createEmptyStep(targetIndex + 1) as EditorStepValue)
-        next[targetIndex] = {
-          ...current,
-          process_id: process.id,
-          process,
-          // 工序库是字典：只回填工序引用信息，不带任何“值/参数”
-          team_name: current.team_name || '',
-          metadata_json: {
-            ...(current.metadata_json ?? {}),
-            process_snapshot: process,
-          },
-        }
-        message.success(`已选择工序：${process.process_code}（更新第 ${targetIndex + 1} 行）`)
-        return next
+    ;(async () => {
+      const hide = message.loading('正在读取工序详情并回填默认参数...', 0)
+      try {
+        const detail = await fetchProcess(process.id)
+        const meta = ((detail as any).metadata_json ?? {}) as any
+        const costType: StepCostMode =
+          meta.cost_type === 'time' || meta.cost_type === 'piece'
+            ? meta.cost_type
+            : safeNum(meta.rate_per_minute, NaN) > 0
+              ? 'time'
+              : 'piece'
+        const measureUnit = normalizeUnit(meta.measure_unit ?? detail.unit_of_measure) || '个'
+        const baseMinutes = safeNum(meta.base_minutes, 0)
+        const unitMinutes = safeNum(meta.unit_minutes, 0)
+        const ratePerMinute =
+          costType === 'time' ? safeNum(meta.rate_per_minute, safeNum(detail.standard_rate, 0)) : safeNum(meta.rate_per_minute, 0)
+        const pieceRate =
+          costType === 'piece' ? safeNum(meta.piece_rate, safeNum(detail.standard_rate, 0)) : safeNum(meta.piece_rate, 0)
+
+        updateSteps((prev) => {
+          const targetIndex = ctx?.targetIndex
+          if (targetIndex !== undefined) {
+            const next = [...prev]
+            const current = next[targetIndex] ?? (createEmptyStep(targetIndex + 1) as EditorStepValue)
+            next[targetIndex] = {
+              ...current,
+              process_id: process.id,
+              process,
+              team_name: current.team_name || detail.team_name || '',
+              metadata_json: {
+                ...(current.metadata_json ?? {}),
+                cost_type: costType,
+                base_minutes: baseMinutes,
+                unit_minutes: unitMinutes,
+                measure_unit: measureUnit,
+                rate_per_minute: costType === 'time' ? ratePerMinute : null,
+                piece_rate: costType === 'piece' ? pieceRate : null,
+                process_snapshot: process,
+              },
+            }
+            message.success(`已选择工序：${process.process_code}（更新第 ${targetIndex + 1} 行）`)
+            return next
+          }
+          message.success(`已选择工序：${process.process_code}（新增一行）`)
+          const empty = createEmptyStep(prev.length + 1) as EditorStepValue
+          return [
+            ...prev,
+            {
+              ...empty,
+              process_id: process.id,
+              process,
+              team_name: detail.team_name || '',
+              metadata_json: {
+                ...(empty.metadata_json ?? {}),
+                cost_type: costType,
+                base_minutes: baseMinutes,
+                unit_minutes: unitMinutes,
+                measure_unit: measureUnit,
+                rate_per_minute: costType === 'time' ? ratePerMinute : null,
+                piece_rate: costType === 'piece' ? pieceRate : null,
+                process_snapshot: process,
+              },
+            },
+          ]
+        })
+      } catch (err: any) {
+        message.error(err?.response?.data?.detail ?? '读取工序详情失败')
+      } finally {
+        hide()
       }
-      message.success(`已选择工序：${process.process_code}（新增一行）`)
-      const empty = createEmptyStep(prev.length + 1) as EditorStepValue
-      return [
-        ...prev,
-        {
-          ...empty,
-          process_id: process.id,
-          process,
-          team_name: '',
-          metadata_json: {
-            ...(empty.metadata_json ?? {}),
-            process_snapshot: process,
-          },
-        },
-      ]
-    })
+    })()
   }
 
   return (

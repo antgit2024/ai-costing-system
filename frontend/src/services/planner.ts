@@ -979,6 +979,8 @@ export const fetchSkuMaster = async (
     search?: string
     channel?: string
     match_status?: string
+    bound_state?: 'bound' | 'unbound'
+    spec_mismatch?: boolean
   } = {},
 ): Promise<SkuMasterListResponse> => {
   const response = await plannerClient.get('/sku-master', { params: sanitizeParams(params) })

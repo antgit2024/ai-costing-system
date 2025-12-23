@@ -30,6 +30,8 @@ def list_sku_master(
     search: str | None = None,
     channel: str | None = None,
     match_status: str | None = None,
+    bound_state: str | None = None,
+    spec_mismatch: bool | None = None,
     page: int = 1,
     page_size: int = 20,
     db: Session = Depends(get_db_session),
@@ -39,6 +41,8 @@ def list_sku_master(
         search=search,
         channel=channel,
         match_status=match_status,
+        bound_state=bound_state,
+        spec_mismatch=spec_mismatch,
         page=page,
         page_size=page_size,
     )

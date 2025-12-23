@@ -19,7 +19,7 @@ import {
 } from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 import dayjs from 'dayjs'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import {
@@ -36,7 +36,8 @@ import type { SkuMasterAutoBindPreviewItem } from '@/types/planner'
 
 const { Title, Text } = Typography
 
-const DEFAULT_PAGE_SIZE = 10
+const DEFAULT_PAGE_SIZE = 100
+const PAGE_SIZE_STORAGE_KEY = 'costing_sku_master_page_size_v1'
 
 const formatTime = (v?: string | null) => {
   if (!v) return '-'
@@ -63,7 +64,16 @@ const SkuMasterWorkspacePage = () => {
   const queryClient = useQueryClient()
 
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
+  const [pageSize, setPageSize] = useState(() => {
+    try {
+      const raw = localStorage.getItem(PAGE_SIZE_STORAGE_KEY)
+      const n = raw ? Number(raw) : NaN
+      if (!Number.isFinite(n) || n <= 0) return DEFAULT_PAGE_SIZE
+      return Math.min(Math.max(Math.floor(n), 10), 500)
+    } catch {
+      return DEFAULT_PAGE_SIZE
+    }
+  })
   const [search, setSearch] = useState<string>('')
   const [specKeyword, setSpecKeyword] = useState<string>('') // MVP: client-side filter on current page
   const [channel, setChannel] = useState<string | undefined>(undefined)
@@ -87,8 +97,21 @@ const SkuMasterWorkspacePage = () => {
   const [autoCandidateIdSet, setAutoCandidateIdSet] = useState<Set<string>>(new Set())
   const [autoCandidatesOnly, setAutoCandidatesOnly] = useState(false)
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(PAGE_SIZE_STORAGE_KEY, String(pageSize))
+    } catch {
+      // ignore
+    }
+  }, [pageSize])
+
+  // Tab 切换：重置分页，避免“第一页空白”的错觉
+  useEffect(() => {
+    setPage(1)
+  }, [listTab])
+
   const listQuery = useQuery({
-    queryKey: ['sku-master', 'list', page, pageSize, search, channel, matchStatus],
+    queryKey: ['sku-master', 'list', listTab, page, pageSize, search, channel, matchStatus],
     queryFn: () =>
       fetchSkuMaster({
         page,
@@ -96,6 +119,8 @@ const SkuMasterWorkspacePage = () => {
         search: search || undefined,
         channel,
         match_status: matchStatus,
+        bound_state: listTab === 'bound' ? 'bound' : listTab === 'unbound' ? 'unbound' : undefined,
+        spec_mismatch: listTab === 'mismatch' ? true : undefined,
       }),
     placeholderData: keepPreviousData,
   })
@@ -107,9 +132,7 @@ const SkuMasterWorkspacePage = () => {
     const kw = specKeyword.trim()
     let rows = items
     if (kw) rows = rows.filter((x) => (x.spec_text ?? '').includes(kw))
-    if (listTab === 'unbound') rows = rows.filter((x) => !isFilled(x.active_model_version_id as any))
-    if (listTab === 'bound') rows = rows.filter((x) => isFilled(x.active_model_version_id as any))
-    if (listTab === 'mismatch') rows = rows.filter((x) => !!x.spec_mismatch)
+    // 注意：unbound/bound/mismatch 已下沉到后端过滤，这里仅保留“命中候选视图”和关键词过滤
     if (autoCandidatesOnly && autoCandidateIdSet.size > 0) rows = rows.filter((x) => autoCandidateIdSet.has(x.id))
     return rows
   }, [items, specKeyword, listTab, autoCandidatesOnly, autoCandidateIdSet])

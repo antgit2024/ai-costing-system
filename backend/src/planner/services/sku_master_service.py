@@ -292,6 +292,8 @@ def list_sku_master(
     search: Optional[str],
     channel: Optional[str],
     match_status: Optional[str],
+    bound_state: Optional[str] = None,
+    spec_mismatch: Optional[bool] = None,
     page: int,
     page_size: int,
 ) -> Tuple[int, List[models.SkuMaster]]:
@@ -309,6 +311,23 @@ def list_sku_master(
         q = q.filter(models.SkuMaster.channel == channel)
     if match_status:
         q = q.filter(models.SkuMaster.match_status == match_status)
+    # server-side filters for tabs (avoid empty pages caused by client-side filtering)
+    if spec_mismatch is True:
+        q = q.filter(models.SkuMaster.metadata_json["spec_mismatch"].as_boolean() == True)  # noqa: E712
+    if bound_state in ("bound", "unbound"):
+        # Use EXISTS subquery to avoid N+1 and support pagination correctly.
+        subq = (
+            db.query(models.SkuModelVersionMapping.id)
+            .filter(
+                models.SkuModelVersionMapping.sku_code == models.SkuMaster.erp_sku_barcode,
+                models.SkuModelVersionMapping.is_active.is_(True),
+                models.SkuModelVersionMapping.is_archived.is_(False),
+            )
+        )
+        if bound_state == "bound":
+            q = q.filter(subq.exists())
+        else:
+            q = q.filter(~subq.exists())
     total = q.count()
     items = q.order_by(models.SkuMaster.updated_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
     _attach_active_version_bindings(db, items)

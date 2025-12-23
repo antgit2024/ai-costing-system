@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import io
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -9,6 +10,7 @@ from openpyxl.utils.datetime import from_excel
 from sqlalchemy.orm import Session
 
 from .. import models
+from . import spec_parser_service
 
 
 def _utcnow() -> datetime:
@@ -87,6 +89,68 @@ ALLOWED_COLUMNS = {
     "最后更新时间",
 }
 
+PARSER_VERSION = "v1"
+
+
+def _sha1_text(text: str) -> str:
+    return hashlib.sha1((text or "").encode("utf-8")).hexdigest()  # noqa: S324 - idempotency/cache key
+
+
+def _extract_model_code_hint(spec_text: Optional[str]) -> Optional[str]:
+    """
+    MVP: try extract model_code from spec_text leading token, e.g. "PM001;50*140;..." or "PM001；..."
+    We intentionally keep it strict to avoid false positives.
+    """
+    raw = (spec_text or "").strip()
+    if not raw:
+        return None
+    first = raw.split(";", 1)[0].split("；", 1)[0].strip()
+    if not first:
+        return None
+    # Accept typical patterns: PM001 / PM-001 / PM001A ...
+    if not first.upper().startswith("PM"):
+        return None
+    # basic safety: only allow letters/digits/_/-
+    for ch in first:
+        if not (ch.isalnum() or ch in ("_", "-")):
+            return None
+    return first.upper()
+
+
+def _compute_parsed_summary(spec_text: Optional[str]) -> Dict[str, Any]:
+    text = (spec_text or "").strip()
+    if not text:
+        return {
+            "spec_text": None,
+            "spec_hash": None,
+            "parser_version": PARSER_VERSION,
+            "tokens": [],
+            "dimensions": {},
+            "model_code_hint": None,
+        }
+    parsed = spec_parser_service.parse_spec(text)
+    dims = {
+        "width_cm": str(parsed.get("width_cm")) if parsed.get("width_cm") is not None else None,
+        "height_cm": str(parsed.get("height_cm")) if parsed.get("height_cm") is not None else None,
+        "diameter_cm": str(parsed.get("diameter_cm")) if parsed.get("diameter_cm") is not None else None,
+        "area_m2": str(parsed.get("area_m2")) if parsed.get("area_m2") is not None else None,
+        "perimeter_m": str(parsed.get("perimeter_m")) if parsed.get("perimeter_m") is not None else None,
+    }
+    return {
+        "spec_text": text,
+        "spec_hash": _sha1_text(text),
+        "parser_version": PARSER_VERSION,
+        "tokens": list(parsed.get("tokens") or []),
+        "dimensions": {k: v for k, v in dims.items() if v not in (None, "")},
+        "model_code_hint": _extract_model_code_hint(text),
+    }
+
+
+def _merge_metadata(base: Dict[str, Any], patch: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(base or {})
+    out.update({k: v for k, v in (patch or {}).items() if v is not None})
+    return out
+
 
 def import_erp_sku_master_xlsx(
     db: Session,
@@ -164,6 +228,7 @@ def import_erp_sku_master_xlsx(
                 source_updated_at=payload["source_updated_at"],
                 metadata_json={"source": "erp_import", "requested_by": requested_by},
             )
+            _update_erp_parsed_cache(row_obj, requested_by=requested_by)
             db.add(row_obj)
             db.flush()
             seen[barcode] = row_obj
@@ -182,6 +247,7 @@ def import_erp_sku_master_xlsx(
             meta = dict(existing.metadata_json or {})
             meta.update({"source": "erp_import", "requested_by": requested_by, "updated_at": _utcnow().isoformat()})
             existing.metadata_json = meta
+            _update_erp_parsed_cache(existing, requested_by=requested_by)
             seen[barcode] = existing
             updated += 1
 
@@ -215,6 +281,7 @@ def list_sku_master(
     total = q.count()
     items = q.order_by(models.SkuMaster.updated_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
     _attach_active_version_bindings(db, items)
+    _attach_parsed_fields(items)
     return total, items
 
 
@@ -223,6 +290,7 @@ def get_sku_master(db: Session, sku_id: str) -> Optional[models.SkuMaster]:
     if not row or row.is_archived:
         return None
     _attach_active_version_bindings(db, [row])
+    _attach_parsed_fields([row])
     return row
 
 
@@ -250,6 +318,7 @@ def ensure_from_shipment(
         return None
     existing = get_by_barcode(db, barcode)
     if existing:
+        _update_shipment_seen(existing, shipment_spec_text=spec_text, channel=channel, metadata=metadata)
         return existing
     row = models.SkuMaster(
         erp_sku_barcode=barcode,
@@ -257,6 +326,8 @@ def ensure_from_shipment(
         spec_text=(spec_text or None),
         metadata_json=dict(metadata),
     )
+    _update_erp_parsed_cache(row, requested_by=str(metadata.get("requested_by") or ""))
+    _update_shipment_seen(row, shipment_spec_text=spec_text, channel=channel, metadata=metadata)
     db.add(row)
     db.flush()
     return row
@@ -300,5 +371,94 @@ def _attach_active_version_bindings(db: Session, rows: List[models.SkuMaster]) -
         else:
             r.active_version_binding_id = m.id
             r.active_model_version_id = m.model_version_id
+
+
+def _update_erp_parsed_cache(row: models.SkuMaster, *, requested_by: Optional[str]) -> None:
+    """
+    Pre-parse ERP spec_text and store summary into metadata_json for reuse/display.
+    """
+    meta = dict(row.metadata_json or {})
+    summary = _compute_parsed_summary(row.spec_text)
+    meta = _merge_metadata(
+        meta,
+        {
+            "erp_spec_hash": summary.get("spec_hash"),
+            "erp_parser_version": summary.get("parser_version"),
+            "erp_dimensions": summary.get("dimensions"),
+            "erp_tokens": summary.get("tokens"),
+            "model_code_hint_erp": summary.get("model_code_hint"),
+            "erp_parsed_at": _utcnow().isoformat(),
+            "requested_by": requested_by or meta.get("requested_by"),
+        },
+    )
+    row.metadata_json = meta
+
+
+def _update_shipment_seen(
+    row: models.SkuMaster,
+    *,
+    shipment_spec_text: Optional[str],
+    channel: Optional[str],
+    metadata: Dict[str, Any],
+) -> None:
+    """
+    Record last seen shipment spec_text/hash, and mark mismatch vs ERP spec_text if different.
+    We do NOT overwrite ERP fields (spec_text/platform ids), only augment metadata.
+    """
+    meta = dict(row.metadata_json or {})
+    ship_summary = _compute_parsed_summary(shipment_spec_text)
+    if ship_summary.get("spec_text"):
+        meta["last_shipment_spec_text"] = ship_summary.get("spec_text")
+        meta["last_shipment_spec_hash"] = ship_summary.get("spec_hash")
+        meta["last_shipment_parser_version"] = ship_summary.get("parser_version")
+        meta["last_shipment_dimensions"] = ship_summary.get("dimensions")
+        meta["last_shipment_tokens"] = ship_summary.get("tokens")
+        meta["model_code_hint_shipment"] = ship_summary.get("model_code_hint")
+        meta["last_shipment_seen_at"] = _utcnow().isoformat()
+
+        erp_text = (row.spec_text or "").strip()
+        ship_text = (ship_summary.get("spec_text") or "").strip()
+        if erp_text and ship_text and erp_text != ship_text:
+            meta["spec_mismatch"] = True
+            meta["spec_mismatch_at"] = _utcnow().isoformat()
+        else:
+            # keep False only when both empty or equal; do not delete historical mismatch marker
+            meta.setdefault("spec_mismatch", False)
+    # keep channel only if empty (avoid overwriting ERP import data)
+    if not row.channel and channel:
+        row.channel = channel
+    # preserve existing source; but record that we saw shipments
+    meta.setdefault("seen_sources", [])
+    if isinstance(meta["seen_sources"], list) and "shipments" not in meta["seen_sources"]:
+        meta["seen_sources"].append("shipments")
+    # merge provenance
+    if metadata:
+        meta.setdefault("shipment_backfill", {})
+        if isinstance(meta["shipment_backfill"], dict):
+            meta["shipment_backfill"].update(
+                {
+                    "batch_id": metadata.get("batch_id"),
+                    "shipment_no": metadata.get("shipment_no"),
+                    "spec_hash": metadata.get("spec_hash"),
+                }
+            )
+    row.metadata_json = meta
+
+
+def _attach_parsed_fields(rows: List[models.SkuMaster]) -> None:
+    """
+    Attach parsed summary fields as dynamic attributes for Pydantic response.
+    """
+    for r in rows:
+        meta = dict(getattr(r, "metadata_json", None) or {})
+        r.erp_spec_hash = meta.get("erp_spec_hash")
+        r.erp_parser_version = meta.get("erp_parser_version")
+        r.erp_dimensions = meta.get("erp_dimensions") or {}
+        r.erp_tokens = meta.get("erp_tokens") or []
+        r.model_code_hint = meta.get("model_code_hint_shipment") or meta.get("model_code_hint_erp")
+        r.last_shipment_spec_text = meta.get("last_shipment_spec_text")
+        r.last_shipment_spec_hash = meta.get("last_shipment_spec_hash")
+        r.spec_mismatch = bool(meta.get("spec_mismatch"))
+        r.spec_mismatch_at = meta.get("spec_mismatch_at")
 
 

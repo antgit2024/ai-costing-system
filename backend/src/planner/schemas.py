@@ -1786,6 +1786,16 @@ class SkuMasterRead(BaseModel):
     # Costing integration summary (computed fields; avoid N+1 on frontend)
     active_version_binding_id: Optional[str] = None
     active_model_version_id: Optional[str] = None
+    # Parsed spec cache & hints (computed fields; stored in metadata_json)
+    model_code_hint: Optional[str] = None
+    erp_spec_hash: Optional[str] = None
+    erp_parser_version: Optional[str] = None
+    erp_dimensions: Dict[str, Any] = Field(default_factory=dict)
+    erp_tokens: List[str] = Field(default_factory=list)
+    last_shipment_spec_text: Optional[str] = None
+    last_shipment_spec_hash: Optional[str] = None
+    spec_mismatch: bool = False
+    spec_mismatch_at: Optional[str] = None
     source_updated_at: Optional[datetime] = None
     metadata: Dict[str, Any] = Field(default_factory=dict, alias="metadata_json")
     created_at: datetime

@@ -206,6 +206,7 @@ const SkuMasterWorkspacePage = () => {
         return (
           <Space size={6}>
             {bound ? <Tag color="green">已绑定</Tag> : <Tag color="red">未绑定</Tag>}
+            {record.spec_mismatch ? <Tag color="orange">规格差异</Tag> : null}
             {srcTag}
           </Space>
         )
@@ -407,6 +408,12 @@ const SkuMasterWorkspacePage = () => {
                 <Descriptions.Item label="spec_text" span={2}>
                   {detailQuery.data.spec_text ?? '-'}
                 </Descriptions.Item>
+                <Descriptions.Item label="model_code_hint">
+                  {detailQuery.data.model_code_hint ?? '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="erp_spec_hash">
+                  {detailQuery.data.erp_spec_hash ?? '-'}
+                </Descriptions.Item>
                 <Descriptions.Item label="platform_product_id">
                   {detailQuery.data.platform_product_id ?? '-'}
                 </Descriptions.Item>
@@ -425,6 +432,12 @@ const SkuMasterWorkspacePage = () => {
                 </Descriptions.Item>
                 <Descriptions.Item label="match_status">
                   {detailQuery.data.match_status ?? '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="规格差异（ERP vs 最近发货）">
+                  {detailQuery.data.spec_mismatch ? <Tag color="orange">有差异</Tag> : <Tag>无</Tag>}
+                </Descriptions.Item>
+                <Descriptions.Item label="last_shipment_spec_hash">
+                  {detailQuery.data.last_shipment_spec_hash ?? '-'}
                 </Descriptions.Item>
                 <Descriptions.Item label="source_updated_at">
                   {formatTime(detailQuery.data.source_updated_at ?? null)}
@@ -457,6 +470,33 @@ const SkuMasterWorkspacePage = () => {
                     <Text type="secondary">无规格图片</Text>
                   )}
                 </Space>
+              </Card>
+              <Card size="small" title="解析摘要（MVP）" style={{ marginTop: 12 }}>
+                <Descriptions bordered size="small" column={1}>
+                  <Descriptions.Item label="ERP 解析版本">
+                    {detailQuery.data.erp_parser_version ?? '-'}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="ERP 尺寸">
+                    {safeString((detailQuery.data.erp_dimensions as any)?.width_cm) ||
+                    safeString((detailQuery.data.erp_dimensions as any)?.height_cm) ? (
+                      <span>
+                        {safeString((detailQuery.data.erp_dimensions as any)?.width_cm) || '?'} ×{' '}
+                        {safeString((detailQuery.data.erp_dimensions as any)?.height_cm) || '?'} cm
+                      </span>
+                    ) : (
+                      '-'
+                    )}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="ERP tokens（前10）">
+                    {(detailQuery.data.erp_tokens ?? []).slice(0, 10).join('；') || '-'}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="最近发货规格（如有）">
+                    {detailQuery.data.last_shipment_spec_text ?? '-'}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="规格差异时间">
+                    {detailQuery.data.spec_mismatch_at ? formatTime(detailQuery.data.spec_mismatch_at) : '-'}
+                  </Descriptions.Item>
+                </Descriptions>
               </Card>
               <Card size="small" title="metadata_json" style={{ marginTop: 12 }}>
                 <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>

@@ -155,6 +155,7 @@ def test_sku_master_import_and_shipment_autobackfill_mvp(client, db_session):
     assert created.spec_text == "约50*140;024画框"
     assert created.channel == "绮妙旗舰店"
     assert created.metadata_json.get("source") == "shipment_autobackfill"
+    assert created.metadata_json.get("last_shipment_spec_hash")
 
     # 3) shipment import should NOT overwrite existing sku master
     keep = models.SkuMaster(
@@ -199,5 +200,8 @@ def test_sku_master_import_and_shipment_autobackfill_mvp(client, db_session):
     )
     assert kept.spec_text == "ORIGINAL"
     assert kept.metadata_json.get("source") == "manual"
+    # should record last shipment spec without overwriting ERP spec_text or source
+    assert kept.metadata_json.get("last_shipment_spec_text") == "NEW_SPEC"
+    assert kept.metadata_json.get("spec_mismatch") is True
 
 

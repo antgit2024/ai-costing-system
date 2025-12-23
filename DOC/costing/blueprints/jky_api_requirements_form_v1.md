@@ -84,6 +84,8 @@
 | 目的 | 冲销已扣料/对账一致性 |
 | 必须返回字段 | `related_line_id`（或可映射键）、`qty`、`updated_at`、`status` |
 
+> 详细售后/退货语义与接口字段清单见：`DOC/costing/blueprints/jky_after_sales_returns_requirements_form_v1.md`
+
 ---
 
 ## D. 写回接口需求（Write-back APIs：把可生产工艺回写到 ERP）

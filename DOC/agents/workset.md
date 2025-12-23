@@ -54,6 +54,7 @@
  - `DOC/costing/blueprints/sku_binding_bom_shipment_plan.md`（SKU 绑定→BOM 快照→发货/扣库对账：ERP 方案与计划）
 - `DOC/costing/blueprints/erp_writeback_process_spec_mvp.md`（ERP 回传MVP：把可生产的工艺/规格回写到 ERP）
 - `DOC/costing/blueprints/jky_api_requirements_form_v1.md`（对外谈判用：吉客云/ERP 对接 API 需求表单 v1）
+- `DOC/costing/blueprints/jky_after_sales_returns_requirements_form_v1.md`（对外谈判用：售后/退货（冲销）对接需求表单 v1）
 
 ### 3.3) 派单任务单（供执行 Agent 闭环）
 

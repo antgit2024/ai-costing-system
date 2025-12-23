@@ -129,6 +129,7 @@
   - `DOC/costing/blueprints/erp_writeback_process_spec_mvp.md`（把“可生产的工艺/规格 + 追溯ID”回写到ERP的最小口径/字段清单/幂等治理）
 - **对外谈判资料（吉客云/ERP API需求表单）**：
   - `DOC/costing/blueprints/jky_api_requirements_form_v1.md`（一页式：读接口+写回接口+限流/幂等/字段字典要求）
+  - `DOC/costing/blueprints/jky_after_sales_returns_requirements_form_v1.md`（售后/退货/作废/换货/补发：冲销与对账所需字段/接口/主键要求）
 
 - **本轮闭环产物（Backend / 发货单导入→spec_hash缓存→BOM快照 + 异常队列 MVP）**：
   - 新增落库表：`shipment_import_batches`、`shipment_lines`、`spec_parse_snapshots`、`bom_snapshots`、`shipment_exception_queue`

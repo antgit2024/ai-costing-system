@@ -3291,16 +3291,99 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                   <Button
                     type="primary"
                     size="small"
-                    onClick={() =>
-                      applyPickedMaterialToRow({
-                        kind: 'virtual',
-                        id: r.id,
-                        code: r.virtual_code,
-                        name: r.name,
-                        unit: (r as any).unit ?? null,
-                        category: null,
-                      })
-                    }
+                    onClick={() => {
+                      ;(async () => {
+                        const hide = message.loading('正在读取虚拟物料详情并回填 BOM 单价...', 0)
+                        try {
+                          // list API 可能不含 bindings/bom_unit_price；用详情接口确保快照完整
+                          const vm = await fetchVirtualMaterial(r.id)
+
+                          const unitOfMeasure =
+                            vm.virtual_kind === 'recipe' || vm.virtual_kind === 'placeholder'
+                              ? vm.unit || ''
+                              : '套'
+
+                          const computeVirtualBomUnitPrice = async (): Promise<number | null> => {
+                            const direct = Number((vm as any)?.bom_unit_price)
+                            if (Number.isFinite(direct)) return direct
+                            if (vm.virtual_kind === 'placeholder') return 0
+
+                            const bindings = ((vm as any).bindings ?? []) as any[]
+                            if (!bindings.length) return null
+
+                            const ids = Array.from(
+                              new Set(
+                                bindings
+                                  .map((b) => String(b.material_id ?? '').trim())
+                                  .filter(Boolean),
+                              ),
+                            )
+                            if (!ids.length) return null
+
+                            const mats = await Promise.all(ids.map((id) => fetchMaterial(id)))
+                            const matMap = new Map(mats.map((m) => [m.id, m]))
+
+                            const derive = (m: any): number | null => {
+                              const meta = ((m as any).metadata_json ?? {}) as any
+                              const raw = meta?.bom_unit_price
+                              if (raw != null && raw !== '') {
+                                const n = Number(raw)
+                                return Number.isFinite(n) ? n : null
+                              }
+                              const unitPrice = Number((m as any).unit_price)
+                              const conv = Number((m as any).conversion_purchase_to_bom)
+                              if (Number.isFinite(unitPrice) && Number.isFinite(conv) && conv > 0) {
+                                return unitPrice / conv
+                              }
+                              return null
+                            }
+
+                            let total = 0
+                            let hitAny = false
+                            for (const b of bindings) {
+                              const mid = String(b.material_id ?? '').trim()
+                              if (!mid) continue
+                              const mat = matMap.get(mid)
+                              if (!mat) continue
+                              const price = derive(mat)
+                              if (price == null) continue
+
+                              let qty = Number(b.quantity_ratio ?? 0)
+                              if (!Number.isFinite(qty)) qty = 0
+                              if (vm.virtual_kind === 'recipe' && qty > 1.5) {
+                                // safety: 老数据可能存的是 0-100（百分比）
+                                qty = qty / 100
+                              }
+
+                              // backend loss_rate is 0-100 (%)
+                              const lossRatePct = Number(b.loss_rate ?? 0)
+                              const lossFactor = 1 + Math.max(0, lossRatePct) / 100
+                              total += Math.max(0, price) * Math.max(0, qty) * lossFactor
+                              hitAny = true
+                            }
+                            return hitAny ? total : null
+                          }
+
+                          const bomUnitPrice = await computeVirtualBomUnitPrice()
+
+                          applyPickedMaterialToRow({
+                            kind: 'virtual',
+                            id: vm.id,
+                            code: vm.virtual_code,
+                            name: vm.name,
+                            unit: unitOfMeasure,
+                            category: vm.category ?? null,
+                            // 虚拟物料的计量方式仍由单位口径决定（area/perimeter/count），这里不强塞
+                            calculation_method: null,
+                            bom_unit_price: bomUnitPrice,
+                          })
+                        } catch (err: any) {
+                          message.error(err?.response?.data?.detail ?? '读取虚拟物料详情失败')
+                        } finally {
+                          hide()
+                        }
+                      })()
+                    }}
                   >
                     选择
                   </Button>

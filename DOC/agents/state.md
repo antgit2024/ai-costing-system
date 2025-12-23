@@ -119,6 +119,12 @@
  - **下一步闭环任务单（前端 SKU 主档工作台）**：`DOC/agents/briefings/frontend_sku_master_workspace_mvp.md`
  - **验收命令（派单文件存在）**：`grep -nF "# Frontend 闭环任务单：SKU 主档工作台（导入/查询/命中率）MVP" DOC/agents/briefings/frontend_sku_master_workspace_mvp.md`
 
+- **补充迭代（已完成）：SKU 主档“预解析缓存 + 规格差异标记”**：
+  - 目标：在 SKU 主档中前置沉淀 `spec_hash/解析版本/尺寸/tokens/model_code_hint`，并在发货触发时记录“ERP规格 vs 最近发货规格”差异，避免重复解析、便于前端复核。
+  - 前端展示：`/costing/sku-master` 列表显示 **对接状态 + 规格差异**，详情抽屉显示 `model_code_hint / erp_spec_hash / last_shipment_spec_text/hash / erp_dimensions/tokens`。
+  - 后端实现：导入/回写时写入 `metadata_json`，并在 `GET /api/planner/sku-master` 列表/详情回传 computed 字段（避免前端 N+1）。
+  - 验收命令：`pytest backend/tests/planner/test_sku_master_import_mvp.py -q && npm -C frontend run build`
+
 - **本轮闭环产物（Backend / 发货单导入→spec_hash缓存→BOM快照 + 异常队列 MVP）**：
   - 新增落库表：`shipment_import_batches`、`shipment_lines`、`spec_parse_snapshots`、`bom_snapshots`、`shipment_exception_queue`
   - 新增接口：

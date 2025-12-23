@@ -78,14 +78,39 @@ import processModulesGuide from '@/guides/process_modules_guide.md?raw'
 const { Title, Text } = Typography
 
 type StepCostMode = 'time' | 'piece'
-type StepMeasureType = 'area' | 'perimeter' | 'length' | 'count'
+type StepMeasureType = 'area' | 'perimeter' | 'width' | 'height' | 'count' | 'length'
 
 const STEP_MEASURE_TYPE_OPTIONS: Array<{ label: string; value: StepMeasureType; unitHint: string }> = [
   { label: '面积', value: 'area', unitHint: '㎡' },
   { label: '周长', value: 'perimeter', unitHint: 'm' },
-  { label: '长度', value: 'length', unitHint: 'm' },
   { label: '数量', value: 'count', unitHint: '个' },
+  { label: '宽度', value: 'width', unitHint: 'm' },
+  { label: '高度', value: 'height', unitHint: 'm' },
+  // legacy: historical modules may have 'length' stored; keep compatible option (only shown when already selected)
+  { label: '长度（legacy）', value: 'length', unitHint: 'm' },
 ]
+
+// 统一口径：按 BOM 单位限制计量方式候选
+const allowedCalcMethodsByUnit = (
+  unit?: string | null,
+): Array<'area' | 'perimeter' | 'count' | 'width' | 'height'> => {
+  const u = normalizeUnit(unit) || unit || ''
+  if (u === '平米') return ['area']
+  if (u === '米') return ['perimeter', 'width', 'height']
+  if (u === '个' || u === '套') return ['count']
+  // unknown unit: don't hard block, keep full set to avoid breaking rare units
+  return ['area', 'perimeter', 'width', 'height', 'count']
+}
+
+const deriveCalcMethodByUnit = (
+  unit: string | null | undefined,
+  preferred?: string | null,
+): 'area' | 'perimeter' | 'count' | 'width' | 'height' => {
+  const allowed = allowedCalcMethodsByUnit(unit)
+  const pref = String(preferred ?? '').trim() as any
+  if (pref && allowed.includes(pref)) return pref
+  return (allowed[0] ?? 'count') as any
+}
 
 const safeNum = (value: unknown, fallback = 0) => {
   const n = Number(value)
@@ -97,14 +122,20 @@ const fallbackModuleCode = () => {
   return `MOD${suffix}`
 }
 
-const calcMeasureQty = (measureType: StepMeasureType, params: { width_mm: number; height_mm: number; length_m: number; count: number }) => {
+const calcMeasureQty = (
+  measureType: StepMeasureType,
+  params: { width_mm: number; height_mm: number; length_m: number; count: number },
+) => {
   const qty = Math.max(0, safeNum(params.count, 0))
   const w = Math.max(0, safeNum(params.width_mm, 0))
   const h = Math.max(0, safeNum(params.height_mm, 0))
   const len = Math.max(0, safeNum(params.length_m, 0))
   if (measureType === 'count') return qty
-  if (measureType === 'length') return len * qty
   if (measureType === 'perimeter') return (2 * (w + h)) / 1000 * qty
+  if (measureType === 'width') return w / 1000 * qty
+  if (measureType === 'height') return h / 1000 * qty
+  // legacy: length in meters
+  if (measureType === 'length') return len * qty
   // area
   return (w * h) / 1_000_000 * qty
 }
@@ -936,12 +967,33 @@ const ProcessModulesPage = () => {
       dataIndex: 'calculation_method',
       width: 80,
       render: (_: unknown, _record, index) => (
-        <Form.Item
-          name={['materials', index, 'calculation_method']}
-          style={{ marginBottom: 0 }}
-          rules={[{ required: true, message: '必填' }]}
-        >
-          <Select options={CALCULATION_METHOD_OPTIONS} placeholder="计量方式" optionLabelProp="label" />
+        <Form.Item noStyle shouldUpdate>
+          {(form) => {
+            const unitOfMeasure = form.getFieldValue(['materials', index, 'unit_of_measure'])
+            const meta = (form.getFieldValue(['materials', index, 'metadata_json']) ?? {}) as any
+            const bomUnit = normalizeUnit(meta?.bom_unit ?? unitOfMeasure) || meta?.bom_unit || unitOfMeasure
+            const allowed = new Set(allowedCalcMethodsByUnit(bomUnit))
+            const current = String(form.getFieldValue(['materials', index, 'calculation_method']) ?? '').trim()
+
+            // 自动纠偏：单位变化导致计量方式不合法时，回填到该单位允许的默认值
+            if (current && !allowed.has(current as any)) {
+              queueMicrotask(() => {
+                const next = deriveCalcMethodByUnit(bomUnit, null)
+                form.setFieldValue(['materials', index, 'calculation_method'], next)
+              })
+            }
+
+            const options = CALCULATION_METHOD_OPTIONS.filter((opt) => allowed.has(opt.value as any))
+            return (
+              <Form.Item
+                name={['materials', index, 'calculation_method']}
+                style={{ marginBottom: 0 }}
+                rules={[{ required: true, message: '必填' }]}
+              >
+                <Select options={options} placeholder="计量方式" optionLabelProp="label" />
+              </Form.Item>
+            )
+          }}
         </Form.Item>
       ),
     },
@@ -1109,6 +1161,46 @@ const ProcessModulesPage = () => {
               { label: '套', value: '套' },
             ]}
           />
+        </Form.Item>
+      ),
+    },
+    {
+      title: '计价量类型',
+      key: 'measure_type',
+      width: 110,
+      render: (_: unknown, _row, index) => (
+        <Form.Item noStyle shouldUpdate>
+          {(form) => {
+            const unit = form.getFieldValue(['steps', index, 'metadata_json', 'measure_unit'])
+            const current = String(form.getFieldValue(['steps', index, 'metadata_json', 'measure_type']) ?? '').trim()
+            const allowed = new Set(allowedCalcMethodsByUnit(unit))
+
+            // legacy: keep 'length' only if already selected in existing data
+            const allowLegacyLength = current === 'length'
+
+            // 自动纠偏：单位变更导致 measure_type 不合法时，切回默认
+            if (current && !allowed.has(current as any) && !(allowLegacyLength && current === 'length')) {
+              queueMicrotask(() => {
+                const next = deriveCalcMethodByUnit(unit, null)
+                form.setFieldValue(['steps', index, 'metadata_json', 'measure_type'], next)
+              })
+            }
+
+            const options = STEP_MEASURE_TYPE_OPTIONS.filter((opt) => {
+              if (opt.value === 'length') return allowLegacyLength
+              return allowed.has(opt.value as any)
+            })
+
+            return (
+              <Form.Item
+                name={['steps', index, 'metadata_json', 'measure_type']}
+                style={{ marginBottom: 0 }}
+                rules={[{ required: true, message: '必填' }]}
+              >
+                <Select options={options} placeholder="计价量" optionFilterProp="label" />
+              </Form.Item>
+            )
+          }}
         </Form.Item>
       ),
     },
@@ -1321,6 +1413,12 @@ const ProcessModulesPage = () => {
               ? 'time'
               : 'piece'
         const measureUnit = normalizeUnit(meta.measure_unit ?? detail.unit_of_measure) || '个'
+        const measureType = (() => {
+          const preferred = String(meta.measure_type ?? '').trim()
+          // legacy: keep old value if present and compatible, else derive from unit
+          if (preferred === 'length') return 'length' as StepMeasureType
+          return deriveCalcMethodByUnit(measureUnit, preferred) as StepMeasureType
+        })()
         const baseMinutes = safeNum(meta.base_minutes, 0)
         const unitMinutes = safeNum(meta.unit_minutes, 0)
         const ratePerMinute =
@@ -1344,6 +1442,7 @@ const ProcessModulesPage = () => {
                 base_minutes: baseMinutes,
                 unit_minutes: unitMinutes,
                 measure_unit: measureUnit,
+                measure_type: (current.metadata_json as any)?.measure_type ?? measureType,
                 rate_per_minute: costType === 'time' ? ratePerMinute : null,
                 piece_rate: costType === 'piece' ? pieceRate : null,
                 process_snapshot: process,
@@ -1367,6 +1466,7 @@ const ProcessModulesPage = () => {
                 base_minutes: baseMinutes,
                 unit_minutes: unitMinutes,
                 measure_unit: measureUnit,
+                measure_type: measureType,
                 rate_per_minute: costType === 'time' ? ratePerMinute : null,
                 piece_rate: costType === 'piece' ? pieceRate : null,
                 process_snapshot: process,

@@ -78,6 +78,17 @@ const CHARGING_MODE_OPTIONS: Array<{ label: string; value: ProcessChargingMode }
   { label: '按高度', value: 'height' },
 ]
 
+/**
+ * 【单位口径-禁止随意改动】
+ * 本项目统一单位口径以 `frontend/src/utils/unit.ts` 的 `normalizeUnit()` 为准：
+ * - 面积：平米
+ * - 长度：米
+ * - 数量：个
+ * - 套装：套
+ *
+ * 这里的 Select 选项必须与 normalizeUnit 的返回值一致，否则会出现“编辑时回显为空/掉值”的历史问题。
+ * ❌ 不要改回 `㎡/m` 作为 value（显示可以写“平米（㎡）/米（m）”，但 value 必须是“平米/米/个/套”）。
+ */
 const MEASURE_UNIT_OPTIONS = [
   { label: '平米', value: '平米' },
   { label: '米', value: '米' },
@@ -151,6 +162,7 @@ const ProcessesPage = () => {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [drawerMode, setDrawerMode] = useState<'create' | 'edit' | 'view'>('create')
   const [selected, setSelected] = useState<ProcessSummary | null>(null)
+  const [pendingFormValues, setPendingFormValues] = useState<Record<string, unknown> | null>(null)
   const [copyModalOpen, setCopyModalOpen] = useState(false)
   const [copySource, setCopySource] = useState<ProcessSummary | null>(null)
   const [guideOpen, setGuideOpen] = useState(false)
@@ -273,8 +285,10 @@ const ProcessesPage = () => {
   const openCreate = () => {
     setDrawerMode('create')
     setSelected(null)
+    // Drawer 使用 destroyOnClose，Form 也设置了 preserve={false}：
+    // 必须在 Drawer 打开且 Form 挂载后再回填，否则会出现“编辑/新建掉值”。
     form.resetFields()
-    form.setFieldsValue({
+    setPendingFormValues({
       process_code: fallbackProcessCode(),
       cost_type: 'time',
       charging_mode: 'count',
@@ -282,6 +296,7 @@ const ProcessesPage = () => {
       unit_of_measure: '个',
       measure_unit: '个',
     })
+    setDrawerOpen(true)
     generateNextCode({ prefix: 'PR', width: 5 })
       .then((res) => {
         form.setFieldValue('process_code', res.code)
@@ -289,7 +304,6 @@ const ProcessesPage = () => {
       .catch(() => {
         // keep fallback
     })
-    setDrawerOpen(true)
   }
 
   const openView = (record: ProcessSummary) => {
@@ -298,7 +312,7 @@ const ProcessesPage = () => {
     form.resetFields()
     const meta = (record.metadata_json ?? {}) as any
     const costType = getProcessCostType(record)
-    form.setFieldsValue({
+    setPendingFormValues({
       id: record.id,
       process_code: record.process_code,
       process_name: record.process_name,
@@ -307,12 +321,12 @@ const ProcessesPage = () => {
       cost_type: costType,
       base_minutes: safeNumber(meta?.base_minutes),
       unit_minutes: safeNumber(meta?.unit_minutes),
-      measure_unit: (meta?.measure_unit as any) ?? (record.unit_of_measure as any) ?? '个',
+      measure_unit: normalizeUnit((meta?.measure_unit as any) ?? record.unit_of_measure) || '个',
       rate_per_minute: safeNumber(meta?.rate_per_minute),
       piece_rate: safeNumber(meta?.piece_rate) ?? safeNumber(record.standard_rate),
       charging_mode: record.charging_mode,
       standard_rate: safeNumber(record.standard_rate),
-      unit_of_measure: record.unit_of_measure ?? undefined,
+      unit_of_measure: normalizeUnit(record.unit_of_measure) || undefined,
       status: record.status,
       standard_time_minutes: safeNumber((record.metadata_json as any)?.standard_time_minutes),
     })
@@ -325,7 +339,7 @@ const ProcessesPage = () => {
     form.resetFields()
     const meta = (record.metadata_json ?? {}) as any
     const costType = getProcessCostType(record)
-    form.setFieldsValue({
+    setPendingFormValues({
       id: record.id,
       process_code: record.process_code,
       process_name: record.process_name,
@@ -334,12 +348,12 @@ const ProcessesPage = () => {
       cost_type: costType,
       base_minutes: safeNumber(meta?.base_minutes),
       unit_minutes: safeNumber(meta?.unit_minutes),
-      measure_unit: (meta?.measure_unit as any) ?? (record.unit_of_measure as any) ?? '个',
+      measure_unit: normalizeUnit((meta?.measure_unit as any) ?? record.unit_of_measure) || '个',
       rate_per_minute: safeNumber(meta?.rate_per_minute),
       piece_rate: safeNumber(meta?.piece_rate) ?? safeNumber(record.standard_rate),
       charging_mode: record.charging_mode,
       standard_rate: safeNumber(record.standard_rate),
-      unit_of_measure: record.unit_of_measure ?? undefined,
+      unit_of_measure: normalizeUnit(record.unit_of_measure) || undefined,
       status: record.status,
       standard_time_minutes: safeNumber((record.metadata_json as any)?.standard_time_minutes),
     })
@@ -541,6 +555,15 @@ const ProcessesPage = () => {
       }
     }
   }, [costTypeValue, drawerMode, form, measureUnitValue])
+
+  // Drawer destroyOnClose + Form preserve={false} 会导致“先 setFieldsValue 再打开抽屉”失效；
+  // 统一在抽屉打开后回填，避免编辑时掉值。
+  useEffect(() => {
+    if (!drawerOpen) return
+    if (!pendingFormValues) return
+    form.setFieldsValue(pendingFormValues)
+    setPendingFormValues(null)
+  }, [drawerOpen, form, pendingFormValues])
 
   return (
     <Space direction="vertical" style={{ width: '100%' }} size={24}>

@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from openpyxl import load_workbook
 from openpyxl.utils.datetime import from_excel
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from .. import models
 from . import spec_parser_service
@@ -383,7 +383,7 @@ def _attach_active_version_bindings(db: Session, rows: List[models.SkuMaster]) -
         return
     versions = (
         db.query(models.ProductModelVersion)
-        .join(models.ProductModel, models.ProductModel.id == models.ProductModelVersion.model_id)
+        .options(joinedload(models.ProductModelVersion.model))
         .filter(
             models.ProductModelVersion.id.in_(list(set(version_ids))),
             models.ProductModelVersion.is_archived.is_(False),

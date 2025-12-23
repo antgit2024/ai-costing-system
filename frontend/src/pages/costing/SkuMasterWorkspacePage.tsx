@@ -8,6 +8,7 @@ import {
   Image,
   Input,
   message,
+  Tabs,
   Row,
   Select,
   Space,
@@ -247,56 +248,101 @@ const SkuMasterWorkspacePage = () => {
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
         <div>
           <Title level={3} style={{ marginBottom: 4 }}>
-            SKU 主档工作台（MVP）
+            商品关联（SKU 主档）
           </Title>
           <Text type="secondary">
-            用于导入 ERP SKU 主档（货品条码为主键），并快速查看字段齐全情况与“对接就绪率”（MVP 统计以当前页为准）。
+            左侧用于绑定与规则配置，右侧用于筛选与列表查看（统计以当前页为准）。
           </Text>
         </div>
         <Button onClick={() => listQuery.refetch()}>刷新</Button>
       </div>
 
       <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
-        <Col span={24}>
-          <Card title="导入 SKU 主档（xlsx）">
-            <Alert
-              type="info"
-              showIcon
-              style={{ marginBottom: 12 }}
-              message="上传文件：ERP 理 平台商品列表.xlsx"
-              description="导入后会写入 sku_master，后续发货导入会优先命中该主档（以货品条码为关联键）。"
-            />
-            <Space wrap>
-              <Upload
-                accept=".xlsx"
-                beforeUpload={(file) => {
-                  setUploadFile(file as File)
-                  return false
-                }}
-                fileList={uploadFile ? ([{ uid: '1', name: uploadFile.name }] as any) : []}
-                onRemove={() => {
-                  setUploadFile(null)
-                }}
-                maxCount={1}
-              >
-                <Button>选择文件</Button>
-              </Upload>
-              <Input
-                style={{ width: 220 }}
-                placeholder="requested_by（可选）"
-                value={requestedBy}
-                onChange={(e) => setRequestedBy(e.target.value)}
+        {/* 左侧：绑定工作台（1/4） */}
+        <Col xs={24} lg={6}>
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <Card size="small" title="绑定工作台">
+              <Tabs
+                items={[
+                  {
+                    key: 'auto',
+                    label: '自动',
+                    children: (
+                      <Space direction="vertical" style={{ width: '100%' }}>
+                        <Text type="secondary">
+                          自动绑定仅建议用于“确定性强”的规则（如 spec_text 中的 model_code_hint 唯一命中已发布标准版本）。
+                        </Text>
+                        <Button block disabled>
+                          预览命中范围（待接）
+                        </Button>
+                        <Button block type="primary" disabled>
+                          执行自动绑定（待接）
+                        </Button>
+                      </Space>
+                    ),
+                  },
+                  {
+                    key: 'manual',
+                    label: '手工',
+                    children: (
+                      <Space direction="vertical" style={{ width: '100%' }}>
+                        <Text type="secondary">面向“未绑定/不确定”的SKU，人工选择已发布标准版本并批量绑定。</Text>
+                        <Button block disabled>
+                          批量绑定所选（待接）
+                        </Button>
+                      </Space>
+                    ),
+                  },
+                ]}
               />
-              <Button type="primary" loading={uploading} onClick={handleImport}>
-                开始导入
-              </Button>
-            </Space>
-          </Card>
+            </Card>
+
+            <Card size="small" title="规则/预设（占位）">
+              <Space direction="vertical" style={{ width: '100%' }}>
+                <Text type="secondary">后续这里放“规则保存/预设”，避免重复调试。</Text>
+                <Button block disabled>
+                  新建规则（待接）
+                </Button>
+                <Button block disabled>
+                  管理预设（待接）
+                </Button>
+              </Space>
+            </Card>
+
+            <Card size="small" title="导入（可选）">
+              <Space direction="vertical" style={{ width: '100%' }}>
+                <Space wrap>
+                  <Upload
+                    accept=".xlsx"
+                    beforeUpload={(file) => {
+                      setUploadFile(file as File)
+                      return false
+                    }}
+                    fileList={uploadFile ? ([{ uid: '1', name: uploadFile.name }] as any) : []}
+                    onRemove={() => setUploadFile(null)}
+                    maxCount={1}
+                  >
+                    <Button>选择xlsx</Button>
+                  </Upload>
+                  <Input
+                    style={{ width: 180 }}
+                    placeholder="requested_by"
+                    value={requestedBy}
+                    onChange={(e) => setRequestedBy(e.target.value)}
+                  />
+                </Space>
+                <Button type="primary" block loading={uploading} onClick={handleImport}>
+                  导入SKU主档
+                </Button>
+              </Space>
+            </Card>
+          </Space>
         </Col>
 
-        <Col span={24}>
+        {/* 右侧：筛选 + 列表（3/4） */}
+        <Col xs={24} lg={18}>
           <Card
-            title="SKU 主档列表（分页）"
+            title="SKU 列表"
             extra={
               <Space wrap>
                 <Input
@@ -327,7 +373,7 @@ const SkuMasterWorkspacePage = () => {
                 />
                 <Select
                   allowClear
-                  style={{ width: 160 }}
+                  style={{ width: 190 }}
                   placeholder="ERP匹配状态（网店↔ERP）"
                   options={matchStatusOptions}
                   value={matchStatus}
@@ -344,6 +390,13 @@ const SkuMasterWorkspacePage = () => {
               </Space>
             }
           >
+            <Tabs
+              items={[
+                { key: 'all', label: '全部', children: null },
+                { key: 'unbound', label: '未绑定', children: null },
+                { key: 'mismatch', label: '规格差异', children: null },
+              ]}
+            />
             <Table
               rowKey="id"
               size="small"

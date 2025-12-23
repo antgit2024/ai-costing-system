@@ -1429,6 +1429,31 @@ def update_model(
     metadata: Optional[Dict[str, Any]],
     modules: Optional[List[Dict[str, Any]]] = None,
 ) -> models.ProductModel:
+    def _normalize_keyword(s: str) -> str:
+        return "".join(str(s or "").strip().split()).upper()
+
+    def _extract_keywords(meta: Dict[str, Any]) -> List[str]:
+        raw = meta.get("recognition_keywords")
+        if not isinstance(raw, list):
+            return []
+        out: List[str] = []
+        for x in raw:
+            if x is None:
+                continue
+            k = _normalize_keyword(str(x))
+            if not k:
+                continue
+            out.append(k)
+        # de-dup while keeping order
+        seen: set[str] = set()
+        uniq: List[str] = []
+        for k in out:
+            if k in seen:
+                continue
+            seen.add(k)
+            uniq.append(k)
+        return uniq
+
     if model_name is not None:
         model.model_name = model_name
     if description is not None:
@@ -1451,6 +1476,31 @@ def update_model(
     if unit_of_measure is not None:
         model.unit_of_measure = unit_of_measure
     if metadata is not None:
+        # Validate recognition keywords uniqueness among models that have published standard versions.
+        # This is used by SKU auto-bind; ambiguous keywords must be rejected at save-time.
+        new_keywords = _extract_keywords(metadata)
+        if new_keywords:
+            # Find other models with published standard versions
+            rows = (
+                db.query(models.ProductModel)
+                .join(models.ProductModelVersion, models.ProductModelVersion.model_id == models.ProductModel.id)
+                .filter(
+                    models.ProductModel.is_archived.is_(False),
+                    models.ProductModel.id != model.id,
+                    models.ProductModelVersion.version_kind == "standard",
+                    models.ProductModelVersion.version_status == "published",
+                    models.ProductModelVersion.is_archived.is_(False),
+                )
+                .all()
+            )
+            used: Dict[str, str] = {}
+            for m in rows:
+                meta0 = m.metadata_json or {}
+                for k in _extract_keywords(meta0):
+                    used[k] = str(m.model_code or m.id)
+            conflicts = [k for k in new_keywords if k in used]
+            if conflicts:
+                raise ValueError(f"型号识别关键词冲突（需全局唯一）：{', '.join(conflicts)}")
         model.metadata_json = metadata
     if modules is not None:
         _replace_modules(db, model, modules)

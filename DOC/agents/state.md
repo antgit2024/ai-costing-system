@@ -1,6 +1,6 @@
 ## 当前状态（崩了也能继续）
 
-- **最近校对（北京时间 GMT+8）**：2025-12-23 18:25（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
+- **最近校对（北京时间 GMT+8）**：2025-12-23 19:10（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **分支**：`backup/20251214-1535`
 
 - **本轮闭环产物（Planner-Optimization / 方案评审稿）**：
@@ -177,6 +177,15 @@
   - 自动绑定（确定性规则，带预览/执行）：
     - 仅对 `model_code_hint` 唯一命中“已发布标准模型”的未绑定 SKU 自动绑定
     - 后端接口：`POST /api/planner/sku-master/auto-bind/preview`、`POST /api/planner/sku-master/auto-bind/execute`
+  - 验收命令：
+    - Backend：`cd backend && . venv/bin/activate && pytest tests/planner/test_sku_master_binding_workbench_mvp.py -q`
+    - Frontend：`npm -C frontend run build`
+
+- **补充迭代（已完成）：标准模型“型号识别规则”（用于自动绑定识别）**：
+  - 入口：标准模型编辑抽屉（`entryContext="standard"`）新增 Tab：**型号识别规则**
+  - 规则：在模型 `metadata_json.recognition_keywords` 维护关键词（如 OZU：`丝圈地垫`、`丝圈`），用于从交易规格 `spec_text` 识别模型
+  - 护栏：关键词在“已发布标准模型集合”内 **必须全局唯一**（保存时后端校验，避免歧义）
+  - 自动链路：`sku-master auto-bind preview/execute` 优先按关键词命中模型，其次才用 `model_code_hint` 兜底
   - 验收命令：
     - Backend：`cd backend && . venv/bin/activate && pytest tests/planner/test_sku_master_binding_workbench_mvp.py -q`
     - Frontend：`npm -C frontend run build`

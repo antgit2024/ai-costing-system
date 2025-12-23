@@ -1865,6 +1865,8 @@ class SkuMasterAutoBindPreviewItem(BaseModel):
     model_name: str
     published_version_id: str
     version_label: Optional[str] = None
+    match_method: Optional[str] = None
+    matched_keyword: Optional[str] = None
 
 
 class SkuMasterAutoBindPreviewResponse(BaseModel):

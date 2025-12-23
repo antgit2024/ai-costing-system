@@ -1370,6 +1370,8 @@ export interface SkuMasterAutoBindPreviewItem {
   model_name: string
   published_version_id: string
   version_label?: string | null
+  match_method?: string | null
+  matched_keyword?: string | null
 }
 
 export interface SkuMasterAutoBindPreviewResponse {

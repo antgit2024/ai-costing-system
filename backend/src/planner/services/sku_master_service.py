@@ -666,6 +666,80 @@ def bind_sku_master_by_model(
 def auto_bind_preview(db: Session, *, limit: int) -> Dict[str, Any]:
     limit = max(min(int(limit or 200), 2000), 1)
 
+    def _norm_text(t: Optional[str]) -> str:
+        return "".join(str(t or "").strip().split()).upper()
+
+    def _extract_model_keywords(meta: Dict[str, Any]) -> List[str]:
+        raw = meta.get("recognition_keywords")
+        if not isinstance(raw, list):
+            return []
+        out: List[str] = []
+        for x in raw:
+            if x is None:
+                continue
+            k = "".join(str(x).strip().split()).upper()
+            if not k:
+                continue
+            out.append(k)
+        # de-dup
+        seen: set[str] = set()
+        uniq: List[str] = []
+        for k in out:
+            if k in seen:
+                continue
+            seen.add(k)
+            uniq.append(k)
+        return uniq
+
+    # Load all published standard models for keyword matching (in-memory) once.
+    published_models: List[Dict[str, Any]] = []
+    rows = (
+        db.query(models.ProductModel, models.ProductModelVersion)
+        .join(models.ProductModelVersion, models.ProductModelVersion.model_id == models.ProductModel.id)
+        .filter(
+            models.ProductModel.is_archived.is_(False),
+            models.ProductModelVersion.is_archived.is_(False),
+            models.ProductModelVersion.version_kind == "standard",
+            models.ProductModelVersion.version_status == "published",
+        )
+        .order_by(models.ProductModel.model_code.asc())
+        .all()
+    )
+    for m, v in rows:
+        meta = m.metadata_json or {}
+        kws = _extract_model_keywords(meta)
+        if not kws:
+            continue
+        published_models.append({"model": m, "version": v, "keywords": kws})
+
+    def _match_by_model_keywords(spec_text: Optional[str]) -> Optional[Dict[str, Any]]:
+        text = _norm_text(spec_text)
+        if not text:
+            return None
+        hits: List[Dict[str, Any]] = []
+        for rec in published_models:
+            m = rec["model"]
+            v = rec["version"]
+            kws: List[str] = rec["keywords"]
+            matched: List[str] = [k for k in kws if k and k in text]
+            if not matched:
+                continue
+            # choose longest keyword within the same model
+            best = sorted(matched, key=lambda x: len(x), reverse=True)[0]
+            hits.append({"model": m, "version": v, "matched_keyword": best})
+
+        if not hits:
+            return None
+        # If multiple models hit, prefer strictly-longest keyword; otherwise ambiguous -> no match.
+        hits_sorted = sorted(hits, key=lambda x: len(str(x["matched_keyword"])), reverse=True)
+        if len(hits_sorted) == 1:
+            return hits_sorted[0]
+        top_len = len(str(hits_sorted[0]["matched_keyword"]))
+        second_len = len(str(hits_sorted[1]["matched_keyword"]))
+        if top_len > second_len:
+            return hits_sorted[0]
+        return None
+
     # Find unbound SKU masters (by barcode)
     q = (
         db.query(models.SkuMaster)
@@ -691,14 +765,29 @@ def auto_bind_preview(db: Session, *, limit: int) -> Dict[str, Any]:
             # Fallback: compute from current spec_text (so older imported rows can still be auto-bound)
             hint = _extract_model_code_hint(r.spec_text)
         hint = (str(hint).strip().upper()) if hint else ""
-        if not hint:
+        match_method = None
+        matched_keyword = None
+        model = None
+        version = None
+
+        if hint:
+            version = product_model_service.get_latest_published_standard_version_for_model_code(db, hint)
+            if version:
+                model = db.get(models.ProductModel, version.model_id)
+                if model and not model.is_archived:
+                    match_method = "model_code_hint"
+
+        if not model or not version:
+            kw_match = _match_by_model_keywords(r.spec_text)
+            if kw_match:
+                model = kw_match["model"]
+                version = kw_match["version"]
+                matched_keyword = kw_match.get("matched_keyword")
+                match_method = "model_keyword"
+
+        if not model or not version:
             continue
-        version = product_model_service.get_latest_published_standard_version_for_model_code(db, hint)
-        if not version:
-            continue
-        model = db.get(models.ProductModel, version.model_id)
-        if not model or model.is_archived:
-            continue
+
         candidates += 1
         items.append(
             {
@@ -710,6 +799,8 @@ def auto_bind_preview(db: Session, *, limit: int) -> Dict[str, Any]:
                 "model_name": model.model_name,
                 "published_version_id": version.id,
                 "version_label": version.version_label,
+                "match_method": match_method,
+                "matched_keyword": matched_keyword,
             }
         )
         if len(items) >= limit:

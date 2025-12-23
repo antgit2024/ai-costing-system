@@ -2363,6 +2363,52 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
               </Space>
             ),
           },
+          ...(entryContext === 'standard'
+            ? [
+                {
+                  key: 'recognition',
+                  label: '型号识别规则',
+                  children: (
+                    <Card size="small" title="型号识别规则（用于 SKU 自动绑定模型）">
+                      <Alert
+                        type="info"
+                        showIcon
+                        message="说明"
+                        description="这里维护“模型级别”的识别关键词（需全局唯一，避免自动绑定歧义）。自动链路：先识别模型→再进入该模型唯一在线发布标准版本→再用行级变体生成最终BOM。"
+                        style={{ marginBottom: 12 }}
+                      />
+                      <Text type="secondary">
+                        例：OZU（丝圈地垫）可配置关键词：丝圈、丝圈地垫。交易规格包含“丝圈地垫”时即可命中 OZU 模型。
+                      </Text>
+                      <div style={{ marginTop: 12 }}>
+                        <Form layout="vertical">
+                          <Form.Item label="识别关键词（全局唯一）">
+                            <Select
+                              mode="tags"
+                              style={{ width: '100%' }}
+                              placeholder="输入关键词后回车；建议从具体到泛化，例如：丝圈地垫、丝圈"
+                              value={(((modelQuery.data as any)?.metadata_json ?? {}) as any)?.recognition_keywords ?? []}
+                              onChange={async (vals) => {
+                                const m = modelQuery.data as any
+                                const meta = { ...(m?.metadata_json ?? {}) }
+                                meta.recognition_keywords = vals
+                                try {
+                                  await updateProductModel(String(m?.id), { metadata_json: meta })
+                                  message.success('已保存型号识别关键词')
+                                  await queryClient.invalidateQueries({ queryKey: ['product-model', String(m?.id)] })
+                                } catch (e: any) {
+                                  message.error(e?.message || '保存失败（可能关键词冲突）')
+                                }
+                              }}
+                            />
+                          </Form.Item>
+                        </Form>
+                      </div>
+                    </Card>
+                  ),
+                },
+              ]
+            : []),
           {
             key: 'lines',
             label: '清单编辑',

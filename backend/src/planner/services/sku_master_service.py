@@ -294,6 +294,9 @@ def list_sku_master(
     match_status: Optional[str],
     bound_state: Optional[str] = None,
     spec_mismatch: Optional[bool] = None,
+    include_terms: Optional[str] = None,
+    exclude_terms: Optional[str] = None,
+    match_scope: Optional[str] = None,
     page: int,
     page_size: int,
 ) -> Tuple[int, List[models.SkuMaster]]:
@@ -328,6 +331,49 @@ def list_sku_master(
             q = q.filter(subq.exists())
         else:
             q = q.filter(~subq.exists())
+
+    def _parse_terms(raw: Optional[str]) -> List[str]:
+        if not raw:
+            return []
+        s = str(raw)
+        for ch in ("，", ";", "；", "\n", "\t"):
+            s = s.replace(ch, " ")
+        parts = [p.strip() for p in s.split(" ") if p.strip()]
+        out: List[str] = []
+        seen: set[str] = set()
+        for p in parts:
+            if p in seen:
+                continue
+            seen.add(p)
+            out.append(p)
+        return out
+
+    include_list = _parse_terms(include_terms)
+    exclude_list = _parse_terms(exclude_terms)
+    scope = (match_scope or "auto").strip()
+    if scope not in ("auto", "spec", "name", "spec_or_name"):
+        scope = "auto"
+
+    # Per-channel default: some channels put spec tokens into product_name.
+    name_channels = ["小红书", "京东"]
+
+    def _field_expr_for_scope(term: str):
+        pattern = f"%{term}%"
+        spec_hit = models.SkuMaster.spec_text.ilike(pattern)
+        name_hit = models.SkuMaster.product_name.ilike(pattern)
+        if scope == "spec":
+            return spec_hit
+        if scope == "name":
+            return name_hit
+        if scope == "spec_or_name":
+            return spec_hit | name_hit
+        # auto
+        return (models.SkuMaster.channel.in_(name_channels) & name_hit) | (~models.SkuMaster.channel.in_(name_channels) & spec_hit)
+
+    for t in include_list:
+        q = q.filter(_field_expr_for_scope(t))
+    for t in exclude_list:
+        q = q.filter(~_field_expr_for_scope(t))
     total = q.count()
     items = q.order_by(models.SkuMaster.updated_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
     _attach_active_version_bindings(db, items)

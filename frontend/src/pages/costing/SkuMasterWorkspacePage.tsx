@@ -74,7 +74,10 @@ const SkuMasterWorkspacePage = () => {
     }
   })
   const [search, setSearch] = useState<string>('')
-  const [specKeyword, setSpecKeyword] = useState<string>('') // 运营筛选：规格包含关键字（仅当前列表/候选视图）
+  const [specKeyword] = useState<string>('') // 兼容占位：旧的“规格关键字”筛选已升级为布尔筛选
+  const [includeTerms, setIncludeTerms] = useState<string>('')
+  const [excludeTerms, setExcludeTerms] = useState<string>('')
+  const [matchScope, setMatchScope] = useState<'auto' | 'spec' | 'name' | 'spec_or_name'>('auto')
   const [channel, setChannel] = useState<string | undefined>(undefined)
   const [matchStatus, setMatchStatus] = useState<string | undefined>(undefined)
   const [listTab, setListTab] = useState<'all' | 'unbound' | 'bound'>('all')
@@ -117,6 +120,9 @@ const SkuMasterWorkspacePage = () => {
         search: search || undefined,
         channel,
         match_status: matchStatus,
+        include_terms: includeTerms || undefined,
+        exclude_terms: excludeTerms || undefined,
+        match_scope: matchScope,
         bound_state: listTab === 'bound' ? 'bound' : listTab === 'unbound' ? 'unbound' : undefined,
       }),
     placeholderData: keepPreviousData,
@@ -137,12 +143,12 @@ const SkuMasterWorkspacePage = () => {
   const total = autoCandidatesOnly ? (autoPreviewCandidates?.length ?? 0) : listQuery.data?.total ?? 0
 
   const filteredItems = useMemo(() => {
-    const kw = specKeyword.trim()
+    // 后端已做 include/exclude/scope 过滤；这里只保留“候选视图”的快速本地过滤（可选）
+    const kw = (specKeyword || '').trim()
     let rows = items
     if (kw) rows = rows.filter((x) => (x.spec_text ?? '').includes(kw))
-    // 注意：unbound/bound/mismatch 已下沉到后端过滤，这里仅保留“命中候选视图”和关键词过滤
     return rows
-  }, [items, specKeyword, listTab])
+  }, [items, specKeyword])
 
   const channelOptions = useMemo(() => {
     const set = new Set<string>()
@@ -572,9 +578,26 @@ const SkuMasterWorkspacePage = () => {
                 />
                 <Input
                   style={{ width: 220 }}
-                  placeholder="规格包含关键字（本列表过滤）"
-                  value={specKeyword}
-                  onChange={(e) => setSpecKeyword(e.target.value)}
+                  placeholder="包含关键词（AND，多词空格分隔）"
+                  value={includeTerms}
+                  onChange={(e) => setIncludeTerms(e.target.value)}
+                />
+                <Input
+                  style={{ width: 200 }}
+                  placeholder="排除关键词（AND NOT）"
+                  value={excludeTerms}
+                  onChange={(e) => setExcludeTerms(e.target.value)}
+                />
+                <Select
+                  style={{ width: 170 }}
+                  value={matchScope}
+                  onChange={(v) => setMatchScope(v)}
+                  options={[
+                    { label: '按渠道自动（推荐）', value: 'auto' },
+                    { label: '仅规格', value: 'spec' },
+                    { label: '仅商品名', value: 'name' },
+                    { label: '规格或商品名', value: 'spec_or_name' },
+                  ]}
                 />
                 <Select
                   allowClear

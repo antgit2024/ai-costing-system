@@ -24,8 +24,9 @@ def test_manual_bind_by_model_and_auto_bind_preview_execute(client, db_session):
     sm1 = models.SkuMaster(erp_sku_barcode="BC-100", spec_text="whatever", metadata_json={})
     sm2 = models.SkuMaster(
         erp_sku_barcode="BC-200",
-        spec_text="A1B;50*140;xxx",
-        metadata_json={"model_code_hint_erp": "A1B"},
+        # model code is NOT in the first segment; should still be detected by scanner.
+        spec_text="50*140;A1B;xxx",
+        metadata_json={},
     )
     db_session.add_all([sm1, sm2])
     db_session.commit()

@@ -107,23 +107,44 @@ def _extract_model_code_hint(spec_text: Optional[str]) -> Optional[str]:
     raw = (spec_text or "").strip()
     if not raw:
         return None
-    first = raw.split(";", 1)[0].split("；", 1)[0].strip()
-    if not first:
+
+    # Split by common separators and scan all segments.
+    # Examples:
+    # - "PM001;50*140;024画框" -> PM001
+    # - "50*140;024画框" -> 024
+    segments: List[str] = []
+    for part in raw.replace("；", ";").split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        segments.append(part)
+
+    if not segments:
         return None
-    token = first.upper()
-    # 3-char code (our system's default model_code length=3)
-    if len(token) == 3 and token.isalnum():
-        return token
-    # leading 3 digits + non-digit suffix, e.g. "024画框"
-    if len(token) >= 3 and token[:3].isdigit():
-        return token[:3]
-    # legacy: PM-prefixed codes
-    if token.startswith("PM"):
-        # basic safety: only allow letters/digits/_/-
+
+    # Priority 1: exact 3-char alnum code segment (matches our default model_code length=3)
+    for seg in segments:
+        token = seg.strip().upper()
+        if len(token) == 3 and token.isalnum():
+            return token
+
+    # Priority 2: leading 3 digits anywhere, e.g. "024画框"
+    for seg in segments:
+        token = seg.strip().upper()
+        if len(token) >= 3 and token[:3].isdigit():
+            return token[:3]
+
+    # Priority 3: legacy PM-prefixed code (scan any segment)
+    for seg in segments:
+        token = seg.strip().upper()
+        if not token.startswith("PM"):
+            continue
         for ch in token:
             if not (ch.isalnum() or ch in ("_", "-")):
-                return None
-        return token
+                break
+        else:
+            return token
+
     return None
 
 
@@ -666,6 +687,9 @@ def auto_bind_preview(db: Session, *, limit: int) -> Dict[str, Any]:
         total_unbound += 1
         meta = r.metadata_json or {}
         hint = meta.get("model_code_hint_shipment") or meta.get("model_code_hint_erp")
+        if not hint:
+            # Fallback: compute from current spec_text (so older imported rows can still be auto-bound)
+            hint = _extract_model_code_hint(r.spec_text)
         hint = (str(hint).strip().upper()) if hint else ""
         if not hint:
             continue

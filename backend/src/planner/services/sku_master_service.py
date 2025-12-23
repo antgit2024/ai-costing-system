@@ -732,8 +732,8 @@ def auto_bind_preview(db: Session, *, limit: int, scan_limit: int = 50000) -> Di
             continue
         published_models.append({"model": m, "version": v, "keywords": kws})
 
-    def _match_by_model_keywords(spec_text: Optional[str]) -> Optional[Dict[str, Any]]:
-        text = _norm_text(spec_text)
+    def _match_by_model_keywords(text_raw: Optional[str]) -> Optional[Dict[str, Any]]:
+        text = _norm_text(text_raw)
         if not text:
             return None
         hits: List[Dict[str, Any]] = []
@@ -788,6 +788,15 @@ def auto_bind_preview(db: Session, *, limit: int, scan_limit: int = 50000) -> Di
         meta = r.metadata_json or {}
         # Prefer latest shipment spec when present; otherwise fallback to ERP spec_text.
         spec_for_match = meta.get("last_shipment_spec_text") or r.spec_text
+        # For keyword recognition, also allow matching against product_name/product_code
+        # (many channels put product type keywords in title instead of spec text).
+        match_text = " ".join(
+            [
+                str(spec_for_match or ""),
+                str(getattr(r, "product_name", None) or ""),
+                str(getattr(r, "product_code", None) or ""),
+            ]
+        )
         hint = meta.get("model_code_hint_shipment") or meta.get("model_code_hint_erp")
         if not hint:
             # Fallback: compute from current spec_text (so older imported rows can still be auto-bound)
@@ -806,7 +815,7 @@ def auto_bind_preview(db: Session, *, limit: int, scan_limit: int = 50000) -> Di
                     match_method = "model_code_hint"
 
         if not model or not version:
-            kw_match = _match_by_model_keywords(spec_for_match)
+            kw_match = _match_by_model_keywords(match_text)
             if kw_match:
                 model = kw_match["model"]
                 version = kw_match["version"]

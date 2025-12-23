@@ -356,13 +356,23 @@ def delete_product_model_version(version_id: str, db: Session = Depends(get_db))
     Soft delete a product model version.
 
     Rules:
-    - Only sample versions can be deleted from UI.
-    - If any non-archived standard version was derived from this sample version,
-      deletion is disallowed.
+    - Standard versions:
+      - Only draft standard versions can be deleted.
+      - Published/archived (or any non-draft) standard versions cannot be deleted.
+    - Sample versions:
+      - If any non-archived standard version was derived from this sample version,
+        deletion is disallowed.
     """
     v = _get_version_or_404(db, version_id)
+    if (v.version_kind or "") == "standard":
+        if (v.version_status or "") != "draft":
+            raise HTTPException(status_code=400, detail="已发布/已归档的标准版本不允许删除")
+        v.is_archived = True
+        db.commit()
+        return None
+
     if (v.version_kind or "") != "sample":
-        raise HTTPException(status_code=400, detail="仅允许删除打样版本（sample）")
+        raise HTTPException(status_code=400, detail="仅允许删除打样版本（sample）或未发布的标准版本（standard draft）")
 
     # NOTE: SQLAlchemy JSON `.astext` is dialect-dependent; avoid it.
     # Use a lightweight Python-side check instead.

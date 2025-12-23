@@ -2298,7 +2298,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                         },
                         {
                           title: '操作',
-                          width: 170,
+                          width: 230,
                           render: (_: any, v: any) => (
                             <Space wrap>
                               <Button
@@ -2354,7 +2354,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                 onClick={() => {
                                   Modal.confirm({
                                     title: '删除标准版本（草稿）？',
-                                    content: '仅草稿允许删除；已发布/已归档版本不允许删除。确认删除？',
+                                    content: '未发布（draft）的标准版本允许删除；已发布/已归档版本不允许删除。确认删除？',
                                     okText: '删除',
                                     okButtonProps: { danger: true },
                                     cancelText: '取消',

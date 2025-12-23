@@ -558,6 +558,9 @@ const SkuMasterWorkspacePage = () => {
             title="SKU 列表"
             extra={
               <Space wrap>
+                {autoCandidatesOnly ? (
+                  <Tag color="purple">命中候选视图：{autoPreviewCandidates.length} 条</Tag>
+                ) : null}
                 <Input
                   style={{ width: 260 }}
                   placeholder="搜索：条码/名称/编码"
@@ -566,6 +569,7 @@ const SkuMasterWorkspacePage = () => {
                     setSearch(e.target.value)
                     setPage(1)
                   }}
+                  disabled={autoCandidatesOnly}
                 />
                 <Input
                   style={{ width: 220 }}
@@ -583,6 +587,7 @@ const SkuMasterWorkspacePage = () => {
                     setChannel(v)
                     setPage(1)
                   }}
+                  disabled={autoCandidatesOnly}
                 />
                 <Select
                   allowClear
@@ -594,15 +599,37 @@ const SkuMasterWorkspacePage = () => {
                     setMatchStatus(v)
                     setPage(1)
                   }}
+                  disabled={autoCandidatesOnly}
                 />
                 <Tag color="blue">总数：{total}</Tag>
                 <Tag>
                   本页：{pageStats.totalRows} ERP匹配填充率：{pageStats.erpMatchedRate} 对接就绪率：
                   {pageStats.linkedRate} 字段齐全率：{pageStats.completeRate}
                 </Tag>
+                {autoCandidatesOnly ? (
+                  <Button
+                    onClick={() => {
+                      setAutoCandidatesOnly(false)
+                      setAutoPreviewCandidates([])
+                      setSelectedRowKeys([])
+                      setPage(1)
+                      message.info('已退出“命中候选视图”')
+                    }}
+                  >
+                    退出候选视图
+                  </Button>
+                ) : null}
               </Space>
             }
           >
+            {autoCandidatesOnly ? (
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginBottom: 8 }}
+                message="当前为“命中候选视图”：仅展示自动预览命中的候选记录；要看全部/未绑定/已绑定/规格差异，请点击右上角“退出候选视图”。"
+              />
+            ) : null}
             <Tabs
               activeKey={listTab}
               onChange={(k) => setListTab(k as any)}
@@ -612,6 +639,9 @@ const SkuMasterWorkspacePage = () => {
                 { key: 'bound', label: '已绑定', children: null },
                 { key: 'mismatch', label: '规格差异', children: null },
               ]}
+              tabBarExtraContent={
+                autoCandidatesOnly ? <Text type="secondary">（候选视图下 TAB 暂停）</Text> : undefined
+              }
             />
             <Table
               rowKey="id"

@@ -73,6 +73,10 @@ const menuItems: MenuProps['items'] = [
         key: '/costing/sku-master',
         label: <Link to="/costing/sku-master">SKU 主档 / 商品关联</Link>,
       },
+      {
+        key: '/costing/spec-matching',
+        label: <Link to="/costing/spec-matching">规格匹配工作台（尺寸解析）</Link>,
+      },
     ],
   },
   {
@@ -127,6 +131,9 @@ const AppLayout = ({ children }: AppLayoutProps) => {
       }
       if (location.pathname.startsWith('/costing/sku-master')) {
         return ['/costing/sku-master']
+      }
+      if (location.pathname.startsWith('/costing/spec-matching')) {
+        return ['/costing/spec-matching']
       }
       return ['/costing']
     }

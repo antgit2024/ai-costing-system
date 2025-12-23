@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from ..dependencies import get_db_session
+from .. import schemas
 from ..schemas import PaginatedSkuMasterResponse, SkuMasterImportResponse, SkuMasterRead
 from ..services import sku_master_service
 
@@ -42,6 +43,39 @@ def list_sku_master(
         page_size=page_size,
     )
     return {"total": total, "page": page, "page_size": page_size, "items": items}
+
+
+@router.get("/published-standard-models", response_model=schemas.PublishedStandardModelCandidateListResponse)
+def list_published_standard_models(
+    search: str | None = None,
+    limit: int = 50,
+    db: Session = Depends(get_db_session),
+):
+    items = sku_master_service.list_published_standard_model_candidates(db, search=search, limit=limit)
+    return {"items": items}
+
+
+@router.post("/bind-by-model", response_model=schemas.SkuMasterBindByModelResponse)
+def bind_by_model(payload: schemas.SkuMasterBindByModelRequest, db: Session = Depends(get_db_session)):
+    try:
+        return sku_master_service.bind_sku_master_by_model(
+            db,
+            model_id=payload.model_id,
+            sku_master_ids=payload.sku_master_ids,
+            requested_by=payload.requested_by,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/auto-bind/preview", response_model=schemas.SkuMasterAutoBindPreviewResponse)
+def auto_bind_preview(payload: schemas.SkuMasterAutoBindPreviewRequest, db: Session = Depends(get_db_session)):
+    return sku_master_service.auto_bind_preview(db, limit=payload.limit)
+
+
+@router.post("/auto-bind/execute", response_model=schemas.SkuMasterAutoBindExecuteResponse)
+def auto_bind_execute(payload: schemas.SkuMasterAutoBindExecuteRequest, db: Session = Depends(get_db_session)):
+    return sku_master_service.auto_bind_execute(db, limit=payload.limit, requested_by=payload.requested_by)
 
 
 @router.get("/{sku_id}", response_model=SkuMasterRead)

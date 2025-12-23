@@ -1,6 +1,6 @@
 ## 当前状态（崩了也能继续）
 
-- **最近校对（北京时间 GMT+8）**：2025-12-23 17:03（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
+- **最近校对（北京时间 GMT+8）**：2025-12-23 18:25（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **分支**：`backup/20251214-1535`
 
 - **本轮闭环产物（Planner-Optimization / 方案评审稿）**：
@@ -169,6 +169,17 @@
     - 上传导入：调用 `POST /api/planner/sku-master/import`（xlsx + requested_by）
     - 列表分页：调用 `GET /api/planner/sku-master`（search/channel/match_status/page/page_size）
     - 详情抽屉：调用 `GET /api/planner/sku-master/{id}`（展示原始字段 + 图片预览 URL + metadata_json）
+
+- **补充迭代（已完成）：SKU 主档绑定工作台（只选模型→唯一在线发布标准版本）**：
+  - 手工绑定（不覆盖已有绑定）：
+    - 右侧列表勾选 SKU 主档 → 左侧选择“已发布标准模型” → 一键绑定（自动落到该模型唯一 `published standard` 版本）
+    - 后端接口：`GET /api/planner/sku-master/published-standard-models`、`POST /api/planner/sku-master/bind-by-model`
+  - 自动绑定（确定性规则，带预览/执行）：
+    - 仅对 `model_code_hint` 唯一命中“已发布标准模型”的未绑定 SKU 自动绑定
+    - 后端接口：`POST /api/planner/sku-master/auto-bind/preview`、`POST /api/planner/sku-master/auto-bind/execute`
+  - 验收命令：
+    - Backend：`cd backend && . venv/bin/activate && pytest tests/planner/test_sku_master_binding_workbench_mvp.py -q`
+    - Frontend：`npm -C frontend run build`
     - 命中率/字段齐全（MVP）：在页面按“当前页”聚合展示
   - 本轮验收命令（必须）：`npm -C frontend run build`（已通过）
 

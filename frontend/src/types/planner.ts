@@ -1341,3 +1341,47 @@ export interface SkuMasterImportResponse {
   errors: Array<Record<string, unknown>>
 }
 
+export interface PublishedStandardModelCandidate {
+  model_id: string
+  model_code: string
+  model_name: string
+  published_version_id: string
+  version_label?: string | null
+}
+
+export interface PublishedStandardModelCandidateListResponse {
+  items: PublishedStandardModelCandidate[]
+}
+
+export interface SkuMasterBindByModelResponse {
+  total_selected: number
+  bound_count: number
+  skipped_already_bound: number
+  skipped_missing_barcode: number
+  errors: Array<Record<string, unknown>>
+}
+
+export interface SkuMasterAutoBindPreviewItem {
+  sku_master_id: string
+  erp_sku_barcode: string
+  model_code_hint: string
+  model_id: string
+  model_code: string
+  model_name: string
+  published_version_id: string
+  version_label?: string | null
+}
+
+export interface SkuMasterAutoBindPreviewResponse {
+  total_unbound: number
+  candidates: number
+  items: SkuMasterAutoBindPreviewItem[]
+}
+
+export interface SkuMasterAutoBindExecuteResponse {
+  preview: SkuMasterAutoBindPreviewResponse
+  bound_count: number
+  skipped_already_bound: number
+  errors: Array<Record<string, unknown>>
+}
+

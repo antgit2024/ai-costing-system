@@ -100,6 +100,10 @@ import type {
   SkuMaster,
   SkuMasterImportResponse,
   SkuMasterListResponse,
+  PublishedStandardModelCandidateListResponse,
+  SkuMasterBindByModelResponse,
+  SkuMasterAutoBindPreviewResponse,
+  SkuMasterAutoBindExecuteResponse,
 } from '@/types/planner'
 
 const resolvePlannerApiBase = (raw?: string): string => {
@@ -982,6 +986,38 @@ export const fetchSkuMaster = async (
 
 export const fetchSkuMasterDetail = async (skuId: string): Promise<SkuMaster> => {
   const response = await plannerClient.get(`/sku-master/${skuId}`)
+  return response.data
+}
+
+export const fetchPublishedStandardModels = async (params: {
+  search?: string
+  limit?: number
+} = {}): Promise<PublishedStandardModelCandidateListResponse> => {
+  const response = await plannerClient.get('/sku-master/published-standard-models', { params: sanitizeParams(params) })
+  return response.data
+}
+
+export const bindSkuMastersByModel = async (payload: {
+  model_id: string
+  sku_master_ids: string[]
+  requested_by?: string
+}): Promise<SkuMasterBindByModelResponse> => {
+  const response = await plannerClient.post('/sku-master/bind-by-model', payload)
+  return response.data
+}
+
+export const autoBindSkuMastersPreview = async (payload: {
+  limit?: number
+} = {}): Promise<SkuMasterAutoBindPreviewResponse> => {
+  const response = await plannerClient.post('/sku-master/auto-bind/preview', payload)
+  return response.data
+}
+
+export const autoBindSkuMastersExecute = async (payload: {
+  limit?: number
+  requested_by?: string
+} = {}): Promise<SkuMasterAutoBindExecuteResponse> => {
+  const response = await plannerClient.post('/sku-master/auto-bind/execute', payload)
   return response.data
 }
 

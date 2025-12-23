@@ -1824,3 +1824,62 @@ class SkuMasterImportResponse(BaseModel):
     updated: int
     skipped: int
     errors: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class PublishedStandardModelCandidate(BaseModel):
+    model_id: str
+    model_code: str
+    model_name: str
+    published_version_id: str
+    version_label: Optional[str] = None
+
+
+class PublishedStandardModelCandidateListResponse(BaseModel):
+    items: List[PublishedStandardModelCandidate] = Field(default_factory=list)
+
+
+class SkuMasterBindByModelRequest(BaseModel):
+    model_id: str
+    sku_master_ids: List[str] = Field(default_factory=list)
+    requested_by: Optional[str] = None
+
+
+class SkuMasterBindByModelResponse(BaseModel):
+    total_selected: int
+    bound_count: int
+    skipped_already_bound: int
+    skipped_missing_barcode: int
+    errors: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class SkuMasterAutoBindPreviewRequest(BaseModel):
+    limit: int = Field(200, ge=1, le=2000)
+
+
+class SkuMasterAutoBindPreviewItem(BaseModel):
+    sku_master_id: str
+    erp_sku_barcode: str
+    model_code_hint: str
+    model_id: str
+    model_code: str
+    model_name: str
+    published_version_id: str
+    version_label: Optional[str] = None
+
+
+class SkuMasterAutoBindPreviewResponse(BaseModel):
+    total_unbound: int
+    candidates: int
+    items: List[SkuMasterAutoBindPreviewItem] = Field(default_factory=list)
+
+
+class SkuMasterAutoBindExecuteRequest(BaseModel):
+    limit: int = Field(200, ge=1, le=2000)
+    requested_by: Optional[str] = None
+
+
+class SkuMasterAutoBindExecuteResponse(BaseModel):
+    preview: SkuMasterAutoBindPreviewResponse
+    bound_count: int
+    skipped_already_bound: int
+    errors: List[Dict[str, Any]] = Field(default_factory=list)

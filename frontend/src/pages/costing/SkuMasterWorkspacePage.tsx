@@ -20,10 +20,18 @@ import {
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { useMemo, useState } from 'react'
-import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { fetchSkuMaster, fetchSkuMasterDetail, importSkuMasterXlsx } from '@/services/planner'
-import type { SkuMaster } from '@/types/planner'
+import {
+  autoBindSkuMastersExecute,
+  autoBindSkuMastersPreview,
+  bindSkuMastersByModel,
+  fetchPublishedStandardModels,
+  fetchSkuMaster,
+  fetchSkuMasterDetail,
+  importSkuMasterXlsx,
+} from '@/services/planner'
+import type { PublishedStandardModelCandidate, SkuMaster } from '@/types/planner'
 
 const { Title, Text } = Typography
 
@@ -59,6 +67,8 @@ const SkuMasterWorkspacePage = () => {
   const [specKeyword, setSpecKeyword] = useState<string>('') // MVP: client-side filter on current page
   const [channel, setChannel] = useState<string | undefined>(undefined)
   const [matchStatus, setMatchStatus] = useState<string | undefined>(undefined)
+  const [listTab, setListTab] = useState<'all' | 'unbound' | 'mismatch'>('all')
+  const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([])
 
   const [uploading, setUploading] = useState(false)
   const [uploadFile, setUploadFile] = useState<File | null>(null)
@@ -66,6 +76,12 @@ const SkuMasterWorkspacePage = () => {
 
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [activeId, setActiveId] = useState<string | null>(null)
+
+  // left workbench
+  const [workbenchTab, setWorkbenchTab] = useState<'auto' | 'manual'>('manual')
+  const [modelSearch, setModelSearch] = useState<string>('')
+  const [selectedModelId, setSelectedModelId] = useState<string | undefined>(undefined)
+  const [autoPreviewText, setAutoPreviewText] = useState<string>('')
 
   const listQuery = useQuery({
     queryKey: ['sku-master', 'list', page, pageSize, search, channel, matchStatus],
@@ -85,9 +101,12 @@ const SkuMasterWorkspacePage = () => {
 
   const filteredItems = useMemo(() => {
     const kw = specKeyword.trim()
-    if (!kw) return items
-    return items.filter((x) => (x.spec_text ?? '').includes(kw))
-  }, [items, specKeyword])
+    let rows = items
+    if (kw) rows = rows.filter((x) => (x.spec_text ?? '').includes(kw))
+    if (listTab === 'unbound') rows = rows.filter((x) => !isFilled(x.active_model_version_id as any))
+    if (listTab === 'mismatch') rows = rows.filter((x) => !!x.spec_mismatch)
+    return rows
+  }, [items, specKeyword, listTab])
 
   const channelOptions = useMemo(() => {
     const set = new Set<string>()
@@ -243,6 +262,62 @@ const SkuMasterWorkspacePage = () => {
     }
   }
 
+  const candidatesQuery = useQuery({
+    queryKey: ['sku-master', 'published-standard-models', modelSearch],
+    queryFn: () => fetchPublishedStandardModels({ search: modelSearch || undefined, limit: 50 }),
+    placeholderData: keepPreviousData,
+  })
+
+  const modelOptions = useMemo(() => {
+    const items = (candidatesQuery.data as any)?.items ?? []
+    return (items as PublishedStandardModelCandidate[]).map((m) => ({
+      label: `${m.model_code}  ${m.model_name}${m.version_label ? `（${m.version_label}）` : ''}`,
+      value: m.model_id,
+    }))
+  }, [candidatesQuery.data])
+
+  const bindMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedModelId) throw new Error('请选择模型')
+      return await bindSkuMastersByModel({
+        model_id: selectedModelId,
+        sku_master_ids: selectedRowKeys,
+        requested_by: requestedBy || undefined,
+      })
+    },
+    onSuccess: async (res: any) => {
+      message.success(
+        `绑定完成：bound=${res.bound_count} skipped(bound)=${res.skipped_already_bound} errors=${(res.errors ?? []).length}`,
+      )
+      setSelectedRowKeys([])
+      await queryClient.invalidateQueries({ queryKey: ['sku-master', 'list'] })
+    },
+    onError: (e: any) => message.error(e?.message || '绑定失败'),
+  })
+
+  const autoPreviewMutation = useMutation({
+    mutationFn: () => autoBindSkuMastersPreview({ limit: 200 }),
+    onSuccess: (res: any) => {
+      setAutoPreviewText(`未绑定≈${res.total_unbound} 可自动=${res.candidates}（展示${(res.items ?? []).length}）`)
+      message.success('已生成预览')
+    },
+    onError: (e: any) => message.error(e?.message || '预览失败'),
+  })
+
+  const autoExecuteMutation = useMutation({
+    mutationFn: () => autoBindSkuMastersExecute({ limit: 200, requested_by: requestedBy || undefined }),
+    onSuccess: async (res: any) => {
+      message.success(
+        `自动绑定完成：bound=${res.bound_count} skipped(bound)=${res.skipped_already_bound} errors=${(res.errors ?? []).length}`,
+      )
+      setAutoPreviewText(
+        `未绑定≈${res.preview?.total_unbound} 可自动=${res.preview?.candidates}（展示${(res.preview?.items ?? []).length}）`,
+      )
+      await queryClient.invalidateQueries({ queryKey: ['sku-master', 'list'] })
+    },
+    onError: (e: any) => message.error(e?.message || '执行失败'),
+  })
+
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
@@ -263,33 +338,75 @@ const SkuMasterWorkspacePage = () => {
           <Space direction="vertical" size={12} style={{ width: '100%' }}>
             <Card size="small" title="绑定工作台">
               <Tabs
+                activeKey={workbenchTab}
+                onChange={(k) => setWorkbenchTab(k as any)}
                 items={[
+                  {
+                    key: 'manual',
+                    label: '手工',
+                    children: (
+                      <Space direction="vertical" style={{ width: '100%' }}>
+                        <Text type="secondary">选择“标准模型”（系统会自动落到该模型唯一在线发布版本）。</Text>
+                        <Select
+                          showSearch
+                          allowClear
+                          placeholder="选择已发布标准模型"
+                          options={modelOptions}
+                          value={selectedModelId}
+                          onChange={(v) => setSelectedModelId(v)}
+                          onSearch={(v) => setModelSearch(v)}
+                          filterOption={false}
+                          loading={candidatesQuery.isFetching}
+                        />
+                        <Input
+                          value={requestedBy}
+                          onChange={(e) => setRequestedBy(e.target.value)}
+                          placeholder="requested_by（可选）"
+                        />
+                        <Button
+                          block
+                          type="primary"
+                          disabled={!selectedModelId || selectedRowKeys.length === 0}
+                          loading={bindMutation.isPending}
+                          onClick={() => bindMutation.mutate()}
+                        >
+                          绑定所选（{selectedRowKeys.length}）
+                        </Button>
+                        <Text type="secondary">
+                          提示：请在右侧列表勾选未绑定SKU后执行；不会覆盖已有绑定。
+                        </Text>
+                      </Space>
+                    ),
+                  },
                   {
                     key: 'auto',
                     label: '自动',
                     children: (
                       <Space direction="vertical" style={{ width: '100%' }}>
                         <Text type="secondary">
-                          自动绑定仅建议用于“确定性强”的规则（如 spec_text 中的 model_code_hint 唯一命中已发布标准版本）。
+                          默认规则：仅对 model_code_hint 唯一命中“已发布标准模型”的SKU自动绑定。
                         </Text>
-                        <Button block disabled>
-                          预览命中范围（待接）
+                        <Input
+                          value={requestedBy}
+                          onChange={(e) => setRequestedBy(e.target.value)}
+                          placeholder="requested_by（可选）"
+                        />
+                        <Button
+                          block
+                          loading={autoPreviewMutation.isPending}
+                          onClick={() => autoPreviewMutation.mutate()}
+                        >
+                          预览命中范围
                         </Button>
-                        <Button block type="primary" disabled>
-                          执行自动绑定（待接）
+                        <Button
+                          block
+                          type="primary"
+                          loading={autoExecuteMutation.isPending}
+                          onClick={() => autoExecuteMutation.mutate()}
+                        >
+                          执行自动绑定
                         </Button>
-                      </Space>
-                    ),
-                  },
-                  {
-                    key: 'manual',
-                    label: '手工',
-                    children: (
-                      <Space direction="vertical" style={{ width: '100%' }}>
-                        <Text type="secondary">面向“未绑定/不确定”的SKU，人工选择已发布标准版本并批量绑定。</Text>
-                        <Button block disabled>
-                          批量绑定所选（待接）
-                        </Button>
+                        {autoPreviewText ? <Alert type="info" showIcon message={autoPreviewText} /> : null}
                       </Space>
                     ),
                   },
@@ -391,6 +508,8 @@ const SkuMasterWorkspacePage = () => {
             }
           >
             <Tabs
+              activeKey={listTab}
+              onChange={(k) => setListTab(k as any)}
               items={[
                 { key: 'all', label: '全部', children: null },
                 { key: 'unbound', label: '未绑定', children: null },
@@ -403,6 +522,10 @@ const SkuMasterWorkspacePage = () => {
               loading={listQuery.isFetching}
               columns={columns}
               dataSource={filteredItems}
+              rowSelection={{
+                selectedRowKeys,
+                onChange: (keys) => setSelectedRowKeys((keys ?? []) as string[]),
+              }}
               pagination={{
                 current: page,
                 pageSize,

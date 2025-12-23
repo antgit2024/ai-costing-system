@@ -2107,7 +2107,12 @@ def get_latest_published_standard_version_for_model_code(
             models.ProductModelVersion.version_status == "published",
             models.ProductModelVersion.is_archived.is_(False),
         )
-        .order_by(models.ProductModelVersion.published_at.desc().nullslast(), models.ProductModelVersion.created_at.desc())
+        # SQLite doesn't support "NULLS LAST"; use (published_at IS NULL) ordering for portability.
+        .order_by(
+            models.ProductModelVersion.published_at.is_(None).asc(),
+            models.ProductModelVersion.published_at.desc(),
+            models.ProductModelVersion.created_at.desc(),
+        )
         .first()
     )
 
@@ -3534,7 +3539,12 @@ def bind_sku_to_version(
     # Verify model_code prefix
     prefix = (model.model_code or "").strip().upper()
     norm = str(parsed.get("normalized") or "").upper()
-    if prefix and not norm.startswith(prefix):
+    skip_prefix_check = False
+    if source_system in ("sku_master_manual", "sku_master_auto", "shipment_autobind", "erp_barcode"):
+        skip_prefix_check = True
+    if isinstance(metadata, dict) and metadata.get("skip_prefix_check") is True:
+        skip_prefix_check = True
+    if not skip_prefix_check and prefix and not norm.startswith(prefix):
         raise ValueError(f"SKU 绑定失败：SKU={sku} 不匹配模型编码前缀 {prefix}")
 
     now = datetime.now(timezone.utc)

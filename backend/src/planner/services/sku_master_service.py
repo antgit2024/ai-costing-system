@@ -10,7 +10,7 @@ from openpyxl.utils.datetime import from_excel
 from sqlalchemy.orm import Session, joinedload
 
 from .. import models
-from . import spec_parser_service
+from . import product_model_service, spec_parser_service
 
 
 def _utcnow() -> datetime:
@@ -98,8 +98,11 @@ def _sha1_text(text: str) -> str:
 
 def _extract_model_code_hint(spec_text: Optional[str]) -> Optional[str]:
     """
-    MVP: try extract model_code from spec_text leading token, e.g. "PM001;50*140;..." or "PM001；..."
-    We intentionally keep it strict to avoid false positives.
+    MVP: try extract model_code from spec_text leading token.
+    Supported patterns (safe/low false-positive):
+    - 3-char code: "A1B;..." / "024;..." / "K7Q；..."
+    - token with leading 3 digits: "024画框;..." -> "024"
+    - longer PM-prefixed code: "PM001;..." (kept for compatibility)
     """
     raw = (spec_text or "").strip()
     if not raw:
@@ -107,14 +110,21 @@ def _extract_model_code_hint(spec_text: Optional[str]) -> Optional[str]:
     first = raw.split(";", 1)[0].split("；", 1)[0].strip()
     if not first:
         return None
-    # Accept typical patterns: PM001 / PM-001 / PM001A ...
-    if not first.upper().startswith("PM"):
-        return None
-    # basic safety: only allow letters/digits/_/-
-    for ch in first:
-        if not (ch.isalnum() or ch in ("_", "-")):
-            return None
-    return first.upper()
+    token = first.upper()
+    # 3-char code (our system's default model_code length=3)
+    if len(token) == 3 and token.isalnum():
+        return token
+    # leading 3 digits + non-digit suffix, e.g. "024画框"
+    if len(token) >= 3 and token[:3].isdigit():
+        return token[:3]
+    # legacy: PM-prefixed codes
+    if token.startswith("PM"):
+        # basic safety: only allow letters/digits/_/-
+        for ch in token:
+            if not (ch.isalnum() or ch in ("_", "-")):
+                return None
+        return token
+    return None
 
 
 def _compute_parsed_summary(spec_text: Optional[str]) -> Dict[str, Any]:
@@ -496,5 +506,233 @@ def _attach_parsed_fields(rows: List[models.SkuMaster]) -> None:
         r.last_shipment_spec_hash = meta.get("last_shipment_spec_hash")
         r.spec_mismatch = bool(meta.get("spec_mismatch"))
         r.spec_mismatch_at = meta.get("spec_mismatch_at")
+
+
+def list_published_standard_model_candidates(
+    db: Session,
+    *,
+    search: Optional[str],
+    limit: int,
+) -> List[Dict[str, Any]]:
+    """
+    Return published standard version candidates for manual binding.
+    Contract: one model has at most one published standard version (enforced by publish).
+    """
+    limit = max(min(int(limit or 50), 200), 1)
+    q = (
+        db.query(models.ProductModel, models.ProductModelVersion)
+        .join(models.ProductModelVersion, models.ProductModelVersion.model_id == models.ProductModel.id)
+        .filter(
+            models.ProductModel.is_archived.is_(False),
+            models.ProductModelVersion.is_archived.is_(False),
+            models.ProductModelVersion.version_kind == "standard",
+            models.ProductModelVersion.version_status == "published",
+        )
+        .order_by(models.ProductModel.model_code.asc())
+    )
+    if search:
+        s = f"%{search.strip()}%"
+        q = q.filter((models.ProductModel.model_code.ilike(s)) | (models.ProductModel.model_name.ilike(s)))
+    rows = q.limit(limit).all()
+    items: List[Dict[str, Any]] = []
+    for m, v in rows:
+        items.append(
+            {
+                "model_id": m.id,
+                "model_code": m.model_code,
+                "model_name": m.model_name,
+                "published_version_id": v.id,
+                "version_label": v.version_label,
+            }
+        )
+    return items
+
+
+def _get_published_standard_version_for_model_id(db: Session, model_id: str) -> models.ProductModelVersion:
+    mid = (model_id or "").strip()
+    if not mid:
+        raise ValueError("model_id 不能为空")
+    v = (
+        db.query(models.ProductModelVersion)
+        .options(joinedload(models.ProductModelVersion.model))
+        .filter(
+            models.ProductModelVersion.model_id == mid,
+            models.ProductModelVersion.version_kind == "standard",
+            models.ProductModelVersion.version_status == "published",
+            models.ProductModelVersion.is_archived.is_(False),
+        )
+        # SQLite doesn't support "NULLS LAST"; use (published_at IS NULL) ordering for portability.
+        .order_by(
+            models.ProductModelVersion.published_at.is_(None).asc(),
+            models.ProductModelVersion.published_at.desc(),
+            models.ProductModelVersion.created_at.desc(),
+        )
+        .first()
+    )
+    if not v:
+        raise ValueError("该模型没有在线发布的标准版本（published standard）")
+    return v
+
+
+def bind_sku_master_by_model(
+    db: Session,
+    *,
+    model_id: str,
+    sku_master_ids: List[str],
+    requested_by: Optional[str],
+) -> Dict[str, Any]:
+    version = _get_published_standard_version_for_model_id(db, model_id)
+    total_selected = len(sku_master_ids or [])
+    if total_selected <= 0:
+        return {
+            "total_selected": 0,
+            "bound_count": 0,
+            "skipped_already_bound": 0,
+            "skipped_missing_barcode": 0,
+            "errors": [],
+        }
+
+    rows = (
+        db.query(models.SkuMaster)
+        .filter(models.SkuMaster.id.in_(list(set(sku_master_ids or []))), models.SkuMaster.is_archived.is_(False))
+        .all()
+    )
+    by_id = {r.id: r for r in rows}
+
+    bound_count = 0
+    skipped_already_bound = 0
+    skipped_missing_barcode = 0
+    errors: List[Dict[str, Any]] = []
+
+    for sid in sku_master_ids:
+        row = by_id.get(sid)
+        if not row:
+            errors.append({"sku_master_id": sid, "error": "sku_master not found"})
+            continue
+        sku = (row.erp_sku_barcode or "").strip()
+        if not sku:
+            skipped_missing_barcode += 1
+            continue
+        if product_model_service.get_active_sku_binding(db, sku):
+            skipped_already_bound += 1
+            continue
+        try:
+            product_model_service.bind_sku_to_version(
+                db,
+                sku_code=sku,
+                version_id=version.id,
+                source_system="sku_master_manual",
+                metadata={
+                    "requested_by": requested_by,
+                    "sku_master_id": row.id,
+                    "binding_method": "manual_by_model",
+                    "skip_prefix_check": True,
+                },
+            )
+            bound_count += 1
+        except Exception as exc:  # noqa: BLE001
+            errors.append({"sku_master_id": row.id, "sku_code": sku, "error": str(exc)})
+
+    return {
+        "total_selected": total_selected,
+        "bound_count": bound_count,
+        "skipped_already_bound": skipped_already_bound,
+        "skipped_missing_barcode": skipped_missing_barcode,
+        "errors": errors,
+    }
+
+
+def auto_bind_preview(db: Session, *, limit: int) -> Dict[str, Any]:
+    limit = max(min(int(limit or 200), 2000), 1)
+
+    # Find unbound SKU masters (by barcode)
+    q = (
+        db.query(models.SkuMaster)
+        .filter(models.SkuMaster.is_archived.is_(False))
+        .order_by(models.SkuMaster.updated_at.desc())
+    )
+    rows = q.limit(limit * 5).all()  # overfetch then filter
+
+    total_unbound = 0
+    items: List[Dict[str, Any]] = []
+    candidates = 0
+
+    for r in rows:
+        sku = (r.erp_sku_barcode or "").strip()
+        if not sku:
+            continue
+        if product_model_service.get_active_sku_binding(db, sku):
+            continue
+        total_unbound += 1
+        meta = r.metadata_json or {}
+        hint = meta.get("model_code_hint_shipment") or meta.get("model_code_hint_erp")
+        hint = (str(hint).strip().upper()) if hint else ""
+        if not hint:
+            continue
+        version = product_model_service.get_latest_published_standard_version_for_model_code(db, hint)
+        if not version:
+            continue
+        model = db.get(models.ProductModel, version.model_id)
+        if not model or model.is_archived:
+            continue
+        candidates += 1
+        items.append(
+            {
+                "sku_master_id": r.id,
+                "erp_sku_barcode": sku,
+                "model_code_hint": hint,
+                "model_id": model.id,
+                "model_code": model.model_code,
+                "model_name": model.model_name,
+                "published_version_id": version.id,
+                "version_label": version.version_label,
+            }
+        )
+        if len(items) >= limit:
+            break
+
+    return {"total_unbound": total_unbound, "candidates": candidates, "items": items}
+
+
+def auto_bind_execute(db: Session, *, limit: int, requested_by: Optional[str]) -> Dict[str, Any]:
+    preview = auto_bind_preview(db, limit=limit)
+    items = list(preview.get("items") or [])
+    bound_count = 0
+    skipped_already_bound = 0
+    errors: List[Dict[str, Any]] = []
+
+    for it in items:
+        sku = str(it.get("erp_sku_barcode") or "").strip()
+        if not sku:
+            continue
+        if product_model_service.get_active_sku_binding(db, sku):
+            skipped_already_bound += 1
+            continue
+        try:
+            product_model_service.bind_sku_to_version(
+                db,
+                sku_code=sku,
+                version_id=str(it.get("published_version_id")),
+                source_system="sku_master_auto",
+                metadata={
+                    "requested_by": requested_by,
+                    "sku_master_id": it.get("sku_master_id"),
+                    "binding_method": "auto_model_code_hint",
+                    "model_code_hint": it.get("model_code_hint"),
+                    "skip_prefix_check": True,
+                },
+            )
+            bound_count += 1
+        except Exception as exc:  # noqa: BLE001
+            errors.append({"sku_master_id": it.get("sku_master_id"), "sku_code": sku, "error": str(exc)})
+
+    # return a fresh preview after binding
+    preview_after = auto_bind_preview(db, limit=limit)
+    return {
+        "preview": preview_after,
+        "bound_count": bound_count,
+        "skipped_already_bound": skipped_already_bound,
+        "errors": errors,
+    }
 
 

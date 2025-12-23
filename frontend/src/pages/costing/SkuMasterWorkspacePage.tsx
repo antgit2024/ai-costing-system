@@ -68,7 +68,7 @@ const SkuMasterWorkspacePage = () => {
   const [specKeyword, setSpecKeyword] = useState<string>('') // MVP: client-side filter on current page
   const [channel, setChannel] = useState<string | undefined>(undefined)
   const [matchStatus, setMatchStatus] = useState<string | undefined>(undefined)
-  const [listTab, setListTab] = useState<'all' | 'unbound' | 'mismatch'>('all')
+  const [listTab, setListTab] = useState<'all' | 'unbound' | 'bound' | 'mismatch'>('all')
   const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([])
 
   const [uploading, setUploading] = useState(false)
@@ -108,6 +108,7 @@ const SkuMasterWorkspacePage = () => {
     let rows = items
     if (kw) rows = rows.filter((x) => (x.spec_text ?? '').includes(kw))
     if (listTab === 'unbound') rows = rows.filter((x) => !isFilled(x.active_model_version_id as any))
+    if (listTab === 'bound') rows = rows.filter((x) => isFilled(x.active_model_version_id as any))
     if (listTab === 'mismatch') rows = rows.filter((x) => !!x.spec_mismatch)
     if (autoCandidatesOnly && autoCandidateIdSet.size > 0) rows = rows.filter((x) => autoCandidateIdSet.has(x.id))
     return rows
@@ -174,14 +175,14 @@ const SkuMasterWorkspacePage = () => {
     {
       title: '货品条码（系统）',
       dataIndex: 'erp_sku_barcode',
-      width: 180,
+      width: 140,
       ellipsis: true,
       render: (v) => safeString(v) || '-',
     },
     {
       title: '销售渠道',
       dataIndex: 'channel',
-      width: 140,
+      width: 110,
       ellipsis: true,
       render: (v) => safeString(v) || '-',
     },
@@ -192,13 +193,7 @@ const SkuMasterWorkspacePage = () => {
       ellipsis: true,
       render: (v) => safeString(v) || '-',
     },
-    {
-      title: '模型提示',
-      dataIndex: 'model_code_hint',
-      width: 120,
-      ellipsis: true,
-      render: (v) => safeString(v) || '-',
-    },
+    // “模型提示”对业务侧噪声较大：已移到详情抽屉；列表仅展示“已绑定模型(名称)”或“预览匹配模型”
     ...(autoCandidatesOnly
       ? [
           {
@@ -227,13 +222,15 @@ const SkuMasterWorkspacePage = () => {
       render: (v, record) => {
         const bound = isFilled(v as any)
         const source = safeString((record.metadata_json as any)?.source)
-        const srcTag =
-          source === 'shipment_autobackfill' ? <Tag color="gold">发货回写</Tag> : <Tag>ERP导入</Tag>
+        const srcTag = source === 'shipment_autobackfill' ? <Tag color="gold">发货回写</Tag> : null
+        const modelLabel = record.bound_model_code
+          ? `${record.bound_model_code}${record.bound_model_name ? `(${record.bound_model_name})` : ''}`
+          : ''
         return (
           <Space size={6}>
             {bound ? <Tag color="green">已绑定</Tag> : <Tag color="red">未绑定</Tag>}
             {record.spec_mismatch ? <Tag color="orange">规格差异</Tag> : null}
-            {record.bound_model_code ? <Tag color="blue">{record.bound_model_code}</Tag> : null}
+            {modelLabel ? <Tag color="blue">{modelLabel}</Tag> : null}
             {srcTag}
           </Space>
         )
@@ -360,7 +357,12 @@ const SkuMasterWorkspacePage = () => {
       setAutoPreviewCandidates(cand)
       const idSet = new Set(cand.map((x) => x.sku_master_id))
       setAutoCandidateIdSet(idSet)
-      setSelectedRowKeys(Array.from(idSet))
+      // 执行完后：跳到“已绑定”列表（便于看到刚绑定的记录），并重置分页避免出现空白第一页
+      setAutoCandidatesOnly(false)
+      setSelectedRowKeys([])
+      setListTab('bound')
+      setPage(1)
+      setPageSize(DEFAULT_PAGE_SIZE)
       await queryClient.invalidateQueries({ queryKey: ['sku-master', 'list'] })
     },
     onError: (e: any) => message.error(e?.message || '执行失败'),
@@ -576,6 +578,7 @@ const SkuMasterWorkspacePage = () => {
               items={[
                 { key: 'all', label: '全部', children: null },
                 { key: 'unbound', label: '未绑定', children: null },
+                { key: 'bound', label: '已绑定', children: null },
                 { key: 'mismatch', label: '规格差异', children: null },
               ]}
             />

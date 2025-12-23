@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ...config import settings
@@ -434,6 +435,18 @@ def _virtual_read(db: Session, vm: models.VirtualMaterial) -> schemas.VirtualMat
     return schemas.VirtualMaterialRead.parse_obj(data)
 
 
+def _commit_or_conflict(db: Session, *, conflict_message: str) -> None:
+    """
+    Commit helper for endpoints that may hit UNIQUE constraints.
+    We translate IntegrityError into 409 with a human-readable message so the UI doesn't show a generic 500.
+    """
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=conflict_message) from exc
+
+
 @router.get(
     "/virtual-materials",
     response_model=schemas.PaginatedVirtualMaterialResponse,
@@ -494,7 +507,17 @@ def create_virtual_material(
     payload: schemas.VirtualMaterialCreateRequest,
     db: Session = Depends(get_db),
 ) -> schemas.VirtualMaterialRead:
-    meta = dict(payload.metadata_json or {})
+    # Pre-check to provide a stable, friendly error instead of a 500 on UNIQUE constraint.
+    exists = (
+        db.query(models.VirtualMaterial.id)
+        .filter(models.VirtualMaterial.virtual_code == payload.virtual_code)
+        .filter(models.VirtualMaterial.is_archived.is_(False))
+        .first()
+    )
+    if exists:
+        raise HTTPException(status_code=409, detail=f"虚拟物料编码已存在：{payload.virtual_code}")
+
+    meta = dict(payload.metadata or {})
     meta["virtual_kind"] = payload.virtual_kind
     unit = payload.unit or ("套" if payload.virtual_kind == "kit" else None)
     vm = models.VirtualMaterial(
@@ -508,7 +531,7 @@ def create_virtual_material(
         metadata_json=meta,
     )
     db.add(vm)
-    db.commit()
+    _commit_or_conflict(db, conflict_message=f"虚拟物料编码已存在：{payload.virtual_code}")
     db.refresh(vm)
     return _virtual_read(db, vm)
 
@@ -534,14 +557,14 @@ def update_virtual_material(
     if payload.status is not None:
         vm.status = payload.status
     meta = vm.metadata_json or {}
-    if payload.metadata_json is not None:
-        meta.update(payload.metadata_json or {})
+    if payload.metadata is not None:
+        meta.update(payload.metadata or {})
     if payload.virtual_kind is not None:
         meta["virtual_kind"] = payload.virtual_kind
     if payload.unit is not None:
         vm.unit = payload.unit
     vm.metadata_json = meta
-    db.commit()
+    _commit_or_conflict(db, conflict_message="保存失败：存在唯一键冲突或数据约束冲突（请检查编码/绑定）")
     db.refresh(vm)
     return _virtual_read(db, vm)
 
@@ -565,11 +588,13 @@ def save_virtual_material_bindings(
     # Replace-all: delete then insert
     db.query(models.VirtualMaterialBinding).filter(
         models.VirtualMaterialBinding.virtual_material_id == virtual_material_id
-    ).delete()
+    ).delete(synchronize_session=False)
     for b in payload.bindings:
         material = db.get(models.Material, b.material_id)
         if not material or material.is_archived:
             raise HTTPException(status_code=400, detail=f"Referenced material not found: {b.material_id}")
+        if material.is_active is False:
+            raise HTTPException(status_code=400, detail=f"Referenced material is inactive: {material.material_code}")
         db.add(
             models.VirtualMaterialBinding(
                 virtual_material_id=virtual_material_id,
@@ -581,7 +606,7 @@ def save_virtual_material_bindings(
                 metadata_json={"binding_type": b.binding_type or "ratio"},
             )
         )
-    db.commit()
+    _commit_or_conflict(db, conflict_message="保存绑定失败：存在重复绑定或数据约束冲突")
     db.refresh(vm)
     return _virtual_read(db, vm)
 

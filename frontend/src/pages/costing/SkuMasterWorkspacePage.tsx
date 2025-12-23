@@ -74,7 +74,7 @@ const SkuMasterWorkspacePage = () => {
     }
   })
   const [search, setSearch] = useState<string>('')
-  const [specKeyword, setSpecKeyword] = useState<string>('') // MVP: client-side filter on current page
+  const [specKeyword, setSpecKeyword] = useState<string>('') // 运营筛选：规格包含关键字（仅当前列表/候选视图）
   const [channel, setChannel] = useState<string | undefined>(undefined)
   const [matchStatus, setMatchStatus] = useState<string | undefined>(undefined)
   const [listTab, setListTab] = useState<'all' | 'unbound' | 'bound'>('all')
@@ -82,12 +82,12 @@ const SkuMasterWorkspacePage = () => {
 
   const [uploading, setUploading] = useState(false)
   const [uploadFile, setUploadFile] = useState<File | null>(null)
-  const [requestedBy, setRequestedBy] = useState<string>('')
+  const [requestedBy, setRequestedBy] = useState<string>('') // 操作人/审核人（可选）
 
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [activeId, setActiveId] = useState<string | null>(null)
 
-  // left workbench
+  // left workbench（映射工作台）
   const [workbenchTab, setWorkbenchTab] = useState<'auto' | 'manual'>('manual')
   const [modelSearch, setModelSearch] = useState<string>('')
   const [selectedModelId, setSelectedModelId] = useState<string | undefined>(undefined)
@@ -416,21 +416,21 @@ const SkuMasterWorkspacePage = () => {
         {/* 左侧：绑定工作台（1/4） */}
         <Col xs={24} lg={6}>
           <Space direction="vertical" size={12} style={{ width: '100%' }}>
-            <Card size="small" title="绑定工作台">
+            <Card size="small" title="映射工作台（SKU→标准模型）">
               <Tabs
                 activeKey={workbenchTab}
                 onChange={(k) => setWorkbenchTab(k as any)}
                 items={[
                   {
                     key: 'manual',
-                    label: '手工',
+                    label: '人工审核',
                     children: (
                       <Space direction="vertical" style={{ width: '100%' }}>
-                        <Text type="secondary">选择“标准模型”（系统会自动落到该模型唯一在线发布版本）。</Text>
+                        <Text type="secondary">选择目标标准模型（系统会自动落到该模型唯一在线发布版本）。</Text>
                         <Select
                           showSearch
                           allowClear
-                          placeholder="选择已发布标准模型"
+                          placeholder="目标标准模型（已发布）"
                           options={modelOptions}
                           value={selectedModelId}
                           onChange={(v) => setSelectedModelId(v)}
@@ -441,7 +441,7 @@ const SkuMasterWorkspacePage = () => {
                         <Input
                           value={requestedBy}
                           onChange={(e) => setRequestedBy(e.target.value)}
-                          placeholder="操作人（可选）"
+                          placeholder="操作人/审核人（可选）"
                         />
                         <Button
                           block
@@ -450,33 +450,33 @@ const SkuMasterWorkspacePage = () => {
                           loading={bindMutation.isPending}
                           onClick={() => bindMutation.mutate()}
                         >
-                          绑定所选（{selectedRowKeys.length}）
+                          执行绑定（写入映射）{selectedRowKeys.length ? `（${selectedRowKeys.length}）` : ''}
                         </Button>
                         <Text type="secondary">
-                          提示：请在右侧列表勾选未绑定SKU后执行；不会覆盖已有绑定。
+                          提示：先在右侧筛选/勾选候选记录，再执行绑定；不会覆盖已有绑定。
                         </Text>
                       </Space>
                     ),
                   },
                   {
                     key: 'auto',
-                    label: '自动',
+                    label: '自动识别',
                     children: (
                       <Space direction="vertical" style={{ width: '100%' }}>
                         <Text type="secondary">
-                          默认规则：仅对 model_code_hint 唯一命中“已发布标准模型”的SKU自动绑定。
+                          默认规则：仅对可确定命中“已发布标准模型”的未绑定 SKU 自动写入映射。
                         </Text>
                         <Input
                           value={requestedBy}
                           onChange={(e) => setRequestedBy(e.target.value)}
-                          placeholder="操作人（可选）"
+                          placeholder="操作人/审核人（可选）"
                         />
                         <Button
                           block
                           loading={autoPreviewMutation.isPending}
                           onClick={() => autoPreviewMutation.mutate()}
                         >
-                          预览命中范围
+                          候选预览（命中）
                         </Button>
                         <Button
                           block
@@ -484,7 +484,7 @@ const SkuMasterWorkspacePage = () => {
                           loading={autoExecuteMutation.isPending}
                           onClick={() => autoExecuteMutation.mutate()}
                         >
-                          执行自动绑定
+                          执行绑定（仅选中候选）
                         </Button>
                         {autoPreviewText ? <Alert type="info" showIcon message={autoPreviewText} /> : null}
                         {autoCandidatesOnly ? (
@@ -553,8 +553,8 @@ const SkuMasterWorkspacePage = () => {
 
         {/* 右侧：筛选 + 列表（3/4） */}
         <Col xs={24} lg={18}>
-          <Card
-            title="SKU 列表"
+            <Card
+            title="候选列表"
             extra={
               <Space wrap>
                 {autoCandidatesOnly ? (
@@ -562,7 +562,7 @@ const SkuMasterWorkspacePage = () => {
                 ) : null}
                 <Input
                   style={{ width: 260 }}
-                  placeholder="搜索：条码/名称/编码"
+                  placeholder="候选筛选：条码/商品名/编码"
                   value={search}
                   onChange={(e) => {
                     setSearch(e.target.value)
@@ -572,7 +572,7 @@ const SkuMasterWorkspacePage = () => {
                 />
                 <Input
                   style={{ width: 220 }}
-                  placeholder="规格关键字（仅当前页过滤）"
+                  placeholder="规格包含关键字（本列表过滤）"
                   value={specKeyword}
                   onChange={(e) => setSpecKeyword(e.target.value)}
                 />

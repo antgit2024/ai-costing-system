@@ -4,8 +4,8 @@ import type { ColumnsType } from 'antd/es/table'
 import { useQuery } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
 
-import { createProductModel, createProductModelVersion, fetchProductModelVersionsPaged } from '@/services/planner'
-import type { ProductModelVersionListItem } from '@/types/planner'
+import { createProductModel, createProductModelVersion, fetchProductModels } from '@/services/planner'
+import type { ProductModel } from '@/types/planner'
 import ProductModelEditorDrawer from '@/components/costing/ProductModelEditorDrawer'
 
 const { Title, Text } = Typography
@@ -40,7 +40,6 @@ export default function StandardModelsPage() {
   const params = useMemo(
     () => ({
       search: search || undefined,
-      version_kind: 'standard',
       page,
       page_size: pageSize,
     }),
@@ -48,16 +47,17 @@ export default function StandardModelsPage() {
   )
 
   const listQuery = useQuery({
-    queryKey: ['standardModelVersions', params],
-    queryFn: () => fetchProductModelVersionsPaged(params),
+    queryKey: ['standardModels', params],
+    queryFn: () => fetchProductModels(params as any),
   })
 
-  const columns: ColumnsType<ProductModelVersionListItem> = [
-    { title: '三位编码', dataIndex: 'model_code', width: 100 },
-    { title: '模型名称', dataIndex: 'model_name', width: 180 },
-    { title: '版本号', dataIndex: 'version_label', width: 220, render: (v) => v ?? '-' },
-    { title: '版本类型', dataIndex: 'version_kind', width: 90, render: (v) => <Tag>{v}</Tag> },
-    { title: '版本状态', dataIndex: 'version_status', width: 110, render: (v) => <Tag>{v}</Tag> },
+  const columns: ColumnsType<ProductModel> = [
+    { title: '总编码', dataIndex: 'model_code', width: 120 },
+    { title: '模型名称', dataIndex: 'model_name' },
+    { title: '状态', dataIndex: 'status', width: 110, render: (v: string) => <Tag>{v}</Tag> },
+    { title: '打样版本数', width: 110, render: (_, r) => (r.sample_version_count ?? '-') },
+    { title: '标准版本数', width: 110, render: (_, r) => (r.standard_version_count ?? '-') },
+    { title: '当前发布标准', width: 180, render: (_, r) => r.current_published_standard_version_label ?? '-' },
     { title: '更新时间', dataIndex: 'updated_at', width: 180 },
     {
       title: '操作',
@@ -66,8 +66,8 @@ export default function StandardModelsPage() {
         <Button
           type="primary"
           onClick={() => {
-            setEditingModelId(r.model_id)
-            setEditingVersionId(r.version_id)
+            setEditingModelId(r.id)
+            setEditingVersionId(null)
             setEditorOpen(true)
           }}
         >
@@ -163,9 +163,11 @@ export default function StandardModelsPage() {
         <Col span={24}>
           <Card>
             <Table
-              rowKey={(r) => r.version_id}
+              rowKey={(r) => r.id}
               loading={listQuery.isLoading}
-              dataSource={(listQuery.data as any)?.items ?? []}
+              dataSource={(((listQuery.data as any)?.items ?? []) as ProductModel[]).filter(
+                (m) => Number(m.standard_version_count ?? 0) > 0,
+              )}
               columns={columns}
               pagination={false}
               scroll={{ x: 980 }}

@@ -389,7 +389,7 @@ def sync_lines_from_modules(db: Session, model: models.ProductModel, *, keep_ove
             meta["standard_used_quantity"] = str((standard_measure * base_qty).normalize())
             meta["fixed_quantity"] = str(Decimal("0"))
             meta["coverage_ratio"] = str(Decimal("1"))
-            # carry pricing snapshot from module line (especially virtual materials)
+            # Carry pricing snapshot from module line if present; otherwise derive from master data.
             module_meta = m.metadata_json or {}
             if "bom_unit_price" in module_meta:
                 meta["bom_unit_price"] = module_meta.get("bom_unit_price")
@@ -415,6 +415,36 @@ def sync_lines_from_modules(db: Session, model: models.ProductModel, *, keep_ove
             mat_code = m.material_code
             mat_name = m.material_name
             uom = m.unit_of_measure
+            # Fallback: if module line doesn't contain BOM pricing snapshots, derive now so
+            # model/version ledgers always have display-ready pricing info.
+            if ("bom_unit_price" not in meta) or ("bom_unit" not in meta):
+                try:
+                    if mat_kind in ("real", "bom") and ref_id:
+                        material = db.get(models.Material, ref_id)
+                        if material and not material.is_archived:
+                            if "bom_unit_price" not in meta:
+                                price = _derive_bom_unit_price(material)
+                                if price is not None:
+                                    meta["bom_unit_price"] = float(price)
+                            if "bom_unit" not in meta:
+                                meta["bom_unit"] = material.unit
+                    elif mat_kind == "virtual" and ref_id:
+                        vm = db.get(models.VirtualMaterial, ref_id)
+                        if vm and not vm.is_archived:
+                            if "bom_unit" not in meta:
+                                meta["bom_unit"] = vm.unit
+                            if "bom_unit_price" not in meta:
+                                raw = (vm.metadata_json or {}).get("bom_unit_price")
+                                if raw not in (None, ""):
+                                    try:
+                                        meta["bom_unit_price"] = float(Decimal(str(raw)))
+                                    except Exception:  # noqa: BLE001
+                                        pass
+                                # If virtual has no bom_unit_price snapshot, keep it absent; it can be computed
+                                # by refresh_model_material_price_snapshots or by virtual bindings strategy.
+                except Exception:
+                    # best-effort only; never block sync
+                    pass
             if mat_kind == "virtual" and ref_id:
                 vm = db.get(models.VirtualMaterial, ref_id)
                 if vm and not vm.is_archived and _get_virtual_kind(vm) == "placeholder":
@@ -477,6 +507,16 @@ def sync_lines_from_modules(db: Session, model: models.ProductModel, *, keep_ove
             for k in ("cost_type", "base_minutes", "unit_minutes", "measure_unit", "rate_per_minute", "piece_rate"):
                 if k in step_meta:
                     meta[k] = step_meta[k]
+            # Fallback: for legacy modules with empty step metadata, derive from process master.
+            proc = db.get(models.Process, s.process_id) if s.process_id else None
+            proc_meta = (proc.metadata_json or {}) if proc else {}
+            for k in ("cost_type", "base_minutes", "unit_minutes", "measure_unit", "rate_per_minute", "piece_rate"):
+                if k not in meta and k in proc_meta:
+                    meta[k] = proc_meta.get(k)
+            if "team_name" not in meta:
+                meta["team_name"] = (s.team_name or None) or (proc.team_name if proc else None)
+            if "rate_per_minute" not in meta and proc and proc.standard_rate is not None:
+                meta["rate_per_minute"] = proc.standard_rate
             # derive sample/standard minutes (best effort)
             measure_method = pricing_method if pricing_method in ("fixed", "count", "area", "perimeter", "width", "height") else "count"
             sample_measure = _measure_qty_for_method(measure_method if measure_method != "fixed" else "count", spec=sample)
@@ -489,7 +529,6 @@ def sync_lines_from_modules(db: Session, model: models.ProductModel, *, keep_ove
                 for k in ("sample_minutes", "standard_minutes", "cost_type", "base_minutes", "unit_minutes", "rate_per_minute", "piece_rate", "team_name"):
                     if k in old_meta:
                         meta[k] = old_meta[k]
-            proc = db.get(models.Process, s.process_id)
             db.add(
                 models.ModelProcess(
                     model_id=model.id,
@@ -655,6 +694,32 @@ def sync_version_lines_from_modules(
             mat_code = m.material_code
             mat_name = m.material_name
             uom = m.unit_of_measure
+            # Fallback derive pricing snapshots for legacy module rows (same as model layer).
+            if ("bom_unit_price" not in meta) or ("bom_unit" not in meta):
+                try:
+                    if mat_kind in ("real", "bom") and ref_id:
+                        material = db.get(models.Material, ref_id)
+                        if material and not material.is_archived:
+                            if "bom_unit_price" not in meta:
+                                price = _derive_bom_unit_price(material)
+                                if price is not None:
+                                    meta["bom_unit_price"] = float(price)
+                            if "bom_unit" not in meta:
+                                meta["bom_unit"] = material.unit
+                    elif mat_kind == "virtual" and ref_id:
+                        vm = db.get(models.VirtualMaterial, ref_id)
+                        if vm and not vm.is_archived:
+                            if "bom_unit" not in meta:
+                                meta["bom_unit"] = vm.unit
+                            if "bom_unit_price" not in meta:
+                                raw = (vm.metadata_json or {}).get("bom_unit_price")
+                                if raw not in (None, ""):
+                                    try:
+                                        meta["bom_unit_price"] = float(Decimal(str(raw)))
+                                    except Exception:  # noqa: BLE001
+                                        pass
+                except Exception:
+                    pass
             if mat_kind == "virtual" and ref_id:
                 vm = db.get(models.VirtualMaterial, ref_id)
                 if vm and not vm.is_archived and _get_virtual_kind(vm) == "placeholder":
@@ -716,6 +781,15 @@ def sync_version_lines_from_modules(
             for k in ("cost_type", "base_minutes", "unit_minutes", "measure_unit", "rate_per_minute", "piece_rate"):
                 if k in step_meta:
                     meta[k] = step_meta[k]
+            proc = db.get(models.Process, s.process_id) if s.process_id else None
+            proc_meta = (proc.metadata_json or {}) if proc else {}
+            for k in ("cost_type", "base_minutes", "unit_minutes", "measure_unit", "rate_per_minute", "piece_rate"):
+                if k not in meta and k in proc_meta:
+                    meta[k] = proc_meta.get(k)
+            if "team_name" not in meta:
+                meta["team_name"] = (s.team_name or None) or (proc.team_name if proc else None)
+            if "rate_per_minute" not in meta and proc and proc.standard_rate is not None:
+                meta["rate_per_minute"] = proc.standard_rate
             measure_method = (
                 pricing_method
                 if pricing_method in ("fixed", "count", "area", "perimeter", "width", "height")

@@ -1309,6 +1309,8 @@ export interface SkuMaster {
   spec_text?: string | null
   images_json?: Record<string, unknown>
   match_status?: string | null
+  active_version_binding_id?: string | null
+  active_model_version_id?: string | null
   source_updated_at?: string | null
   metadata_json?: Record<string, unknown>
   created_at: string

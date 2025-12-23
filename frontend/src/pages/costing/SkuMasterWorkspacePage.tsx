@@ -113,7 +113,8 @@ const SkuMasterWorkspacePage = () => {
   const pageStats = useMemo(() => {
     const rows = filteredItems
     const totalRows = rows.length
-    const matched = rows.filter((x) => isFilled(x.match_status)).length
+    const erpMatched = rows.filter((x) => isFilled(x.match_status)).length
+    const linked = rows.filter((x) => isFilled(x.active_model_version_id as any)).length
     const complete = rows.filter((x) => {
       // MVP: “字段齐全” = 条码 + 渠道 + 名称 + 编码 + 规格 + 平台商品Id + 平台规格Id
       return (
@@ -129,9 +130,11 @@ const SkuMasterWorkspacePage = () => {
     const rate = (n: number) => (totalRows ? `${Math.round((n / totalRows) * 1000) / 10}%` : '-')
     return {
       totalRows,
-      matched,
+      erpMatched,
+      linked,
       complete,
-      matchedRate: rate(matched),
+      erpMatchedRate: rate(erpMatched),
+      linkedRate: rate(linked),
       completeRate: rate(complete),
     }
   }, [filteredItems])
@@ -192,13 +195,20 @@ const SkuMasterWorkspacePage = () => {
       render: (v) => safeString(v) || '-',
     },
     {
-      title: '匹配状态',
-      dataIndex: 'match_status',
-      width: 120,
-      render: (v) => {
-        const s = safeString(v) || '—'
-        const color = s.includes('匹配') || s.includes('命中') || s.toLowerCase().includes('match') ? 'green' : 'default'
-        return <Tag color={color}>{s}</Tag>
+      title: '对接状态（本系统）',
+      dataIndex: 'active_model_version_id',
+      width: 160,
+      render: (v, record) => {
+        const bound = isFilled(v as any)
+        const source = safeString((record.metadata_json as any)?.source)
+        const srcTag =
+          source === 'shipment_autobackfill' ? <Tag color="gold">发货回写</Tag> : <Tag>ERP导入</Tag>
+        return (
+          <Space size={6}>
+            {bound ? <Tag color="green">已绑定</Tag> : <Tag color="red">未绑定</Tag>}
+            {srcTag}
+          </Space>
+        )
       },
     },
     {
@@ -258,7 +268,7 @@ const SkuMasterWorkspacePage = () => {
             SKU 主档工作台（MVP）
           </Title>
           <Text type="secondary">
-            用于导入 ERP SKU 主档（货品条码为主键），并快速查看命中率/字段齐全情况（MVP 统计以当前页为准）。
+            用于导入 ERP SKU 主档（货品条码为主键），并快速查看字段齐全情况与“对接就绪率”（MVP 统计以当前页为准）。
           </Text>
         </div>
         <Button onClick={() => listQuery.refetch()}>刷新</Button>
@@ -336,7 +346,7 @@ const SkuMasterWorkspacePage = () => {
                 <Select
                   allowClear
                   style={{ width: 160 }}
-                  placeholder="匹配状态"
+                  placeholder="ERP匹配状态（网店↔ERP）"
                   options={matchStatusOptions}
                   value={matchStatus}
                   onChange={(v) => {
@@ -346,8 +356,8 @@ const SkuMasterWorkspacePage = () => {
                 />
                 <Tag color="blue">总数：{total}</Tag>
                 <Tag>
-                  本页：{pageStats.totalRows} 命中率：{pageStats.matchedRate} 字段齐全率：
-                  {pageStats.completeRate}
+                  本页：{pageStats.totalRows} ERP匹配填充率：{pageStats.erpMatchedRate} 对接就绪率：
+                  {pageStats.linkedRate} 字段齐全率：{pageStats.completeRate}
                 </Tag>
               </Space>
             }
@@ -402,6 +412,16 @@ const SkuMasterWorkspacePage = () => {
                 </Descriptions.Item>
                 <Descriptions.Item label="platform_sku_id">
                   {detailQuery.data.platform_sku_id ?? '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="对接状态（本系统）">
+                  {detailQuery.data.active_model_version_id ? (
+                    <Tag color="green">已绑定</Tag>
+                  ) : (
+                    <Tag color="red">未绑定</Tag>
+                  )}
+                </Descriptions.Item>
+                <Descriptions.Item label="active_model_version_id">
+                  {detailQuery.data.active_model_version_id ?? '-'}
                 </Descriptions.Item>
                 <Descriptions.Item label="match_status">
                   {detailQuery.data.match_status ?? '-'}

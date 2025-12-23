@@ -214,6 +214,7 @@ def list_sku_master(
         q = q.filter(models.SkuMaster.match_status == match_status)
     total = q.count()
     items = q.order_by(models.SkuMaster.updated_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    _attach_active_version_bindings(db, items)
     return total, items
 
 
@@ -221,6 +222,7 @@ def get_sku_master(db: Session, sku_id: str) -> Optional[models.SkuMaster]:
     row = db.get(models.SkuMaster, sku_id)
     if not row or row.is_archived:
         return None
+    _attach_active_version_bindings(db, [row])
     return row
 
 
@@ -258,5 +260,45 @@ def ensure_from_shipment(
     db.add(row)
     db.flush()
     return row
+
+
+def _attach_active_version_bindings(db: Session, rows: List[models.SkuMaster]) -> None:
+    """
+    Attach computed fields to sku_master rows for frontend readability:
+    - active_version_binding_id
+    - active_model_version_id
+
+    NOTE: We reuse existing sku_model_version_mapping as the current SSOT for "是否已绑定可用版本".
+    """
+    if not rows:
+        return
+    barcodes = [r.erp_sku_barcode for r in rows if getattr(r, "erp_sku_barcode", None)]
+    if not barcodes:
+        return
+
+    mappings = (
+        db.query(models.SkuModelVersionMapping)
+        .filter(
+            models.SkuModelVersionMapping.sku_code.in_(list(set(barcodes))),
+            models.SkuModelVersionMapping.is_active.is_(True),
+            models.SkuModelVersionMapping.is_archived.is_(False),
+        )
+        .order_by(models.SkuModelVersionMapping.sku_code.asc(), models.SkuModelVersionMapping.created_at.desc())
+        .all()
+    )
+
+    latest: Dict[str, models.SkuModelVersionMapping] = {}
+    for m in mappings:
+        if m.sku_code not in latest:
+            latest[m.sku_code] = m
+
+    for r in rows:
+        m = latest.get(r.erp_sku_barcode)
+        if not m:
+            r.active_version_binding_id = None
+            r.active_model_version_id = None
+        else:
+            r.active_version_binding_id = m.id
+            r.active_model_version_id = m.model_version_id
 
 

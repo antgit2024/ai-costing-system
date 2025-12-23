@@ -1783,6 +1783,9 @@ class SkuMasterRead(BaseModel):
     spec_text: Optional[str] = None
     images: Dict[str, Any] = Field(default_factory=dict, alias="images_json")
     match_status: Optional[str] = None
+    # Costing integration summary (computed fields; avoid N+1 on frontend)
+    active_version_binding_id: Optional[str] = None
+    active_model_version_id: Optional[str] = None
     source_updated_at: Optional[datetime] = None
     metadata: Dict[str, Any] = Field(default_factory=dict, alias="metadata_json")
     created_at: datetime

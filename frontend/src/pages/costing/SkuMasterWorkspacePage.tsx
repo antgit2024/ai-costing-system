@@ -77,7 +77,7 @@ const SkuMasterWorkspacePage = () => {
   const [specKeyword] = useState<string>('') // 兼容占位：旧的“规格关键字”筛选已升级为布尔筛选
   const [includeTerms, setIncludeTerms] = useState<string>('')
   const [excludeTerms, setExcludeTerms] = useState<string>('')
-  const [matchScope, setMatchScope] = useState<'auto' | 'spec' | 'name' | 'spec_or_name'>('auto')
+  const [matchScope, setMatchScope] = useState<'spec' | 'name'>('spec')
   const [channel, setChannel] = useState<string | undefined>(undefined)
   const [matchStatus, setMatchStatus] = useState<string | undefined>(undefined)
   const [listTab, setListTab] = useState<'all' | 'unbound' | 'bound'>('all')
@@ -593,10 +593,8 @@ const SkuMasterWorkspacePage = () => {
                   value={matchScope}
                   onChange={(v) => setMatchScope(v)}
                   options={[
-                    { label: '按渠道自动（推荐）', value: 'auto' },
-                    { label: '仅规格', value: 'spec' },
-                    { label: '仅商品名', value: 'name' },
-                    { label: '规格或商品名', value: 'spec_or_name' },
+                    { label: '商品规格', value: 'spec' },
+                    { label: '商品名称', value: 'name' },
                   ]}
                 />
                 <Select

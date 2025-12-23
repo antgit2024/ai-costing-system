@@ -983,7 +983,7 @@ export const fetchSkuMaster = async (
     spec_mismatch?: boolean
     include_terms?: string
     exclude_terms?: string
-    match_scope?: 'auto' | 'spec' | 'name' | 'spec_or_name'
+    match_scope?: 'spec' | 'name'
   } = {},
 ): Promise<SkuMasterListResponse> => {
   const response = await plannerClient.get('/sku-master', { params: sanitizeParams(params) })

@@ -1854,6 +1854,8 @@ class SkuMasterBindByModelResponse(BaseModel):
 
 class SkuMasterAutoBindPreviewRequest(BaseModel):
     limit: int = Field(200, ge=1, le=2000)
+    # max rows to scan among unbound sku masters (server-side filter) to find candidates
+    scan_limit: int = Field(50000, ge=100, le=500000)
 
 
 class SkuMasterAutoBindPreviewItem(BaseModel):

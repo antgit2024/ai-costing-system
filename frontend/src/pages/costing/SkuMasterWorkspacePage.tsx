@@ -353,7 +353,7 @@ const SkuMasterWorkspacePage = () => {
   })
 
   const autoPreviewMutation = useMutation({
-    mutationFn: () => autoBindSkuMastersPreview({ limit: 200 }),
+    mutationFn: () => autoBindSkuMastersPreview({ limit: 200, scan_limit: 50000 }),
     onSuccess: (res: any) => {
       setAutoPreviewText(`未绑定≈${res.total_unbound} 可自动=${res.candidates}（展示${(res.items ?? []).length}）`)
       const cand = (res.items ?? []) as SkuMasterAutoBindPreviewItem[]

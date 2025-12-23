@@ -74,7 +74,7 @@ def bind_by_model(payload: schemas.SkuMasterBindByModelRequest, db: Session = De
 
 @router.post("/auto-bind/preview", response_model=schemas.SkuMasterAutoBindPreviewResponse)
 def auto_bind_preview(payload: schemas.SkuMasterAutoBindPreviewRequest, db: Session = Depends(get_db_session)):
-    return sku_master_service.auto_bind_preview(db, limit=payload.limit)
+    return sku_master_service.auto_bind_preview(db, limit=payload.limit, scan_limit=payload.scan_limit)
 
 
 @router.post("/auto-bind/execute", response_model=schemas.SkuMasterAutoBindExecuteResponse)
@@ -84,6 +84,7 @@ def auto_bind_execute(payload: schemas.SkuMasterAutoBindExecuteRequest, db: Sess
         limit=payload.limit,
         requested_by=payload.requested_by,
         sku_master_ids=payload.sku_master_ids,
+        scan_limit=50000,
     )
 
 

@@ -682,8 +682,9 @@ def bind_sku_master_by_model(
     }
 
 
-def auto_bind_preview(db: Session, *, limit: int) -> Dict[str, Any]:
+def auto_bind_preview(db: Session, *, limit: int, scan_limit: int = 50000) -> Dict[str, Any]:
     limit = max(min(int(limit or 200), 2000), 1)
+    scan_limit = max(min(int(scan_limit or 50000), 500000), 100)
 
     def _norm_text(t: Optional[str]) -> str:
         return "".join(str(t or "").strip().split()).upper()
@@ -759,15 +760,24 @@ def auto_bind_preview(db: Session, *, limit: int) -> Dict[str, Any]:
             return hits_sorted[0]
         return None
 
-    # Find unbound SKU masters (by barcode)
+    # Find unbound SKU masters (server-side filter; avoid empty pages from client-side filtering)
+    subq = (
+        db.query(models.SkuModelVersionMapping.id)
+        .filter(
+            models.SkuModelVersionMapping.sku_code == models.SkuMaster.erp_sku_barcode,
+            models.SkuModelVersionMapping.is_active.is_(True),
+            models.SkuModelVersionMapping.is_archived.is_(False),
+        )
+    )
     q = (
         db.query(models.SkuMaster)
         .filter(models.SkuMaster.is_archived.is_(False))
+        .filter(~subq.exists())
         .order_by(models.SkuMaster.updated_at.desc())
     )
-    rows = q.limit(limit * 5).all()  # overfetch then filter
+    rows = q.limit(scan_limit).all()
 
-    total_unbound = 0
+    total_unbound = q.count()
     items: List[Dict[str, Any]] = []
     candidates = 0
 
@@ -775,9 +785,6 @@ def auto_bind_preview(db: Session, *, limit: int) -> Dict[str, Any]:
         sku = (r.erp_sku_barcode or "").strip()
         if not sku:
             continue
-        if product_model_service.get_active_sku_binding(db, sku):
-            continue
-        total_unbound += 1
         meta = r.metadata_json or {}
         # Prefer latest shipment spec when present; otherwise fallback to ERP spec_text.
         spec_for_match = meta.get("last_shipment_spec_text") or r.spec_text
@@ -833,9 +840,14 @@ def auto_bind_preview(db: Session, *, limit: int) -> Dict[str, Any]:
 
 
 def auto_bind_execute(
-    db: Session, *, limit: int, requested_by: Optional[str], sku_master_ids: Optional[List[str]] = None
+    db: Session,
+    *,
+    limit: int,
+    requested_by: Optional[str],
+    sku_master_ids: Optional[List[str]] = None,
+    scan_limit: int = 50000,
 ) -> Dict[str, Any]:
-    preview = auto_bind_preview(db, limit=limit)
+    preview = auto_bind_preview(db, limit=limit, scan_limit=scan_limit)
     items_all = list(preview.get("items") or [])
     selected_set = {str(x) for x in (sku_master_ids or []) if str(x).strip()}
     items = items_all

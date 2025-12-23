@@ -1011,6 +1011,7 @@ export const bindSkuMastersByModel = async (payload: {
 
 export const autoBindSkuMastersPreview = async (payload: {
   limit?: number
+  scan_limit?: number
 } = {}): Promise<SkuMasterAutoBindPreviewResponse> => {
   const response = await plannerClient.post('/sku-master/auto-bind/preview', payload)
   return response.data

@@ -72,7 +72,7 @@ const SkuMasterWorkspacePage = () => {
 
   const [uploading, setUploading] = useState(false)
   const [uploadFile, setUploadFile] = useState<File | null>(null)
-  const [requestedBy, setRequestedBy] = useState<string>('planner_user')
+  const [requestedBy, setRequestedBy] = useState<string>('')
 
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [activeId, setActiveId] = useState<string | null>(null)
@@ -361,7 +361,7 @@ const SkuMasterWorkspacePage = () => {
                         <Input
                           value={requestedBy}
                           onChange={(e) => setRequestedBy(e.target.value)}
-                          placeholder="requested_by（可选）"
+                          placeholder="操作人（可选）"
                         />
                         <Button
                           block
@@ -389,7 +389,7 @@ const SkuMasterWorkspacePage = () => {
                         <Input
                           value={requestedBy}
                           onChange={(e) => setRequestedBy(e.target.value)}
-                          placeholder="requested_by（可选）"
+                          placeholder="操作人（可选）"
                         />
                         <Button
                           block

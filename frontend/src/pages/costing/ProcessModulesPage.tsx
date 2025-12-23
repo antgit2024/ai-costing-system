@@ -1181,7 +1181,8 @@ const ProcessModulesPage = () => {
           material_code: records[0].material_code,
           material_name: records[0].material_name,
           unit_of_measure: normalizeUnit(records[0].unit || records[0].purchase_unit) || '',
-          calculation_method: (next[ctx.targetIndex]?.calculation_method as any) ?? calcMethod,
+          // 替换物料：以新物料主数据为准（否则会出现“计量方式与单位不配套/不更新”的回归问题）
+          calculation_method: calcMethod,
           quantity: safeNum((next[ctx.targetIndex] as any)?.quantity, 1) || 1,
           loss_rate: safeNum((next[ctx.targetIndex] as any)?.loss_rate, 0) || 0,
           material_category: records[0].category || undefined,

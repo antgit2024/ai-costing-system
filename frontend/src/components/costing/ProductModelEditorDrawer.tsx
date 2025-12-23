@@ -1184,16 +1184,35 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     name?: string | null
     unit?: string | null
     category?: string | null
+    calculation_method?: string | null
+    bom_unit_price?: number | null
     defaults?: { fixed_quantity?: number; coverage_ratio?: number; loss_rate?: number }
   }) => {
     const unitNorm = normalizeUnit(payload.unit) || payload.unit || undefined
+    /**
+     * 【计量方式/单位口径（重要，禁止随意改坏）】
+     * - 单位归一化：统一走 normalizeUnit()，最终口径为：平米/米/个/套
+     * - 计量方式必须与单位匹配：
+     *   - area -> 平米
+     *   - perimeter/width/height -> 米
+     *   - count -> 个/套
+     * 选择/替换物料时，必须同步更新：
+     * - row.unit_of_measure
+     * - row.calculation_method
+     * - row.metadata_json.bom_unit
+     * - row.metadata_json.bom_unit_price（尽量取主数据快照/推导）
+     */
+
+    const deriveCalcMethod = (preferred?: string | null): CalcMethod => {
+      const allowed = allowedCalcMethodsByBomUnit(unitNorm)
+      const pref = String(preferred ?? '').trim() as CalcMethod
+      if (pref && allowed.includes(pref)) return pref
+      return (allowed[0] ?? 'count') as CalcMethod
+    }
 
     // 新增模式：append 一行（不依赖工艺模块）
     if (pickerMode === 'add' || pickerRowIndex === null) {
-      const calcMethod = (() => {
-        const allowed = allowedCalcMethodsByBomUnit(unitNorm)
-        return (allowed[0] ?? 'count') as any
-      })()
+      const calcMethod = deriveCalcMethod(payload.calculation_method)
       const baseQty = 0
       const fixedQty = payload.defaults?.fixed_quantity != null ? Number(payload.defaults.fixed_quantity) : 0
       const cov = payload.defaults?.coverage_ratio != null ? Number(payload.defaults.coverage_ratio) : 1
@@ -1221,6 +1240,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
         metadata_json: {
           display_unit: unitNorm,
           bom_unit: unitNorm,
+          ...(payload.bom_unit_price != null ? { bom_unit_price: payload.bom_unit_price } : {}),
           display_category: payload.category ?? undefined,
         },
       }
@@ -1233,12 +1253,22 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     const next = materials.slice()
     const row = next[pickerRowIndex] as any
     if (!row) return
+    const calcMethod = deriveCalcMethod(payload.calculation_method ?? row.calculation_method)
+    const mqSample = Math.max(0, measureQty(calcMethod, sampleSpec))
+    const mqStandard = Math.max(0, measureQty(calcMethod, standardSpec))
+    const baseQty = row.base_quantity != null ? Number(row.base_quantity) : 0
+    const fixedQty = row.fixed_quantity != null ? Number(row.fixed_quantity) : 0
+    const cov = row.coverage_ratio != null ? Number(row.coverage_ratio) : 1
+    const sampleUsed = fixedQty + mqSample * baseQty * cov
+    const standardUsed = fixedQty + mqStandard * baseQty * cov
     next[pickerRowIndex] = {
       ...row,
       material_kind: payload.kind,
       material_ref_id: payload.id,
       material_code: payload.code ?? undefined,
       material_name: payload.name ?? undefined,
+      unit_of_measure: unitNorm,
+      calculation_method: calcMethod,
       fixed_quantity:
         (row.fixed_quantity == null || Number(row.fixed_quantity) === 0) &&
         payload.defaults?.fixed_quantity != null &&
@@ -1255,10 +1285,14 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
         (row.loss_rate == null || Number(row.loss_rate) === 0) && payload.defaults?.loss_rate != null
           ? payload.defaults.loss_rate
           : row.loss_rate,
+      sample_used_quantity: sampleUsed,
+      standard_used_quantity: standardUsed,
       metadata_json: {
         ...(row.metadata_json ?? {}),
         display_unit: unitNorm,
-        bom_unit: (row.metadata_json as any)?.bom_unit ?? unitNorm,
+        // 替换物料时：以新物料单位为准，强制刷新 bom_unit，避免“计量方式/单位不配套”
+        bom_unit: unitNorm,
+        ...(payload.bom_unit_price != null ? { bom_unit_price: payload.bom_unit_price } : {}),
         display_category: payload.category ?? undefined,
       },
     }
@@ -3203,6 +3237,21 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                         name: r.material_name,
                         unit: r.unit,
                         category: r.category,
+                        calculation_method: (r as any).calculation_method ?? null,
+                        bom_unit_price: (() => {
+                          const meta = ((r as any).metadata_json ?? {}) as any
+                          const raw = meta?.bom_unit_price
+                          if (raw != null && raw !== '') {
+                            const n = Number(raw)
+                            return Number.isFinite(n) ? n : null
+                          }
+                          const unitPrice = Number((r as any).unit_price)
+                          const conv = Number((r as any).conversion_purchase_to_bom)
+                          if (Number.isFinite(unitPrice) && Number.isFinite(conv) && conv > 0) {
+                            return unitPrice / conv
+                          }
+                          return null
+                        })(),
                         defaults: (() => {
                           const meta = (r.metadata_json ?? {}) as Record<string, any>
                           const d = (meta.costing_defaults ?? {}) as Record<string, any>

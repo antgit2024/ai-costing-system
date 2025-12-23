@@ -1,6 +1,6 @@
 ## 当前状态（崩了也能继续）
 
-- **最近校对（北京时间 GMT+8）**：2025-12-23 10:15（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
+- **最近校对（北京时间 GMT+8）**：2025-12-23 11:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **分支**：`backup/20251214-1535`
 
 - **本轮闭环产物（Planner-Optimization / 方案评审稿）**：
@@ -33,9 +33,18 @@
   - `frontend/src/types/planner.ts`
   - `frontend/src/pages/costing/ShipmentMonitorPage.tsx`
   - `frontend/src/pages/costing/SkuMasterWorkspacePage.tsx`
+  - `frontend/src/pages/costing/ProcessModulesPage.tsx`
   - `backend/src/planner/routers/shipments.py`
   - `backend/src/planner/services/shipment_import_service.py`
   - `backend/src/planner/schemas.py`
+
+- **本轮补充（Frontend / 模型清单：替换物料自动回填口径统一）**：
+  - 问题：替换物料后，`unit_of_measure` / `metadata_json.bom_unit` / `calculation_method` / `bom_unit_price` 未同步更新，导致“计量方式与 BOM 单位不配套”、且表现为“所有行看起来都像同一种计量方式”。
+  - 修复：
+    - `ProductModelEditorDrawer` 在“替换物料”时强制同步回填：`unit_of_measure`、`metadata_json.bom_unit`、`calculation_method`，并尽量从主数据/换算推导 `bom_unit_price`。
+    - `ProcessModulesPage` 在替换物料时不再沿用旧 `calculation_method`，改为以新物料主数据为准（避免回归）。
+  - 防回归：在关键函数旁加了“单位口径/计量方式必须匹配 normalizeUnit”的硬备注（禁止改回 `㎡/m` 作为 value）。
+  - 本轮验收命令：`npm -C frontend run build`（已通过）
 
 - **已确认正确版本快照（请勿覆盖）**：
   - `DOC/index/extracted/ProductModelEditorDrawer_confirmed_20251221T042643Z.tsx`

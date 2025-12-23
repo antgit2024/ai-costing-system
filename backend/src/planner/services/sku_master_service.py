@@ -760,10 +760,12 @@ def auto_bind_preview(db: Session, *, limit: int) -> Dict[str, Any]:
             continue
         total_unbound += 1
         meta = r.metadata_json or {}
+        # Prefer latest shipment spec when present; otherwise fallback to ERP spec_text.
+        spec_for_match = meta.get("last_shipment_spec_text") or r.spec_text
         hint = meta.get("model_code_hint_shipment") or meta.get("model_code_hint_erp")
         if not hint:
             # Fallback: compute from current spec_text (so older imported rows can still be auto-bound)
-            hint = _extract_model_code_hint(r.spec_text)
+            hint = _extract_model_code_hint(spec_for_match)
         hint = (str(hint).strip().upper()) if hint else ""
         match_method = None
         matched_keyword = None
@@ -778,7 +780,7 @@ def auto_bind_preview(db: Session, *, limit: int) -> Dict[str, Any]:
                     match_method = "model_code_hint"
 
         if not model or not version:
-            kw_match = _match_by_model_keywords(r.spec_text)
+            kw_match = _match_by_model_keywords(spec_for_match)
             if kw_match:
                 model = kw_match["model"]
                 version = kw_match["version"]

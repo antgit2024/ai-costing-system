@@ -893,6 +893,12 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     return normalizeUnit(meta.bom_unit ?? meta.display_unit) || ''
   }
 
+  const getProcessMeasureUnit = (row: any) => {
+    const meta = (row?.metadata_json ?? {}) as any
+    // process 行本身无 unit_of_measure（来自工序库）；我们将其快照落在 metadata_json.measure_unit
+    return normalizeUnit(meta.measure_unit) || String(meta.measure_unit ?? '').trim()
+  }
+
   // 约束：计价口径需与 BOM 单位一致（个=数量；㎡=面积；m=周长/宽/高）
   useEffect(() => {
     if (!open) return
@@ -1308,9 +1314,16 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
         const allowed = new Set(['count', 'area', 'perimeter', 'width', 'height', 'fixed'])
         return (allowed.has(v) ? v : 'count') as any
       })()
+      const measureUnit = normalizeUnit((proc as any)?.unit_of_measure) || String((proc as any)?.unit_of_measure ?? '').trim()
+      const pricingByUnit = (() => {
+        const allowed = allowedCalcMethodsByBomUnit(measureUnit)
+        // 固定工时保持为 fixed（不参与单位限制）；其它按单位纠偏
+        if (pricing === 'fixed') return pricing
+        return (allowed.includes(pricing as any) ? pricing : (allowed[0] ?? 'count')) as any
+      })()
       const base = 0
       const unit = 0
-      const method = pricing === 'fixed' ? 'count' : pricing
+      const method = pricingByUnit === 'fixed' ? 'count' : pricingByUnit
       const mqSample = Math.max(0, measureQty(method as any, sampleSpec))
       const stdMq = Math.max(0, measureQty(method as any, standardSpec))
       const appended: any = {
@@ -1320,7 +1333,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
         process_code: proc.process_code,
         process_name: proc.process_name,
         team_name: (proc as any)?.team_name ?? undefined,
-        pricing_method: pricing,
+        pricing_method: pricingByUnit,
         base_minutes: base,
         unit_minutes: unit,
         rate_per_minute: (proc as any)?.rate_per_minute ?? undefined,
@@ -1330,7 +1343,9 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
         sample_minutes: base + unit * mqSample,
         standard_minutes: base + unit * stdMq,
         metadata_json: {
-          pricing_method: pricing,
+          pricing_method: pricingByUnit,
+          // 快照：用于按单位限制工序组“计量方式”候选（与物料组同口径）
+          measure_unit: measureUnit || undefined,
           base_minutes: base,
           unit_minutes: unit,
           team_name: (proc as any)?.team_name ?? undefined,
@@ -1352,6 +1367,11 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       process_id: proc.id,
       process_code: proc.process_code,
       process_name: proc.process_name,
+      metadata_json: {
+        ...(row.metadata_json ?? {}),
+        measure_unit:
+          normalizeUnit((proc as any)?.unit_of_measure) || String((proc as any)?.unit_of_measure ?? '').trim() || undefined,
+      },
     }
     setProcesses(next as any)
     setProcessPickerOpen(false)
@@ -2655,10 +2675,14 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                   options={(() => {
                                     const bomUnit = getBomUnitForRow(r)
                                     const allowed = new Set(allowedCalcMethodsByBomUnit(bomUnit))
-                                    return ALL_CALC_METHOD_OPTIONS.map((o) => ({
-                                      ...o,
-                                      disabled: !allowed.has(o.value),
-                                    }))
+                                    const cur = String(r.calculation_method ?? '').trim() as CalcMethod
+                                    // 只展示允许的项；若历史数据不兼容，保留一个 legacy 选项避免回显为空
+                                    const base = ALL_CALC_METHOD_OPTIONS.filter((o) => allowed.has(o.value))
+                                    if (cur && !allowed.has(cur) && ALL_CALC_METHOD_OPTIONS.some((o) => o.value === cur)) {
+                                      const legacy = ALL_CALC_METHOD_OPTIONS.find((o) => o.value === cur)!
+                                      return [{ label: `${legacy.label}（legacy）`, value: legacy.value }, ...base]
+                                    }
+                                    return base
                                   })()}
                                   onChange={(v) => {
                                     const next = (materials as any[]).slice()
@@ -3050,13 +3074,29 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                 getPopupContainer={() => document.body}
                                 style={{ width: '100%' }}
                                 value={r.pricing_method}
-                                options={[
-                                  { label: '数量', value: 'count' },
-                                  { label: '面积', value: 'area' },
-                                  { label: '周长', value: 'perimeter' },
-                                  { label: '宽度', value: 'width' },
-                                  { label: '高度', value: 'height' },
-                                ]}
+                                options={(() => {
+                                  // 工序组口径与物料组一致：按“单位→计量方式”限制候选
+                                  const unit = getProcessMeasureUnit(r)
+                                  const allowed = new Set(allowedCalcMethodsByBomUnit(unit))
+                                  const cur = String(r.pricing_method ?? '').trim() as any
+                                  const base = [
+                                    { label: '数量', value: 'count' as const },
+                                    { label: '面积', value: 'area' as const },
+                                    { label: '周长', value: 'perimeter' as const },
+                                    { label: '宽度', value: 'width' as const },
+                                    { label: '高度', value: 'height' as const },
+                                  ].filter((o) => allowed.has(o.value as any))
+                                  if (cur && !allowed.has(cur)) {
+                                    const legacyLabel =
+                                      cur === 'fixed'
+                                        ? '固定（legacy）'
+                                        : cur === 'length'
+                                          ? '长度（legacy）'
+                                          : `${cur}（legacy）`
+                                    return [{ label: legacyLabel, value: cur as any }, ...base]
+                                  }
+                                  return base
+                                })()}
                                 onChange={(v) => {
                                   const next = (processes as any[]).slice()
                                   const row = next[idx]

@@ -1574,9 +1574,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       processes,
     } as any)
     await queryClient.invalidateQueries({ queryKey: ['productModelVersionLines', selectedVersionId] })
-    if (entryContext === 'sample') {
-      await computeVersionStats(selectedVersionId)
-    }
+    // 保存后：立刻刷新版本统计（用于“标准版本/打样版本”Tab上方展示）
+    await computeVersionStats(selectedVersionId)
+    // 版本列表的统计是从 version.metadata_json.ui_stats 读取的；refetch 后能保持刷新不丢
+    await versionsQuery.refetch()
     message.success('已保存清单')
   }
 
@@ -1619,9 +1620,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   }
 
   const publishMutation = useMutation({
-    mutationFn: async () => {
-      if (!selectedVersionId) throw new Error('请先选择标准版本')
-      return await publishProductModelVersion(selectedVersionId, {})
+    mutationFn: async (versionId?: string) => {
+      const vid = String(versionId ?? selectedVersionId ?? '').trim()
+      if (!vid) throw new Error('请先选择标准版本')
+      return await publishProductModelVersion(vid, {})
     },
     onSuccess: async () => {
       message.success('已发布标准版本')
@@ -2144,6 +2146,47 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                       </Space>
                     }
                   >
+                    <Space wrap style={{ marginBottom: 8 }}>
+                      <Tag>
+                        物料数：
+                        {selectedVersionId ? (versionStatsById[selectedVersionId]?.material_count ?? '-') : '-'}
+                      </Tag>
+                      <Tag>
+                        工序数：
+                        {selectedVersionId ? (versionStatsById[selectedVersionId]?.process_count ?? '-') : '-'}
+                      </Tag>
+                      <Tag color="blue">
+                        物料价：
+                        {selectedVersionId && versionStatsById[selectedVersionId]?.material_cost != null
+                          ? Number(versionStatsById[selectedVersionId].material_cost).toFixed(2)
+                          : '-'}
+                      </Tag>
+                      <Tag color="purple">
+                        工序价：
+                        {selectedVersionId && versionStatsById[selectedVersionId]?.labor_cost != null
+                          ? Number(versionStatsById[selectedVersionId].labor_cost).toFixed(2)
+                          : '-'}
+                      </Tag>
+                      <Tag color="orange">
+                        制造费：
+                        {selectedVersionId && versionStatsById[selectedVersionId]?.manufacturing_fee != null
+                          ? Number(versionStatsById[selectedVersionId].manufacturing_fee).toFixed(2)
+                          : '-'}
+                      </Tag>
+                      <Tag color="green">
+                        合计价：
+                        {(() => {
+                          if (!selectedVersionId) return '-'
+                          const s = versionStatsById[selectedVersionId] ?? {}
+                          const total =
+                            s.total_cost != null
+                              ? Number(s.total_cost)
+                              : Number(s.material_cost ?? 0) + Number(s.labor_cost ?? 0) + Number(s.manufacturing_fee ?? 0)
+                          return Number.isFinite(total) && total > 0 ? total.toFixed(2) : '-'
+                        })()}
+                      </Tag>
+                      <Text type="secondary">提示：保存清单后会自动刷新这些汇总。</Text>
+                    </Space>
                     <Table
                       rowKey="id"
                       size="small"
@@ -2194,18 +2237,75 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                         },
                         {
                           title: '操作',
-                          width: 90,
+                          width: 170,
                           render: (_: any, v: any) => (
-                            <Button
-                              size="small"
-                              type={selectedVersionId === v.id ? 'primary' : 'default'}
-                              onClick={() => {
-                                setSelectedVersionId(v.id)
-                                setActiveTab('lines')
-                              }}
-                            >
-                              编辑
-                            </Button>
+                            <Space wrap>
+                              <Button
+                                size="small"
+                                type={selectedVersionId === v.id ? 'primary' : 'default'}
+                                disabled={String(v.version_status) !== 'draft'}
+                                onClick={() => {
+                                  setSelectedVersionId(v.id)
+                                  setActiveTab('lines')
+                                }}
+                              >
+                                编辑
+                              </Button>
+                              <Button
+                                size="small"
+                                type="primary"
+                                disabled={String(v.version_status) !== 'draft'}
+                                loading={publishMutation.isPending}
+                                onClick={() => {
+                                  const published = (filteredVersions as any[]).find(
+                                    (x) => String(x.version_kind) === 'standard' && String(x.version_status) === 'published',
+                                  )
+                                  if (published && String(published.id) !== String(v.id)) {
+                                    Modal.confirm({
+                                      title: '发布该版本并替换当前已发布版本？',
+                                      content: '系统将把当前已发布的标准版本归档，并发布此版本（同一模型只允许一个版本处于发布状态）。继续？',
+                                      okText: '继续发布',
+                                      cancelText: '取消',
+                                      onOk: () => {
+                                        setSelectedVersionId(v.id)
+                                        publishMutation.mutate(v.id)
+                                      },
+                                    })
+                                    return
+                                  }
+                                  setSelectedVersionId(v.id)
+                                  publishMutation.mutate(v.id)
+                                }}
+                              >
+                                发布
+                              </Button>
+                              <Button
+                                size="small"
+                                danger
+                                disabled={String(v.version_status) !== 'draft'}
+                                onClick={() => {
+                                  Modal.confirm({
+                                    title: '删除标准版本（草稿）？',
+                                    content: '仅草稿允许删除；已发布/已归档版本不允许删除。确认删除？',
+                                    okText: '删除',
+                                    okButtonProps: { danger: true },
+                                    cancelText: '取消',
+                                    onOk: async () => {
+                                      try {
+                                        await deleteProductModelVersion(v.id)
+                                        message.success('已删除版本')
+                                        await versionsQuery.refetch()
+                                        if (selectedVersionId === v.id) setSelectedVersionId(null)
+                                      } catch (err: any) {
+                                        message.error(err?.response?.data?.detail ?? '删除版本失败')
+                                      }
+                                    },
+                                  })
+                                }}
+                              >
+                                删除
+                              </Button>
+                            </Space>
                           ),
                         },
                       ]}
@@ -2218,7 +2318,12 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                 {entryContext === 'sample' ? null : (
                   <Card size="small" title="发布 / SKU 绑定">
                     <Space wrap>
-                      <Button type="primary" onClick={() => publishMutation.mutate()} loading={publishMutation.isPending} disabled={!selectedVersionId}>
+                      <Button
+                        type="primary"
+                        onClick={() => publishMutation.mutate(selectedVersionId ?? undefined)}
+                        loading={publishMutation.isPending}
+                        disabled={!selectedVersionId}
+                      >
                         发布该标准版本
                       </Button>
                       <Input

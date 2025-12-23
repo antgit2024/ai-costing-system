@@ -79,14 +79,16 @@ const CHARGING_MODE_OPTIONS: Array<{ label: string; value: ProcessChargingMode }
 ]
 
 const MEASURE_UNIT_OPTIONS = [
-  { label: '平米（㎡）', value: '㎡' },
-  { label: '米（m）', value: 'm' },
-  { label: '个（个）', value: '个' },
+  { label: '平米', value: '平米' },
+  { label: '米', value: '米' },
+  { label: '个', value: '个' },
+  { label: '套', value: '套' },
 ]
 
 const unitToChargingMode = (unit?: string | null): ProcessChargingMode => {
-  if (unit === '㎡') return 'area'
-  if (unit === 'm') return 'perimeter'
+  const u = normalizeUnit(unit)
+  if (u === '平米') return 'area'
+  if (u === '米') return 'perimeter'
   return 'count'
 }
 
@@ -159,7 +161,7 @@ const ProcessesPage = () => {
       cost_type?: ProcessCostType
       base_minutes?: number
       unit_minutes?: number
-      measure_unit?: '㎡' | 'm' | '个'
+      measure_unit?: '平米' | '米' | '个' | '套'
       rate_per_minute?: number
       piece_rate?: number
       standard_time_minutes?: number
@@ -172,6 +174,16 @@ const ProcessesPage = () => {
     queryFn: () => fetchProcesses(filters),
     placeholderData: keepPreviousData,
   })
+
+  const categoryOptions = useMemo(() => {
+    const base = new Map<string, string>()
+    for (const opt of PROCESS_CATEGORY_OPTIONS) base.set(opt.value, opt.label)
+    for (const it of listQuery.data?.items ?? []) {
+      const c = String(it.category ?? '').trim()
+      if (c) base.set(c, c)
+    }
+    return Array.from(base.entries()).map(([value, label]) => ({ value, label }))
+  }, [listQuery.data?.items])
 
   const createMutation = useMutation({
     mutationFn: (payload: ProcessCreatePayload) => createProcess(payload),
@@ -517,7 +529,8 @@ const ProcessesPage = () => {
   const statusValue = Form.useWatch('status', form) as string | undefined
   const isActive = statusValue === 'active'
   const costTypeValue = (Form.useWatch('cost_type', form) as ProcessCostType | undefined) ?? 'piece'
-  const measureUnitValue = (Form.useWatch('measure_unit', form) as '㎡' | 'm' | '个' | undefined) ?? '个'
+  const measureUnitValue =
+    (Form.useWatch('measure_unit', form) as '平米' | '米' | '个' | '套' | undefined) ?? '个'
 
   // keep unit hint stable (user can override by switching measure_unit)
   useEffect(() => {
@@ -732,7 +745,7 @@ const ProcessesPage = () => {
             name="category"
             rules={[{ required: true, message: '请选择分类' }]}
           >
-            <Select placeholder="请选择" options={PROCESS_CATEGORY_OPTIONS} showSearch optionFilterProp="label" />
+            <Select placeholder="请选择" options={categoryOptions} showSearch optionFilterProp="label" />
           </Form.Item>
 
           <Text type="secondary" style={{ display: 'block', marginTop: -8, marginBottom: 12 }}>

@@ -102,3 +102,23 @@ def get_sku_master(sku_id: str, db: Session = Depends(get_db_session)):
     return row
 
 
+@router.post("/{sku_id}/spec-preparse", response_model=schemas.SkuMasterSpecPreparseSaveResponse)
+def save_spec_preparse(
+    sku_id: str,
+    payload: schemas.SkuMasterSpecPreparseSaveRequest,
+    db: Session = Depends(get_db_session),
+):
+    try:
+        return sku_master_service.save_spec_preparse(
+            db,
+            sku_id=sku_id,
+            spec_text=payload.spec_text,
+            width_cm=payload.width_cm,
+            height_cm=payload.height_cm,
+            diameter_cm=payload.diameter_cm,
+            requested_by=payload.requested_by,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+

@@ -1323,6 +1323,13 @@ export interface SkuMaster {
   erp_tokens?: string[]
   last_shipment_spec_text?: string | null
   last_shipment_spec_hash?: string | null
+  preparse_spec_text?: string | null
+  preparse_spec_hash?: string | null
+  preparse_parser_version?: string | null
+  preparse_dimensions?: Record<string, unknown>
+  preparse_tokens?: string[]
+  preparse_saved_at?: string | null
+  preparse_saved_by?: string | null
   spec_mismatch?: boolean
   spec_mismatch_at?: string | null
   source_updated_at?: string | null

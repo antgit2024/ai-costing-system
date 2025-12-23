@@ -1,10 +1,10 @@
-import { Alert, Card, Col, Descriptions, Input, Row, Select, Space, Table, Tag, Typography } from 'antd'
+import { Alert, Button, Card, Col, Descriptions, Input, InputNumber, Row, Select, Space, Table, Tag, Typography, message } from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { useEffect, useMemo, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery } from '@tanstack/react-query'
 
-import { fetchSkuMaster, parseSpec } from '@/services/planner'
+import { fetchSkuMaster, parseSpec, saveSkuMasterSpecPreparse } from '@/services/planner'
 import type { SkuMaster, SpecParseResponse } from '@/types/planner'
 
 const { Title, Text } = Typography
@@ -52,6 +52,9 @@ export default function SkuSpecMatchingPage() {
   const [activeSku, setActiveSku] = useState<SkuMaster | null>(null)
   const [specTextDraft, setSpecTextDraft] = useState<string>('')
   const [specParsed, setSpecParsed] = useState<SpecParseResponse | null>(null)
+  const [manualWidthCm, setManualWidthCm] = useState<number | null>(null)
+  const [manualHeightCm, setManualHeightCm] = useState<number | null>(null)
+  const [manualDiameterCm, setManualDiameterCm] = useState<number | null>(null)
 
   useEffect(() => {
     try {
@@ -120,6 +123,9 @@ export default function SkuSpecMatchingPage() {
     // 切换行时：默认用“发货规格”优先，其次用 ERP 规格，并清空手工覆写
     setSpecTextDraft('')
     setSpecParsed(null)
+    setManualWidthCm(null)
+    setManualHeightCm(null)
+    setManualDiameterCm(null)
   }, [activeSku?.id])
 
   useEffect(() => {
@@ -127,6 +133,43 @@ export default function SkuSpecMatchingPage() {
     parseMutation.mutate(effectiveSpecText)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveSpecText])
+
+  const savePreparseMutation = useMutation({
+    mutationFn: async () => {
+      if (!activeSku?.id) throw new Error('请先选择一条SKU')
+      const baseDims = specParsed || ({} as any)
+      const width = manualWidthCm != null ? manualWidthCm : baseDims?.width_cm ?? null
+      const height = manualHeightCm != null ? manualHeightCm : baseDims?.height_cm ?? null
+      const dia = manualDiameterCm != null ? manualDiameterCm : baseDims?.diameter_cm ?? null
+      return saveSkuMasterSpecPreparse(activeSku.id, {
+        spec_text: effectiveSpecText,
+        width_cm: width as any,
+        height_cm: height as any,
+        diameter_cm: dia as any,
+        requested_by: null,
+      })
+    },
+    onSuccess: (res) => {
+      message.success('已保存为预解析缓存（用于加速/预填，不影响发货快照口径）')
+      // 本地刷新选中行的展示（避免必须手动刷新列表）
+      setActiveSku((prev) =>
+        prev
+          ? ({
+              ...prev,
+              preparse_spec_hash: res.preparse_spec_hash,
+              preparse_dimensions: res.preparse_dimensions,
+              preparse_tokens: res.preparse_tokens,
+              preparse_saved_at: res.preparse_saved_at ?? null,
+              preparse_saved_by: res.preparse_saved_by ?? null,
+            } as any)
+          : prev,
+      )
+      listQuery.refetch()
+    },
+    onError: (err: any) => {
+      message.error(err?.response?.data?.detail ?? err?.message ?? '保存失败')
+    },
+  })
 
   const columns: ColumnsType<SkuMaster> = useMemo(
     () => [
@@ -216,6 +259,10 @@ export default function SkuSpecMatchingPage() {
                     {activeSku.bound_model_code ? <Tag color="blue">{activeSku.bound_model_code}</Tag> : null}
                     {activeSku.bound_model_name ? <span>{activeSku.bound_model_name}</span> : null}
                   </Space>
+                  <Space wrap>
+                    <Tag color="purple">模式：人工审核</Tag>
+                    {activeSku.preparse_spec_hash ? <Tag color="geekblue">已保存预解析</Tag> : <Tag>未保存</Tag>}
+                  </Space>
                   <Text type="secondary">用于解析的规格文本（可手工覆写调试）：</Text>
                   <Input.TextArea
                     rows={4}
@@ -223,6 +270,35 @@ export default function SkuSpecMatchingPage() {
                     onChange={(e) => setSpecTextDraft(e.target.value)}
                     placeholder="优先发货规格，其次网店规格；你也可以在这里粘贴一段规格文本进行解析"
                   />
+                  <Space wrap>
+                    <span style={{ color: '#666' }}>人工校对：</span>
+                    <InputNumber
+                      addonBefore="宽cm"
+                      value={manualWidthCm}
+                      onChange={(v) => setManualWidthCm(typeof v === 'number' ? v : null)}
+                      placeholder={specParsed?.width_cm != null ? String(specParsed.width_cm) : '—'}
+                    />
+                    <InputNumber
+                      addonBefore="高cm"
+                      value={manualHeightCm}
+                      onChange={(v) => setManualHeightCm(typeof v === 'number' ? v : null)}
+                      placeholder={specParsed?.height_cm != null ? String(specParsed.height_cm) : '—'}
+                    />
+                    <InputNumber
+                      addonBefore="直径cm"
+                      value={manualDiameterCm}
+                      onChange={(v) => setManualDiameterCm(typeof v === 'number' ? v : null)}
+                      placeholder={specParsed?.diameter_cm != null ? String(specParsed.diameter_cm) : '—'}
+                    />
+                    <Button
+                      type="primary"
+                      loading={savePreparseMutation.isPending}
+                      onClick={() => savePreparseMutation.mutate()}
+                      disabled={!effectiveSpecText || !activeSku?.id}
+                    >
+                      保存预解析
+                    </Button>
+                  </Space>
                   <Alert
                     type="info"
                     showIcon
@@ -237,6 +313,9 @@ export default function SkuSpecMatchingPage() {
                     <Descriptions.Item label="周长(m)">{specParsed?.perimeter_m ?? '-'}</Descriptions.Item>
                     <Descriptions.Item label="tokens数">{(specParsed?.tokens ?? []).length}</Descriptions.Item>
                   </Descriptions>
+                  {activeSku.preparse_saved_at ? (
+                    <Text type="secondary">预解析保存时间：{formatTime(activeSku.preparse_saved_at)}</Text>
+                  ) : null}
                   <Card size="small" title="解析 tokens（原始分段）" style={{ marginTop: 8 }}>
                     <div style={{ whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.2 }}>
                       {(specParsed?.tokens ?? []).slice(0, 50).map((t, idx) => (

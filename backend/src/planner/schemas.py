@@ -1799,6 +1799,14 @@ class SkuMasterRead(BaseModel):
     erp_tokens: List[str] = Field(default_factory=list)
     last_shipment_spec_text: Optional[str] = None
     last_shipment_spec_hash: Optional[str] = None
+    # Pre-parse cache / manual audit (stored in metadata_json; for acceleration & preview only)
+    preparse_spec_text: Optional[str] = None
+    preparse_spec_hash: Optional[str] = None
+    preparse_parser_version: Optional[str] = None
+    preparse_dimensions: Dict[str, Any] = Field(default_factory=dict)
+    preparse_tokens: List[str] = Field(default_factory=list)
+    preparse_saved_at: Optional[str] = None
+    preparse_saved_by: Optional[str] = None
     spec_mismatch: bool = False
     spec_mismatch_at: Optional[str] = None
     source_updated_at: Optional[datetime] = None
@@ -1816,6 +1824,27 @@ class PaginatedSkuMasterResponse(BaseModel):
     page: int
     page_size: int
     items: List[SkuMasterRead]
+
+
+class SkuMasterSpecPreparseSaveRequest(BaseModel):
+    spec_text: str
+    # Optional manual overrides (cm); if omitted, use parser outputs.
+    width_cm: Optional[Decimal] = None
+    height_cm: Optional[Decimal] = None
+    diameter_cm: Optional[Decimal] = None
+    requested_by: Optional[str] = None
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class SkuMasterSpecPreparseSaveResponse(BaseModel):
+    sku_id: str
+    preparse_spec_hash: str
+    preparse_dimensions: Dict[str, Any] = Field(default_factory=dict)
+    preparse_tokens: List[str] = Field(default_factory=list)
+    preparse_saved_at: Optional[str] = None
+    preparse_saved_by: Optional[str] = None
 
 
 class SkuMasterImportResponse(BaseModel):

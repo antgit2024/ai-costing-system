@@ -1029,6 +1029,27 @@ export const autoBindSkuMastersExecute = async (payload: {
   return response.data
 }
 
+export const saveSkuMasterSpecPreparse = async (
+  skuId: string,
+  payload: {
+    spec_text: string
+    width_cm?: string | number | null
+    height_cm?: string | number | null
+    diameter_cm?: string | number | null
+    requested_by?: string | null
+  },
+): Promise<{
+  sku_id: string
+  preparse_spec_hash: string
+  preparse_dimensions: Record<string, unknown>
+  preparse_tokens: string[]
+  preparse_saved_at?: string | null
+  preparse_saved_by?: string | null
+}> => {
+  const response = await plannerClient.post(`/sku-master/${skuId}/spec-preparse`, payload)
+  return response.data
+}
+
 export const validateProductModelRecognitionKeywords = async (
   modelId: string,
   payload: { keywords: string[] },

@@ -590,8 +590,101 @@ def _attach_parsed_fields(rows: List[models.SkuMaster]) -> None:
         r.model_code_hint = meta.get("model_code_hint_shipment") or meta.get("model_code_hint_erp")
         r.last_shipment_spec_text = meta.get("last_shipment_spec_text")
         r.last_shipment_spec_hash = meta.get("last_shipment_spec_hash")
+        r.preparse_spec_text = meta.get("preparse_spec_text")
+        r.preparse_spec_hash = meta.get("preparse_spec_hash")
+        r.preparse_parser_version = meta.get("preparse_parser_version")
+        r.preparse_dimensions = meta.get("preparse_dimensions") or {}
+        r.preparse_tokens = meta.get("preparse_tokens") or []
+        r.preparse_saved_at = meta.get("preparse_saved_at")
+        r.preparse_saved_by = meta.get("preparse_saved_by")
         r.spec_mismatch = bool(meta.get("spec_mismatch"))
         r.spec_mismatch_at = meta.get("spec_mismatch_at")
+
+
+def save_spec_preparse(
+    db: Session,
+    *,
+    sku_id: str,
+    spec_text: str,
+    width_cm: Any = None,
+    height_cm: Any = None,
+    diameter_cm: Any = None,
+    requested_by: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Persist a "pre-parse cache / manual audit" result into sku_master.metadata_json.
+    This is for acceleration & preview only; shipment BOM generation MUST still re-parse on each import.
+    """
+    row = db.get(models.SkuMaster, sku_id)
+    if not row or row.is_archived:
+        raise ValueError("SKU master not found")
+    text = (spec_text or "").strip()
+    if not text:
+        raise ValueError("spec_text 不能为空")
+
+    # Upsert SpecParseSnapshot (for cross-reference & audit)
+    spec_hash = _sha1_text(text)
+    existing = db.query(models.SpecParseSnapshot).filter(models.SpecParseSnapshot.spec_hash == spec_hash).first()
+    if not existing:
+        parsed0 = spec_parser_service.parse_spec(text)
+        dimensions0 = {
+            "width_cm": parsed0.get("width_cm"),
+            "height_cm": parsed0.get("height_cm"),
+            "diameter_cm": parsed0.get("diameter_cm"),
+            "area_m2": parsed0.get("area_m2"),
+            "perimeter_m": parsed0.get("perimeter_m"),
+        }
+        snap = models.SpecParseSnapshot(
+            spec_hash=spec_hash,
+            spec_text=text,
+            tokens_json=list(parsed0.get("tokens") or []),
+            dimensions_json=_json_safe(dimensions0),
+            parser_version=PARSER_VERSION,
+            parse_json=_json_safe(parsed0),
+        )
+        db.add(snap)
+        db.flush()
+
+    # Save cache to sku_master.metadata_json, allowing manual overrides
+    parsed = spec_parser_service.parse_spec(text)
+    dims = {
+        "width_cm": parsed.get("width_cm"),
+        "height_cm": parsed.get("height_cm"),
+        "diameter_cm": parsed.get("diameter_cm"),
+        "area_m2": parsed.get("area_m2"),
+        "perimeter_m": parsed.get("perimeter_m"),
+    }
+    if width_cm not in (None, ""):
+        dims["width_cm"] = width_cm
+    if height_cm not in (None, ""):
+        dims["height_cm"] = height_cm
+    if diameter_cm not in (None, ""):
+        dims["diameter_cm"] = diameter_cm
+
+    meta = dict(row.metadata_json or {})
+    meta.update(
+        {
+            "preparse_spec_text": text,
+            "preparse_spec_hash": spec_hash,
+            "preparse_parser_version": PARSER_VERSION,
+            "preparse_dimensions": _json_safe(dims),
+            "preparse_tokens": list(parsed.get("tokens") or []),
+            "preparse_saved_at": _utcnow().isoformat(),
+            "preparse_saved_by": (requested_by or meta.get("requested_by") or None),
+        }
+    )
+    row.metadata_json = meta
+    db.commit()
+    db.refresh(row)
+
+    return {
+        "sku_id": row.id,
+        "preparse_spec_hash": spec_hash,
+        "preparse_dimensions": meta.get("preparse_dimensions") or {},
+        "preparse_tokens": meta.get("preparse_tokens") or [],
+        "preparse_saved_at": meta.get("preparse_saved_at"),
+        "preparse_saved_by": meta.get("preparse_saved_by"),
+    }
 
 
 def list_published_standard_model_candidates(

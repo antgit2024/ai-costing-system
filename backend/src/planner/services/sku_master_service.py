@@ -788,15 +788,8 @@ def auto_bind_preview(db: Session, *, limit: int, scan_limit: int = 50000) -> Di
         meta = r.metadata_json or {}
         # Prefer latest shipment spec when present; otherwise fallback to ERP spec_text.
         spec_for_match = meta.get("last_shipment_spec_text") or r.spec_text
-        # For keyword recognition, also allow matching against product_name/product_code
-        # (many channels put product type keywords in title instead of spec text).
-        match_text = " ".join(
-            [
-                str(spec_for_match or ""),
-                str(getattr(r, "product_name", None) or ""),
-                str(getattr(r, "product_code", None) or ""),
-            ]
-        )
+        # Keyword recognition is STRICT: only match against spec_text (prefer latest shipment spec).
+        match_text = str(spec_for_match or "")
         hint = meta.get("model_code_hint_shipment") or meta.get("model_code_hint_erp")
         if not hint:
             # Fallback: compute from current spec_text (so older imported rows can still be auto-bound)

@@ -1,16 +1,21 @@
 import { useMemo, useState } from 'react'
-import { Button, Card, Input, Space, Table, Tag } from 'antd'
+import { Button, Card, Col, Input, Modal, Row, Space, Table, Tag, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useQuery } from '@tanstack/react-query'
 
-import { fetchProductModels } from '@/services/planner'
+import { createProductModel, fetchProductModels } from '@/services/planner'
 import type { ProductModel } from '@/types/planner'
 import ProductModelEditorDrawer from '@/components/costing/ProductModelEditorDrawer'
+
+const { Title, Text } = Typography
 
 export default function SampleModelsPage() {
   const [search, setSearch] = useState('')
   const [editorOpen, setEditorOpen] = useState(false)
   const [editingModelId, setEditingModelId] = useState<string | null>(null)
+  const [creating, setCreating] = useState(false)
+  const [createModalOpen, setCreateModalOpen] = useState(false)
+  const [createName, setCreateName] = useState<string>('未命名打样模型')
 
   const params = useMemo(
     () => ({
@@ -51,30 +56,103 @@ export default function SampleModelsPage() {
     },
   ]
 
-  return (
-    <Space direction="vertical" size={12} style={{ width: '100%' }}>
-      <Card size="small" title="打样模型">
-        <Space wrap>
-          <Input.Search
-            allowClear
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            onSearch={() => listQuery.refetch()}
-            placeholder="搜索总编码 / 名称"
-            style={{ width: 360 }}
-          />
-        </Space>
-      </Card>
+  const handleCreate = async () => {
+    if (creating) return
+    const name = String(createName || '').trim()
+    if (!name) {
+      message.warning('请输入模型名称')
+      return
+    }
+    setCreating(true)
+    try {
+      const created = await createProductModel({
+        model_name: name,
+        metadata_json: { created_from: 'ui', entry_context: 'sample' },
+      })
+      message.success(`已创建：${created.model_code}`)
+      setCreateModalOpen(false)
+      setEditingModelId(created.id)
+      setEditorOpen(true)
+      await listQuery.refetch()
+    } catch (err: any) {
+      message.error(err?.response?.data?.detail ?? '新建打样模型失败')
+    } finally {
+      setCreating(false)
+    }
+  }
 
-      <Card>
-        <Table
-          rowKey="id"
-          loading={listQuery.isLoading}
-          dataSource={(listQuery.data as any)?.items ?? []}
-          columns={columns}
-          pagination={false}
-        />
-      </Card>
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+        <div>
+          <Title level={3} style={{ marginBottom: 4 }}>
+            打样模型
+          </Title>
+          <Text type="secondary">用于打样版本管理，并可从打样版本推导生成标准版本。</Text>
+        </div>
+      </div>
+
+      <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+        <Col xs={24} lg={12}>
+          <Card size="small" title="筛选">
+            <Space wrap>
+              <Input.Search
+                allowClear
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                onSearch={() => listQuery.refetch()}
+                placeholder="搜索总编码 / 名称"
+                style={{ width: 360 }}
+              />
+            </Space>
+          </Card>
+        </Col>
+        <Col xs={24} lg={12}>
+          <Card size="small" title="操作">
+            <Space wrap>
+              <Button type="primary" onClick={() => setCreateModalOpen(true)}>
+                新建打样模型
+              </Button>
+              <Button onClick={() => listQuery.refetch()}>刷新</Button>
+            </Space>
+          </Card>
+        </Col>
+
+        <Col span={24}>
+          <Card>
+            <Table
+              rowKey="id"
+              loading={listQuery.isLoading}
+              dataSource={(listQuery.data as any)?.items ?? []}
+              columns={columns}
+              pagination={false}
+              scroll={{ x: 1100 }}
+            />
+          </Card>
+        </Col>
+      </Row>
+
+      <Modal
+        title="新建打样模型"
+        open={createModalOpen}
+        okText="创建并进入"
+        cancelText="取消"
+        confirmLoading={creating}
+        onOk={handleCreate}
+        onCancel={() => {
+          if (creating) return
+          setCreateModalOpen(false)
+        }}
+      >
+        <Space direction="vertical" style={{ width: '100%' }}>
+          <Input
+            value={createName}
+            onChange={(e) => setCreateName(e.target.value)}
+            placeholder="模型名称（必填）"
+          />
+          <Text type="secondary">创建后会自动生成一个草稿打样版本，进入抽屉继续配置物料/工序。</Text>
+        </Space>
+      </Modal>
 
       <ProductModelEditorDrawer
         open={editorOpen}
@@ -82,7 +160,7 @@ export default function SampleModelsPage() {
         entryContext="sample"
         modelId={editingModelId}
       />
-    </Space>
+    </div>
   )
 }
 

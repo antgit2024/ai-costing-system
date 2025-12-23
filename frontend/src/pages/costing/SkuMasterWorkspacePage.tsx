@@ -74,7 +74,6 @@ const SkuMasterWorkspacePage = () => {
     }
   })
   const [search, setSearch] = useState<string>('')
-  const [specKeyword] = useState<string>('') // 兼容占位：旧的“规格关键字”筛选已升级为布尔筛选
   const [includeTerms, setIncludeTerms] = useState<string>('')
   const [excludeTerms, setExcludeTerms] = useState<string>('')
   const [matchScope, setMatchScope] = useState<'spec' | 'name'>('spec')
@@ -112,7 +111,19 @@ const SkuMasterWorkspacePage = () => {
   }, [listTab])
 
   const listQuery = useQuery({
-    queryKey: ['sku-master', 'list', listTab, page, pageSize, search, channel, matchStatus],
+    queryKey: [
+      'sku-master',
+      'list',
+      listTab,
+      page,
+      pageSize,
+      search,
+      channel,
+      matchStatus,
+      includeTerms,
+      excludeTerms,
+      matchScope,
+    ],
     queryFn: () =>
       fetchSkuMaster({
         page,
@@ -140,15 +151,49 @@ const SkuMasterWorkspacePage = () => {
         // 用于表格展示“匹配模型（预览）”
       })) as any[]
     : listQuery.data?.items ?? []
-  const total = autoCandidatesOnly ? (autoPreviewCandidates?.length ?? 0) : listQuery.data?.total ?? 0
+  const _splitTerms = (s: string) =>
+    (s || '')
+      .split(/\s+/g)
+      .map((x) => x.trim())
+      .filter(Boolean)
 
   const filteredItems = useMemo(() => {
-    // 后端已做 include/exclude/scope 过滤；这里只保留“候选视图”的快速本地过滤（可选）
-    const kw = (specKeyword || '').trim()
     let rows = items
-    if (kw) rows = rows.filter((x) => (x.spec_text ?? '').includes(kw))
+
+    // 普通列表：全部交给后端（避免分页“空页”）
+    if (!autoCandidatesOnly) return rows
+
+    // 候选视图：做本地快速筛选（输入即生效）
+    const q = (search || '').trim()
+    if (q) {
+      rows = rows.filter((x) => {
+        const barcode = String(x.erp_sku_barcode || '')
+        const spec = String(x.spec_text || '')
+        const ch = String(x.channel || '')
+        return barcode.includes(q) || spec.includes(q) || ch.includes(q)
+      })
+    }
+
+    const inc = _splitTerms(includeTerms)
+    if (inc.length) {
+      rows = rows.filter((x) => {
+        const spec = String(x.spec_text || '')
+        return inc.every((t) => spec.includes(t))
+      })
+    }
+
+    const exc = _splitTerms(excludeTerms)
+    if (exc.length) {
+      rows = rows.filter((x) => {
+        const spec = String(x.spec_text || '')
+        return exc.every((t) => !spec.includes(t))
+      })
+    }
+
     return rows
-  }, [items, specKeyword])
+  }, [autoCandidatesOnly, items, search, includeTerms, excludeTerms])
+
+  const total = autoCandidatesOnly ? filteredItems.length : listQuery.data?.total ?? 0
 
   const channelOptions = useMemo(() => {
     const set = new Set<string>()
@@ -568,25 +613,30 @@ const SkuMasterWorkspacePage = () => {
                 ) : null}
                 <Input
                   style={{ width: 260 }}
-                  placeholder="候选筛选：条码/商品名/编码"
+                  placeholder={autoCandidatesOnly ? '候选筛选（本地）：条码/规格/渠道' : '候选筛选：条码/商品名/编码'}
                   value={search}
                   onChange={(e) => {
                     setSearch(e.target.value)
                     setPage(1)
                   }}
-                  disabled={autoCandidatesOnly}
                 />
                 <Input
                   style={{ width: 220 }}
                   placeholder="包含关键词（AND，多词空格分隔）"
                   value={includeTerms}
-                  onChange={(e) => setIncludeTerms(e.target.value)}
+                  onChange={(e) => {
+                    setIncludeTerms(e.target.value)
+                    setPage(1)
+                  }}
                 />
                 <Input
                   style={{ width: 200 }}
                   placeholder="排除关键词（AND NOT）"
                   value={excludeTerms}
-                  onChange={(e) => setExcludeTerms(e.target.value)}
+                  onChange={(e) => {
+                    setExcludeTerms(e.target.value)
+                    setPage(1)
+                  }}
                 />
                 <Select
                   style={{ width: 170 }}
@@ -596,6 +646,7 @@ const SkuMasterWorkspacePage = () => {
                     { label: '商品规格', value: 'spec' },
                     { label: '商品名称', value: 'name' },
                   ]}
+                  disabled={autoCandidatesOnly}
                 />
                 <Select
                   allowClear

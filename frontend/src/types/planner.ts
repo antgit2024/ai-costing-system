@@ -1364,6 +1364,8 @@ export interface SkuMasterBindByModelResponse {
 export interface SkuMasterAutoBindPreviewItem {
   sku_master_id: string
   erp_sku_barcode: string
+  channel?: string | null
+  spec_text?: string | null
   model_code_hint: string
   model_id: string
   model_code: string

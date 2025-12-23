@@ -31,8 +31,7 @@ import {
   fetchSkuMasterDetail,
   importSkuMasterXlsx,
 } from '@/services/planner'
-import type { PublishedStandardModelCandidate, SkuMaster } from '@/types/planner'
-import type { SkuMasterAutoBindPreviewItem } from '@/types/planner'
+import type { PublishedStandardModelCandidate, SkuMaster, SkuMasterAutoBindPreviewItem } from '@/types/planner'
 
 const { Title, Text } = Typography
 
@@ -94,7 +93,6 @@ const SkuMasterWorkspacePage = () => {
   const [selectedModelId, setSelectedModelId] = useState<string | undefined>(undefined)
   const [autoPreviewText, setAutoPreviewText] = useState<string>('')
   const [autoPreviewCandidates, setAutoPreviewCandidates] = useState<SkuMasterAutoBindPreviewItem[]>([])
-  const [autoCandidateIdSet, setAutoCandidateIdSet] = useState<Set<string>>(new Set())
   const [autoCandidatesOnly, setAutoCandidatesOnly] = useState(false)
 
   useEffect(() => {
@@ -123,19 +121,29 @@ const SkuMasterWorkspacePage = () => {
         spec_mismatch: listTab === 'mismatch' ? true : undefined,
       }),
     placeholderData: keepPreviousData,
+    enabled: !autoCandidatesOnly, // 命中候选视图时不依赖服务端分页列表
   })
 
-  const items = listQuery.data?.items ?? []
-  const total = listQuery.data?.total ?? 0
+  const items = autoCandidatesOnly
+    ? autoPreviewCandidates.map((x) => ({
+        id: x.sku_master_id,
+        erp_sku_barcode: x.erp_sku_barcode,
+        channel: x.channel ?? null,
+        spec_text: x.spec_text ?? null,
+        // 预览候选本身就是未绑定
+        active_model_version_id: null,
+        // 用于表格展示“匹配模型（预览）”
+      })) as any[]
+    : listQuery.data?.items ?? []
+  const total = autoCandidatesOnly ? (autoPreviewCandidates?.length ?? 0) : listQuery.data?.total ?? 0
 
   const filteredItems = useMemo(() => {
     const kw = specKeyword.trim()
     let rows = items
     if (kw) rows = rows.filter((x) => (x.spec_text ?? '').includes(kw))
     // 注意：unbound/bound/mismatch 已下沉到后端过滤，这里仅保留“命中候选视图”和关键词过滤
-    if (autoCandidatesOnly && autoCandidateIdSet.size > 0) rows = rows.filter((x) => autoCandidateIdSet.has(x.id))
     return rows
-  }, [items, specKeyword, listTab, autoCandidatesOnly, autoCandidateIdSet])
+  }, [items, specKeyword, listTab])
 
   const channelOptions = useMemo(() => {
     const set = new Set<string>()
@@ -351,12 +359,11 @@ const SkuMasterWorkspacePage = () => {
       const cand = (res.items ?? []) as SkuMasterAutoBindPreviewItem[]
       setAutoPreviewCandidates(cand)
       const idSet = new Set(cand.map((x) => x.sku_master_id))
-      setAutoCandidateIdSet(idSet)
       setAutoCandidatesOnly(true)
       setListTab('unbound')
       // 让右侧尽量展示“命中候选”（200条）
       setPage(1)
-      setPageSize(200)
+      setPageSize(100)
       setSelectedRowKeys(Array.from(idSet))
       message.success('已生成预览')
     },
@@ -381,8 +388,6 @@ const SkuMasterWorkspacePage = () => {
       )
       const cand = (res.preview?.items ?? []) as SkuMasterAutoBindPreviewItem[]
       setAutoPreviewCandidates(cand)
-      const idSet = new Set(cand.map((x) => x.sku_master_id))
-      setAutoCandidateIdSet(idSet)
       // 执行完后：跳到“已绑定”列表（便于看到刚绑定的记录），并重置分页避免出现空白第一页
       setAutoCandidatesOnly(false)
       setSelectedRowKeys([])
@@ -488,10 +493,10 @@ const SkuMasterWorkspacePage = () => {
                             block
                             onClick={() => {
                               setAutoCandidatesOnly(false)
-                              setAutoCandidateIdSet(new Set())
                               setAutoPreviewCandidates([])
                               setSelectedRowKeys([])
-                              setPageSize(DEFAULT_PAGE_SIZE)
+                              // 恢复用户偏好分页（已持久化）
+                              setPage(1)
                               message.info('已退出“命中候选”视图')
                             }}
                           >

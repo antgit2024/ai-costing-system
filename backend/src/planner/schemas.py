@@ -1859,6 +1859,8 @@ class SkuMasterAutoBindPreviewRequest(BaseModel):
 class SkuMasterAutoBindPreviewItem(BaseModel):
     sku_master_id: str
     erp_sku_barcode: str
+    channel: Optional[str] = None
+    spec_text: Optional[str] = None
     model_code_hint: str
     model_id: str
     model_code: str

@@ -814,6 +814,8 @@ def auto_bind_preview(db: Session, *, limit: int) -> Dict[str, Any]:
             {
                 "sku_master_id": r.id,
                 "erp_sku_barcode": sku,
+                "channel": r.channel,
+                "spec_text": spec_for_match,
                 "model_code_hint": hint,
                 "model_id": model.id,
                 "model_code": model.model_code,

@@ -556,7 +556,9 @@ def update_virtual_material(
         vm.category = payload.category
     if payload.status is not None:
         vm.status = payload.status
-    meta = vm.metadata_json or {}
+    # IMPORTANT: SQLAlchemy JSON column does not reliably detect in-place mutations.
+    # Always deep-copy into a new object before updating, so changes are persisted.
+    meta = json.loads(json.dumps(vm.metadata_json or {}, ensure_ascii=False))
     if payload.metadata is not None:
         meta.update(payload.metadata or {})
     if payload.virtual_kind is not None:

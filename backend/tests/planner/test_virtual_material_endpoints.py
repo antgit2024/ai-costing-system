@@ -79,3 +79,37 @@ def test_virtual_material_bindings_reject_inactive_material(client: TestClient, 
     assert "inactive" in bind_resp.json()["detail"].lower()
 
 
+def test_virtual_material_update_persists_virtual_kind_in_metadata(client: TestClient):
+    # Create VM as kit
+    vm_resp = client.post(
+        f"{API_PREFIX}/virtual-materials",
+        json={
+            "virtual_code": "VM-KIND-001",
+            "name": "Kind VM",
+            "virtual_kind": "kit",
+            "unit": "套",
+            "status": "draft",
+            "metadata_json": {},
+        },
+    )
+    assert vm_resp.status_code == 201, vm_resp.text
+    vm_id = vm_resp.json()["id"]
+
+    # Switch to recipe: backend stores virtual_kind in metadata_json.virtual_kind
+    patch_resp = client.patch(
+        f"{API_PREFIX}/virtual-materials/{vm_id}",
+        json={
+            "virtual_kind": "recipe",
+            "unit": "平米",
+            "metadata_json": {"note": "switch-to-recipe"},
+        },
+    )
+    assert patch_resp.status_code == 200, patch_resp.text
+    assert patch_resp.json()["virtual_kind"] == "recipe"
+
+    # Reload: must remain recipe (regression for JSON in-place mutation not persisted)
+    get_resp = client.get(f"{API_PREFIX}/virtual-materials/{vm_id}")
+    assert get_resp.status_code == 200, get_resp.text
+    assert get_resp.json()["virtual_kind"] == "recipe"
+
+

@@ -212,14 +212,17 @@ const SkuMasterWorkspacePage = () => {
     {
       title: '商品规格（网店）',
       dataIndex: 'spec_text',
-      width: 220,
-      ellipsis: true,
-      render: (v) => safeString(v) || '-',
+      width: 560,
+      ellipsis: false,
+      render: (v) => {
+        const s = safeString(v) || '-'
+        return <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{s}</span>
+      },
     },
     // “模型提示”对业务侧噪声较大：已移到详情抽屉；列表仅展示“已绑定模型(名称)”或“预览匹配模型”
     ...(autoCandidatesOnly
       ? [
-          {
+    {
             title: '匹配模型（预览）',
             dataIndex: 'id',
             width: 240,
@@ -516,31 +519,31 @@ const SkuMasterWorkspacePage = () => {
 
             <Card size="small" title="导入（可选）">
               <Space direction="vertical" style={{ width: '100%' }}>
-                <Space wrap>
-                  <Upload
-                    accept=".xlsx"
-                    beforeUpload={(file) => {
-                      setUploadFile(file as File)
-                      return false
-                    }}
-                    fileList={uploadFile ? ([{ uid: '1', name: uploadFile.name }] as any) : []}
+            <Space wrap>
+              <Upload
+                accept=".xlsx"
+                beforeUpload={(file) => {
+                  setUploadFile(file as File)
+                  return false
+                }}
+                fileList={uploadFile ? ([{ uid: '1', name: uploadFile.name }] as any) : []}
                     onRemove={() => setUploadFile(null)}
-                    maxCount={1}
-                  >
+                maxCount={1}
+              >
                     <Button>选择xlsx</Button>
-                  </Upload>
-                  <Input
+              </Upload>
+              <Input
                     style={{ width: 180 }}
                     placeholder="requested_by"
-                    value={requestedBy}
-                    onChange={(e) => setRequestedBy(e.target.value)}
-                  />
+                value={requestedBy}
+                onChange={(e) => setRequestedBy(e.target.value)}
+              />
                 </Space>
                 <Button type="primary" block loading={uploading} onClick={handleImport}>
                   导入SKU主档
-                </Button>
-              </Space>
-            </Card>
+              </Button>
+            </Space>
+          </Card>
           </Space>
         </Col>
 

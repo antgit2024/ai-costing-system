@@ -66,6 +66,7 @@ import {
   syncProductModelVersionFromModules,
   updateProductModel,
   updateProductModelVersionLines,
+  validateProductModelRecognitionKeywords,
   fetchVirtualMaterial,
   fetchVirtualMaterials,
 } from '@/services/planner'
@@ -266,6 +267,14 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   const navigate = useNavigate()
 
   const [activeTab, setActiveTab] = useState<'basic' | 'versions' | 'lines'>('lines')
+  // 标准模型：型号识别规则（用于 SKU 自动绑定模型）
+  const [recognitionDraftKeywords, setRecognitionDraftKeywords] = useState<string[]>([])
+  const [recognitionNewKeyword, setRecognitionNewKeyword] = useState<string>('')
+  const [recognitionValidateResult, setRecognitionValidateResult] = useState<
+    { ok: boolean; normalized_keywords: string[]; conflicts: Record<string, string> } | null
+  >(null)
+  const [recognitionSaving, setRecognitionSaving] = useState(false)
+  const [recognitionValidating, setRecognitionValidating] = useState(false)
   const [versions, setVersions] = useState<ProductModelVersionRead[]>([])
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null)
 
@@ -401,6 +410,16 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     queryFn: () => fetchProductModel(modelId as string),
     enabled: open && !!modelId,
   })
+
+  useEffect(() => {
+    if (entryContext !== 'standard') return
+    if (!modelQuery.data) return
+    const meta = ((modelQuery.data as any)?.metadata_json ?? {}) as any
+    const kws = Array.isArray(meta.recognition_keywords) ? meta.recognition_keywords.map((x: any) => String(x)) : []
+    setRecognitionDraftKeywords(kws)
+    setRecognitionValidateResult(null)
+    setRecognitionNewKeyword('')
+  }, [entryContext, modelQuery.data])
 
   const versionsQuery = useQuery({
     queryKey: ['productModelVersions', modelId],
@@ -2381,28 +2400,135 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                         例：OZU（丝圈地垫）可配置关键词：丝圈、丝圈地垫。交易规格包含“丝圈地垫”时即可命中 OZU 模型。
                       </Text>
                       <div style={{ marginTop: 12 }}>
-                        <Form layout="vertical">
-                          <Form.Item label="识别关键词（全局唯一）">
-                            <Select
-                              mode="tags"
-                              style={{ width: '100%' }}
-                              placeholder="输入关键词后回车；建议从具体到泛化，例如：丝圈地垫、丝圈"
-                              value={(((modelQuery.data as any)?.metadata_json ?? {}) as any)?.recognition_keywords ?? []}
-                              onChange={async (vals) => {
-                                const m = modelQuery.data as any
-                                const meta = { ...(m?.metadata_json ?? {}) }
-                                meta.recognition_keywords = vals
-                                try {
-                                  await updateProductModel(String(m?.id), { metadata_json: meta })
-                                  message.success('已保存型号识别关键词')
-                                  await queryClient.invalidateQueries({ queryKey: ['product-model', String(m?.id)] })
-                                } catch (e: any) {
-                                  message.error(e?.message || '保存失败（可能关键词冲突）')
-                                }
-                              }}
-                            />
-                          </Form.Item>
-                        </Form>
+                        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                          <Card size="small" title="关键词维护（列表式）">
+                            <Space wrap style={{ width: '100%' }}>
+                              <Input
+                                style={{ width: 320 }}
+                                value={recognitionNewKeyword}
+                                onChange={(e) => setRecognitionNewKeyword(e.target.value)}
+                                placeholder="输入关键词，例如：丝圈地垫 / 丝圈"
+                                onPressEnter={() => {
+                                  const v = recognitionNewKeyword.trim()
+                                  if (!v) return
+                                  setRecognitionDraftKeywords((prev) => [...prev, v])
+                                  setRecognitionNewKeyword('')
+                                  setRecognitionValidateResult(null)
+                                }}
+                              />
+                              <Button
+                                onClick={() => {
+                                  const v = recognitionNewKeyword.trim()
+                                  if (!v) return
+                                  setRecognitionDraftKeywords((prev) => [...prev, v])
+                                  setRecognitionNewKeyword('')
+                                  setRecognitionValidateResult(null)
+                                }}
+                              >
+                                添加
+                              </Button>
+                              <Button
+                                onClick={async () => {
+                                  const m = modelQuery.data as any
+                                  if (!m?.id) return
+                                  setRecognitionValidating(true)
+                                  try {
+                                    const res = await validateProductModelRecognitionKeywords(String(m.id), {
+                                      keywords: recognitionDraftKeywords,
+                                    })
+                                    setRecognitionValidateResult(res as any)
+                                    // 回填规范化后的关键词（去空格/去重/大写）
+                                    setRecognitionDraftKeywords(res.normalized_keywords ?? [])
+                                    message.success(res.ok ? '校验通过' : '校验未通过（存在冲突）')
+                                  } catch (e: any) {
+                                    message.error(e?.response?.data?.detail ?? e?.message ?? '校验失败')
+                                  } finally {
+                                    setRecognitionValidating(false)
+                                  }
+                                }}
+                                loading={recognitionValidating}
+                              >
+                                校验
+                              </Button>
+                              <Button
+                                type="primary"
+                                onClick={async () => {
+                                  const m = modelQuery.data as any
+                                  if (!m?.id) return
+                                  setRecognitionSaving(true)
+                                  try {
+                                    const meta = { ...(m?.metadata_json ?? {}) }
+                                    meta.recognition_keywords = recognitionDraftKeywords
+                                    await updateProductModel(String(m.id), { metadata_json: meta })
+                                    message.success('已保存')
+                                    await queryClient.invalidateQueries({ queryKey: ['product-model', String(m.id)] })
+                                  } catch (e: any) {
+                                    message.error(e?.response?.data?.detail ?? e?.message ?? '保存失败')
+                                  } finally {
+                                    setRecognitionSaving(false)
+                                  }
+                                }}
+                                loading={recognitionSaving}
+                              >
+                                保存
+                              </Button>
+                            </Space>
+
+                            {recognitionValidateResult ? (
+                              <div style={{ marginTop: 12 }}>
+                                {recognitionValidateResult.ok ? (
+                                  <Alert type="success" showIcon message="校验通过：关键词在已发布标准模型集合内唯一" />
+                                ) : (
+                                  <Alert
+                                    type="error"
+                                    showIcon
+                                    message="校验失败：关键词冲突（需全局唯一）"
+                                    description={
+                                      <div>
+                                        {Object.entries(recognitionValidateResult.conflicts ?? {}).map(([k, other]) => (
+                                          <div key={k}>
+                                            <Text strong>{k}</Text> 已被模型 <Text code>{other}</Text> 使用
+                                          </div>
+                                        ))}
+                                      </div>
+                                    }
+                                  />
+                                )}
+                              </div>
+                            ) : null}
+
+                            <div style={{ marginTop: 12 }}>
+                              <Table
+                                size="small"
+                                rowKey={(r) => r.keyword}
+                                pagination={false}
+                                dataSource={recognitionDraftKeywords.map((k) => ({ keyword: k }))}
+                                columns={[
+                                  { title: '关键词', dataIndex: 'keyword' },
+                                  {
+                                    title: '操作',
+                                    width: 120,
+                                    render: (_: any, r: any) => (
+                                      <Button
+                                        size="small"
+                                        danger
+                                        onClick={() => {
+                                          setRecognitionDraftKeywords((prev) => prev.filter((x) => x !== r.keyword))
+                                          setRecognitionValidateResult(null)
+                                        }}
+                                      >
+                                        删除
+                                      </Button>
+                                    ),
+                                  },
+                                ]}
+                              />
+                            </div>
+                          </Card>
+                          <Text type="secondary">
+                            提示：同一模型内允许“包含关系”（如：丝圈地垫 ⊃ 丝圈），匹配时系统会优先使用更长更具体的关键词；但跨模型必须唯一，否则自动绑定会产生歧义。
+                          </Text>
+                        </Space>
                       </div>
                     </Card>
                   ),

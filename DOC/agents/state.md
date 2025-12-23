@@ -1,6 +1,6 @@
 ## 当前状态（崩了也能继续）
 
-- **最近校对（北京时间 GMT+8）**：2025-12-23 19:10（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
+- **最近校对（北京时间 GMT+8）**：2025-12-23 19:35（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **分支**：`backup/20251214-1535`
 
 - **本轮闭环产物（Planner-Optimization / 方案评审稿）**：
@@ -188,6 +188,13 @@
   - 自动链路：`sku-master auto-bind preview/execute` 优先按关键词命中模型，其次才用 `model_code_hint` 兜底
   - 验收命令：
     - Backend：`cd backend && . venv/bin/activate && pytest tests/planner/test_sku_master_binding_workbench_mvp.py -q`
+    - Frontend：`npm -C frontend run build`
+
+- **补充迭代（已完成）：型号识别规则 UI 列表化（新增/删除/校验/保存）**：
+  - 交互：新增关键词→列表展示→可删除；提供“校验”按钮（不落库）与“保存”按钮（落库）
+  - 后端：新增校验接口 `POST /api/planner/product-models/{id}/recognition/validate`
+  - 验收命令：
+    - Backend：`cd backend && . venv/bin/activate && pytest tests/planner/test_product_model_recognition_validate.py -q`
     - Frontend：`npm -C frontend run build`
     - 命中率/字段齐全（MVP）：在页面按“当前页”聚合展示
   - 本轮验收命令（必须）：`npm -C frontend run build`（已通过）

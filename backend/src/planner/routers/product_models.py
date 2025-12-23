@@ -328,6 +328,24 @@ def update_product_model(model_id: str, payload: schemas.ProductModelUpdateReque
     return _serialize_model(db, model)
 
 
+@router.post("/{model_id}/recognition/validate", response_model=schemas.RecognitionKeywordsValidateResponse)
+def validate_model_recognition_keywords(
+    model_id: str,
+    payload: schemas.RecognitionKeywordsValidateRequest,
+    db: Session = Depends(get_db),
+):
+    model = _get_model_or_404(model_id, db)
+    meta = model.metadata_json or {}
+    # merge draft keywords into current metadata for normalization rules
+    meta2 = dict(meta)
+    meta2["recognition_keywords"] = list(payload.keywords or [])
+    normalized = product_model_service._extract_recognition_keywords(meta2)  # noqa: SLF001
+    conflicts = product_model_service._validate_recognition_keywords_uniqueness(  # noqa: SLF001
+        db, current_model_id=model.id, keywords=normalized
+    )
+    return {"ok": not bool(conflicts), "normalized_keywords": normalized, "conflicts": conflicts}
+
+
 @router.post("/{model_id}/activate", response_model=schemas.ProductModelRead)
 def activate_product_model(model_id: str, db: Session = Depends(get_db)):
     model = _get_model_or_404(model_id, db)

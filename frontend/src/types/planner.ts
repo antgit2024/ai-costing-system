@@ -1387,3 +1387,9 @@ export interface SkuMasterAutoBindExecuteResponse {
   errors: Array<Record<string, unknown>>
 }
 
+export interface RecognitionKeywordsValidateResponse {
+  ok: boolean
+  normalized_keywords: string[]
+  conflicts: Record<string, string>
+}
+

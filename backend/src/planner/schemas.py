@@ -1885,3 +1885,13 @@ class SkuMasterAutoBindExecuteResponse(BaseModel):
     bound_count: int
     skipped_already_bound: int
     errors: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class RecognitionKeywordsValidateRequest(BaseModel):
+    keywords: List[str] = Field(default_factory=list)
+
+
+class RecognitionKeywordsValidateResponse(BaseModel):
+    ok: bool
+    normalized_keywords: List[str] = Field(default_factory=list)
+    conflicts: Dict[str, str] = Field(default_factory=dict)

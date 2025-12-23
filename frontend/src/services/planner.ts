@@ -104,6 +104,7 @@ import type {
   SkuMasterBindByModelResponse,
   SkuMasterAutoBindPreviewResponse,
   SkuMasterAutoBindExecuteResponse,
+  RecognitionKeywordsValidateResponse,
 } from '@/types/planner'
 
 const resolvePlannerApiBase = (raw?: string): string => {
@@ -1018,6 +1019,14 @@ export const autoBindSkuMastersExecute = async (payload: {
   requested_by?: string
 } = {}): Promise<SkuMasterAutoBindExecuteResponse> => {
   const response = await plannerClient.post('/sku-master/auto-bind/execute', payload)
+  return response.data
+}
+
+export const validateProductModelRecognitionKeywords = async (
+  modelId: string,
+  payload: { keywords: string[] },
+): Promise<RecognitionKeywordsValidateResponse> => {
+  const response = await plannerClient.post(`/product-models/${modelId}/recognition/validate`, payload)
   return response.data
 }
 

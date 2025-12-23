@@ -32,6 +32,7 @@ import {
   importSkuMasterXlsx,
 } from '@/services/planner'
 import type { PublishedStandardModelCandidate, SkuMaster } from '@/types/planner'
+import type { SkuMasterAutoBindPreviewItem } from '@/types/planner'
 
 const { Title, Text } = Typography
 
@@ -82,6 +83,9 @@ const SkuMasterWorkspacePage = () => {
   const [modelSearch, setModelSearch] = useState<string>('')
   const [selectedModelId, setSelectedModelId] = useState<string | undefined>(undefined)
   const [autoPreviewText, setAutoPreviewText] = useState<string>('')
+  const [autoPreviewCandidates, setAutoPreviewCandidates] = useState<SkuMasterAutoBindPreviewItem[]>([])
+  const [autoCandidateIdSet, setAutoCandidateIdSet] = useState<Set<string>>(new Set())
+  const [autoCandidatesOnly, setAutoCandidatesOnly] = useState(false)
 
   const listQuery = useQuery({
     queryKey: ['sku-master', 'list', page, pageSize, search, channel, matchStatus],
@@ -105,8 +109,9 @@ const SkuMasterWorkspacePage = () => {
     if (kw) rows = rows.filter((x) => (x.spec_text ?? '').includes(kw))
     if (listTab === 'unbound') rows = rows.filter((x) => !isFilled(x.active_model_version_id as any))
     if (listTab === 'mismatch') rows = rows.filter((x) => !!x.spec_mismatch)
+    if (autoCandidatesOnly && autoCandidateIdSet.size > 0) rows = rows.filter((x) => autoCandidateIdSet.has(x.id))
     return rows
-  }, [items, specKeyword, listTab])
+  }, [items, specKeyword, listTab, autoCandidatesOnly, autoCandidateIdSet])
 
   const channelOptions = useMemo(() => {
     const set = new Set<string>()
@@ -194,6 +199,27 @@ const SkuMasterWorkspacePage = () => {
       ellipsis: true,
       render: (v) => safeString(v) || '-',
     },
+    ...(autoCandidatesOnly
+      ? [
+          {
+            title: '匹配模型（预览）',
+            dataIndex: 'id',
+            width: 240,
+            render: (_: any, record: any) => {
+              const hit = autoPreviewCandidates.find((x) => x.sku_master_id === record.id)
+              if (!hit) return '-'
+              const label = `${hit.model_code} ${hit.model_name}${hit.version_label ? `（${hit.version_label}）` : ''}`
+              return (
+                <Space size={6}>
+                  <Tag color="blue">{label}</Tag>
+                  {hit.match_method ? <Tag>{hit.match_method}</Tag> : null}
+                  {hit.matched_keyword ? <Tag color="purple">{hit.matched_keyword}</Tag> : null}
+                </Space>
+              )
+            },
+          } as any,
+        ]
+      : []),
     {
       title: '对接状态（本系统）',
       dataIndex: 'active_model_version_id',
@@ -299,13 +325,30 @@ const SkuMasterWorkspacePage = () => {
     mutationFn: () => autoBindSkuMastersPreview({ limit: 200 }),
     onSuccess: (res: any) => {
       setAutoPreviewText(`未绑定≈${res.total_unbound} 可自动=${res.candidates}（展示${(res.items ?? []).length}）`)
+      const cand = (res.items ?? []) as SkuMasterAutoBindPreviewItem[]
+      setAutoPreviewCandidates(cand)
+      const idSet = new Set(cand.map((x) => x.sku_master_id))
+      setAutoCandidateIdSet(idSet)
+      setAutoCandidatesOnly(true)
+      setListTab('unbound')
+      // 让右侧尽量展示“命中候选”（200条）
+      setPage(1)
+      setPageSize(200)
+      setSelectedRowKeys(Array.from(idSet))
       message.success('已生成预览')
     },
     onError: (e: any) => message.error(e?.message || '预览失败'),
   })
 
   const autoExecuteMutation = useMutation({
-    mutationFn: () => autoBindSkuMastersExecute({ limit: 200, requested_by: requestedBy || undefined }),
+    mutationFn: () => {
+      if (!selectedRowKeys.length) throw new Error('请先在右侧列表勾选要绑定的记录（可先点预览自动全选）')
+      // 仅绑定“预览命中候选”中被勾选的
+      const allow = new Set(autoPreviewCandidates.map((x) => x.sku_master_id))
+      const ids = selectedRowKeys.filter((id) => allow.has(id))
+      if (!ids.length) throw new Error('当前勾选项不在“自动命中候选”中，不会执行绑定')
+      return autoBindSkuMastersExecute({ limit: 200, requested_by: requestedBy || undefined, sku_master_ids: ids })
+    },
     onSuccess: async (res: any) => {
       message.success(
         `自动绑定完成：bound=${res.bound_count} skipped(bound)=${res.skipped_already_bound} errors=${(res.errors ?? []).length}`,
@@ -313,6 +356,11 @@ const SkuMasterWorkspacePage = () => {
       setAutoPreviewText(
         `未绑定≈${res.preview?.total_unbound} 可自动=${res.preview?.candidates}（展示${(res.preview?.items ?? []).length}）`,
       )
+      const cand = (res.preview?.items ?? []) as SkuMasterAutoBindPreviewItem[]
+      setAutoPreviewCandidates(cand)
+      const idSet = new Set(cand.map((x) => x.sku_master_id))
+      setAutoCandidateIdSet(idSet)
+      setSelectedRowKeys(Array.from(idSet))
       await queryClient.invalidateQueries({ queryKey: ['sku-master', 'list'] })
     },
     onError: (e: any) => message.error(e?.message || '执行失败'),
@@ -407,6 +455,21 @@ const SkuMasterWorkspacePage = () => {
                           执行自动绑定
                         </Button>
                         {autoPreviewText ? <Alert type="info" showIcon message={autoPreviewText} /> : null}
+                        {autoCandidatesOnly ? (
+                          <Button
+                            block
+                            onClick={() => {
+                              setAutoCandidatesOnly(false)
+                              setAutoCandidateIdSet(new Set())
+                              setAutoPreviewCandidates([])
+                              setSelectedRowKeys([])
+                              setPageSize(DEFAULT_PAGE_SIZE)
+                              message.info('已退出“命中候选”视图')
+                            }}
+                          >
+                            退出命中候选视图
+                          </Button>
+                        ) : null}
                       </Space>
                     ),
                   },

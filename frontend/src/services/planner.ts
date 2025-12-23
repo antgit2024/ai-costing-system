@@ -1017,6 +1017,7 @@ export const autoBindSkuMastersPreview = async (payload: {
 export const autoBindSkuMastersExecute = async (payload: {
   limit?: number
   requested_by?: string
+  sku_master_ids?: string[]
 } = {}): Promise<SkuMasterAutoBindExecuteResponse> => {
   const response = await plannerClient.post('/sku-master/auto-bind/execute', payload)
   return response.data

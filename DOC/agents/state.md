@@ -1,6 +1,6 @@
 ## 当前状态（崩了也能继续）
 
-- **最近校对（北京时间 GMT+8）**：2025-12-23 19:35（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
+- **最近校对（北京时间 GMT+8）**：2025-12-23 20:05（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **分支**：`backup/20251214-1535`
 
 - **本轮闭环产物（Planner-Optimization / 方案评审稿）**：
@@ -177,6 +177,14 @@
   - 自动绑定（确定性规则，带预览/执行）：
     - 仅对 `model_code_hint` 唯一命中“已发布标准模型”的未绑定 SKU 自动绑定
     - 后端接口：`POST /api/planner/sku-master/auto-bind/preview`、`POST /api/planner/sku-master/auto-bind/execute`
+  - 验收命令：
+    - Backend：`cd backend && . venv/bin/activate && pytest tests/planner/test_sku_master_binding_workbench_mvp.py -q`
+    - Frontend：`npm -C frontend run build`
+
+- **补充迭代（已完成）：自动绑定预览→右侧候选列表→默认全选→仅绑定选中**：
+  - 预览后：右侧列表自动切换为“命中候选视图”（只显示命中候选并默认全选），新增列展示匹配模型/命中词/命中方式
+  - 执行：仅对“命中候选”中被勾选的记录执行绑定；未勾选则不绑定
+  - 后端：`POST /api/planner/sku-master/auto-bind/execute` 支持 `sku_master_ids` 入参
   - 验收命令：
     - Backend：`cd backend && . venv/bin/activate && pytest tests/planner/test_sku_master_binding_workbench_mvp.py -q`
     - Frontend：`npm -C frontend run build`

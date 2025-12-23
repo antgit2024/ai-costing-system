@@ -54,7 +54,10 @@ def test_manual_bind_by_model_and_auto_bind_preview_execute(client, db_session):
     assert any(it["erp_sku_barcode"] == "BC-200" and it["model_code"] == "A1B" for it in prev_body["items"])
 
     # Execute should bind BC-200
-    exe = client.post("/api/planner/sku-master/auto-bind/execute", json={"limit": 50, "requested_by": "tester"})
+    exe = client.post(
+        "/api/planner/sku-master/auto-bind/execute",
+        json={"limit": 50, "requested_by": "tester", "sku_master_ids": [sm2.id]},
+    )
     assert exe.status_code == 200, exe.text
     m2 = (
         db_session.query(models.SkuModelVersionMapping)

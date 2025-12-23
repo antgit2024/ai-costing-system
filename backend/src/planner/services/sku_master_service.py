@@ -811,9 +811,15 @@ def auto_bind_preview(db: Session, *, limit: int) -> Dict[str, Any]:
     return {"total_unbound": total_unbound, "candidates": candidates, "items": items}
 
 
-def auto_bind_execute(db: Session, *, limit: int, requested_by: Optional[str]) -> Dict[str, Any]:
+def auto_bind_execute(
+    db: Session, *, limit: int, requested_by: Optional[str], sku_master_ids: Optional[List[str]] = None
+) -> Dict[str, Any]:
     preview = auto_bind_preview(db, limit=limit)
-    items = list(preview.get("items") or [])
+    items_all = list(preview.get("items") or [])
+    selected_set = {str(x) for x in (sku_master_ids or []) if str(x).strip()}
+    items = items_all
+    if selected_set:
+        items = [it for it in items_all if str(it.get("sku_master_id") or "") in selected_set]
     bound_count = 0
     skipped_already_bound = 0
     errors: List[Dict[str, Any]] = []
@@ -834,8 +840,9 @@ def auto_bind_execute(db: Session, *, limit: int, requested_by: Optional[str]) -
                 metadata={
                     "requested_by": requested_by,
                     "sku_master_id": it.get("sku_master_id"),
-                    "binding_method": "auto_model_code_hint",
+                    "binding_method": it.get("match_method") or "auto",
                     "model_code_hint": it.get("model_code_hint"),
+                    "matched_keyword": it.get("matched_keyword"),
                     "skip_prefix_check": True,
                 },
             )

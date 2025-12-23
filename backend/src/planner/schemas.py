@@ -1877,6 +1877,7 @@ class SkuMasterAutoBindPreviewResponse(BaseModel):
 
 class SkuMasterAutoBindExecuteRequest(BaseModel):
     limit: int = Field(200, ge=1, le=2000)
+    sku_master_ids: List[str] = Field(default_factory=list)
     requested_by: Optional[str] = None
 
 

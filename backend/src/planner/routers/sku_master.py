@@ -75,7 +75,12 @@ def auto_bind_preview(payload: schemas.SkuMasterAutoBindPreviewRequest, db: Sess
 
 @router.post("/auto-bind/execute", response_model=schemas.SkuMasterAutoBindExecuteResponse)
 def auto_bind_execute(payload: schemas.SkuMasterAutoBindExecuteRequest, db: Session = Depends(get_db_session)):
-    return sku_master_service.auto_bind_execute(db, limit=payload.limit, requested_by=payload.requested_by)
+    return sku_master_service.auto_bind_execute(
+        db,
+        limit=payload.limit,
+        requested_by=payload.requested_by,
+        sku_master_ids=payload.sku_master_ids,
+    )
 
 
 @router.get("/{sku_id}", response_model=SkuMasterRead)

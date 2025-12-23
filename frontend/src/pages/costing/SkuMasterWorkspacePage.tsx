@@ -156,6 +156,7 @@ const SkuMasterWorkspacePage = () => {
       .split(/\s+/g)
       .map((x) => x.trim())
       .filter(Boolean)
+  const _normText = (s: any) => String(s ?? '').replace(/\s+/g, '').toUpperCase()
 
   const filteredItems = useMemo(() => {
     let rows = items
@@ -164,12 +165,13 @@ const SkuMasterWorkspacePage = () => {
     if (!autoCandidatesOnly) return rows
 
     // 候选视图：做本地快速筛选（输入即生效）
-    const q = (search || '').trim()
+    const qRaw = (search || '').trim()
+    const q = _normText(qRaw)
     if (q) {
       rows = rows.filter((x) => {
-        const barcode = String(x.erp_sku_barcode || '')
-        const spec = String(x.spec_text || '')
-        const ch = String(x.channel || '')
+        const barcode = _normText(x.erp_sku_barcode)
+        const spec = _normText(x.spec_text)
+        const ch = _normText(x.channel)
         return barcode.includes(q) || spec.includes(q) || ch.includes(q)
       })
     }
@@ -177,16 +179,16 @@ const SkuMasterWorkspacePage = () => {
     const inc = _splitTerms(includeTerms)
     if (inc.length) {
       rows = rows.filter((x) => {
-        const spec = String(x.spec_text || '')
-        return inc.every((t) => spec.includes(t))
+        const spec = _normText(x.spec_text)
+        return inc.every((t) => spec.includes(_normText(t)))
       })
     }
 
     const exc = _splitTerms(excludeTerms)
     if (exc.length) {
       rows = rows.filter((x) => {
-        const spec = String(x.spec_text || '')
-        return exc.every((t) => !spec.includes(t))
+        const spec = _normText(x.spec_text)
+        return exc.every((t) => !spec.includes(_normText(t)))
       })
     }
 

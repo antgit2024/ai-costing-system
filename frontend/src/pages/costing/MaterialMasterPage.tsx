@@ -671,7 +671,7 @@ const MaterialMasterPage = () => {
       title: '物料编码',
       dataIndex: 'material_code',
       key: 'material_code',
-      width: 160,
+      width: 80,
       render: (code: string) => (
         <Space>
           <Text code>{code}</Text>
@@ -945,9 +945,6 @@ const MaterialMasterPage = () => {
                 <Descriptions.Item label="计算方式">
                   {getCalculationMethodLabel(editingMaterial.calculation_method)}
                 </Descriptions.Item>
-                <Descriptions.Item label="入库单价/单位">
-                  {formatCurrency(editingMaterial.unit_price, editingMaterial.currency)} / {purchaseUnitLabel}
-                </Descriptions.Item>
                 <Descriptions.Item label="采购单价/单位">
                   {yidaPurchaseUnitPrice != null
                     ? `${formatCurrency(yidaPurchaseUnitPrice, editingMaterial.currency)} / ${yidaPurchaseUnit || '-'}`
@@ -956,9 +953,24 @@ const MaterialMasterPage = () => {
                 <Descriptions.Item label="采购→入库 换算">
                   {purchaseToInboundFormula || '-'}
                 </Descriptions.Item>
+                <Descriptions.Item label="入库单价/单位">
+                  {formatCurrency(editingMaterial.unit_price, editingMaterial.currency)} / {purchaseUnitLabel}
+                </Descriptions.Item>
+                <Descriptions.Item label="入库→BOM 换算">
+                  {livePurchaseToBom != null && Number.isFinite(Number(livePurchaseToBom)) ? (
+                    <Text>
+                      {formatDecimalDisplay(livePurchaseToBom)}（1 {purchaseUnitLabel} = ? {bomUnitLabel}）
+                    </Text>
+                  ) : (
+                    '-'
+                  )}
+                </Descriptions.Item>
                 <Descriptions.Item label="BOM单价/单位">
                   {formatCurrency(deriveBomUnitPrice(editingMaterial), editingMaterial.currency)} /{' '}
                   {getBomUnitLabel(editingMaterial.unit) ?? editingMaterial.unit ?? '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="采购规格">
+                  {purchaseSpec || '-'}
                 </Descriptions.Item>
                 <Descriptions.Item label="备注">{editingMaterial.bom_notes || '-'}</Descriptions.Item>
                 <Descriptions.Item label="最近同步">

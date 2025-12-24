@@ -656,21 +656,41 @@ const MaterialMasterPage = () => {
     }
   }
 
-  const confirmSyncMaterials = () => {
+  type MaterialSyncMode = 'full' | 'new_only' | 'core_fields'
+
+  const confirmSyncMaterials = (mode: MaterialSyncMode) => {
+    const title =
+      mode === 'new_only'
+        ? '同步新物料（仅新增）'
+        : mode === 'core_fields'
+          ? '更新原价格（关键字段）'
+          : '全量同步宜搭物料'
+    const content =
+      mode === 'new_only'
+        ? '将扫描宜搭表单，仅把“本地不存在的物料”新增进来；已存在的物料不会被更新。确认继续？'
+        : mode === 'core_fields'
+          ? '将扫描宜搭表单，仅更新关键字段：入库单价/单位、采购单价/单位、采购→入库换算（公式）、采购规格；不会覆盖其它主数据字段。确认继续？'
+          : '将立即触发 YiDa 全量同步任务（新增+更新多数字段，raw_form_data 会全量覆盖），可能需要几分钟完成。确认继续？'
     Modal.confirm({
-      title: '手动同步宜搭物料',
-      content: '将立即触发 YiDa 同步任务，该操作可能需要几分钟完成，确认继续？',
+      title,
+      content,
       okText: '立即同步',
       cancelText: '取消',
-      onOk: handleSyncMaterials,
+      onOk: () => handleSyncMaterials(mode),
     })
   }
 
-  const handleSyncMaterials = async () => {
+  const handleSyncMaterials = async (mode: MaterialSyncMode) => {
     setSyncing(true)
     try {
-      await triggerMaterialSync()
-      message.success('已触发宜搭物料同步')
+      await triggerMaterialSync({ requested_by: 'material_master', mode })
+      message.success(
+        mode === 'new_only'
+          ? '已触发“同步新物料”任务'
+          : mode === 'core_fields'
+            ? '已触发“更新原价格”任务'
+            : '已触发“全量同步宜搭”任务',
+      )
       setSyncDrawerOpen(true)
       queryClient.invalidateQueries({ queryKey: ['material-sync-logs'] })
     } catch (error) {
@@ -1293,9 +1313,23 @@ const MaterialMasterPage = () => {
                 <Button
                   icon={<CloudSyncOutlined />}
                   loading={syncing}
-                  onClick={confirmSyncMaterials}
+                  onClick={() => confirmSyncMaterials('new_only')}
                 >
-                  同步宜搭
+                  同步新物料
+                </Button>
+                <Button
+                  icon={<CloudSyncOutlined />}
+                  loading={syncing}
+                  onClick={() => confirmSyncMaterials('core_fields')}
+                >
+                  更新原价格
+                </Button>
+                <Button
+                  icon={<CloudSyncOutlined />}
+                  loading={syncing}
+                  onClick={() => confirmSyncMaterials('full')}
+                >
+                  全量同步宜搭
                 </Button>
                 <Button icon={<HistoryOutlined />} onClick={() => setSyncDrawerOpen(true)}>
                   同步日志

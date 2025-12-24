@@ -411,6 +411,7 @@ export interface MaterialSyncRequest {
   config_path?: string
   dump_path?: string
   material_codes?: string[]
+  mode?: 'full' | 'new_only' | 'core_fields'
 }
 
 export const triggerMaterialSync = async (payload: MaterialSyncRequest = {}) => {

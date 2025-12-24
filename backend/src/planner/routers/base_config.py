@@ -9,7 +9,7 @@ import logging
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
@@ -41,6 +41,11 @@ class YidaMaterialSyncRequest(BaseModel):
     dry_run: bool = False
     config_path: Optional[str] = None
     dump_path: Optional[str] = None
+    # 同步模式：
+    # - full: 全量 upsert（新增+更新多数字段，raw_form_data 全量覆盖）
+    # - new_only: 仅新增新物料（已存在的物料不更新）
+    # - core_fields: 仅更新关键字段（入库/采购价格与单位、采购→入库换算、采购规格等），避免覆盖其它主数据字段
+    mode: Literal["full", "new_only", "core_fields"] = "full"
     # 可选：仅同步指定物料编码（避免每次全量几千条）
     material_codes: Optional[list[str]] = None
 
@@ -76,6 +81,7 @@ def sync_yida_materials(
         dump_path=payload.dump_path,
         payload={
             **({"dump_path": payload.dump_path} if payload.dump_path else {}),
+            **({"mode": payload.mode} if payload.mode else {}),
             **(
                 {"material_codes": [c for c in (payload.material_codes or []) if str(c).strip()]}
                 if payload.material_codes

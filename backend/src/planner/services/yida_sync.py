@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterator, Optional, Tuple
+from typing import Any, Dict, Iterator, Literal, Optional, Tuple
 
 import requests
 from sqlalchemy.orm import Session
@@ -325,6 +325,21 @@ class YidaMaterialMapper:
 class MaterialSyncService:
     """Synchronizes YiDa materials into the local materials table."""
 
+    # 仅更新“原价格/关键字段”时允许落库的宜搭字段（formData key）
+    # - 入库单位 / 入库单价
+    # - 采购单位 / 采购单价 / 采购→入库换算（公式）
+    # - 采购规格
+    #
+    # 说明：这里用 fieldId 而不是“逻辑字段名”，因为采购规格目前仅用于前端展示（从 raw_form_data 读取），未映射到本地列。
+    _CORE_FIELDS_RAW_FORM_IDS: set[str] = {
+        "selectField_lxo1y6ac",  # 入库单位
+        "numberField_lxmosz1s",  # 入库单价
+        "selectField_mjjgsdlp",  # 采购单位
+        "numberField_mjjgsdlr",  # 采购单价
+        "numberField_mjjgsdlq",  # 采购→入库换算（公式）
+        "textField_lxo1y6ab",  # 采购规格
+    }
+
     def __init__(self, db: Session, client: YidaFormClient):
         self.db = db
         self.client = client
@@ -337,6 +352,7 @@ class MaterialSyncService:
         dry_run: bool = False,
         dump_path: Optional[Path] = None,
         material_codes: Optional[set[str]] = None,
+        mode: Literal["full", "new_only", "core_fields"] = "full",
     ) -> MaterialSyncResult:
         result = MaterialSyncResult()
         dump_buffer: list[Any] = []
@@ -362,7 +378,7 @@ class MaterialSyncService:
                         # 仍然会遍历宜搭数据，但不会落库（直到找到目标物料）
                         continue
 
-                self._upsert_material(normalized, result)
+                self._upsert_material(normalized, result, mode=mode)
                 result.processed += 1
                 if remaining:
                     remaining.discard(normalized.material_code)
@@ -384,7 +400,13 @@ class MaterialSyncService:
             logger.exception("YiDa material sync failed")
             raise
 
-    def _upsert_material(self, data: NormalizedMaterial, result: MaterialSyncResult) -> None:
+    def _upsert_material(
+        self,
+        data: NormalizedMaterial,
+        result: MaterialSyncResult,
+        *,
+        mode: Literal["full", "new_only", "core_fields"] = "full",
+    ) -> None:
         material = (
             self.db.query(Material)
             .filter(Material.material_code == data.material_code)
@@ -415,7 +437,45 @@ class MaterialSyncService:
             )
             self.db.add(material)
             result.created += 1
+            if not data.is_active:
+                result.disabled += 1
         else:
+            if mode == "new_only":
+                # 仅新增：已存在的不更新
+                result.skipped += 1
+                return
+
+            if mode == "core_fields":
+                # 仅更新关键字段（不要覆盖其它主数据字段）
+                material.unit_price = data.unit_price
+                material.purchase_unit = data.purchase_unit
+                if data.currency:
+                    material.currency = data.currency
+
+                existing_meta = dict(material.metadata_json or {})
+                new_meta = dict(data.metadata or {})
+
+                # 关键字段：这些字段在 mapper 中会写入 metadata（来自 yida_materials.json 的 mapping）
+                for k in ("yida_purchase_unit", "yida_purchase_unit_price", "purchase_to_inbound_formula"):
+                    if k in new_meta and new_meta[k] not in (None, "", []):
+                        existing_meta[k] = new_meta[k]
+
+                # raw_form_data：只 merge 关键 fieldId，避免“部分同步”误覆盖其它字段
+                existing_raw = existing_meta.get("raw_form_data") or {}
+                if not isinstance(existing_raw, dict):
+                    existing_raw = {}
+                incoming_raw = new_meta.get("raw_form_data") or {}
+                if isinstance(incoming_raw, dict):
+                    merged_raw = dict(existing_raw)
+                    for fid in self._CORE_FIELDS_RAW_FORM_IDS:
+                        if fid in incoming_raw:
+                            merged_raw[fid] = incoming_raw.get(fid)
+                    existing_meta["raw_form_data"] = merged_raw
+
+                material.metadata_json = existing_meta
+                result.updated += 1
+                return
+
             material.material_name = data.material_name
             material.material_type = data.material_type or material.material_type
             material.category = data.category
@@ -444,8 +504,8 @@ class MaterialSyncService:
             material.metadata_json = existing_meta
             result.updated += 1
 
-        if not data.is_active:
-            result.disabled += 1
+            if not data.is_active:
+                result.disabled += 1
 
 
 @dataclass
@@ -768,6 +828,7 @@ def run_material_sync_job(job_id: str) -> None:
         client = YidaFormClient(config)
         service = MaterialSyncService(session, client)
         payload = job.payload or {}
+        mode = payload.get("mode") or "full"
         dump_value = payload.get("dump_path")
         dump_path = Path(dump_value) if dump_value else None
         codes_value = payload.get("material_codes") or []
@@ -777,6 +838,7 @@ def run_material_sync_job(job_id: str) -> None:
             dry_run=job.dry_run,
             dump_path=dump_path,
             material_codes=material_codes,
+            mode=mode,
         )
 
         job.status = "succeeded"

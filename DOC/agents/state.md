@@ -1,6 +1,6 @@
 ## 当前状态（崩了也能继续）
 
-- **最近校对（北京时间 GMT+8）**：2025-12-25 04:12（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
+- **最近校对（北京时间 GMT+8）**：2025-12-25 04:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **分支**：`backup/20251214-1535`
 
 - **本轮闭环产物（Planner-Optimization / 方案评审稿）**：
@@ -46,6 +46,15 @@
     - **补充（虚拟物料）**：替换虚拟物料时同样回填 `metadata_json.bom_unit_price`（优先用虚拟物料详情的 `bom_unit_price`；为空时按 bindings×真实物料 BOM 单价汇总推导），避免出现“VM00023 → VM00022 但 BOM 单价/单位不更新”。
   - 防回归：在关键函数旁加了“单位口径/计量方式必须匹配 normalizeUnit”的硬备注（禁止改回 `㎡/m` 作为 value）。
   - 本轮验收命令：`npm -C frontend run build`（已通过）
+
+- **本轮补充（Materials / 宜搭同步分模式 + 前端按钮拆分）**：
+  - 背景：物料页原“同步宜搭”属于全量 upsert，用户需要更安全/更快的同步方式（只拉新、只更新价格关键字段）。
+  - 后端：`POST /api/planner/base-config/materials/sync-yida` 新增 `mode`：
+    - `full`：全量同步（默认，raw_form_data 全量覆盖）
+    - `new_only`：仅新增新物料（已存在的不更新）
+    - `core_fields`：仅更新关键字段（入库单价/单位、采购单价/单位、采购→入库换算、采购规格），并且 raw_form_data 只 merge 对应字段
+  - 前端：`/costing/materials` 顶部按钮拆分为 **同步新物料 / 更新原价格 / 全量同步宜搭**（均会打开同步日志抽屉便于跟踪）
+  - 本轮验收命令：`npm -C frontend run build`（已通过）；Backend smoke：用 curl 触发 `mode=new_only/core_fields` 均可成功落库
 
 - **已确认正确版本快照（请勿覆盖）**：
   - `DOC/index/extracted/ProductModelEditorDrawer_confirmed_20251221T042643Z.tsx`

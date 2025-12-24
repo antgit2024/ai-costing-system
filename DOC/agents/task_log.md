@@ -161,6 +161,7 @@
 | 2025-12-25 | 基础信息TAB：显示本地描述 | Frontend | 用户确认：基础信息里的“备注”不一定来自成本参数“本地描述”；要求无论是否相同，都展示“本地描述”的值。 | ✅ `MaterialMasterPage.tsx`：基础信息TAB将原“备注”更名为“备注（宜搭）”，并新增一行“本地描述”（展示 `metadata_json.local_description`，来源于成本参数输入）。前端 build+部署完成，线上入口 `index-COZ5A2v7.js`。 | — |
 | 2025-12-25 | 基础信息TAB：备注（宜搭）无值隐藏 | Frontend | 用户反馈“备注（宜搭）没有值，估计是假的”，要求先隐藏。 | ✅ `MaterialMasterPage.tsx`：当 `bom_notes` 为空时不渲染“备注（宜搭）”行。前端 build+部署完成，线上入口 `index-F_75whEu.js`。 | 后续如确认宜搭字段映射无误，可恢复显示。 |
 | 2025-12-25 | 宜搭同步：启用字段接入 `is_active` | Backend | 用户询问“物料启用 radioField_lnk335sn 是否同步”；并希望列表默认仅显示启用物料（“仅启用”开关有意义）。 | ✅ 更新 `backend/config/yida_materials.json`：将 `is_active` 映射到宜搭 `radioField_lnk335sn`；`status` 不从宜搭同步，默认由 `is_active` 推导（active/inactive）。已触发一次同步 job（limit=50）验证成功。 | 前端“仅启用”开关继续保留：默认只展示启用物料（来自宜搭/本地均适用）。如需“严格只读宜搭启用状态”，再考虑禁用本地停用开关。 |
+| 2025-12-25 | 物料页：宜搭同步拆分按钮（全量/仅拉新/仅更新原价格） | Frontend+Backend | 用户问“同步宜搭到底同步什么”，并希望新增“同步新物料”“更新原价格”两个按钮减少误覆盖。 | ✅ 后端 `sync-yida` 支持 `mode=full/new_only/core_fields`；`core_fields` 只更新入库单价/单位、采购单价/单位、采购→入库换算、采购规格（raw_form_data 只 merge 对应 fieldId），`new_only` 仅新增不更新；前端 `/costing/materials` 增加 3 个按钮并分别传入 mode，原“同步宜搭”改名为“全量同步宜搭”。已 build+部署；并重启 `planner-costing.service` 生效。 | 如后续需要“只更新某个物料的原价格”，可在现有“同步宜搭(本物料)”按钮上加 mode 下拉。 |
 
 ## 调试模板
 

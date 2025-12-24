@@ -47,6 +47,32 @@ a {
   padding: 0 32px;
 }
 
+.app-header-inner {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+@keyframes taskBadgePulse {
+  0% {
+    filter: brightness(1);
+    transform: scale(1);
+  }
+  50% {
+    filter: brightness(1.15);
+    transform: scale(1.03);
+  }
+  100% {
+    filter: brightness(1);
+    transform: scale(1);
+  }
+}
+
+.task-badge-blink .ant-badge-count {
+  animation: taskBadgePulse 1.2s ease-in-out infinite;
+}
+
 .app-content {
   padding: 24px 32px 48px;
   background: #f4f6fb;

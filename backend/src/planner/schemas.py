@@ -215,6 +215,29 @@ class PlannerJobRead(BaseModel):
         orm_mode = True
 
 
+class TaskCenterItemRead(BaseModel):
+    id: str
+    # planner: planner_import_jobs; material: material_sync_jobs
+    source: str
+    job_type: str
+    status: str
+    requested_by: str
+    title: str
+    created_at: datetime
+    updated_at: datetime
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    progress_current: Optional[int] = None
+    progress_total: Optional[int] = None
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    result: Dict[str, Any] = Field(default_factory=dict)
+    error_message: Optional[str] = None
+
+
+class TaskCenterListResponse(BaseModel):
+    items: List[TaskCenterItemRead] = Field(default_factory=list)
+
+
 class MaterialSyncJobRead(BaseModel):
     id: str
     job_type: str

@@ -247,6 +247,33 @@ export const fetchPlannerJob = async (jobId: string): Promise<PlannerJob> => {
   return response.data
 }
 
+export interface TaskCenterItem {
+  id: string
+  source: 'planner' | 'material' | string
+  job_type: string
+  status: string
+  requested_by: string
+  title: string
+  created_at: string
+  updated_at: string
+  started_at?: string | null
+  finished_at?: string | null
+  progress_current?: number | null
+  progress_total?: number | null
+  payload?: Record<string, unknown>
+  result?: Record<string, unknown>
+  error_message?: string | null
+}
+
+export interface TaskCenterListResponse {
+  items: TaskCenterItem[]
+}
+
+export const fetchTaskCenter = async (params: { limit?: number } = {}): Promise<TaskCenterListResponse> => {
+  const response = await plannerClient.get('/task-center/recent', { params: sanitizeParams(params as any) })
+  return response.data
+}
+
 export const setScenarioFavorite = async (
   scenarioId: string,
   favorite: boolean,

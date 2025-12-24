@@ -1,4 +1,4 @@
-import { Layout, Menu } from 'antd'
+import { Badge, Button, Layout, Menu, Space } from 'antd'
 import AreaChartOutlined from '@ant-design/icons/lib/icons/AreaChartOutlined'
 import CalculatorOutlined from '@ant-design/icons/lib/icons/CalculatorOutlined'
 import DeploymentUnitOutlined from '@ant-design/icons/lib/icons/DeploymentUnitOutlined'
@@ -6,8 +6,12 @@ import ExperimentOutlined from '@ant-design/icons/lib/icons/ExperimentOutlined'
 import HomeOutlined from '@ant-design/icons/lib/icons/HomeOutlined'
 import UnorderedListOutlined from '@ant-design/icons/lib/icons/UnorderedListOutlined'
 import type { MenuProps } from 'antd'
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
+
+import TaskCenterDrawer from '@/components/common/TaskCenterDrawer'
+import { fetchTaskCenter } from '@/services/planner'
 
 const { Header, Sider, Content } = Layout
 
@@ -93,6 +97,22 @@ interface AppLayoutProps {
 
 const AppLayout = ({ children }: AppLayoutProps) => {
   const location = useLocation()
+  const [taskOpen, setTaskOpen] = useState(false)
+
+  const taskProbeQuery = useQuery({
+    queryKey: ['task-center-probe'],
+    queryFn: () => fetchTaskCenter({ limit: 30 }),
+    refetchInterval: (q) => {
+      const items = q.state.data?.items ?? []
+      const hasRunning = items.some((t) => ['pending', 'running', 'processing'].includes(String(t.status)))
+      return hasRunning ? 2000 : 8000
+    },
+  })
+
+  const runningCount =
+    taskProbeQuery.data?.items?.filter((t) =>
+      ['pending', 'running', 'processing'].includes(String(t.status)),
+    ).length ?? 0
 
   const selectedKeys = useMemo(() => {
     if (location.pathname.startsWith('/planner/scenario-builder')) {
@@ -141,22 +161,36 @@ const AppLayout = ({ children }: AppLayoutProps) => {
   }, [location.pathname])
 
   return (
-    <Layout className="app-layout">
-      <Sider width={240} theme="dark">
-        <div className="sidebar-logo">AI Costing</div>
-        <Menu
-          theme="dark"
-          mode="inline"
-          selectedKeys={selectedKeys}
-          items={menuItems}
-          style={{ borderInlineEnd: 0 }}
-        />
-      </Sider>
-      <Layout>
-        <Header className="app-header">Planner 控制台</Header>
-        <Content className="app-content">{children}</Content>
+    <>
+      <Layout className="app-layout">
+        <Sider width={240} theme="dark">
+          <div className="sidebar-logo">AI Costing</div>
+          <Menu
+            theme="dark"
+            mode="inline"
+            selectedKeys={selectedKeys}
+            items={menuItems}
+            style={{ borderInlineEnd: 0 }}
+          />
+        </Sider>
+        <Layout>
+          <Header className="app-header">
+            <div className="app-header-inner">
+              <div>Planner 控制台</div>
+              <Space>
+                <Badge count={runningCount} size="small" className={runningCount ? 'task-badge-blink' : undefined}>
+                  <Button icon={<UnorderedListOutlined />} onClick={() => setTaskOpen(true)}>
+                    任务列表
+                  </Button>
+                </Badge>
+              </Space>
+            </div>
+          </Header>
+          <Content className="app-content">{children}</Content>
+        </Layout>
       </Layout>
-    </Layout>
+      <TaskCenterDrawer open={taskOpen} onClose={() => setTaskOpen(false)} />
+    </>
   )
 }
 

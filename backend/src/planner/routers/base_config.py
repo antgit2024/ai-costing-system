@@ -36,6 +36,48 @@ router = APIRouter(prefix="/base-config", tags=["base-config"])
 logger = logging.getLogger(__name__)
 
 
+def _normalize_bom_unit(raw: Optional[str]) -> Optional[str]:
+    """
+    Normalize BOM unit for validation only (do NOT auto-fill).
+    IMPORTANT: do NOT use substring matching like `includes('米')` (it will mis-classify '平米').
+    """
+    if raw is None:
+        return None
+    v = str(raw).strip()
+    if not v:
+        return None
+    if v in ("平米", "㎡", "平方米", "m2", "m²", "M2"):
+        return "平米"
+    if v in ("米", "m", "M"):
+        return "米"
+    if v in ("个", "件", "张", "块", "pcs", "PCS"):
+        return "个"
+    if v == "套":
+        return "套"
+    return v
+
+
+def _validate_calc_method_unit(calc_method: Optional[str], bom_unit: Optional[str]) -> None:
+    if not calc_method or not bom_unit:
+        return
+    method = str(calc_method).strip()
+    unit = _normalize_bom_unit(bom_unit)
+    if unit is None:
+        return
+    allowed = {
+        "area": {"平米"},
+        "perimeter": {"米"},
+        "width": {"米"},
+        "height": {"米"},
+        "count": {"个", "套"},
+    }.get(method)
+    if allowed and unit not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"计算方式与BOM单位不一致：{method} 只允许 {sorted(allowed)}",
+        )
+
+
 class YidaMaterialSyncRequest(BaseModel):
     requested_by: str = Field("system", max_length=64)
     limit: Optional[int] = Field(None, gt=0, le=5000)
@@ -356,6 +398,9 @@ def update_material(
         material.conversion_purchase_to_bom = payload.conversion_purchase_to_bom
     if payload.conversion_bom_to_inventory is not None:
         material.conversion_bom_to_inventory = payload.conversion_bom_to_inventory
+
+    # Validation (backend guardrail): ensure calculation_method matches BOM unit.
+    _validate_calc_method_unit(material.calculation_method, material.unit)
 
     metadata = dict(material.metadata_json or {})
     metadata_updated = False

@@ -591,6 +591,23 @@ const MaterialMasterPage = () => {
       typeof values.is_bom_material === 'boolean'
         ? values.is_bom_material
         : getBomDisplayValue(editingMaterial)
+    // 保存校验：计量方式与 BOM 单位必须一致（避免后续算价/扣库口径错配）
+    const nextCalcMethod = (values.calculation_method ?? editingMaterial.calculation_method) as any
+    const nextBomUnit = normalizeBomUnit(values.bom_unit || normalizeBomUnit(editingMaterial.unit))
+    const allowedBomUnitsByMethod: Record<string, string[]> = {
+      area: ['平米'],
+      perimeter: ['米'],
+      width: ['米'],
+      height: ['米'],
+      // 专业做法通常会有“单位主数据表”来管理 pcs/sheet/block 等。当前系统先用“个”作为数量的规范单位。
+      count: ['个', '套'],
+    }
+    const allowed = allowedBomUnitsByMethod[String(nextCalcMethod)] || []
+    if (allowed.length && nextBomUnit && !allowed.includes(nextBomUnit)) {
+      message.error(`保存失败：计算方式“${getCalculationMethodLabel(nextCalcMethod)}”只允许 BOM 单位为：${allowed.join(' / ')}`)
+      return
+    }
+
     const payload: MaterialStatusUpdatePayload = {
       is_bom_material: nextIsBom,
       conversion_purchase_to_bom: conversionPurchase,

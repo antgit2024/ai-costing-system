@@ -223,7 +223,17 @@ const MaterialDrawer = ({ materialId, open, onClose, onUpdated }: MaterialDrawer
                     </Text>
                   </Text>
                   <Text>
-                    采购→入库 换算：<Text strong>{purchaseToInboundFormula || '-'}</Text>
+                    采购→入库 换算：
+                    <Text strong>
+                      {(() => {
+                        if (!purchaseToInboundFormula) return '-'
+                        const num = Number(purchaseToInboundFormula)
+                        const val = Number.isFinite(num) ? num : purchaseToInboundFormula
+                        const pu = yidaPurchaseUnit || '采购单位'
+                        const iu = materialData.purchase_unit || materialData.unit || '-'
+                        return `1${pu}=${val}${iu}`
+                      })()}
+                    </Text>
                   </Text>
                   {purchaseSpec && (
                     <Text>

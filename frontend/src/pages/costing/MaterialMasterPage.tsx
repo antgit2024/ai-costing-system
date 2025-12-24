@@ -34,7 +34,7 @@ import {
 } from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 import dayjs from 'dayjs'
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { MATERIAL_CATEGORIES } from '@/constants/materialCategories'
@@ -293,6 +293,7 @@ const MaterialMasterPage = () => {
   const [filtersForm] = Form.useForm()
   const [costForm] = Form.useForm()
   const lastSubmittedCostValuesRef = useRef<CostFormValues | null>(null)
+  const lastAutoBomToInventoryRef = useRef<number | null>(null)
   const [filters, setFilters] = useState(defaultFilters)
   const [pagination, setPagination] = useState({ current: 1, pageSize: 20 })
   const [syncDrawerOpen, setSyncDrawerOpen] = useState(false)
@@ -305,6 +306,40 @@ const MaterialMasterPage = () => {
   const watchedBomUnit = Form.useWatch('bom_unit', costForm)
   const watchedInventoryUnit = Form.useWatch('inventory_unit', costForm)
   const watchedConversionPurchaseToBom = Form.useWatch('conversion_purchase_to_bom', costForm)
+  const watchedConversionBomToInventory = Form.useWatch('conversion_bom_to_inventory', costForm)
+
+  useEffect(() => {
+    if (!detailDrawerOpen || !editingMaterial) {
+      return
+    }
+    const inboundUnit = editingMaterial.purchase_unit || ''
+    const inventoryUnit = (watchedInventoryUnit ?? editingMaterial.inventory_unit ?? inboundUnit) || ''
+    const convPurchase =
+      toFiniteNumber(watchedConversionPurchaseToBom) ?? parseDecimal(editingMaterial.conversion_purchase_to_bom)
+    if (!inboundUnit || !inventoryUnit || inboundUnit !== inventoryUnit) {
+      return
+    }
+    if (!convPurchase || convPurchase <= 0) {
+      return
+    }
+    const derived = Number((1 / convPurchase).toFixed(6))
+    if (!Number.isFinite(derived)) {
+      return
+    }
+    const current = toFiniteNumber(watchedConversionBomToInventory)
+    // 仅在“未填写”或仍是上一次自动值时才自动回填，避免覆盖用户手动输入
+    if (current === undefined || current === null || current === lastAutoBomToInventoryRef.current) {
+      lastAutoBomToInventoryRef.current = derived
+      costForm.setFieldsValue({ conversion_bom_to_inventory: derived })
+    }
+  }, [
+    detailDrawerOpen,
+    editingMaterial,
+    watchedInventoryUnit,
+    watchedConversionPurchaseToBom,
+    watchedConversionBomToInventory,
+    costForm,
+  ])
 
   const materialsQuery = useQuery<MaterialListResponse>({
     queryKey: ['materials', filters, pagination],
@@ -475,20 +510,20 @@ const MaterialMasterPage = () => {
     setDetailDrawerOpen(true)
     const metadata = (record.metadata_json as Record<string, any>) ?? {}
     const costingDefaults = (metadata.costing_defaults ?? {}) as Record<string, any>
-    const purchaseToInboundFormula = metadata?.purchase_to_inbound_formula
-    const purchaseToInboundNumber =
-      typeof purchaseToInboundFormula === 'number'
-        ? purchaseToInboundFormula
-        : typeof purchaseToInboundFormula === 'string' && purchaseToInboundFormula.trim()
-          ? Number(purchaseToInboundFormula)
-          : undefined
+    const convPurchase = parseDecimal(record.conversion_purchase_to_bom)
+    const inboundUnit = record.purchase_unit || ''
+    const inventoryUnit = record.inventory_unit || record.purchase_unit || ''
+    const derivedBomToInventory =
+      inboundUnit && inventoryUnit && inboundUnit === inventoryUnit && convPurchase && convPurchase > 0
+        ? Number((1 / convPurchase).toFixed(6))
+        : undefined
     costForm.setFieldsValue({
       is_bom_material: getBomDisplayValue(record),
       bom_unit: normalizeBomUnit(record.unit) ?? BOM_UNIT_OPTIONS[0].value,
       conversion_purchase_to_bom: parseDecimal(record.conversion_purchase_to_bom),
       inventory_unit: record.inventory_unit || record.purchase_unit || undefined,
       conversion_bom_to_inventory:
-        parseDecimal(record.conversion_bom_to_inventory) ?? purchaseToInboundNumber ?? undefined,
+        parseDecimal(record.conversion_bom_to_inventory) ?? derivedBomToInventory ?? undefined,
       calculation_method: record.calculation_method,
       local_description: (metadata.local_description as string) ?? '',
       fixed_quantity_alpha:
@@ -951,7 +986,18 @@ const MaterialMasterPage = () => {
                     : '-'}
                 </Descriptions.Item>
                 <Descriptions.Item label="采购→入库 换算">
-                  {purchaseToInboundFormula || '-'}
+                  {(() => {
+                    if (!purchaseToInboundFormula) return '-'
+                    const num = Number(purchaseToInboundFormula)
+                    const val = Number.isFinite(num) ? formatDecimalDisplay(num) : String(purchaseToInboundFormula)
+                    const pu = yidaPurchaseUnit || '采购单位'
+                    const iu = purchaseUnitLabel || '入库单位'
+                    return (
+                      <Text>
+                        1{pu}={val}{iu}
+                      </Text>
+                    )
+                  })()}
                 </Descriptions.Item>
                 <Descriptions.Item label="入库单价/单位">
                   {formatCurrency(editingMaterial.unit_price, editingMaterial.currency)} / {purchaseUnitLabel}
@@ -959,7 +1005,7 @@ const MaterialMasterPage = () => {
                 <Descriptions.Item label="入库→BOM 换算">
                   {livePurchaseToBom != null && Number.isFinite(Number(livePurchaseToBom)) ? (
                     <Text>
-                      {formatDecimalDisplay(livePurchaseToBom)}（1 {purchaseUnitLabel} = ? {bomUnitLabel}）
+                      1{purchaseUnitLabel}={formatDecimalDisplay(livePurchaseToBom)}{bomUnitLabel}
                     </Text>
                   ) : (
                     '-'
@@ -1092,6 +1138,26 @@ const MaterialMasterPage = () => {
                     <Form.Item
                       label={`BOM→库存换算（1 ${bomUnitLabel} = ? ${inventoryUnitDisplay}）`}
                       name="conversion_bom_to_inventory"
+                      extra={
+                        (() => {
+                          const inboundUnit = editingMaterial.purchase_unit || ''
+                          const inventoryUnit = (watchedInventoryUnit ?? editingMaterial.inventory_unit ?? inboundUnit) || ''
+                          const convPurchase =
+                            toFiniteNumber(watchedConversionPurchaseToBom) ??
+                            parseDecimal(editingMaterial.conversion_purchase_to_bom)
+                          if (!inboundUnit || !inventoryUnit || inboundUnit !== inventoryUnit) {
+                            return '提示：若库存单位=入库单位，可由“入库→BOM 换算”自动推回（取倒数）。'
+                          }
+                          if (!convPurchase || convPurchase <= 0) {
+                            return '提示：先填写“入库→BOM 换算”，系统会自动推回 BOM→库存（倒数）。'
+                          }
+                          const derived = Number((1 / convPurchase).toFixed(6))
+                          if (!Number.isFinite(derived)) {
+                            return '提示：换算值异常，无法推导。'
+                          }
+                          return `自动推导：1${bomUnitLabel}=${formatDecimalDisplay(derived, 6)}${inventoryUnit}`
+                        })()
+                      }
                       rules={[
                         { required: true, message: '请输入 BOM→库存 换算系数' },
                         positiveNumberRule('换算系数必须大于 0'),

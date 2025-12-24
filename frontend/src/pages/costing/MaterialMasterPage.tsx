@@ -878,19 +878,6 @@ const MaterialMasterPage = () => {
       },
     },
     {
-      title: '入库单价/单位',
-      key: 'unit_price',
-      width: 180,
-      render: (_, record) => (
-        <Space direction="vertical" size={0}>
-          <Text>{formatCurrency(record.unit_price, record.currency)}</Text>
-          <Text type="secondary">
-            {record.purchase_unit || record.unit || '-'}
-          </Text>
-        </Space>
-      ),
-    },
-    {
       title: '采购单价/单位',
       key: 'yida_purchase_unit_price',
       width: 180,
@@ -911,6 +898,19 @@ const MaterialMasterPage = () => {
           </Space>
         )
       },
+    },
+    {
+      title: '入库单价/单位',
+      key: 'unit_price',
+      width: 180,
+      render: (_, record) => (
+        <Space direction="vertical" size={0}>
+          <Text>{formatCurrency(record.unit_price, record.currency)}</Text>
+          <Text type="secondary">
+            {record.purchase_unit || record.unit || '-'}
+          </Text>
+        </Space>
+      ),
     },
     {
       title: 'BOM单价/单位',

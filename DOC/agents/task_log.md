@@ -168,6 +168,7 @@
 | 2025-12-25 | 任务列表增强：点击任务→详情抽屉（复制ID/跳转/结果） | Frontend | 用户确认“下一步更强：点击某条任务→打开详情（复制任务ID、跳转到对应页面、显示 result_json）”可做。 | ✅ 任务列表抽屉中点击任一任务行，将打开对应详情：Planner 任务复用 `PlannerJobDrawer`（新增 `extraActions` 支持“跳转”按钮）；物料同步/推导任务新增 `MaterialSyncJobDrawer`，支持复制任务ID、查看 payload/result_json、跳转到物料管理。 | 后续可加：从 task-center item 直接携带 payload/result 省一次详情请求；为任务增加“取消/重试”能力。 |
 | 2025-12-25 | 标准模型列表：实时核价入口 + 偏差预警列（±5%）+ 删除按钮（受限） | Frontend | 用户担心遗忘：要求在标准模型列表“操作”增加“实时核价”，列表加一列偏差，超过 ±5% 预警；并要求增加删除按钮。 | ✅ `/costing/standard-models`：新增“实时核价”按钮（默认按 1000mm×1000mm×1 调 `POST /product-models/{id}/preview`），对比“已发布标准版本”在 `version.metadata_json.ui_stats` 保存的基准价，输出偏差列；偏差绝对值≥5% 标红预警。删除按钮按后端保护规则默认禁用（存在 standard 版本时不允许删除，避免 SKU 绑定断裂）。 | 若需“已生成 standard 版本仍可删除/归档”，需单独评审后端保护规则与 SKU 绑定影响；也可改为“归档/停用”而非删除。 |
 | 2025-12-25 | 物料列表：显示采购单价/单位 | Frontend | 用户要求在物料管理列表中同时展示“采购单价/单位”（与入库单价/单位同样的两行展示）。 | ✅ `/costing/materials` 列表新增“采购单价/单位”列，读取宜搭字段 `numberField_mjjgsdlr`（采购单价）+ `selectField_mjjgsdlp`（采购单位），样式与“入库单价/单位”一致。已 build+部署。 | 若后续需要显示“采购→入库换算”，可新增第三行或 Tooltip 展示 `numberField_mjjgsdlq`。 |
+| 2025-12-25 | 物料列表：采购/入库列顺序调整 | Frontend | 用户要求将“采购单价/单位”和“入库单价/单位”两列交换位置。 | ✅ `/costing/materials` 已将“采购单价/单位”列移动到“入库单价/单位”列之前（其余列不变）。已 build+部署。 | - |
 
 ## 调试模板
 

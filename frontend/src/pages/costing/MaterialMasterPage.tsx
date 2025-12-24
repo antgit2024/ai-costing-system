@@ -512,7 +512,8 @@ const MaterialMasterPage = () => {
     const costingDefaults = (metadata.costing_defaults ?? {}) as Record<string, any>
     const convPurchase = parseDecimal(record.conversion_purchase_to_bom)
     const inboundUnit = record.purchase_unit || ''
-    const inventoryUnit = record.inventory_unit || record.purchase_unit || ''
+    // 盘点（库存）单位：按业务口径固定使用“入库单位”
+    const inventoryUnit = record.purchase_unit || ''
     const derivedBomToInventory =
       inboundUnit && inventoryUnit && inboundUnit === inventoryUnit && convPurchase && convPurchase > 0
         ? Number((1 / convPurchase).toFixed(6))
@@ -521,7 +522,7 @@ const MaterialMasterPage = () => {
       is_bom_material: getBomDisplayValue(record),
       bom_unit: normalizeBomUnit(record.unit) ?? BOM_UNIT_OPTIONS[0].value,
       conversion_purchase_to_bom: parseDecimal(record.conversion_purchase_to_bom),
-      inventory_unit: record.inventory_unit || record.purchase_unit || undefined,
+      inventory_unit: record.purchase_unit || undefined,
       conversion_bom_to_inventory:
         parseDecimal(record.conversion_bom_to_inventory) ?? derivedBomToInventory ?? undefined,
       calculation_method: record.calculation_method,
@@ -934,11 +935,6 @@ const MaterialMasterPage = () => {
       watchedBomUnit || normalizeBomUnit(editingMaterial.unit) || '㎡'
     const bomUnitLabel =
       getBomUnitLabel(normalizedBomUnitValue) ?? normalizedBomUnitValue ?? '平米'
-    const inventoryUnitLocked = Boolean(
-      ((editingMaterial.metadata_json ?? {}) as {
-        inventory_unit_from_yida?: boolean
-      })?.inventory_unit_from_yida,
-    )
     const inventoryUnitValue =
       watchedInventoryUnit ?? editingMaterial.inventory_unit ?? ''
     const inventoryUnitDisplay = inventoryUnitValue || '库存单位'
@@ -1143,29 +1139,15 @@ const MaterialMasterPage = () => {
                         positiveNumberRule('换算系数必须大于 0'),
                       ]}
                     >
-                      <InputNumber min={0.000001} step={0.0001} style={{ width: '100%' }} />
+                      <InputNumber disabled min={0.000001} step={0.0001} style={{ width: '100%' }} />
                     </Form.Item>
                   </Col>
                   <Col xs={24} md={12}>
                     <Form.Item
                       label="库存单位"
                       name="inventory_unit"
-                      rules={
-                        inventoryUnitLocked
-                          ? []
-                          : [{ required: true, message: '请输入库存单位（如 件/箱/套）' }]
-                      }
                     >
-                      <Input
-                        disabled={inventoryUnitLocked}
-                        placeholder={
-                          inventoryUnitLocked
-                            ? '来自宜搭，仅做参考'
-                            : editingMaterial.purchase_unit
-                              ? `默认：${editingMaterial.purchase_unit}`
-                              : '例如 件 / 箱 / 套'
-                        }
-                      />
+                      <Input disabled />
                     </Form.Item>
                   </Col>
                 </Row>

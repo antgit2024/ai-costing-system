@@ -905,9 +905,15 @@ const MaterialMasterPage = () => {
         : deriveBomUnitPrice(editingMaterial)
     const purchaseSpec = getFormValue(editingMaterial, 'textField_lxo1y6ab')
     const costFormula = getFormValue(editingMaterial, 'textField_m3pgyx4d')
-    const inboundUnitFromYida = getFormValue(editingMaterial, 'selectField_mjjgsdlp') || purchaseUnitLabel
-    const inboundUnitPriceFromYida = parseDecimal(getFormValue(editingMaterial, 'numberField_mjjgsdlr'))
-    const purchaseToInboundFormula = getFormValue(editingMaterial, 'numberField_mjjgsdlq')
+    const yidaPurchaseUnit =
+      ((editingMaterial.metadata_json ?? {}) as any)?.yida_purchase_unit ||
+      getFormValue(editingMaterial, 'selectField_mjjgsdlp')
+    const yidaPurchaseUnitPrice =
+      toFiniteNumber(((editingMaterial.metadata_json ?? {}) as any)?.yida_purchase_unit_price) ??
+      parseDecimal(getFormValue(editingMaterial, 'numberField_mjjgsdlr'))
+    const purchaseToInboundFormula =
+      ((editingMaterial.metadata_json ?? {}) as any)?.purchase_to_inbound_formula ||
+      getFormValue(editingMaterial, 'numberField_mjjgsdlq')
 
     return (
       <Tabs
@@ -929,7 +935,12 @@ const MaterialMasterPage = () => {
                   {getCalculationMethodLabel(editingMaterial.calculation_method)}
                 </Descriptions.Item>
                 <Descriptions.Item label="入库单价/单位">
-                  {formatCurrency(inboundUnitPriceFromYida ?? editingMaterial.unit_price, editingMaterial.currency)} / {inboundUnitFromYida || '-'}
+                  {formatCurrency(editingMaterial.unit_price, editingMaterial.currency)} / {purchaseUnitLabel}
+                </Descriptions.Item>
+                <Descriptions.Item label="采购单价/单位">
+                  {yidaPurchaseUnitPrice != null
+                    ? `${formatCurrency(yidaPurchaseUnitPrice, editingMaterial.currency)} / ${yidaPurchaseUnit || '-'}`
+                    : '-'}
                 </Descriptions.Item>
                 <Descriptions.Item label="采购转入库公式">
                   {purchaseToInboundFormula || '-'}
@@ -1024,7 +1035,7 @@ const MaterialMasterPage = () => {
                 <Row gutter={16}>
                   <Col xs={24} md={12}>
                     <Form.Item
-                      label={`入库→BOM 换算（1 ${inboundUnitFromYida || purchaseUnitLabel} = ? ${bomUnitLabel}）`}
+                      label={`入库→BOM 换算（1 ${purchaseUnitLabel} = ? ${bomUnitLabel}）`}
                       name="conversion_purchase_to_bom"
                       rules={[
                         { required: true, message: '请输入入库→BOM 换算系数' },

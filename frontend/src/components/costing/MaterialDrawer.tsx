@@ -58,17 +58,26 @@ const MaterialDrawer = ({ materialId, open, onClose, onUpdated }: MaterialDrawer
   const purchaseSpec =
     rawFormData?.textField_lxo1y6ab ?? materialMetadata?.textField_lxo1y6ab ?? ''
   const purchaseUnitPrice = materialData?.unit_price !== undefined ? Number(materialData.unit_price) : undefined
-  const inboundUnitFromYida =
-    (rawFormData?.selectField_mjjgsdlp ?? materialMetadata?.selectField_mjjgsdlp ?? materialData?.purchase_unit) || ''
-  const inboundUnitPriceFromYidaRaw = rawFormData?.numberField_mjjgsdlr ?? materialMetadata?.numberField_mjjgsdlr
-  const inboundUnitPriceFromYida =
-    inboundUnitPriceFromYidaRaw !== undefined && inboundUnitPriceFromYidaRaw !== null && String(inboundUnitPriceFromYidaRaw).trim()
-      ? Number(inboundUnitPriceFromYidaRaw)
+  const yidaPurchaseUnit =
+    (materialMetadata?.yida_purchase_unit ??
+      rawFormData?.selectField_mjjgsdlp ??
+      materialMetadata?.selectField_mjjgsdlp) ||
+    ''
+  const yidaPurchaseUnitPriceRaw =
+    materialMetadata?.yida_purchase_unit_price ??
+    rawFormData?.numberField_mjjgsdlr ??
+    materialMetadata?.numberField_mjjgsdlr
+  const yidaPurchaseUnitPrice =
+    yidaPurchaseUnitPriceRaw !== undefined && yidaPurchaseUnitPriceRaw !== null && String(yidaPurchaseUnitPriceRaw).trim()
+      ? Number(yidaPurchaseUnitPriceRaw)
       : undefined
   const purchaseToInboundFormula =
-    rawFormData?.numberField_mjjgsdlq ?? materialMetadata?.numberField_mjjgsdlq ?? ''
+    materialMetadata?.purchase_to_inbound_formula ??
+    rawFormData?.numberField_mjjgsdlq ??
+    materialMetadata?.numberField_mjjgsdlq ??
+    ''
   const computedBomUnitPrice = useMemo(() => {
-    const basePrice = inboundUnitPriceFromYida ?? purchaseUnitPrice
+    const basePrice = purchaseUnitPrice
     if (basePrice === undefined) {
       return undefined
     }
@@ -77,7 +86,7 @@ const MaterialDrawer = ({ materialId, open, onClose, onUpdated }: MaterialDrawer
       return undefined
     }
     return basePrice / conversion
-  }, [inboundUnitPriceFromYida, purchaseUnitPrice, conversionPurchaseValue])
+  }, [purchaseUnitPrice, conversionPurchaseValue])
   const bomUnitDisplay =
     bomUnitValue || materialData?.unit || materialData?.purchase_unit || '-'
 
@@ -158,8 +167,16 @@ const MaterialDrawer = ({ materialId, open, onClose, onUpdated }: MaterialDrawer
                   <Text>
                     入库单价/单位：
                     <Text strong>
-                      {formatCurrency(inboundUnitPriceFromYida ?? materialData.unit_price, materialData.currency)} /{' '}
-                      {inboundUnitFromYida || materialData.purchase_unit || materialData.unit || '-'}
+                      {formatCurrency(materialData.unit_price, materialData.currency)} /{' '}
+                      {materialData.purchase_unit || materialData.unit || '-'}
+                    </Text>
+                  </Text>
+                  <Text>
+                    采购单价/单位：
+                    <Text strong>
+                      {yidaPurchaseUnitPrice != null
+                        ? `${formatCurrency(yidaPurchaseUnitPrice, materialData.currency)} / ${yidaPurchaseUnit || '-'}`
+                        : '-'}
                     </Text>
                   </Text>
                   <Text>

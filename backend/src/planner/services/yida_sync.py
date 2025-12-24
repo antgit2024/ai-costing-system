@@ -271,6 +271,23 @@ class YidaMaterialMapper:
         if cost_formula:
             metadata["cost_formula"] = cost_formula
 
+        # 宜搭新增字段：采购单位/采购单价（仅落库到 metadata_json，避免覆盖本地入库口径字段）
+        yida_purchase_unit = _clean_str(self._get_value(form_data, "yida_purchase_unit"))
+        if yida_purchase_unit:
+            metadata["yida_purchase_unit"] = yida_purchase_unit
+        yida_purchase_unit_price_raw = self._get_value(form_data, "yida_purchase_unit_price")
+        if yida_purchase_unit_price_raw not in (None, ""):
+            metadata["yida_purchase_unit_price"] = float(
+                _to_decimal(yida_purchase_unit_price_raw, default=Decimal("0"))
+            )
+
+        # 采购转入库公式：宜搭字段（numberField_mjjgsdlq），用于入库口径解释/核对（不参与计算）
+        purchase_to_inbound_formula = _clean_str(
+            self._get_value(form_data, "purchase_to_inbound_formula")
+        )
+        if purchase_to_inbound_formula:
+            metadata["purchase_to_inbound_formula"] = purchase_to_inbound_formula
+
         normalized = NormalizedMaterial(
             material_code=material_code,
             material_name=material_name,

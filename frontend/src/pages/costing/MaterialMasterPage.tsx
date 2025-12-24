@@ -1014,7 +1014,9 @@ const MaterialMasterPage = () => {
                 <Descriptions.Item label="采购规格">
                   {purchaseSpec || '-'}
                 </Descriptions.Item>
-                <Descriptions.Item label="备注（宜搭）">{editingMaterial.bom_notes || '-'}</Descriptions.Item>
+                {editingMaterial.bom_notes ? (
+                  <Descriptions.Item label="备注（宜搭）">{editingMaterial.bom_notes}</Descriptions.Item>
+                ) : null}
                 <Descriptions.Item label="本地描述">
                   {((editingMaterial.metadata_json ?? {}) as any)?.local_description || '-'}
                 </Descriptions.Item>

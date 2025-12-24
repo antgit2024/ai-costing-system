@@ -433,8 +433,14 @@ class MaterialSyncService:
             material.source_updated_at = data.source_updated_at
             material.usage_scope = data.usage_scope
             material.bom_notes = data.bom_notes
-            existing_meta = material.metadata_json or {}
-            existing_meta.update(data.metadata)
+            # IMPORTANT:
+            # `raw_form_data` 必须用最新同步结果全量覆盖（不能 merge），否则旧字段缺失/控件变更会导致前端读取到过期值。
+            existing_meta = dict(material.metadata_json or {})
+            new_meta = dict(data.metadata or {})
+            if "raw_form_data" in new_meta:
+                existing_meta["raw_form_data"] = new_meta["raw_form_data"]
+                new_meta.pop("raw_form_data", None)
+            existing_meta.update(new_meta)
             material.metadata_json = existing_meta
             result.updated += 1
 

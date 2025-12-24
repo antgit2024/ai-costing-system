@@ -1049,54 +1049,51 @@ const MaterialMasterPage = () => {
             label: '成本参数',
             children: (
               <Form layout="vertical" form={costForm} onFinish={handleCostFormSubmit}>
-                <Form.Item
-                  label="BOM单价/单位"
-                  extra="= 入库单价 ÷ 入库→BOM 换算，实时推算，仅供本地核对"
-                >
-                  <Input
-                    disabled
-                    value={`${formatCurrency(liveBomUnitPrice, editingMaterial.currency)} / ${
-                      bomUnitLabel || '-'
-                    }`}
-                  />
-                </Form.Item>
-                <Form.Item
-                  label="计算方式"
-                  name="calculation_method"
-                  rules={[{ required: true, message: '请选择计算方式' }]}
-                  extra="影响模型引用时的默认度量单位，切换后将同步推荐的 BOM 单位"
-                >
-                  <Select
-                    placeholder="请选择计算方式"
-                    options={CALCULATION_METHOD_OPTIONS.map((item) => ({
-                      label: item.label,
-                      value: item.value,
-                    }))}
-                    onChange={(value) => {
-                      const defaultUnit = getDefaultUnitByCalculationMethod(value)
-                      if (defaultUnit) {
-                        costForm.setFieldsValue({ bom_unit: defaultUnit })
-                      }
-                    }}
-                  />
-                </Form.Item>
-                <Form.Item
-                  label="BOM 单位"
-                  name="bom_unit"
-                  rules={[{ required: true, message: '请选择 BOM 单位' }]}
-                >
-                  <Select options={BOM_UNIT_OPTIONS} placeholder="请选择 BOM 单位" />
-                </Form.Item>
+                <Row gutter={16}>
+                  <Col xs={24} md={12}>
+                    <Form.Item label="BOM单价/单位">
+                      <Input
+                        disabled
+                        value={`${formatCurrency(liveBomUnitPrice, editingMaterial.currency)} / ${
+                          bomUnitLabel || '-'
+                        }`}
+                      />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={12}>
+                    <Form.Item
+                      label="计算方式"
+                      name="calculation_method"
+                      rules={[{ required: true, message: '请选择计算方式' }]}
+                    >
+                      <Select
+                        placeholder="请选择计算方式"
+                        options={CALCULATION_METHOD_OPTIONS.map((item) => ({
+                          label: item.label,
+                          value: item.value,
+                        }))}
+                        onChange={(value) => {
+                          const defaultUnit = getDefaultUnitByCalculationMethod(value)
+                          if (defaultUnit) {
+                            costForm.setFieldsValue({ bom_unit: defaultUnit })
+                          }
+                        }}
+                      />
+                    </Form.Item>
+                  </Col>
+                </Row>
                 {(purchaseSpec || costFormula) && (
                   <div style={{ marginBottom: 8 }}>
-                    {purchaseSpec && (
-                      <Form.Item label="采购规格（只读）" style={{ marginBottom: 8 }}>
-                        <Input.TextArea value={purchaseSpec} autoSize disabled />
-                      </Form.Item>
-                    )}
                     <Row gutter={16}>
                       <Col xs={24} md={12}>
-                        <Form.Item label="入库单价/单位（只读）" style={{ marginBottom: 8 }}>
+                        {purchaseSpec ? (
+                          <Form.Item label="采购规格" style={{ marginBottom: 8 }}>
+                            <Input.TextArea value={purchaseSpec} autoSize disabled />
+                          </Form.Item>
+                        ) : null}
+                      </Col>
+                      <Col xs={24} md={12}>
+                        <Form.Item label="入库单价/单位" style={{ marginBottom: 8 }}>
                           <Input
                             disabled
                             value={`${formatCurrency(editingMaterial.unit_price, editingMaterial.currency)} / ${
@@ -1105,7 +1102,6 @@ const MaterialMasterPage = () => {
                           />
                         </Form.Item>
                       </Col>
-                      <Col xs={24} md={12} />
                     </Row>
                     {costFormula && (
                       <Form.Item label="成本计算公式（只读）" style={{ marginBottom: 8 }}>
@@ -1128,8 +1124,12 @@ const MaterialMasterPage = () => {
                     </Form.Item>
                   </Col>
                   <Col xs={24} md={12}>
-                    <Form.Item label="BOM 单位（同上）">
-                      <Input disabled value={bomUnitLabel || '-'} />
+                    <Form.Item
+                      label="BOM 单位"
+                      name="bom_unit"
+                      rules={[{ required: true, message: '请选择 BOM 单位' }]}
+                    >
+                      <Select options={BOM_UNIT_OPTIONS} placeholder="请选择 BOM 单位" />
                     </Form.Item>
                   </Col>
                 </Row>
@@ -1138,26 +1138,6 @@ const MaterialMasterPage = () => {
                     <Form.Item
                       label={`BOM→库存换算（1 ${bomUnitLabel} = ? ${inventoryUnitDisplay}）`}
                       name="conversion_bom_to_inventory"
-                      extra={
-                        (() => {
-                          const inboundUnit = editingMaterial.purchase_unit || ''
-                          const inventoryUnit = (watchedInventoryUnit ?? editingMaterial.inventory_unit ?? inboundUnit) || ''
-                          const convPurchase =
-                            toFiniteNumber(watchedConversionPurchaseToBom) ??
-                            parseDecimal(editingMaterial.conversion_purchase_to_bom)
-                          if (!inboundUnit || !inventoryUnit || inboundUnit !== inventoryUnit) {
-                            return '提示：若库存单位=入库单位，可由“入库→BOM 换算”自动推回（取倒数）。'
-                          }
-                          if (!convPurchase || convPurchase <= 0) {
-                            return '提示：先填写“入库→BOM 换算”，系统会自动推回 BOM→库存（倒数）。'
-                          }
-                          const derived = Number((1 / convPurchase).toFixed(6))
-                          if (!Number.isFinite(derived)) {
-                            return '提示：换算值异常，无法推导。'
-                          }
-                          return `自动推导：1${bomUnitLabel}=${formatDecimalDisplay(derived, 6)}${inventoryUnit}`
-                        })()
-                      }
                       rules={[
                         { required: true, message: '请输入 BOM→库存 换算系数' },
                         positiveNumberRule('换算系数必须大于 0'),
@@ -1192,17 +1172,9 @@ const MaterialMasterPage = () => {
                 <Form.Item label="是否 BOM 物料" name="is_bom_material" valuePropName="checked">
                   <Switch />
                 </Form.Item>
-                <Alert
-                  type="info"
-                  showIcon
-                  style={{ marginBottom: 16, padding: '8px 12px' }}
-                  message="说明"
-                  description="BOM 单位仅限 平米/米/个；开关与换算系数只影响本地成本与库存单价的推算，不会回写宜搭。调整后请重新导出成本表核对。"
-                />
                 <Form.Item
                   label="本地描述"
                   name="local_description"
-                  extra="仅在本系统内可见，同时在虚拟物料绑定的物料详情中同步展示。"
                 >
                   <Input.TextArea
                     rows={3}

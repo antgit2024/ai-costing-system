@@ -162,6 +162,7 @@
 | 2025-12-25 | 基础信息TAB：备注（宜搭）无值隐藏 | Frontend | 用户反馈“备注（宜搭）没有值，估计是假的”，要求先隐藏。 | ✅ `MaterialMasterPage.tsx`：当 `bom_notes` 为空时不渲染“备注（宜搭）”行。前端 build+部署完成，线上入口 `index-F_75whEu.js`。 | 后续如确认宜搭字段映射无误，可恢复显示。 |
 | 2025-12-25 | 宜搭同步：启用字段接入 `is_active` | Backend | 用户询问“物料启用 radioField_lnk335sn 是否同步”；并希望列表默认仅显示启用物料（“仅启用”开关有意义）。 | ✅ 更新 `backend/config/yida_materials.json`：将 `is_active` 映射到宜搭 `radioField_lnk335sn`；`status` 不从宜搭同步，默认由 `is_active` 推导（active/inactive）。已触发一次同步 job（limit=50）验证成功。 | 前端“仅启用”开关继续保留：默认只展示启用物料（来自宜搭/本地均适用）。如需“严格只读宜搭启用状态”，再考虑禁用本地停用开关。 |
 | 2025-12-25 | 物料页：宜搭同步拆分按钮（全量/仅拉新/仅更新原价格） | Frontend+Backend | 用户问“同步宜搭到底同步什么”，并希望新增“同步新物料”“更新原价格”两个按钮减少误覆盖。 | ✅ 后端 `sync-yida` 支持 `mode=full/new_only/core_fields`；`core_fields` 只更新入库单价/单位、采购单价/单位、采购→入库换算、采购规格（raw_form_data 只 merge 对应 fieldId），`new_only` 仅新增不更新；前端 `/costing/materials` 增加 3 个按钮并分别传入 mode，原“同步宜搭”改名为“全量同步宜搭”。已 build+部署；并重启 `planner-costing.service` 生效。 | 如后续需要“只更新某个物料的原价格”，可在现有“同步宜搭(本物料)”按钮上加 mode 下拉。 |
+| 2025-12-25 | 物料页：推导 BOM 价格（入库→BOM） | Frontend+Backend | 用户要求新增“推导BOM价格”按钮，并希望更新价格后 BOM 价格能自动刷新；同时希望无法推导时在 BOM 单位处红字提示原因。 | ✅ 新增 `POST /api/planner/base-config/materials/derive-bom-prices`（后台任务写入 `metadata_json.bom_unit_price`）；前端 `/costing/materials` 在“刷新”后新增“推导BOM价格”，并在三种宜搭同步完成后自动触发一次推导；BOM 单位无法推导时红字+Tooltip 提示原因（未选 BOM 单位/入库单价缺失/换算系数不合法）。 | 下游引用（虚拟物料/工艺模板/产品模型）建议采用“快照+显式刷新”的专业流程：发布版本不回写，草稿版可点“刷新价格”生成新快照。 |
 
 ## 调试模板
 

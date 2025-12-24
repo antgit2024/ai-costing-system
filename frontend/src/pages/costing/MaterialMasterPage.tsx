@@ -44,6 +44,7 @@ import {
   fetchMaterialSyncLogs,
   fetchMaterials,
   fetchMaterialVirtualLinks,
+  triggerMaterialBomDerive,
   triggerMaterialSync,
   updateMaterial,
 } from '@/services/planner'
@@ -196,6 +197,21 @@ const deriveBomUnitPrice = (record: Material): number | undefined => {
     return undefined
   }
   return Number(record.unit_price) / conversion
+}
+
+const getBomDeriveIssue = (record: Material): string | null => {
+  // 这里的“BOM 单价/单位”是后续算价/扣库的基础输入。若无法推导，必须明确暴露原因，避免静默失败。
+  if (!record.unit || !String(record.unit).trim()) {
+    return '未选择 BOM 单位（请在物料详情-成本参数里选择并保存）'
+  }
+  if (record.unit_price === undefined || record.unit_price === null) {
+    return '入库单价缺失（请先同步/录入入库单价）'
+  }
+  const conversion = parseDecimal(record.conversion_purchase_to_bom)
+  if (!conversion || conversion <= 0) {
+    return '入库→BOM 换算缺失或不合法（必须 > 0）'
+  }
+  return null
 }
 
 const getBomDisplayValue = (record: Material) =>
@@ -683,7 +699,7 @@ const MaterialMasterPage = () => {
   const handleSyncMaterials = async (mode: MaterialSyncMode) => {
     setSyncing(true)
     try {
-      await triggerMaterialSync({ requested_by: 'material_master', mode })
+      const job = await triggerMaterialSync({ requested_by: 'material_master', mode })
       message.success(
         mode === 'new_only'
           ? '已触发“同步新物料”任务'
@@ -693,12 +709,106 @@ const MaterialMasterPage = () => {
       )
       setSyncDrawerOpen(true)
       queryClient.invalidateQueries({ queryKey: ['material-sync-logs'] })
+
+      const jobId = job?.id
+      if (jobId) {
+        // 等宜搭同步完成后，自动推导一次 BOM 单价快照（用于算价/扣库）
+        let done = false
+        for (let i = 0; i < 120; i++) {
+          await new Promise((r) => setTimeout(r, 1000))
+          const current = await fetchMaterialSyncJob(jobId)
+          if (current?.status === 'failed') {
+            message.error(current?.error_message || '宜搭同步失败，未执行 BOM 价格推导')
+            done = true
+            break
+          }
+          if (current?.status === 'succeeded' || current?.status === 'completed') {
+            done = true
+            const deriveJob = await triggerMaterialBomDerive({
+              requested_by: 'material_master_auto',
+              limit: 5000,
+              search: filters.search,
+              category: filters.category,
+              status: filters.status,
+              is_active: filters.is_active,
+              is_bom_material: filters.is_bom_material,
+            })
+            message.success('已自动触发 BOM 价格推导任务')
+            queryClient.invalidateQueries({ queryKey: ['material-sync-logs'] })
+            const deriveJobId = deriveJob?.id
+            if (deriveJobId) {
+              for (let j = 0; j < 120; j++) {
+                await new Promise((r) => setTimeout(r, 1000))
+                const d = await fetchMaterialSyncJob(deriveJobId)
+                if (d?.status === 'failed') {
+                  message.error(d?.error_message || 'BOM 价格推导失败')
+                  break
+                }
+                if (d?.status === 'succeeded' || d?.status === 'completed') {
+                  await materialsQuery.refetch()
+                  break
+                }
+              }
+            }
+            break
+          }
+        }
+        if (!done) {
+          message.info('同步任务仍在执行，可稍后手动点击“推导BOM价格”')
+        }
+      }
     } catch (error) {
       const err = error as Error
       message.error(err.message || '同步失败，请稍后重试')
     } finally {
       setSyncing(false)
     }
+  }
+
+  const confirmDeriveBomPrices = () => {
+    Modal.confirm({
+      title: '推导 BOM 价格（入库→BOM）',
+      content:
+        '将按“BOM 单价 = 入库单价 ÷ 入库→BOM 换算”推导并写入本地（metadata_json.bom_unit_price）。该值用于算价/扣库；无法推导的物料会清理旧的 BOM 单价快照并在列表中以红字提示原因。确认继续？',
+      okText: '立即推导',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          setSyncing(true)
+          const job = await triggerMaterialBomDerive({
+            requested_by: 'material_master_manual',
+            limit: 5000,
+            search: filters.search,
+            category: filters.category,
+            status: filters.status,
+            is_active: filters.is_active,
+            is_bom_material: filters.is_bom_material,
+          })
+          message.success('已触发 BOM 价格推导任务')
+          setSyncDrawerOpen(true)
+          queryClient.invalidateQueries({ queryKey: ['material-sync-logs'] })
+          const jobId = job?.id
+          if (jobId) {
+            for (let i = 0; i < 120; i++) {
+              await new Promise((r) => setTimeout(r, 1000))
+              const current = await fetchMaterialSyncJob(jobId)
+              if (current?.status === 'failed') {
+                message.error(current?.error_message || 'BOM 价格推导失败')
+                break
+              }
+              if (current?.status === 'succeeded' || current?.status === 'completed') {
+                await materialsQuery.refetch()
+                break
+              }
+            }
+          }
+        } catch (err: any) {
+          message.error(getErrorMessage(err))
+        } finally {
+          setSyncing(false)
+        }
+      },
+    })
   }
 
   const materialColumns: ColumnsType<Material> = [
@@ -771,10 +881,17 @@ const MaterialMasterPage = () => {
       render: (_, record) => {
         const bomPrice = deriveBomUnitPrice(record)
         const bomUnitText = getBomUnitLabel(record.unit) ?? record.unit ?? '-'
+        const issue = getBomDeriveIssue(record)
         return (
           <Space direction="vertical" size={0}>
             <Text>{formatCurrency(bomPrice, record.currency)}</Text>
-            <Text type="secondary">{bomUnitText}</Text>
+            {issue ? (
+              <Tooltip title={issue}>
+                <Text style={{ color: '#cf1322' }}>{bomUnitText}</Text>
+              </Tooltip>
+            ) : (
+              <Text type="secondary">{bomUnitText}</Text>
+            )}
           </Space>
         )
       },
@@ -1309,6 +1426,9 @@ const MaterialMasterPage = () => {
               <Space>
                 <Button icon={<ReloadOutlined />} onClick={() => materialsQuery.refetch()}>
                   刷新
+                </Button>
+                <Button loading={syncing} onClick={confirmDeriveBomPrices}>
+                  推导BOM价格
                 </Button>
                 <Button
                   icon={<CloudSyncOutlined />}

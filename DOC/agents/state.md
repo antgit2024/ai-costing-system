@@ -54,7 +54,12 @@
     - `new_only`：仅新增新物料（已存在的不更新）
     - `core_fields`：仅更新关键字段（入库单价/单位、采购单价/单位、采购→入库换算、采购规格），并且 raw_form_data 只 merge 对应字段
   - 前端：`/costing/materials` 顶部按钮拆分为 **同步新物料 / 更新原价格 / 全量同步宜搭**（均会打开同步日志抽屉便于跟踪）
-  - 本轮验收命令：`npm -C frontend run build`（已通过）；Backend smoke：用 curl 触发 `mode=new_only/core_fields` 均可成功落库
+  - 新增“推导BOM价格”：
+    - 入口：`/costing/materials` 刷新按钮右侧
+    - 后端接口：`POST /api/planner/base-config/materials/derive-bom-prices`（后台任务，写入 `metadata_json.bom_unit_price`）
+    - 推导口径：\(BOM单价 = 入库单价 \div 入库→BOM换算\)，用于算价/扣库；无法推导时列表以红字提示原因
+    - 自动化：三种宜搭同步任务完成后会自动触发一次 BOM 价格推导
+  - 本轮验收命令：`npm -C frontend run build`（已通过）；Backend smoke：用 curl 触发 `mode=new_only/core_fields` 与 `derive-bom-prices` 均可成功落库
 
 - **已确认正确版本快照（请勿覆盖）**：
   - `DOC/index/extracted/ProductModelEditorDrawer_confirmed_20251221T042643Z.tsx`

@@ -29,6 +29,7 @@ from ..services.yida_sync import (
     YidaFormClient,
     run_material_sync_job,
 )
+from ..services.material_bom_derivation import run_material_bom_derivation_job
 from openpyxl import Workbook
 
 router = APIRouter(prefix="/base-config", tags=["base-config"])
@@ -48,6 +49,22 @@ class YidaMaterialSyncRequest(BaseModel):
     mode: Literal["full", "new_only", "core_fields"] = "full"
     # 可选：仅同步指定物料编码（避免每次全量几千条）
     material_codes: Optional[list[str]] = None
+
+
+class MaterialBomDeriveRequest(BaseModel):
+    requested_by: str = Field("system", max_length=64)
+    # 仅处理匹配到的前 N 条（默认 5000，避免误操作跑全库过久）
+    limit: Optional[int] = Field(5000, gt=0, le=20000)
+    dry_run: bool = False
+    # 可选：仅推导指定物料编码（更安全）
+    material_codes: Optional[list[str]] = None
+    # 可选：按与列表一致的筛选条件缩小范围
+    search: Optional[str] = Field(None, max_length=128)
+    material_type: Optional[str] = None
+    category: Optional[str] = None
+    status: Optional[str] = None
+    is_bom_material: Optional[bool] = None
+    is_active: Optional[bool] = None
 
 
 class YidaProcessSyncRequest(BaseModel):
@@ -105,6 +122,49 @@ def get_material_sync_job(job_id: str, db: Session = Depends(get_db)) -> schemas
     job = db.get(models.MaterialSyncJob, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Material sync job not found")
+    return schemas.MaterialSyncJobRead.from_orm(job)
+
+
+@router.post(
+    "/materials/derive-bom-prices",
+    response_model=schemas.MaterialSyncJobRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def derive_material_bom_prices(
+    payload: MaterialBomDeriveRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+) -> schemas.MaterialSyncJobRead:
+    """
+    Derive and persist materials' BOM unit price snapshot (metadata_json.bom_unit_price).
+    Formula: bom_unit_price = unit_price ÷ conversion_purchase_to_bom
+    """
+    job = models.MaterialSyncJob(
+        job_type="materials_bom_derive",
+        config_path="(local)",
+        requested_by=payload.requested_by,
+        status="pending",
+        limit=payload.limit,
+        dry_run=payload.dry_run,
+        dump_path=None,
+        payload={
+            **({"search": payload.search} if payload.search else {}),
+            **({"material_type": payload.material_type} if payload.material_type else {}),
+            **({"category": payload.category} if payload.category else {}),
+            **({"status": payload.status} if payload.status else {}),
+            **({"is_bom_material": payload.is_bom_material} if payload.is_bom_material is not None else {}),
+            **({"is_active": payload.is_active} if payload.is_active is not None else {}),
+            **(
+                {"material_codes": [c for c in (payload.material_codes or []) if str(c).strip()]}
+                if payload.material_codes
+                else {}
+            ),
+        },
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    background_tasks.add_task(run_material_bom_derivation_job, job.id)
     return schemas.MaterialSyncJobRead.from_orm(job)
 
 

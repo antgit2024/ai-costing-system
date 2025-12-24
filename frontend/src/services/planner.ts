@@ -419,6 +419,24 @@ export const triggerMaterialSync = async (payload: MaterialSyncRequest = {}) => 
   return response.data
 }
 
+export interface MaterialBomDeriveRequest {
+  requested_by?: string
+  limit?: number
+  dry_run?: boolean
+  material_codes?: string[]
+  search?: string
+  material_type?: string
+  category?: string
+  status?: string
+  is_bom_material?: boolean
+  is_active?: boolean
+}
+
+export const triggerMaterialBomDerive = async (payload: MaterialBomDeriveRequest = {}) => {
+  const response = await plannerClient.post('/base-config/materials/derive-bom-prices', payload)
+  return response.data
+}
+
 export const fetchMaterialSyncJob = async (jobId: string) => {
   const response = await plannerClient.get(`/base-config/materials/sync-jobs/${jobId}`)
   return response.data

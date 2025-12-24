@@ -2,8 +2,11 @@ import { useMemo, useState } from 'react'
 import { Badge, Button, Drawer, List, Progress, Space, Tag, Tooltip, Typography } from 'antd'
 import ReloadOutlined from '@ant-design/icons/lib/icons/ReloadOutlined'
 import { useQuery } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
 
 import { fetchTaskCenter, type TaskCenterItem } from '@/services/planner'
+import PlannerJobDrawerLazy from '@/components/planner/PlannerJobDrawerLazy'
+import MaterialSyncJobDrawer from '@/components/common/MaterialSyncJobDrawer'
 
 const { Text } = Typography
 
@@ -39,7 +42,11 @@ export interface TaskCenterDrawerProps {
 }
 
 const TaskCenterDrawer = ({ open, onClose }: TaskCenterDrawerProps) => {
+  const navigate = useNavigate()
   const [limit, setLimit] = useState(50)
+  const [selected, setSelected] = useState<TaskCenterItem | null>(null)
+  const [plannerDetailOpen, setPlannerDetailOpen] = useState(false)
+  const [materialDetailOpen, setMaterialDetailOpen] = useState(false)
   const tasksQuery = useQuery({
     queryKey: ['task-center', { limit }],
     queryFn: () => fetchTaskCenter({ limit }),
@@ -57,6 +64,22 @@ const TaskCenterDrawer = ({ open, onClose }: TaskCenterDrawerProps) => {
     () => items.filter((t) => runningStatuses.has(String(t.status))).length,
     [items],
   )
+
+  const openDetail = (item: TaskCenterItem) => {
+    setSelected(item)
+    if (item.source === 'material') {
+      setMaterialDetailOpen(true)
+      return
+    }
+    setPlannerDetailOpen(true)
+  }
+
+  const plannerJumpTarget = (item: TaskCenterItem | null) => {
+    if (!item) return '/planner'
+    const payload = (item.payload ?? {}) as Record<string, unknown>
+    if (payload.scenario_id) return '/planner/scenarios'
+    return '/planner'
+  }
 
   return (
     <Drawer
@@ -102,7 +125,10 @@ const TaskCenterDrawer = ({ open, onClose }: TaskCenterDrawerProps) => {
                   : 0
           const duration = fmtDuration(item.started_at ?? item.created_at, item.finished_at ?? null)
           return (
-            <List.Item>
+            <List.Item
+              style={{ cursor: 'pointer' }}
+              onClick={() => openDetail(item)}
+            >
               <Space direction="vertical" size={4} style={{ width: '100%' }}>
                 <Space wrap style={{ width: '100%', justifyContent: 'space-between' }}>
                   <Space wrap>
@@ -134,6 +160,25 @@ const TaskCenterDrawer = ({ open, onClose }: TaskCenterDrawerProps) => {
             </List.Item>
           )
         }}
+      />
+
+      <PlannerJobDrawerLazy
+        open={plannerDetailOpen}
+        jobId={selected?.source === 'planner' ? selected.id : undefined}
+        kind="planner"
+        onClose={() => setPlannerDetailOpen(false)}
+        title="任务详情（Planner）"
+        extraActions={
+          <Button onClick={() => navigate(plannerJumpTarget(selected))}>
+            跳转
+          </Button>
+        }
+      />
+
+      <MaterialSyncJobDrawer
+        open={materialDetailOpen}
+        jobId={selected?.source === 'material' ? selected.id : undefined}
+        onClose={() => setMaterialDetailOpen(false)}
       />
     </Drawer>
   )

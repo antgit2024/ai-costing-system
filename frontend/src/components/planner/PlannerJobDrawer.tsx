@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Button, Drawer, Descriptions, Divider, Input, List, Progress, Skeleton, Space, Tag, Tooltip, Typography } from 'antd'
 import CopyOutlined from '@ant-design/icons/lib/icons/CopyOutlined'
 import SearchOutlined from '@ant-design/icons/lib/icons/SearchOutlined'
@@ -24,6 +24,7 @@ export interface PlannerJobDrawerProps {
   width?: number
   onClose: () => void
   onJobSettled?: () => void
+  extraActions?: ReactNode
 }
 
 type JobResult = PlannerJob | ImportJob
@@ -38,6 +39,7 @@ const PlannerJobDrawer = ({
   width = 480,
   onClose,
   onJobSettled,
+  extraActions,
 }: PlannerJobDrawerProps) => {
   const jobQuery = usePlannerJob(jobId, kind, open)
   const job = jobQuery.data
@@ -94,6 +96,7 @@ const PlannerJobDrawer = ({
       onClose={onClose}
       destroyOnClose
       title={title ?? '作业进度'}
+      extra={extraActions}
     >
       {!job ? (
         <Skeleton active paragraph={{ rows: 6 }} />

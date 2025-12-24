@@ -464,7 +464,7 @@ export const triggerMaterialBomDerive = async (payload: MaterialBomDeriveRequest
   return response.data
 }
 
-export const fetchMaterialSyncJob = async (jobId: string) => {
+export const fetchMaterialSyncJob = async (jobId: string): Promise<import('@/types/planner').MaterialSyncJobRead> => {
   const response = await plannerClient.get(`/base-config/materials/sync-jobs/${jobId}`)
   return response.data
 }

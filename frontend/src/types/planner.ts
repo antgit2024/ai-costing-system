@@ -413,6 +413,24 @@ export interface MaterialSyncLog {
 
 export interface MaterialSyncLogResponse extends PaginatedResponse<MaterialSyncLog> {}
 
+export interface MaterialSyncJobRead {
+  id: string
+  job_type: string
+  config_path: string
+  requested_by: string
+  status: string
+  limit?: number | null
+  dry_run: boolean
+  dump_path?: string | null
+  payload: Record<string, unknown>
+  result_json: Record<string, unknown>
+  error_message?: string | null
+  started_at?: string | null
+  finished_at?: string | null
+  created_at: string
+  updated_at: string
+}
+
 export interface VirtualMaterialBinding {
   material_id: string
   material_code: string

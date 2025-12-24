@@ -475,12 +475,20 @@ const MaterialMasterPage = () => {
     setDetailDrawerOpen(true)
     const metadata = (record.metadata_json as Record<string, any>) ?? {}
     const costingDefaults = (metadata.costing_defaults ?? {}) as Record<string, any>
+    const purchaseToInboundFormula = metadata?.purchase_to_inbound_formula
+    const purchaseToInboundNumber =
+      typeof purchaseToInboundFormula === 'number'
+        ? purchaseToInboundFormula
+        : typeof purchaseToInboundFormula === 'string' && purchaseToInboundFormula.trim()
+          ? Number(purchaseToInboundFormula)
+          : undefined
     costForm.setFieldsValue({
       is_bom_material: getBomDisplayValue(record),
       bom_unit: normalizeBomUnit(record.unit) ?? BOM_UNIT_OPTIONS[0].value,
       conversion_purchase_to_bom: parseDecimal(record.conversion_purchase_to_bom),
-      inventory_unit: record.inventory_unit,
-      conversion_bom_to_inventory: parseDecimal(record.conversion_bom_to_inventory),
+      inventory_unit: record.inventory_unit || record.purchase_unit || undefined,
+      conversion_bom_to_inventory:
+        parseDecimal(record.conversion_bom_to_inventory) ?? purchaseToInboundNumber ?? undefined,
       calculation_method: record.calculation_method,
       local_description: (metadata.local_description as string) ?? '',
       fixed_quantity_alpha:
@@ -945,7 +953,7 @@ const MaterialMasterPage = () => {
                     ? `${formatCurrency(yidaPurchaseUnitPrice, editingMaterial.currency)} / ${yidaPurchaseUnit || '-'}`
                     : '-'}
                 </Descriptions.Item>
-                <Descriptions.Item label="采购转入库公式">
+                <Descriptions.Item label="采购→入库 换算">
                   {purchaseToInboundFormula || '-'}
                 </Descriptions.Item>
                 <Descriptions.Item label="BOM单价/单位">
@@ -1014,20 +1022,6 @@ const MaterialMasterPage = () => {
                     }}
                   />
                 </Form.Item>
-                {(purchaseSpec || costFormula) && (
-                  <div style={{ marginBottom: 8 }}>
-                    {purchaseSpec && (
-                      <Form.Item label="采购规格（只读）" style={{ marginBottom: 8 }}>
-                        <Input.TextArea value={purchaseSpec} autoSize disabled />
-                      </Form.Item>
-                    )}
-                    {costFormula && (
-                      <Form.Item label="成本计算公式（只读）" style={{ marginBottom: 8 }}>
-                        <Input.TextArea value={costFormula} autoSize disabled />
-                      </Form.Item>
-                    )}
-                  </div>
-                )}
                 <Form.Item
                   label="BOM 单位"
                   name="bom_unit"
@@ -1035,6 +1029,33 @@ const MaterialMasterPage = () => {
                 >
                   <Select options={BOM_UNIT_OPTIONS} placeholder="请选择 BOM 单位" />
                 </Form.Item>
+                {(purchaseSpec || costFormula) && (
+                  <div style={{ marginBottom: 8 }}>
+                    {purchaseSpec && (
+                      <Form.Item label="采购规格（只读）" style={{ marginBottom: 8 }}>
+                        <Input.TextArea value={purchaseSpec} autoSize disabled />
+                      </Form.Item>
+                    )}
+                    <Row gutter={16}>
+                      <Col xs={24} md={12}>
+                        <Form.Item label="入库单价/单位（只读）" style={{ marginBottom: 8 }}>
+                          <Input
+                            disabled
+                            value={`${formatCurrency(editingMaterial.unit_price, editingMaterial.currency)} / ${
+                              editingMaterial.purchase_unit || '-'
+                            }`}
+                          />
+                        </Form.Item>
+                      </Col>
+                      <Col xs={24} md={12} />
+                    </Row>
+                    {costFormula && (
+                      <Form.Item label="成本计算公式（只读）" style={{ marginBottom: 8 }}>
+                        <Input.TextArea value={costFormula} autoSize disabled />
+                      </Form.Item>
+                    )}
+                  </div>
+                )}
                 <Row gutter={16}>
                   <Col xs={24} md={12}>
                     <Form.Item
@@ -1042,6 +1063,25 @@ const MaterialMasterPage = () => {
                       name="conversion_purchase_to_bom"
                       rules={[
                         { required: true, message: '请输入入库→BOM 换算系数' },
+                        positiveNumberRule('换算系数必须大于 0'),
+                      ]}
+                    >
+                      <InputNumber min={0.000001} step={0.0001} style={{ width: '100%' }} />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={12}>
+                    <Form.Item label="BOM 单位（同上）">
+                      <Input disabled value={bomUnitLabel || '-'} />
+                    </Form.Item>
+                  </Col>
+                </Row>
+                <Row gutter={16}>
+                  <Col xs={24} md={12}>
+                    <Form.Item
+                      label={`BOM→库存换算（1 ${bomUnitLabel} = ? ${inventoryUnitDisplay}）`}
+                      name="conversion_bom_to_inventory"
+                      rules={[
+                        { required: true, message: '请输入 BOM→库存 换算系数' },
                         positiveNumberRule('换算系数必须大于 0'),
                       ]}
                     >
@@ -1063,22 +1103,14 @@ const MaterialMasterPage = () => {
                         placeholder={
                           inventoryUnitLocked
                             ? '来自宜搭，仅做参考'
-                            : '例如 件 / 箱 / 套'
+                            : editingMaterial.purchase_unit
+                              ? `默认：${editingMaterial.purchase_unit}`
+                              : '例如 件 / 箱 / 套'
                         }
                       />
                     </Form.Item>
                   </Col>
                 </Row>
-                <Form.Item
-                  label={`BOM→库存换算（1 ${bomUnitLabel} = ? ${inventoryUnitDisplay}）`}
-                  name="conversion_bom_to_inventory"
-                  rules={[
-                    { required: true, message: '请输入 BOM→库存 换算系数' },
-                    positiveNumberRule('换算系数必须大于 0'),
-                  ]}
-                >
-                  <InputNumber min={0.000001} step={0.0001} style={{ width: '100%' }} />
-                </Form.Item>
                 <Form.Item label="是否 BOM 物料" name="is_bom_material" valuePropName="checked">
                   <Switch />
                 </Form.Item>
@@ -1140,17 +1172,6 @@ const MaterialMasterPage = () => {
                     description="这些参数会写入 metadata_json.costing_defaults。产品模型中选择/替换该物料时，会自动带入 α/覆盖率/损耗（若模型行仍处于默认值）。"
                   />
                 </Card>
-                <Form.Item>
-                  <Space>
-                    <Button type="primary" htmlType="submit" loading={detailMutation.isPending}>
-                      保存
-                    </Button>
-                    <Button icon={<QuestionCircleOutlined />} onClick={() => setGuideOpen(true)}>
-                      新建指南
-                    </Button>
-                    <Button onClick={closeMaterialDrawer}>取消</Button>
-                  </Space>
-                </Form.Item>
               </Form>
             ),
           },
@@ -1329,46 +1350,59 @@ const MaterialMasterPage = () => {
         onClose={closeMaterialDrawer}
         extra={
           editingMaterial ? (
-            <Button
-              icon={<CloudSyncOutlined />}
-              loading={syncing}
-              onClick={async () => {
-                try {
-                  const job = await triggerMaterialSync({
-                    requested_by: 'material_drawer',
-                    limit: 5000,
-                    material_codes: [editingMaterial.material_code],
-                  })
-                  message.success('已触发同步任务，正在刷新…')
-                  const jobId = job?.id
-                  if (jobId) {
-                    for (let i = 0; i < 20; i++) {
-                      await new Promise((r) => setTimeout(r, 1000))
-                      const current = await fetchMaterialSyncJob(jobId)
-                      if (current?.status === 'succeeded' || current?.status === 'completed') {
-                        break
-                      }
-                      if (current?.status === 'failed') {
-                        message.error(current?.error_message || '同步失败')
-                        break
+            <Space>
+              <Button type="primary" loading={detailMutation.isPending} onClick={() => costForm.submit()}>
+                保存
+              </Button>
+              <Button icon={<QuestionCircleOutlined />} onClick={() => setGuideOpen(true)}>
+                新建指南
+              </Button>
+              <Button onClick={closeMaterialDrawer}>取消</Button>
+              <Button
+                icon={<CloudSyncOutlined />}
+                loading={syncing}
+                onClick={async () => {
+                  try {
+                    const job = await triggerMaterialSync({
+                      requested_by: 'material_drawer',
+                      limit: 5000,
+                      material_codes: [editingMaterial.material_code],
+                    })
+                    message.success('已触发同步任务，正在刷新…')
+                    const jobId = job?.id
+                    if (jobId) {
+                      for (let i = 0; i < 20; i++) {
+                        await new Promise((r) => setTimeout(r, 1000))
+                        const current = await fetchMaterialSyncJob(jobId)
+                        if (current?.status === 'succeeded' || current?.status === 'completed') {
+                          break
+                        }
+                        if (current?.status === 'failed') {
+                          message.error(current?.error_message || '同步失败')
+                          break
+                        }
                       }
                     }
-                  }
-                  await materialsQuery.refetch()
-                  if (editingMaterial?.id) {
-                    const refreshed = await fetchMaterials({ search: editingMaterial.material_code, page: 1, page_size: 1 })
-                    const hit = refreshed?.items?.[0]
-                    if (hit) {
-                      setEditingMaterial(hit)
+                    await materialsQuery.refetch()
+                    if (editingMaterial?.id) {
+                      const refreshed = await fetchMaterials({
+                        search: editingMaterial.material_code,
+                        page: 1,
+                        page_size: 1,
+                      })
+                      const hit = refreshed?.items?.[0]
+                      if (hit) {
+                        setEditingMaterial(hit)
+                      }
                     }
+                  } catch (err: any) {
+                    message.error(getErrorMessage(err))
                   }
-                } catch (err: any) {
-                  message.error(getErrorMessage(err))
-                }
-              }}
-            >
-              同步宜搭（本物料）
-            </Button>
+                }}
+              >
+                同步宜搭
+              </Button>
+            </Space>
           ) : null
         }
       >

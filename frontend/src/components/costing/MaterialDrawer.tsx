@@ -223,7 +223,7 @@ const MaterialDrawer = ({ materialId, open, onClose, onUpdated }: MaterialDrawer
                     </Text>
                   </Text>
                   <Text>
-                    采购转入库公式：<Text strong>{purchaseToInboundFormula || '-'}</Text>
+                    采购→入库 换算：<Text strong>{purchaseToInboundFormula || '-'}</Text>
                   </Text>
                   {purchaseSpec && (
                     <Text>

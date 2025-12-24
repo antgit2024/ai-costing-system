@@ -1,10 +1,17 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Button, Card, Col, Input, Modal, Row, Space, Table, Tag, Typography, message } from 'antd'
+import { Button, Card, Col, Input, Modal, Row, Space, Table, Tag, Tooltip, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useQuery } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
 
-import { createProductModel, createProductModelVersion, fetchProductModels } from '@/services/planner'
+import {
+  createProductModel,
+  createProductModelVersion,
+  deleteProductModel,
+  fetchProductModelVersions,
+  fetchProductModels,
+  previewProductModel,
+} from '@/services/planner'
 import type { ProductModel } from '@/types/planner'
 import ProductModelEditorDrawer from '@/components/costing/ProductModelEditorDrawer'
 
@@ -23,6 +30,20 @@ export default function StandardModelsPage() {
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [createName, setCreateName] = useState<string>('未命名标准模型')
   const [creating, setCreating] = useState(false)
+
+  const [auditingModelIds, setAuditingModelIds] = useState<Record<string, boolean>>({})
+  const [auditResultByModelId, setAuditResultByModelId] = useState<
+    Record<
+      string,
+      {
+        baseline_total?: number
+        realtime_total?: number
+        diff_percent?: number
+        checked_at?: string
+        error?: string
+      }
+    >
+  >({})
 
   useEffect(() => {
     const st = (location as any)?.state ?? {}
@@ -51,6 +72,96 @@ export default function StandardModelsPage() {
     queryFn: () => fetchProductModels(params as any),
   })
 
+  const getBaselineTotalFromPublished = async (modelId: string, publishedVersionId: string) => {
+    const versions = await fetchProductModelVersions(modelId)
+    const v = versions.find((x) => x.id === publishedVersionId)
+    const meta: any = (v as any)?.metadata_json ?? (v as any)?.metadata ?? {}
+    const ui = meta?.ui_stats ?? {}
+    const total = Number(ui.total_cost ?? ui.total ?? NaN)
+    if (Number.isFinite(total) && total > 0) {
+      return total
+    }
+    const material = Number(ui.material_cost ?? 0)
+    const labor = Number(ui.labor_cost ?? 0)
+    const mf = Number(ui.manufacturing_fee ?? ui.overhead_cost ?? 0)
+    const sum = material + labor + mf
+    return Number.isFinite(sum) && sum > 0 ? sum : undefined
+  }
+
+  const handleRealtimeAudit = async (model: ProductModel) => {
+    const modelId = model.id
+    if (auditingModelIds[modelId]) return
+    const publishedVersionId = (model as any).current_published_standard_version_id
+    if (!publishedVersionId) {
+      message.warning('该模型暂无“已发布”标准版本，无法核价')
+      return
+    }
+
+    setAuditingModelIds((prev) => ({ ...prev, [modelId]: true }))
+    try {
+      const baselineTotal = await getBaselineTotalFromPublished(modelId, String(publishedVersionId))
+      if (!baselineTotal) {
+        throw new Error('未找到发布版本的基准价（version.metadata_json.ui_stats.total_cost）')
+      }
+
+      // 标准核价口径：默认使用 100×100cm×1（= 1000mm×1000mm×1）
+      const widthMm = Number((model as any).standard_width_mm ?? 1000)
+      const heightMm = Number((model as any).standard_height_mm ?? 1000)
+      const preview = await previewProductModel(modelId, {
+        width_mm: widthMm,
+        height_mm: heightMm,
+        quantity: 1,
+      } as any)
+
+      const realtimeTotal = Number((preview as any)?.totals?.total_cost ?? NaN)
+      if (!Number.isFinite(realtimeTotal)) {
+        throw new Error('实时核价失败：preview 返回 totals.total_cost 缺失')
+      }
+      const diffPercent = ((realtimeTotal - baselineTotal) / baselineTotal) * 100
+      setAuditResultByModelId((prev) => ({
+        ...prev,
+        [modelId]: {
+          baseline_total: baselineTotal,
+          realtime_total: realtimeTotal,
+          diff_percent: diffPercent,
+          checked_at: new Date().toISOString(),
+        },
+      }))
+      message.success('实时核价完成')
+    } catch (err: any) {
+      setAuditResultByModelId((prev) => ({
+        ...prev,
+        [modelId]: {
+          ...prev[modelId],
+          error: err?.message || String(err),
+          checked_at: new Date().toISOString(),
+        },
+      }))
+      message.error(err?.message || '实时核价失败')
+    } finally {
+      setAuditingModelIds((prev) => ({ ...prev, [modelId]: false }))
+    }
+  }
+
+  const handleDeleteModel = async (model: ProductModel) => {
+    Modal.confirm({
+      title: '删除模型',
+      content: `确认删除（归档）模型：${model.model_code} - ${model.model_name}？`,
+      okText: '删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await deleteProductModel(model.id)
+          message.success('已删除（归档）')
+          await listQuery.refetch()
+        } catch (err: any) {
+          message.error(err?.response?.data?.detail ?? err?.message ?? '删除失败')
+        }
+      },
+    })
+  }
+
   const columns: ColumnsType<ProductModel> = [
     { title: '总编码', dataIndex: 'model_code', width: 120 },
     { title: '模型名称', dataIndex: 'model_name' },
@@ -58,21 +169,52 @@ export default function StandardModelsPage() {
     { title: '打样版本数', width: 110, render: (_, r) => (r.sample_version_count ?? '-') },
     { title: '标准版本数', width: 110, render: (_, r) => (r.standard_version_count ?? '-') },
     { title: '当前发布标准', width: 180, render: (_, r) => r.current_published_standard_version_label ?? '-' },
+    {
+      title: '核价偏差',
+      width: 140,
+      render: (_, r) => {
+        const audit = auditResultByModelId[r.id]
+        if (!audit) return <Tag>-</Tag>
+        if (audit.error) {
+          return (
+            <Tooltip title={audit.error}>
+              <Tag color="red">失败</Tag>
+            </Tooltip>
+          )
+        }
+        const diff = audit.diff_percent
+        if (diff === undefined || diff === null || !Number.isFinite(diff)) return <Tag>-</Tag>
+        const abs = Math.abs(diff)
+        const warn = abs >= 5
+        const text = `${diff >= 0 ? '+' : ''}${diff.toFixed(1)}%`
+        return <Tag color={warn ? 'red' : 'green'}>{warn ? `预警 ${text}` : text}</Tag>
+      },
+    },
     { title: '更新时间', dataIndex: 'updated_at', width: 180 },
     {
       title: '操作',
-      width: 120,
+      width: 260,
       render: (_, r) => (
-        <Button
-          type="primary"
-          onClick={() => {
-            setEditingModelId(r.id)
-            setEditingVersionId(null)
-            setEditorOpen(true)
-          }}
-        >
-          编辑
-        </Button>
+        <Space>
+          <Button
+            type="primary"
+            onClick={() => {
+              setEditingModelId(r.id)
+              setEditingVersionId(null)
+              setEditorOpen(true)
+            }}
+          >
+            编辑
+          </Button>
+          <Button loading={Boolean(auditingModelIds[r.id])} onClick={() => handleRealtimeAudit(r)}>
+            实时核价
+          </Button>
+          <Tooltip title="当前后端规则：只要存在 standard 版本（哪怕未发布），为了避免 SKU 绑定/历史口径断裂，不允许删除。后续如需放开需改后端规则。">
+            <Button danger disabled={Number(r.standard_version_count ?? 0) > 0} onClick={() => handleDeleteModel(r)}>
+              删除
+            </Button>
+          </Tooltip>
+        </Space>
       ),
     },
   ]

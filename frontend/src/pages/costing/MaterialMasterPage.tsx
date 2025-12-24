@@ -891,6 +891,28 @@ const MaterialMasterPage = () => {
       ),
     },
     {
+      title: '采购单价/单位',
+      key: 'yida_purchase_unit_price',
+      width: 180,
+      render: (_, record) => {
+        const unit =
+          getFormValue(record, 'selectField_mjjgsdlp') ||
+          ((record.metadata_json as any)?.yida_purchase_unit as string | undefined) ||
+          ''
+        const rawPrice =
+          getFormValue(record, 'numberField_mjjgsdlr') ||
+          ((record.metadata_json as any)?.yida_purchase_unit_price as any)
+        const priceNum = typeof rawPrice === 'number' ? rawPrice : Number(rawPrice)
+        const price = Number.isFinite(priceNum) ? priceNum : undefined
+        return (
+          <Space direction="vertical" size={0}>
+            <Text>{formatCurrency(price, record.currency)}</Text>
+            <Text type="secondary">{unit || '-'}</Text>
+          </Space>
+        )
+      },
+    },
+    {
       title: 'BOM单价/单位',
       key: 'bom_unit_price',
       width: 180,

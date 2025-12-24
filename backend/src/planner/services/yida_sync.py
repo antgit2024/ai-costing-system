@@ -261,11 +261,10 @@ class YidaMaterialMapper:
             "raw_form_data": form_data,
         }
 
-        bom_unit_price_raw = self._get_value(form_data, "bom_unit_price")
-        if bom_unit_price_raw not in (None, ""):
-            metadata["bom_unit_price"] = float(
-                _to_decimal(bom_unit_price_raw, default=Decimal("0"))
-            )
+        # IMPORTANT（口径约束）：
+        # 不从宜搭同步 BOM 单价/单位。
+        # 本地系统的 BOM 单价/单位应通过“入库单价 ÷ 入库→BOM 换算”在保存时推导并写入本地（metadata_json.bom_unit_price）。
+        # 这样才能确保换算口径一致，并避免宜搭字段变更导致历史核算口径漂移。
 
         cost_formula = _clean_str(self._get_value(form_data, "cost_formula"))
         if cost_formula:

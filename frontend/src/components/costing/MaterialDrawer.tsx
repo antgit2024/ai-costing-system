@@ -18,7 +18,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { fetchMaterial, fetchMaterialSyncJob, triggerMaterialSync, updateMaterial } from '@/services/planner'
 import { MATERIAL_STATUS_OPTIONS } from '@/constants/planner'
-import { BOM_UNIT_SELECT_OPTIONS, getDefaultUnitByCalculationMethod } from '@/constants/calculationMethods'
+import { BOM_UNIT_SELECT_OPTIONS } from '@/constants/calculationMethods'
 import type { Material, MaterialStatusUpdatePayload } from '@/types/planner'
 
 const { Text } = Typography
@@ -88,14 +88,7 @@ const MaterialDrawer = ({ materialId, open, onClose, onUpdated }: MaterialDrawer
     }
     return basePrice / conversion
   }, [purchaseUnitPrice, conversionPurchaseValue])
-  const bomUnitDisplay =
-    bomUnitValue ||
-    materialData?.unit ||
-    materialData?.purchase_unit ||
-    (materialData?.calculation_method
-      ? getDefaultUnitByCalculationMethod(materialData.calculation_method as any)
-      : undefined) ||
-    '-'
+  const bomUnitDisplay = bomUnitValue || materialData?.unit || materialData?.purchase_unit || '-'
 
   useEffect(() => {
     if (materialQuery.data) {
@@ -218,12 +211,7 @@ const MaterialDrawer = ({ materialId, open, onClose, onUpdated }: MaterialDrawer
                     入库单价/单位：
                     <Text strong>
                       {formatCurrency(materialData.unit_price, materialData.currency)} /{' '}
-                      {materialData.purchase_unit ||
-                        materialData.unit ||
-                        (materialData.calculation_method
-                          ? getDefaultUnitByCalculationMethod(materialData.calculation_method as any)
-                          : undefined) ||
-                        '-'}
+                      {materialData.purchase_unit || materialData.unit || '-'}
                     </Text>
                   </Text>
                   <Text>

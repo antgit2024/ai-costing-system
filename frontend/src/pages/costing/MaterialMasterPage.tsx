@@ -266,15 +266,6 @@ const getMaterialTypeLabel = (record: Material): string => {
   }
 }
 
-const getFallbackUnitLabelByCalcMethod = (calcMethod?: string | null): string | undefined => {
-  if (!calcMethod) return undefined
-  try {
-    return getDefaultUnitByCalculationMethod(calcMethod as any) || undefined
-  } catch {
-    return undefined
-  }
-}
-
 interface CostFormValues {
   is_bom_material?: boolean
   bom_unit?: string
@@ -704,10 +695,7 @@ const MaterialMasterPage = () => {
         <Space direction="vertical" size={0}>
           <Text>{formatCurrency(record.unit_price, record.currency)}</Text>
           <Text type="secondary">
-            {record.purchase_unit ||
-              record.unit ||
-              getFallbackUnitLabelByCalcMethod(record.calculation_method) ||
-              '-'}
+            {record.purchase_unit || record.unit || '-'}
           </Text>
         </Space>
       ),
@@ -898,10 +886,7 @@ const MaterialMasterPage = () => {
     }
     const virtualLinks = materialVirtualLinksQuery.data ?? []
     const imageUrls = getImageUrls(editingMaterial)
-    const purchaseUnitLabel =
-      editingMaterial.purchase_unit ||
-      getFallbackUnitLabelByCalcMethod(editingMaterial.calculation_method) ||
-      '-'
+    const purchaseUnitLabel = editingMaterial.purchase_unit || '-'
     const normalizedBomUnitValue =
       watchedBomUnit || normalizeBomUnit(editingMaterial.unit) || '㎡'
     const bomUnitLabel =
@@ -965,10 +950,7 @@ const MaterialMasterPage = () => {
                 </Descriptions.Item>
                 <Descriptions.Item label="BOM单价/单位">
                   {formatCurrency(deriveBomUnitPrice(editingMaterial), editingMaterial.currency)} /{' '}
-                  {getBomUnitLabel(editingMaterial.unit) ??
-                    editingMaterial.unit ??
-                    getFallbackUnitLabelByCalcMethod(editingMaterial.calculation_method) ??
-                    '-'}
+                  {getBomUnitLabel(editingMaterial.unit) ?? editingMaterial.unit ?? '-'}
                 </Descriptions.Item>
                 <Descriptions.Item label="备注">{editingMaterial.bom_notes || '-'}</Descriptions.Item>
                 <Descriptions.Item label="最近同步">

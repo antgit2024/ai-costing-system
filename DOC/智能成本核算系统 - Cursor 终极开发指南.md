@@ -48,7 +48,7 @@
 | `material_id` | INT, PK, AI | 物料ID |
 | `material_code` | VARCHAR(50), UNIQUE | 物料编码 |
 | `material_name` | VARCHAR(255) | 物料名称 |
-| `unit_price` | DECIMAL(10, 2) | 最新采购单价 |
+| `unit_price` | DECIMAL(10, 2) | 最新入库单价 |
 | `unit` | VARCHAR(10) | 单位（如：米, 平方, 个） |
 | `updated_at` | DATETIME | 更新时间 |
 

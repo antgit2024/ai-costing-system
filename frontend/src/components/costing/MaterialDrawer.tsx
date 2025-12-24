@@ -58,16 +58,26 @@ const MaterialDrawer = ({ materialId, open, onClose, onUpdated }: MaterialDrawer
   const purchaseSpec =
     rawFormData?.textField_lxo1y6ab ?? materialMetadata?.textField_lxo1y6ab ?? ''
   const purchaseUnitPrice = materialData?.unit_price !== undefined ? Number(materialData.unit_price) : undefined
+  const inboundUnitFromYida =
+    (rawFormData?.selectField_mjjgsdlp ?? materialMetadata?.selectField_mjjgsdlp ?? materialData?.purchase_unit) || ''
+  const inboundUnitPriceFromYidaRaw = rawFormData?.numberField_mjjgsdlr ?? materialMetadata?.numberField_mjjgsdlr
+  const inboundUnitPriceFromYida =
+    inboundUnitPriceFromYidaRaw !== undefined && inboundUnitPriceFromYidaRaw !== null && String(inboundUnitPriceFromYidaRaw).trim()
+      ? Number(inboundUnitPriceFromYidaRaw)
+      : undefined
+  const purchaseToInboundFormula =
+    rawFormData?.numberField_mjjgsdlq ?? materialMetadata?.numberField_mjjgsdlq ?? ''
   const computedBomUnitPrice = useMemo(() => {
-    if (purchaseUnitPrice === undefined) {
+    const basePrice = inboundUnitPriceFromYida ?? purchaseUnitPrice
+    if (basePrice === undefined) {
       return undefined
     }
     const conversion = Number(conversionPurchaseValue || 0)
     if (!conversion) {
       return undefined
     }
-    return purchaseUnitPrice / conversion
-  }, [purchaseUnitPrice, conversionPurchaseValue])
+    return basePrice / conversion
+  }, [inboundUnitPriceFromYida, purchaseUnitPrice, conversionPurchaseValue])
   const bomUnitDisplay =
     bomUnitValue || materialData?.unit || materialData?.purchase_unit || '-'
 
@@ -146,11 +156,14 @@ const MaterialDrawer = ({ materialId, open, onClose, onUpdated }: MaterialDrawer
               message={
                 <Space direction="vertical" size={0}>
                   <Text>
-                    采购单价/单位：
+                    入库单价/单位：
                     <Text strong>
-                      {formatCurrency(materialData.unit_price, materialData.currency)} /{' '}
-                      {materialData.purchase_unit || materialData.unit || '-'}
+                      {formatCurrency(inboundUnitPriceFromYida ?? materialData.unit_price, materialData.currency)} /{' '}
+                      {inboundUnitFromYida || materialData.purchase_unit || materialData.unit || '-'}
                     </Text>
+                  </Text>
+                  <Text>
+                    采购转入库公式：<Text strong>{purchaseToInboundFormula || '-'}</Text>
                   </Text>
                   {purchaseSpec && (
                     <Text>
@@ -171,7 +184,7 @@ const MaterialDrawer = ({ materialId, open, onClose, onUpdated }: MaterialDrawer
                 / {bomUnitDisplay}
               </Text>
               <div>
-                <Text type="secondary">根据采购单价与换算系数实时计算，用于绑定虚拟物料</Text>
+                <Text type="secondary">根据入库单价与换算系数实时计算，用于绑定虚拟物料</Text>
               </div>
             </div>
           </Form.Item>
@@ -179,7 +192,7 @@ const MaterialDrawer = ({ materialId, open, onClose, onUpdated }: MaterialDrawer
             <Select options={BOM_UNIT_SELECT_OPTIONS} />
           </Form.Item>
           <Form.Item
-            label="采购→BOM 换算"
+            label="入库→BOM 换算"
             name="conversion_purchase_to_bom"
             rules={[
               { required: true, message: '请输入转换系数' },

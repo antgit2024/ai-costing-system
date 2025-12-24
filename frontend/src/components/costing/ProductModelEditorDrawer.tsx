@@ -3261,7 +3261,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                     {(() => {
                                       const m: any = materialPreviewQuery.data
                                       if (!m) return '-'
-                                      const pu = m.purchase_unit || '采购单位'
+                                      const pu = m.purchase_unit || '入库单位'
                                       const bomUnit = normalizeUnit(m.unit) || 'BOM单位'
                                       const c = Number(m.conversion_purchase_to_bom)
                                       if (!Number.isFinite(c) || c <= 0) return '-'

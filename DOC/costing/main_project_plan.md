@@ -31,7 +31,7 @@
 ### Phase 1 – 数据与同步中心（2 周）
 - **Backend**：
   - 实现宜搭物料同步 job（定时与手动触发），写入 `materials`。
-  - 统一将“采购单位价格 + 换算公式”转换为 BOM 单位单价，保存 `bom_unit_price`，同时保留采购单位/单价与换算公式。
+  - 统一将“入库单位价格 + 换算公式”转换为 BOM 单位单价，保存 `bom_unit_price`，同时保留入库单位/单价与换算公式。
   - 开发 ERP/Excel 订单导入 API：解析 Excel → `sales_orders`、`order_items`。
   - 提供同步状态 API 与审计表。
 - **Frontend**：
@@ -47,8 +47,8 @@
 | 物料类型 | 主料/辅料 | `material_type` |  |
 | 分类 / 模型类目 | 业务分类 | `category` / `model_category` | 用于筛选 |
 | BOM单位 | 计算单位 | `unit` |  |
-| 采购单价 或 固定成本价 | 单价 | `unit_price` | 需确认取值逻辑 |
-| 采购单位 & 盘点单位 | 不同单位 | `purchase_unit` / `inventory_unit` | 用于换算 |
+| 入库单价 或 固定成本价 | 单价 | `unit_price` | 需确认取值逻辑 |
+| 入库单位 & 盘点单位 | 不同单位 | `purchase_unit` / `inventory_unit` | 用于换算 |
 | 供应商（编码+名称） | 来源供应商 | `supplier_code` / `supplier_name` |  |
 | 物料启用 / 状态 | 启用标记 | `is_active` / `status` |  |
 | 创建时间 / 修改时间 | 时间戳 | `source_created_at` / `source_updated_at` |  |
@@ -76,7 +76,7 @@
   - 元数据：班组、说明、质检要求、状态等
 - **工艺模块表**（process_modules）：
   - 由“物料清单（process_materials）+ 工序引用（process_labors）”组成
-  - 物料部分使用 BOM 单位及换算后的单价，保留采购单位/单价信息
+  - 物料部分使用 BOM 单位及换算后的单价，保留入库单位/单价信息
   - 工序部分可同时配置固定工时（LED 接线等不随尺寸变化）与按周长/面积/数量计价项
   - 引用 PDF 示例（《谌婷婷发起的工艺列表_1765587959158.pdf》）的结构：材料区、工序区、质检区
 - **模型引用**：

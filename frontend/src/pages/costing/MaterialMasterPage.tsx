@@ -687,7 +687,7 @@ const MaterialMasterPage = () => {
       },
     },
     {
-      title: '采购单价/单位',
+      title: '入库单价/单位',
       key: 'unit_price',
       width: 180,
       render: (_, record) => (
@@ -905,6 +905,9 @@ const MaterialMasterPage = () => {
         : deriveBomUnitPrice(editingMaterial)
     const purchaseSpec = getFormValue(editingMaterial, 'textField_lxo1y6ab')
     const costFormula = getFormValue(editingMaterial, 'textField_m3pgyx4d')
+    const inboundUnitFromYida = getFormValue(editingMaterial, 'selectField_mjjgsdlp') || purchaseUnitLabel
+    const inboundUnitPriceFromYida = parseDecimal(getFormValue(editingMaterial, 'numberField_mjjgsdlr'))
+    const purchaseToInboundFormula = getFormValue(editingMaterial, 'numberField_mjjgsdlq')
 
     return (
       <Tabs
@@ -925,9 +928,11 @@ const MaterialMasterPage = () => {
                 <Descriptions.Item label="计算方式">
                   {getCalculationMethodLabel(editingMaterial.calculation_method)}
                 </Descriptions.Item>
-                <Descriptions.Item label="采购单价/单位">
-                  {formatCurrency(editingMaterial.unit_price, editingMaterial.currency)} /{' '}
-                  {purchaseUnitLabel}
+                <Descriptions.Item label="入库单价/单位">
+                  {formatCurrency(inboundUnitPriceFromYida ?? editingMaterial.unit_price, editingMaterial.currency)} / {inboundUnitFromYida || '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="采购转入库公式">
+                  {purchaseToInboundFormula || '-'}
                 </Descriptions.Item>
                 <Descriptions.Item label="BOM单价/单位">
                   {formatCurrency(deriveBomUnitPrice(editingMaterial), editingMaterial.currency)} /{' '}
@@ -966,7 +971,7 @@ const MaterialMasterPage = () => {
               <Form layout="vertical" form={costForm} onFinish={handleCostFormSubmit}>
                 <Form.Item
                   label="BOM单价/单位"
-                  extra="= 采购单价 ÷ 采购→BOM 换算，实时推算，仅供本地核对"
+                  extra="= 入库单价 ÷ 入库→BOM 换算，实时推算，仅供本地核对"
                 >
                   <Input
                     disabled
@@ -1009,29 +1014,20 @@ const MaterialMasterPage = () => {
                     )}
                   </div>
                 )}
-                <Row gutter={16}>
-                  <Col xs={24} md={12}>
-                    <Form.Item label="采购单位">
-                      <Input value={purchaseUnitLabel} disabled />
-                    </Form.Item>
-                  </Col>
-                  <Col xs={24} md={12}>
-                    <Form.Item
-                      label="BOM 单位"
-                      name="bom_unit"
-                      rules={[{ required: true, message: '请选择 BOM 单位' }]}
-                    >
-                      <Select options={BOM_UNIT_OPTIONS} placeholder="请选择 BOM 单位" />
-                    </Form.Item>
-                  </Col>
-                </Row>
+                <Form.Item
+                  label="BOM 单位"
+                  name="bom_unit"
+                  rules={[{ required: true, message: '请选择 BOM 单位' }]}
+                >
+                  <Select options={BOM_UNIT_OPTIONS} placeholder="请选择 BOM 单位" />
+                </Form.Item>
                 <Row gutter={16}>
                   <Col xs={24} md={12}>
                     <Form.Item
-                      label={`采购→BOM 换算（1 ${purchaseUnitLabel} = ? ${bomUnitLabel}）`}
+                      label={`入库→BOM 换算（1 ${inboundUnitFromYida || purchaseUnitLabel} = ? ${bomUnitLabel}）`}
                       name="conversion_purchase_to_bom"
                       rules={[
-                        { required: true, message: '请输入采购→BOM 换算系数' },
+                        { required: true, message: '请输入入库→BOM 换算系数' },
                         positiveNumberRule('换算系数必须大于 0'),
                       ]}
                     >

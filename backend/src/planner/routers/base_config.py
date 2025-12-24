@@ -41,6 +41,8 @@ class YidaMaterialSyncRequest(BaseModel):
     dry_run: bool = False
     config_path: Optional[str] = None
     dump_path: Optional[str] = None
+    # 可选：仅同步指定物料编码（避免每次全量几千条）
+    material_codes: Optional[list[str]] = None
 
 
 class YidaProcessSyncRequest(BaseModel):
@@ -72,7 +74,14 @@ def sync_yida_materials(
         limit=payload.limit,
         dry_run=payload.dry_run,
         dump_path=payload.dump_path,
-        payload={"dump_path": payload.dump_path} if payload.dump_path else {},
+        payload={
+            **({"dump_path": payload.dump_path} if payload.dump_path else {}),
+            **(
+                {"material_codes": [c for c in (payload.material_codes or []) if str(c).strip()]}
+                if payload.material_codes
+                else {}
+            ),
+        },
     )
     db.add(job)
     db.commit()

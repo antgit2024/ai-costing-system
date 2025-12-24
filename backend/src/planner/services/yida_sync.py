@@ -337,9 +337,11 @@ class MaterialSyncService:
         limit: Optional[int] = None,
         dry_run: bool = False,
         dump_path: Optional[Path] = None,
+        material_codes: Optional[set[str]] = None,
     ) -> MaterialSyncResult:
         result = MaterialSyncResult()
         dump_buffer: list[Any] = []
+        remaining = set(material_codes or [])
 
         try:
             for record in self.client.fetch_instances(limit=limit):
@@ -354,8 +356,19 @@ class MaterialSyncService:
                         result.errors.append(f"{record.get('formInstanceId', 'unknown')}: {error}")
                     continue
 
+                # 可选：仅同步指定物料编码
+                if remaining:
+                    code = normalized.material_code
+                    if code not in remaining:
+                        # 仍然会遍历宜搭数据，但不会落库（直到找到目标物料）
+                        continue
+
                 self._upsert_material(normalized, result)
                 result.processed += 1
+                if remaining:
+                    remaining.discard(normalized.material_code)
+                    if not remaining:
+                        break
 
             if dump_path is not None:
                 dump_path.parent.mkdir(parents=True, exist_ok=True)
@@ -752,10 +765,13 @@ def run_material_sync_job(job_id: str) -> None:
         payload = job.payload or {}
         dump_value = payload.get("dump_path")
         dump_path = Path(dump_value) if dump_value else None
+        codes_value = payload.get("material_codes") or []
+        material_codes = {str(c).strip() for c in codes_value if str(c).strip()} if codes_value else None
         result = service.sync_materials(
             limit=job.limit,
             dry_run=job.dry_run,
             dump_path=dump_path,
+            material_codes=material_codes,
         )
 
         job.status = "succeeded"

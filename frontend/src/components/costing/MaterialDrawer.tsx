@@ -12,12 +12,13 @@ import {
   Typography,
   message,
 } from 'antd'
+import CloudSyncOutlined from '@ant-design/icons/lib/icons/CloudSyncOutlined'
 import { useEffect, useMemo } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { fetchMaterial, updateMaterial } from '@/services/planner'
+import { fetchMaterial, fetchMaterialSyncJob, triggerMaterialSync, updateMaterial } from '@/services/planner'
 import { MATERIAL_STATUS_OPTIONS } from '@/constants/planner'
-import { BOM_UNIT_SELECT_OPTIONS } from '@/constants/calculationMethods'
+import { BOM_UNIT_SELECT_OPTIONS, getDefaultUnitByCalculationMethod } from '@/constants/calculationMethods'
 import type { Material, MaterialStatusUpdatePayload } from '@/types/planner'
 
 const { Text } = Typography
@@ -88,7 +89,13 @@ const MaterialDrawer = ({ materialId, open, onClose, onUpdated }: MaterialDrawer
     return basePrice / conversion
   }, [purchaseUnitPrice, conversionPurchaseValue])
   const bomUnitDisplay =
-    bomUnitValue || materialData?.unit || materialData?.purchase_unit || '-'
+    bomUnitValue ||
+    materialData?.unit ||
+    materialData?.purchase_unit ||
+    (materialData?.calculation_method
+      ? getDefaultUnitByCalculationMethod(materialData.calculation_method as any)
+      : undefined) ||
+    '-'
 
   useEffect(() => {
     if (materialQuery.data) {
@@ -147,7 +154,50 @@ const MaterialDrawer = ({ materialId, open, onClose, onUpdated }: MaterialDrawer
   }, [materialQuery.data])
 
   return (
-    <Drawer title={drawerTitle} width={520} open={open} onClose={onClose} destroyOnClose>
+    <Drawer
+      title={drawerTitle}
+      width={520}
+      open={open}
+      onClose={onClose}
+      destroyOnClose
+      extra={
+        materialData ? (
+          <Button
+            icon={<CloudSyncOutlined />}
+            onClick={async () => {
+              try {
+                const job = await triggerMaterialSync({
+                  requested_by: 'material_drawer',
+                  limit: 5000,
+                  material_codes: [materialData.material_code],
+                })
+                message.success('已触发同步任务，正在刷新…')
+                const jobId = (job as any)?.id
+                if (jobId) {
+                  for (let i = 0; i < 20; i++) {
+                    await new Promise((r) => setTimeout(r, 1000))
+                    const current = await fetchMaterialSyncJob(jobId)
+                    if (current?.status === 'succeeded' || current?.status === 'completed') {
+                      break
+                    }
+                    if (current?.status === 'failed') {
+                      message.error(current?.error_message || '同步失败')
+                      break
+                    }
+                  }
+                }
+                queryClient.invalidateQueries({ queryKey: ['material', materialId] })
+                queryClient.invalidateQueries({ queryKey: ['materials'] })
+              } catch (err: any) {
+                message.error((err as Error)?.message || '同步失败')
+              }
+            }}
+          >
+            同步宜搭
+          </Button>
+        ) : null
+      }
+    >
       {materialQuery.isLoading ? (
         <div style={{ textAlign: 'center', padding: 48 }}>
           <Spin />
@@ -168,7 +218,12 @@ const MaterialDrawer = ({ materialId, open, onClose, onUpdated }: MaterialDrawer
                     入库单价/单位：
                     <Text strong>
                       {formatCurrency(materialData.unit_price, materialData.currency)} /{' '}
-                      {materialData.purchase_unit || materialData.unit || '-'}
+                      {materialData.purchase_unit ||
+                        materialData.unit ||
+                        (materialData.calculation_method
+                          ? getDefaultUnitByCalculationMethod(materialData.calculation_method as any)
+                          : undefined) ||
+                        '-'}
                     </Text>
                   </Text>
                   <Text>

@@ -405,14 +405,21 @@ export const exportMaterials = async (
 }
 
 export interface MaterialSyncRequest {
+  requested_by?: string
   limit?: number
   dry_run?: boolean
   config_path?: string
   dump_path?: string
+  material_codes?: string[]
 }
 
 export const triggerMaterialSync = async (payload: MaterialSyncRequest = {}) => {
   const response = await plannerClient.post('/base-config/materials/sync-yida', payload)
+  return response.data
+}
+
+export const fetchMaterialSyncJob = async (jobId: string) => {
+  const response = await plannerClient.get(`/base-config/materials/sync-jobs/${jobId}`)
   return response.data
 }
 

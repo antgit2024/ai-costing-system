@@ -40,6 +40,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import { MATERIAL_CATEGORIES } from '@/constants/materialCategories'
 import {
   exportMaterials,
+  fetchMaterialSyncJob,
   fetchMaterialSyncLogs,
   fetchMaterials,
   fetchMaterialVirtualLinks,
@@ -262,6 +263,15 @@ const getMaterialTypeLabel = (record: Material): string => {
       return '主料'
     default:
       return record.material_type || '-'
+  }
+}
+
+const getFallbackUnitLabelByCalcMethod = (calcMethod?: string | null): string | undefined => {
+  if (!calcMethod) return undefined
+  try {
+    return getDefaultUnitByCalculationMethod(calcMethod as any) || undefined
+  } catch {
+    return undefined
   }
 }
 
@@ -693,7 +703,12 @@ const MaterialMasterPage = () => {
       render: (_, record) => (
         <Space direction="vertical" size={0}>
           <Text>{formatCurrency(record.unit_price, record.currency)}</Text>
-          <Text type="secondary">{record.purchase_unit || record.unit || '-'}</Text>
+          <Text type="secondary">
+            {record.purchase_unit ||
+              record.unit ||
+              getFallbackUnitLabelByCalcMethod(record.calculation_method) ||
+              '-'}
+          </Text>
         </Space>
       ),
     },
@@ -883,7 +898,10 @@ const MaterialMasterPage = () => {
     }
     const virtualLinks = materialVirtualLinksQuery.data ?? []
     const imageUrls = getImageUrls(editingMaterial)
-    const purchaseUnitLabel = editingMaterial.purchase_unit || '-'
+    const purchaseUnitLabel =
+      editingMaterial.purchase_unit ||
+      getFallbackUnitLabelByCalcMethod(editingMaterial.calculation_method) ||
+      '-'
     const normalizedBomUnitValue =
       watchedBomUnit || normalizeBomUnit(editingMaterial.unit) || '㎡'
     const bomUnitLabel =
@@ -947,7 +965,10 @@ const MaterialMasterPage = () => {
                 </Descriptions.Item>
                 <Descriptions.Item label="BOM单价/单位">
                   {formatCurrency(deriveBomUnitPrice(editingMaterial), editingMaterial.currency)} /{' '}
-                  {getBomUnitLabel(editingMaterial.unit) ?? editingMaterial.unit ?? '-'}
+                  {getBomUnitLabel(editingMaterial.unit) ??
+                    editingMaterial.unit ??
+                    getFallbackUnitLabelByCalcMethod(editingMaterial.calculation_method) ??
+                    '-'}
                 </Descriptions.Item>
                 <Descriptions.Item label="备注">{editingMaterial.bom_notes || '-'}</Descriptions.Item>
                 <Descriptions.Item label="最近同步">
@@ -1324,6 +1345,50 @@ const MaterialMasterPage = () => {
         open={detailDrawerOpen}
         destroyOnClose
         onClose={closeMaterialDrawer}
+        extra={
+          editingMaterial ? (
+            <Button
+              icon={<CloudSyncOutlined />}
+              loading={syncing}
+              onClick={async () => {
+                try {
+                  const job = await triggerMaterialSync({
+                    requested_by: 'material_drawer',
+                    limit: 5000,
+                    material_codes: [editingMaterial.material_code],
+                  })
+                  message.success('已触发同步任务，正在刷新…')
+                  const jobId = job?.id
+                  if (jobId) {
+                    for (let i = 0; i < 20; i++) {
+                      await new Promise((r) => setTimeout(r, 1000))
+                      const current = await fetchMaterialSyncJob(jobId)
+                      if (current?.status === 'succeeded' || current?.status === 'completed') {
+                        break
+                      }
+                      if (current?.status === 'failed') {
+                        message.error(current?.error_message || '同步失败')
+                        break
+                      }
+                    }
+                  }
+                  await materialsQuery.refetch()
+                  if (editingMaterial?.id) {
+                    const refreshed = await fetchMaterials({ search: editingMaterial.material_code, page: 1, page_size: 1 })
+                    const hit = refreshed?.items?.[0]
+                    if (hit) {
+                      setEditingMaterial(hit)
+                    }
+                  }
+                } catch (err: any) {
+                  message.error(getErrorMessage(err))
+                }
+              }}
+            >
+              同步宜搭（本物料）
+            </Button>
+          ) : null
+        }
       >
         {editingMaterial && renderMaterialDrawerTabs()}
       </Drawer>

@@ -185,11 +185,21 @@ const getBomUnitPrice = (record: Material): number | undefined => {
 }
 
 const deriveBomUnitPrice = (record: Material): number | undefined => {
+  // display 与“推导BOM价格”按钮保持同口径：缺关键输入则不推导
+  if (!record.unit || !String(record.unit).trim()) {
+    return undefined
+  }
+  if (!record.purchase_unit || !String(record.purchase_unit).trim()) {
+    return undefined
+  }
   const metadataPrice = getBomUnitPrice(record)
   if (metadataPrice !== undefined) {
     return metadataPrice
   }
   if (record.unit_price === undefined || record.unit_price === null) {
+    return undefined
+  }
+  if (Number(record.unit_price) <= 0) {
     return undefined
   }
   const conversion = parseDecimal(record.conversion_purchase_to_bom)
@@ -204,8 +214,14 @@ const getBomDeriveIssue = (record: Material): string | null => {
   if (!record.unit || !String(record.unit).trim()) {
     return '未选择 BOM 单位（请在物料详情-成本参数里选择并保存）'
   }
+  if (!record.purchase_unit || !String(record.purchase_unit).trim()) {
+    return '入库单位缺失（请先同步/补齐入库单位；不要自动补齐）'
+  }
   if (record.unit_price === undefined || record.unit_price === null) {
     return '入库单价缺失（请先同步/录入入库单价）'
+  }
+  if (Number(record.unit_price) <= 0) {
+    return '入库单价为 0（可能未同步完成/数据缺失）'
   }
   const conversion = parseDecimal(record.conversion_purchase_to_bom)
   if (!conversion || conversion <= 0) {
@@ -886,9 +902,15 @@ const MaterialMasterPage = () => {
           <Space direction="vertical" size={0}>
             <Text>{formatCurrency(bomPrice, record.currency)}</Text>
             {issue ? (
-              <Tooltip title={issue}>
-                <Text style={{ color: '#cf1322' }}>{bomUnitText}</Text>
-              </Tooltip>
+              <>
+                <Tooltip title={issue}>
+                  <Text style={{ color: '#cf1322' }}>{bomUnitText}</Text>
+                </Tooltip>
+                {/* 不依赖 hover：直接把原因显示出来（更符合运营场景） */}
+                <Text style={{ color: '#cf1322', fontSize: 12 }} ellipsis={{ tooltip: issue }}>
+                  {issue}
+                </Text>
+              </>
             ) : (
               <Text type="secondary">{bomUnitText}</Text>
             )}

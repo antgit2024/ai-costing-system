@@ -26,23 +26,24 @@ def _to_decimal(value: Any) -> Optional[Decimal]:
 def _derive_bom_unit_price(material: models.Material) -> Optional[Decimal]:
     """
     BOM 单价推导口径（与前端/历史逻辑一致）：
-    - 若 metadata_json.bom_unit_price 已存在且可解析 → 直接使用（不覆盖）
-    - 否则：BOM 单价 = 入库单价(unit_price) ÷ 入库→BOM 换算(conversion_purchase_to_bom)
+    - 每次都按最新“入库单价 + 入库→BOM 换算”重新推导并覆盖（不沿用旧快照）
+    - 公式：BOM 单价 = 入库单价(unit_price) ÷ 入库→BOM 换算(conversion_purchase_to_bom)
 
     说明：
     - 本接口的“推导”是为了把可推导的值落库，作为后续算价/扣库的稳定输入。
     - BOM 单位使用 materials.unit（由用户在“BOM 单位”下拉选择保存）。
     """
-    meta = material.metadata_json or {}
-    raw = meta.get("bom_unit_price")
-    if raw not in (None, ""):
-        parsed = _to_decimal(raw)
-        if parsed is not None:
-            return parsed
+    # 为了避免“看起来有值但口径不明”，缺关键输入时一律不推导
+    if not (material.unit or "").strip():
+        return None
+    if not (material.purchase_unit or "").strip():
+        return None
 
     unit_price = _to_decimal(material.unit_price)
     conversion = _to_decimal(material.conversion_purchase_to_bom)
     if unit_price is None or conversion is None:
+        return None
+    if unit_price <= 0:
         return None
     if conversion <= 0:
         return None

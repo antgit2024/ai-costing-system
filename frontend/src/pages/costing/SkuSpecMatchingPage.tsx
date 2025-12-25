@@ -250,6 +250,9 @@ export default function SkuSpecMatchingPage() {
       setIsPreviewMode(false)
       setPreviewItems([])
       setPreviewSelectedKeys([])
+      // 保存后这些记录会从“未解析”列表中移除；自动切到“已解析”避免用户以为丢了
+      setListTab('parsed')
+      setPage(1)
       listQuery.refetch()
     },
     onError: (err: any) => {

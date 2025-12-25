@@ -1758,6 +1758,21 @@ class ShipmentImportPreviewIssue(BaseModel):
     reason: str
 
 
+class ShipmentImportPreviewReadyItem(BaseModel):
+    row_index: Optional[int] = None
+    shipment_no: Optional[str] = None
+    sku_code: Optional[str] = None
+    spec_text: Optional[str] = None
+    qty: Optional[Decimal] = None
+    model_version_id: Optional[str] = None
+    bound_model_code: Optional[str] = None
+    bound_model_name: Optional[str] = None
+    bound_version_label: Optional[str] = None
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
 class ShipmentImportPreviewResponse(BaseModel):
     preview_id: str  # file_hash
     file_name: str
@@ -1769,6 +1784,7 @@ class ShipmentImportPreviewResponse(BaseModel):
     unbound_sku_rows: int
     warnings: List[Dict[str, Any]] = Field(default_factory=list)
     issues: List[ShipmentImportPreviewIssue] = Field(default_factory=list)
+    ready_items: List[ShipmentImportPreviewReadyItem] = Field(default_factory=list)
 
 
 class ShipmentImportExecuteRequest(BaseModel):

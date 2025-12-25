@@ -1007,6 +1007,7 @@ export const previewShipmentsXlsx = async (params: {
   unbound_sku_rows: number
   warnings: Array<Record<string, unknown>>
   issues: Array<Record<string, unknown>>
+  ready_items: Array<Record<string, unknown>>
 }> => {
   const formData = new FormData()
   formData.append('file', params.file)

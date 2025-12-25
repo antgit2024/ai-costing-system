@@ -10,6 +10,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from openpyxl import load_workbook
 from openpyxl.utils.datetime import from_excel
 from sqlalchemy.orm import Session
+from sqlalchemy.orm import joinedload
 
 from .. import models
 from . import bom_generation_service, product_model_service, spec_parser_service, sku_master_service
@@ -501,6 +502,7 @@ def preview_shipment_xlsx(
     export_date: Optional[str],
     requested_by: Optional[str],
     issue_limit: int = 200,
+    ready_limit: int = 200,
 ) -> Dict[str, Any]:
     """
     Preview-only: parse xlsx rows, compute readiness & issues, and cache file bytes for later execute.
@@ -516,6 +518,35 @@ def preview_shipment_xlsx(
     missing_spec_rows = 0
     unbound_sku_rows = 0
     issues: List[Dict[str, Any]] = []
+    ready_items: List[Dict[str, Any]] = []
+
+    # Preload bindings for this file (avoid per-row db calls)
+    sku_codes_all = [str(p.get("sku_code") or "").strip() for p in rows if str(p.get("sku_code") or "").strip()]
+    bindings = (
+        db.query(models.SkuModelVersionMapping)
+        .filter(
+            models.SkuModelVersionMapping.sku_code.in_(list(set(sku_codes_all))),
+            models.SkuModelVersionMapping.is_active.is_(True),
+            models.SkuModelVersionMapping.is_archived.is_(False),
+        )
+        .order_by(models.SkuModelVersionMapping.sku_code.asc(), models.SkuModelVersionMapping.created_at.desc())
+        .all()
+    )
+    latest_binding: Dict[str, models.SkuModelVersionMapping] = {}
+    for b in bindings:
+        if b.sku_code not in latest_binding:
+            latest_binding[b.sku_code] = b
+
+    version_ids = [b.model_version_id for b in latest_binding.values() if getattr(b, "model_version_id", None)]
+    versions = (
+        db.query(models.ProductModelVersion)
+        .options(joinedload(models.ProductModelVersion.model))
+        .filter(models.ProductModelVersion.id.in_(list(set(version_ids))), models.ProductModelVersion.is_archived.is_(False))
+        .all()
+        if version_ids
+        else []
+    )
+    by_vid: Dict[str, models.ProductModelVersion] = {v.id: v for v in versions}
 
     for payload in rows:
         total_rows += 1
@@ -550,7 +581,7 @@ def preview_shipment_xlsx(
                     }
                 )
             continue
-        binding = product_model_service.get_active_sku_binding(db, str(sku_code))
+        binding = latest_binding.get(str(sku_code))
         if not binding:
             unbound_sku_rows += 1
             if len(issues) < issue_limit:
@@ -565,6 +596,22 @@ def preview_shipment_xlsx(
                 )
             continue
         ready_rows += 1
+        if len(ready_items) < max(min(int(ready_limit or 200), 1000), 1):
+            v = by_vid.get(getattr(binding, "model_version_id", None))
+            m = getattr(v, "model", None) if v else None
+            ready_items.append(
+                {
+                    "row_index": row_index,
+                    "shipment_no": shipment_no,
+                    "sku_code": sku_code,
+                    "spec_text": spec_text,
+                    "qty": payload.get("qty"),
+                    "model_version_id": getattr(binding, "model_version_id", None),
+                    "bound_model_code": getattr(m, "model_code", None),
+                    "bound_model_name": getattr(m, "model_name", None),
+                    "bound_version_label": getattr(v, "version_label", None),
+                }
+            )
 
     # cache file for execute step
     _ensure_preview_dir()
@@ -586,6 +633,7 @@ def preview_shipment_xlsx(
         "unbound_sku_rows": unbound_sku_rows,
         "warnings": warnings,
         "issues": issues,
+        "ready_items": ready_items,
         "requested_by": requested_by,
     }
 

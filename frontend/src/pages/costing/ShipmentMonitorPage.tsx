@@ -28,9 +28,10 @@ import {
   fetchShipmentBomSnapshots,
   fetchShipmentExceptions,
   fetchShipmentImportBatches,
+  generateBom,
   previewShipmentsXlsx,
 } from '@/services/planner'
-import type { BomSnapshot, ShipmentException, ShipmentImportBatch } from '@/types/planner'
+import type { BomGenerateResponse, BomSnapshot, ShipmentException, ShipmentImportBatch } from '@/types/planner'
 
 const { Title, Text } = Typography
 
@@ -72,7 +73,7 @@ const ShipmentMonitorPage = () => {
   const [batchPage, setBatchPage] = useState(1)
   const [batchPageSize, setBatchPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<'batches' | 'exceptions' | 'snapshots'>('batches')
+  const [activeTab, setActiveTab] = useState<'batches' | 'exceptions' | 'snapshots' | 'parse-queue'>('batches')
 
   const [uploading, setUploading] = useState(false)
   const [uploadFile, setUploadFile] = useState<File | null>(null)
@@ -81,6 +82,9 @@ const ShipmentMonitorPage = () => {
   )
   const [uploadRequestedBy, setUploadRequestedBy] = useState<string>('planner_user')
   const [previewData, setPreviewData] = useState<any>(null)
+  const [queueDrawerOpen, setQueueDrawerOpen] = useState(false)
+  const [activeQueueRow, setActiveQueueRow] = useState<any>(null)
+  const [queueBomPreview, setQueueBomPreview] = useState<BomGenerateResponse | null>(null)
 
   const [exceptionResolved, setExceptionResolved] = useState<'unresolved' | 'resolved' | 'all'>(
     'unresolved',
@@ -129,6 +133,22 @@ const ShipmentMonitorPage = () => {
     queryFn: () => fetchShipmentBomSnapshots(snapshotQuery),
     enabled: activeTab === 'snapshots',
   })
+
+  const handleQueuePreviewBom = async (row: any) => {
+    try {
+      setActiveQueueRow(row)
+      setQueueDrawerOpen(true)
+      setQueueBomPreview(null)
+      const specText = safeString(row?.spec_text)
+      const skuCode = safeString(row?.sku_code)
+      const qty0 = Number(row?.qty ?? 1)
+      const qty = Number.isFinite(qty0) && qty0 > 0 ? qty0 : 1
+      const res = await generateBom({ spec_text: specText, sku_code: skuCode, quantity: qty })
+      setQueueBomPreview(res)
+    } catch (err: any) {
+      message.error(`BOM预览失败：${err?.response?.data?.detail ?? err?.message ?? 'unknown error'}`)
+    }
+  }
 
   const batchColumns: ColumnsType<ShipmentImportBatch> = [
     {
@@ -577,6 +597,69 @@ const ShipmentMonitorPage = () => {
               ),
             },
             {
+              key: 'parse-queue',
+              label: '解析队列（预览可执行）',
+              children: (
+                <Row gutter={[16, 16]}>
+                  <Col span={24}>
+                    <Card title="解析队列（来自“预览”结果）" size="small">
+                      {!previewData ? (
+                        <Alert type="info" showIcon message="请先在上方上传区点击“预览”，这里会展示可执行的记录列表。" />
+                      ) : (
+                        <>
+                          <Alert
+                            type="info"
+                            showIcon
+                            style={{ marginBottom: 12 }}
+                            message={`可执行记录：${previewData.ready_rows}/${previewData.total_rows}（点击行可预览BOM）`}
+                          />
+                          <Table
+                            rowKey={(r) => safeString((r as any).row_index) + '-' + safeString((r as any).sku_code)}
+                            size="small"
+                            dataSource={(previewData.ready_items ?? []) as any[]}
+                            pagination={{ pageSize: 20 }}
+                            columns={[
+                              { title: '行号', dataIndex: 'row_index', width: 80 },
+                              { title: '发货单号', dataIndex: 'shipment_no', width: 160, ellipsis: true },
+                              { title: 'SKU', dataIndex: 'sku_code', width: 160, ellipsis: true },
+                              {
+                                title: '交易规格',
+                                dataIndex: 'spec_text',
+                                render: (v) => (
+                                  <div style={{ whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.2 }}>
+                                    {safeString(v) || '-'}
+                                  </div>
+                                ),
+                              },
+                              { title: 'qty', dataIndex: 'qty', width: 90 },
+                              {
+                                title: '模型',
+                                dataIndex: 'bound_model_code',
+                                width: 220,
+                                render: (_v, r) =>
+                                  safeString((r as any).bound_model_code) ? (
+                                    <Space size={6}>
+                                      <Tag color="blue">{safeString((r as any).bound_model_code)}</Tag>
+                                      <span style={{ color: '#666' }}>{safeString((r as any).bound_model_name)}</span>
+                                    </Space>
+                                  ) : (
+                                    '-'
+                                  ),
+                              },
+                              { title: '标准版本', dataIndex: 'bound_version_label', width: 180, ellipsis: true },
+                            ]}
+                            onRow={(record) => ({
+                              onClick: () => handleQueuePreviewBom(record),
+                            })}
+                          />
+                        </>
+                      )}
+                    </Card>
+                  </Col>
+                </Row>
+              ),
+            },
+            {
               key: 'snapshots',
               label: 'BOM 快照查询',
               children: (
@@ -665,6 +748,67 @@ const ShipmentMonitorPage = () => {
           ]}
         />
       </div>
+
+      <Drawer
+        title="解析队列：BOM预览（扣库存清单）"
+        open={queueDrawerOpen}
+        onClose={() => {
+          setQueueDrawerOpen(false)
+          setActiveQueueRow(null)
+          setQueueBomPreview(null)
+        }}
+        width={980}
+      >
+        {activeQueueRow ? (
+          <Space direction="vertical" style={{ width: '100%' }}>
+            <Descriptions bordered size="small" column={2}>
+              <Descriptions.Item label="shipment_no">{safeString(activeQueueRow.shipment_no) || '-'}</Descriptions.Item>
+              <Descriptions.Item label="sku_code">{safeString(activeQueueRow.sku_code) || '-'}</Descriptions.Item>
+              <Descriptions.Item label="qty">{safeString(activeQueueRow.qty) || '-'}</Descriptions.Item>
+              <Descriptions.Item label="模型">
+                {safeString(activeQueueRow.bound_model_code) ? (
+                  <Space size={6}>
+                    <Tag color="blue">{safeString(activeQueueRow.bound_model_code)}</Tag>
+                    <span>{safeString(activeQueueRow.bound_model_name)}</span>
+                  </Space>
+                ) : (
+                  '-'
+                )}
+              </Descriptions.Item>
+              <Descriptions.Item label="交易规格" span={2}>
+                {safeString(activeQueueRow.spec_text) || '-'}
+              </Descriptions.Item>
+            </Descriptions>
+            <Card size="small" title="最终BOM（可扣库存行）">
+              {queueBomPreview ? (
+                <Table
+                  rowKey={(r) => safeString((r as any).line_index) + '-' + safeString((r as any).material_code)}
+                  size="small"
+                  pagination={false}
+                  columns={[
+                    { title: '#', dataIndex: 'line_index', width: 60 },
+                    { title: '编码', dataIndex: 'material_code', width: 140, ellipsis: true },
+                    { title: '名称', dataIndex: 'material_name', ellipsis: true },
+                    { title: '数量', dataIndex: 'computed_quantity', width: 120 },
+                    { title: '单位', dataIndex: 'unit_of_measure', width: 90 },
+                    { title: '计量', dataIndex: 'calculation_method', width: 110 },
+                  ]}
+                  dataSource={(queueBomPreview.final_material_lines ?? []) as any[]}
+                />
+              ) : (
+                <Text type="secondary">加载中…（若失败会在顶部提示）</Text>
+              )}
+            </Card>
+            {queueBomPreview?.trace ? (
+              <Card size="small" title="Trace（用于审计/排查）">
+                <pre style={{ margin: 0, maxHeight: 240, overflow: 'auto' }}>{jsonPretty(queueBomPreview.trace)}</pre>
+              </Card>
+            ) : null}
+          </Space>
+        ) : (
+          <Alert type="info" showIcon message="请选择一条解析队列记录" />
+        )}
+      </Drawer>
 
       <Drawer
         title="BOM 快照详情（只读）"

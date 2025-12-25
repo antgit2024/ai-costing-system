@@ -941,6 +941,37 @@ const ShipmentMonitorPage = () => {
                     ),
                   },
                   {
+                    key: 'inventory',
+                    label: `扣库清单（真实物料）`,
+                    children: Array.isArray((queueBomPreview as any)?.trace?.inventory?.inventory_lines) ? (
+                      <Table
+                        size="small"
+                        pagination={false}
+                        rowKey={(r) => safeString((r as any).material_code)}
+                        columns={[
+                          { title: '物料编码', dataIndex: 'material_code', width: 140, ellipsis: true },
+                          { title: '物料名称', dataIndex: 'material_name', ellipsis: true },
+                          { title: '单位', dataIndex: 'unit_of_measure', width: 90 },
+                          { title: '扣库数量', dataIndex: 'quantity', width: 140 },
+                          {
+                            title: '来源(展开)',
+                            dataIndex: 'sources',
+                            render: (v) => (Array.isArray(v) ? v.length : 0),
+                            width: 110,
+                          },
+                        ]}
+                        dataSource={((queueBomPreview as any)?.trace?.inventory?.inventory_lines ?? []) as any[]}
+                      />
+                    ) : (
+                      <Alert
+                        type="info"
+                        showIcon
+                        message="暂未生成扣库清单（真实物料展开）。"
+                        description="当前页面物料表显示的是模型BOM行（可能含虚拟物料）。扣库存应以“扣库清单（真实物料）”为准。"
+                      />
+                    ),
+                  },
+                  {
                     key: 'processes',
                     label: `工序（${(((queueBomPreview as any)?.trace?.costing?.process_lines ?? []) as any[]).length}）`,
                     children: Array.isArray((queueBomPreview as any)?.trace?.costing?.process_lines) ? (
@@ -1060,6 +1091,37 @@ const ShipmentMonitorPage = () => {
                         dataSource={snapshotLines}
                         pagination={false}
                         scroll={{ x: 960 }}
+                      />
+                    ),
+                  },
+                  {
+                    key: 'inventory',
+                    label: '扣库清单（真实物料）',
+                    children: Array.isArray((activeSnapshot as any)?.trace?.inventory?.inventory_lines) ? (
+                      <Table
+                        size="small"
+                        pagination={false}
+                        rowKey={(r) => safeString((r as any).material_code)}
+                        columns={[
+                          { title: '物料编码', dataIndex: 'material_code', width: 140, ellipsis: true },
+                          { title: '物料名称', dataIndex: 'material_name', ellipsis: true },
+                          { title: '单位', dataIndex: 'unit_of_measure', width: 90 },
+                          { title: '扣库数量', dataIndex: 'quantity', width: 140 },
+                          {
+                            title: '来源(展开)',
+                            dataIndex: 'sources',
+                            render: (v) => (Array.isArray(v) ? v.length : 0),
+                            width: 110,
+                          },
+                        ]}
+                        dataSource={((activeSnapshot as any)?.trace?.inventory?.inventory_lines ?? []) as any[]}
+                      />
+                    ) : (
+                      <Alert
+                        type="info"
+                        showIcon
+                        message="该快照未包含扣库清单（真实物料展开）。"
+                        description="可点快照列表的“回填”，重新生成后即可获得真实物料扣库清单。"
                       />
                     ),
                   },

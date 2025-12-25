@@ -3,6 +3,7 @@
 - **最近校对（北京时间 GMT+8）**：2025-12-25 04:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-25 06:08（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-25 14:40（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
+- **最近校对（北京时间 GMT+8）**：2025-12-25 15:10（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **分支**：`backup/20251214-1535`
 
 - **本轮闭环产物（Planner-Optimization / 方案评审稿）**：
@@ -53,6 +54,12 @@
 
 - **盘点/扣库模式确认（待后续实现）**：
   - 当前业务走“发货触发标准回冲（Backflush）按 BOM 标准比例扣真实物料”，月底盘点对真实物料做差异调整；虚拟物料不作为盘点库存对象。
+
+- **本轮补充（扣库清单：虚拟物料→真实物料展开）**：
+  - 背景：BOM 快照/预览的“物料”表可能主要是虚拟物料（VM），但库存扣减必须落在真实物料（Material）。
+  - 实现：`POST /api/planner/bom/generate` 的 `trace.inventory.inventory_lines` 返回“真实物料扣库清单”（把 virtual 行按 `virtual_material_bindings` 展开并聚合）。
+  - 前端：`/costing/shipments` 的 BOM 预览抽屉 / 快照详情抽屉新增 Tab：**扣库清单（真实物料）**，用于对账与后续扣库/盘点闭环。
+  - 提示：历史快照若缺失该字段，可用“回填”重算后补齐。
 
 - **本轮验收命令（必须）**：
   - Frontend：`npm -C frontend run build`

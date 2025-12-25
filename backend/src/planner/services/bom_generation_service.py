@@ -114,6 +114,7 @@ def generate_bom(
                 _push(add_line)
 
     costing = _attach_costing(db, final_lines, process_lines=process_lines, measurement=measurement)
+    inventory = _build_inventory_lines(db, final_lines)
 
     return {
         "final_material_lines": final_lines,
@@ -125,6 +126,7 @@ def generate_bom(
             "measurement_mm": measurement,
             "matched_variants": trace_hits,
             "costing": costing,
+            "inventory": inventory,
         },
     }
 
@@ -381,6 +383,149 @@ def _resolve_overhead_rate(db: Session, *, model_version_processes: List[models.
     if rate is None:
         rate = _read(model.metadata_json if model else None)
     return rate if rate is not None else Decimal("0.3")
+
+
+def _build_inventory_lines(db: Session, final_lines: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Build inventory deduction lines (REAL materials only).
+
+    Rules:
+    - real line => keep as-is (apply line loss_rate already included in computed_quantity? We keep computed_quantity here).
+    - virtual line => expand using virtual_material_bindings into real materials by quantity_ratio and binding.loss_rate.
+      expanded_qty = virtual_computed_qty * quantity_ratio * (1 + binding_loss_rate/100)
+
+    Output is stored under trace.inventory for snapshot/audit.
+    """
+    out_lines: List[Dict[str, Any]] = []
+    warnings: List[str] = []
+
+    # Preload bindings and materials for virtual lines
+    v_ids = [str(l.get("material_ref_id")) for l in final_lines if (l.get("material_kind") == "virtual" and l.get("material_ref_id"))]
+    v_ids = list({*v_ids})
+    bindings_by_virtual: Dict[str, List[models.VirtualMaterialBinding]] = {}
+    if v_ids:
+        rows = (
+            db.query(models.VirtualMaterialBinding)
+            .filter(models.VirtualMaterialBinding.virtual_material_id.in_(v_ids))
+            .all()
+        )
+        for b in rows:
+            bindings_by_virtual.setdefault(b.virtual_material_id, []).append(b)
+
+    mat_ids = list({str(b.material_id) for xs in bindings_by_virtual.values() for b in xs if b.material_id})
+    mats: Dict[str, models.Material] = {}
+    if mat_ids:
+        ms = db.query(models.Material).filter(models.Material.id.in_(mat_ids)).all()
+        mats = {m.id: m for m in ms}
+
+    def _d(v: Any, default: Decimal = Decimal("0")) -> Decimal:
+        if isinstance(v, Decimal):
+            return v
+        if v in (None, ""):
+            return default
+        try:
+            return Decimal(str(v))
+        except Exception:  # noqa: BLE001
+            return default
+
+    for line in final_lines:
+        kind = str(line.get("material_kind") or "real")
+        qty = _d(line.get("computed_quantity"), Decimal("0"))
+        if qty <= 0:
+            continue
+
+        if kind == "real":
+            out_lines.append(
+                {
+                    "source": "real_line",
+                    "from_line_index": line.get("line_index"),
+                    "material_id": line.get("material_ref_id"),
+                    "material_code": line.get("material_code"),
+                    "material_name": line.get("material_name"),
+                    "unit_of_measure": line.get("unit_of_measure"),
+                    "quantity": qty,
+                }
+            )
+            continue
+
+        if kind != "virtual":
+            # Unknown kinds are not inventory objects
+            continue
+
+        vid = str(line.get("material_ref_id") or "")
+        binds = bindings_by_virtual.get(vid) or []
+        if not binds:
+            warnings.append(f"虚拟物料未配置绑定：{line.get('material_code') or vid}")
+            continue
+
+        for b in binds:
+            m = mats.get(str(b.material_id))
+            if not m or m.is_archived:
+                warnings.append(f"虚拟物料绑定的真实物料不存在或已归档：{getattr(b,'material_id',None)}")
+                continue
+            ratio = _d(getattr(b, "quantity_ratio", None), Decimal("0"))
+            # safety: recipe legacy 0-100 => 0-1
+            if ratio > Decimal("1.5"):
+                ratio = ratio / Decimal("100")
+            loss = _d(getattr(b, "loss_rate", None), Decimal("0"))
+            loss_factor = Decimal("1") + (loss / Decimal("100"))
+            used = qty * ratio * loss_factor
+            if used <= 0:
+                continue
+            out_lines.append(
+                {
+                    "source": "virtual_expand",
+                    "from_line_index": line.get("line_index"),
+                    "virtual_code": line.get("material_code"),
+                    "virtual_name": line.get("material_name"),
+                    "material_id": m.id,
+                    "material_code": m.material_code,
+                    "material_name": m.material_name,
+                    "unit_of_measure": m.unit or line.get("unit_of_measure"),
+                    "quantity": used,
+                    "ratio": ratio,
+                    "binding_loss_rate": loss,
+                }
+            )
+
+    # Aggregate by real material_code for readability
+    agg: Dict[str, Dict[str, Any]] = {}
+    for r in out_lines:
+        code = str(r.get("material_code") or "")
+        if not code:
+            continue
+        agg.setdefault(
+            code,
+            {
+                "material_code": r.get("material_code"),
+                "material_name": r.get("material_name"),
+                "unit_of_measure": r.get("unit_of_measure"),
+                "quantity": Decimal("0"),
+                "sources": [],
+            },
+        )
+        agg[code]["quantity"] = _d(agg[code]["quantity"]) + _d(r.get("quantity"))
+        # keep limited trace
+        if len(agg[code]["sources"]) < 20:
+            agg[code]["sources"].append(
+                {
+                    "source": r.get("source"),
+                    "from_line_index": r.get("from_line_index"),
+                    "virtual_code": r.get("virtual_code"),
+                    "ratio": r.get("ratio"),
+                    "binding_loss_rate": r.get("binding_loss_rate"),
+                    "quantity": r.get("quantity"),
+                }
+            )
+
+    agg_lines = sorted(agg.values(), key=lambda x: str(x.get("material_code") or ""))
+    total_qty = sum([_d(x.get("quantity")) for x in agg_lines], Decimal("0"))
+    return {
+        "inventory_lines": agg_lines,
+        "inventory_line_count": len(agg_lines),
+        "inventory_total_quantity_sum": total_qty,
+        "warnings": warnings[:50],
+    }
 
 def _resolve_version(
     db: Session,

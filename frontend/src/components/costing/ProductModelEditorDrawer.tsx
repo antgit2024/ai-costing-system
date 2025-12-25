@@ -296,8 +296,9 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
 
   const [modules, setModules] = useState<ModuleLinkDraft[]>([])
   // ERP 口径：默认“从模块同步”应拉取最新模板值；如需保留已调参，再开启保留开关
-  const [syncKeepOverrides, setSyncKeepOverrides] = useState(false)
+  const [syncKeepOverrides, setSyncKeepOverrides] = useState(true)
   const [syncingFromModules, setSyncingFromModules] = useState(false)
+  const [syncSelectedModuleIds, setSyncSelectedModuleIds] = useState<string[]>([])
   const [savingLines, setSavingLines] = useState(false)
   const [refreshingMaterialPrices, setRefreshingMaterialPrices] = useState(false)
   const [summary, setSummary] = useState<{
@@ -536,6 +537,25 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     }
     if (Object.keys(next).length > 0) setVersionStatsById((prev) => ({ ...prev, ...next }))
   }, [open, filteredVersions])
+
+  // 默认全选模块（便于“勾选同步”）；当模块列表变化时自动补齐
+  useEffect(() => {
+    if (!open) return
+    const ids = (modules ?? []).map((m) => String(m.module_id)).filter((x) => !!x)
+    if (ids.length === 0) {
+      if (syncSelectedModuleIds.length !== 0) setSyncSelectedModuleIds([])
+      return
+    }
+    // 如果当前选择为空，或存在不在列表里的旧选择，则重置为全选
+    const cur = new Set((syncSelectedModuleIds ?? []).map((x) => String(x)))
+    const hasAny = cur.size > 0
+    const allIn = ids.every((id) => cur.has(id))
+    const allValid = [...cur].every((id) => ids.includes(id))
+    if (!hasAny || !allValid || !allIn) {
+      setSyncSelectedModuleIds(ids)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, modules])
 
   const computeVersionStats = async (versionId: string) => {
     if (!versionId) return
@@ -1461,6 +1481,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     }
     const nextModules = [...modules, ...appended].map((m, i) => ({ ...m, sequence_order: i + 1 }))
     setModules(nextModules)
+    // 默认全选：便于后续“勾选同步”
+    setSyncSelectedModuleIds(nextModules.map((m) => m.module_id))
     setModulePickerSelected([])
     setModulePickerOpen(false)
 
@@ -1478,6 +1500,15 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     try {
       setSyncingFromModules(true)
       const vid = await ensureVersion()
+      // 保留调参模式下：先保存当前清单，避免“同步返回覆盖编辑态”导致已调参数丢失
+      if (syncKeepOverrides && selectedVersionId) {
+        await updateProductModelVersionLines(selectedVersionId, {
+          sample: entryContext === 'standard' ? lockStandardSpec() : sampleSpec,
+          standard: lockStandardSpec(),
+          materials,
+          processes,
+        } as any)
+      }
       await updateProductModel(modelId, {
         modules: nextModules
           .slice()
@@ -1489,7 +1520,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
             metadata_json: m.metadata_json ?? {},
           })),
       } as any)
-      const res = await syncProductModelVersionFromModules(vid, { keep_overrides: true })
+      const appendedIds = appended.map((x) => x.module_id)
+      const res = await syncProductModelVersionFromModules(vid, { keep_overrides: true, module_ids: appendedIds })
       hydrateLinesFromApi(res)
       await queryClient.invalidateQueries({ queryKey: ['productModel', modelId] })
       await queryClient.invalidateQueries({ queryKey: ['productModelVersionLines', vid] })
@@ -1518,6 +1550,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
 
         const moduleId = target.module_id
         setModules(normalizedModules)
+        setSyncSelectedModuleIds(normalizedModules.map((m) => m.module_id))
         setMaterials((prev) => prev.filter((x: any) => getRowSourceModuleId(x) !== String(moduleId)))
         setProcesses((prev) => prev.filter((x: any) => getRowSourceModuleId(x) !== String(moduleId)))
 
@@ -1566,6 +1599,15 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       setSyncingFromModules(true)
       try {
         const vid = await ensureVersion()
+        if (syncKeepOverrides) {
+          // 重要：保留调参=以后端已保存为准；先保存避免同步覆盖编辑态导致丢参
+          await updateProductModelVersionLines(vid, {
+            sample: entryContext === 'standard' ? lockStandardSpec() : sampleSpec,
+            standard: lockStandardSpec(),
+            materials,
+            processes,
+          } as any)
+        }
         // 先把当前模块列表写回主档（保证同步读取到最新 modules）
         await updateProductModel(modelId, {
           modules: modules
@@ -1578,7 +1620,15 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
               metadata_json: m.metadata_json ?? {},
             })),
         } as any)
-        const res = await syncProductModelVersionFromModules(vid, { keep_overrides: syncKeepOverrides })
+        const selectedIds = (syncSelectedModuleIds ?? []).filter((x) => !!String(x || '').trim())
+        if (selectedIds.length === 0) {
+          message.warning('请先勾选要同步的工艺模块（可多选）')
+          return
+        }
+        const res = await syncProductModelVersionFromModules(vid, {
+          keep_overrides: syncKeepOverrides,
+          module_ids: selectedIds,
+        })
         hydrateLinesFromApi(res)
         await queryClient.invalidateQueries({ queryKey: ['productModelVersionLines', vid] })
         message.success(syncKeepOverrides ? '已同步到版本清单（保留版本层调参）' : '已同步到版本清单（覆盖版本层调参）')
@@ -2786,7 +2836,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                               disabled={!selectedVersionId}
                               type="primary"
                             >
-                              从模块同步
+                              同步
                             </Button>
                           </Space>
                           <Tooltip
@@ -2811,6 +2861,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                         pagination={false}
                         size="small"
                         style={{ fontSize: TABLE_FONT_SIZE }}
+                        rowSelection={{
+                          selectedRowKeys: syncSelectedModuleIds,
+                          onChange: (keys) => setSyncSelectedModuleIds(keys.map((k) => String(k))),
+                        }}
                         columns={[
                           {
                             title: '编码',

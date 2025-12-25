@@ -1074,6 +1074,10 @@ class ProductModelLinesResponse(BaseModel):
 
 class ProductModelSyncFromModulesRequest(BaseModel):
     keep_overrides: bool = Field(True, description="同步时保留模型层已调整的参数")
+    module_ids: Optional[List[str]] = Field(
+        None,
+        description="可选：仅同步指定模块ID（用于增量添加/勾选同步），不传则同步全部模块",
+    )
 
 
 class ProductModelLinesUpdateRequest(BaseModel):

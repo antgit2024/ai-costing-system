@@ -188,7 +188,12 @@ def sync_version_from_modules(
 ):
     v = _get_version_or_404(db, version_id)
     try:
-        product_model_service.sync_version_lines_from_modules(db, version=v, keep_overrides=payload.keep_overrides)
+        product_model_service.sync_version_lines_from_modules(
+            db,
+            version=v,
+            keep_overrides=payload.keep_overrides,
+            module_ids=payload.module_ids,
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     # IMPORTANT: SessionLocal has autoflush=False; without an explicit commit, sync results

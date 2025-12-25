@@ -818,6 +818,7 @@ export interface ProductModelLinesResponse {
 
 export interface ProductModelSyncFromModulesRequest {
   keep_overrides?: boolean
+  module_ids?: string[]
 }
 
 export interface ProductModelLinesUpdateRequest extends ProductModelLinesResponse {}

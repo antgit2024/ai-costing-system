@@ -570,6 +570,7 @@ def sync_version_lines_from_modules(
     *,
     version: models.ProductModelVersion,
     keep_overrides: bool = True,
+    module_ids: List[str] | None = None,
 ) -> None:
     """
     Build model_version_materials/model_version_processes from version module bindings.
@@ -612,10 +613,10 @@ def sync_version_lines_from_modules(
     else:
         module_links = list_version_modules(db, version.id)
 
-    module_ids = [link.module_id for link in module_links]
+    all_module_ids = [link.module_id for link in module_links]
     modules = (
         db.query(models.ProcessModule)
-        .filter(models.ProcessModule.id.in_(module_ids), models.ProcessModule.is_archived.is_(False))
+        .filter(models.ProcessModule.id.in_(all_module_ids), models.ProcessModule.is_archived.is_(False))
         .all()
     )
     module_by_id = {m.id: m for m in modules}
@@ -634,18 +635,34 @@ def sync_version_lines_from_modules(
         key = f"{meta.get('source_module_id')}::{meta.get('source_row_id')}"
         existing_by_source_proc[key] = row
 
-    db.query(models.ModelVersionMaterial).filter(models.ModelVersionMaterial.version_id == version.id).delete(
-        synchronize_session=False
-    )
-    db.query(models.ModelVersionProcess).filter(models.ModelVersionProcess.version_id == version.id).delete(
-        synchronize_session=False
-    )
+    selected = {str(x).strip() for x in (module_ids or []) if str(x).strip()}
+    if not selected:
+        # Original behavior: rebuild all lines from scratch.
+        db.query(models.ModelVersionMaterial).filter(models.ModelVersionMaterial.version_id == version.id).delete(
+            synchronize_session=False
+        )
+        db.query(models.ModelVersionProcess).filter(models.ModelVersionProcess.version_id == version.id).delete(
+            synchronize_session=False
+        )
+    else:
+        # Selected sync: only remove rows belonging to selected modules; keep other modules' tuned rows untouched.
+        for row in existing_materials:
+            meta = row.metadata_json or {}
+            if str(meta.get("source_module_id") or "").strip() in selected:
+                db.delete(row)
+        for row in existing_processes:
+            meta = row.metadata_json or {}
+            if str(meta.get("source_module_id") or "").strip() in selected:
+                db.delete(row)
+        db.flush()
 
     seq_mat = 0
     seq_proc = 0
     for link in module_links:
         module = module_by_id.get(link.module_id)
         if not module:
+            continue
+        if selected and str(module.id) not in selected:
             continue
 
         for m in module.materials or []:

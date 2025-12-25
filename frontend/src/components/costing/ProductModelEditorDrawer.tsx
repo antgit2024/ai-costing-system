@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import dayjs from 'dayjs'
 import {
   Alert,
@@ -998,11 +998,16 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     return `计价量=面积(㎡)×数量；面积=${((w * h) / 1_000_000).toFixed(4)}㎡，数量=${q}`
   }
 
+  // 尺寸是否由用户交互修改（而非接口 hydrate / 版本切换）：
+  // 只在用户确实改了尺寸时才重算，避免“打开抽屉/切版本时把已保存的本品用量覆盖成 0”。
+  const sampleSpecTouchedRef = useRef(false)
+
   // 当用户修改“打样尺寸（实际尺寸）”时：按计价方式自动重算“本品用量/本品用时”（基数不变）
   // 说明：该行为与旧抽屉一致，会覆盖依赖尺寸口径的 computed 字段（sample_used_quantity / sample_minutes）。
   useEffect(() => {
     if (!open) return
     if (activeTab !== 'lines') return
+    if (!sampleSpecTouchedRef.current) return
 
     setMaterials((prev: any[]) => {
       if (!Array.isArray(prev) || prev.length === 0) return prev
@@ -1040,6 +1045,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       })
       return changed ? next : prev
     })
+    sampleSpecTouchedRef.current = false
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, activeTab, sampleSpec.width_mm, sampleSpec.height_mm, sampleSpec.quantity, sampleSpec.unit_label, specLocked])
 
@@ -2661,7 +2667,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                       min={0}
                       precision={2}
                       value={Number(sampleSpec.width_mm ?? 0) / 10}
-                      onChange={(v) => setSampleSpec({ ...sampleSpec, width_mm: Number(v ?? 0) * 10 })}
+                      onChange={(v) => {
+                        sampleSpecTouchedRef.current = true
+                        setSampleSpec({ ...sampleSpec, width_mm: Number(v ?? 0) * 10 })
+                      }}
                       addonBefore="宽(cm)"
                       disabled={specLocked}
                     />
@@ -2670,7 +2679,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                       min={0}
                       precision={2}
                       value={Number(sampleSpec.height_mm ?? 0) / 10}
-                      onChange={(v) => setSampleSpec({ ...sampleSpec, height_mm: Number(v ?? 0) * 10 })}
+                      onChange={(v) => {
+                        sampleSpecTouchedRef.current = true
+                        setSampleSpec({ ...sampleSpec, height_mm: Number(v ?? 0) * 10 })
+                      }}
                       addonBefore="高(cm)"
                       disabled={specLocked}
                     />
@@ -2679,7 +2691,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                       min={1}
                       precision={0}
                       value={sampleSpec.quantity}
-                      onChange={(v) => setSampleSpec({ ...sampleSpec, quantity: Number(v ?? 1) })}
+                      onChange={(v) => {
+                        sampleSpecTouchedRef.current = true
+                        setSampleSpec({ ...sampleSpec, quantity: Number(v ?? 1) })
+                      }}
                       addonBefore="数量"
                       disabled={specLocked}
                     />
@@ -2688,7 +2703,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                         size="small"
                         style={{ width: 140 }}
                         value={sampleSpec.unit_label}
-                        onChange={(e) => setSampleSpec({ ...sampleSpec, unit_label: e.target.value || 'CM' })}
+                        onChange={(e) => {
+                          sampleSpecTouchedRef.current = true
+                          setSampleSpec({ ...sampleSpec, unit_label: e.target.value || 'CM' })
+                        }}
                         addonBefore="单位"
                         disabled={specLocked}
                       />
@@ -2877,6 +2895,9 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                         size="small"
                         style={{ fontSize: TABLE_FONT_SIZE }}
                         onRow={(r: any) => {
+                          // 手动新增（非来源模块）的行：统一灰底，避免彩色背景造成“新增行很花”的视觉干扰
+                          const hasSource = !!(r?.source_module_id || r?.source_module_code)
+                          if (!hasSource) return { style: { background: '#f5f5f5' } }
                           const key = r.source_module_id ?? r.source_module_code ?? 'model'
                           const color = getModuleColor(String(key))
                           return { style: { background: hexToRgba(color, 0.06) } }
@@ -3369,6 +3390,9 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                         size="small"
                         style={{ fontSize: TABLE_FONT_SIZE }}
                         onRow={(r: any) => {
+                          // 手动新增（非来源模块）的行：统一灰底，避免彩色背景造成“新增行很花”的视觉干扰
+                          const hasSource = !!(r?.source_module_id || r?.source_module_code)
+                          if (!hasSource) return { style: { background: '#f5f5f5' } }
                           const key = r.source_module_id ?? r.source_module_code ?? 'model'
                           const color = getModuleColor(String(key))
                           return { style: { background: hexToRgba(color, 0.06) } }
@@ -3385,10 +3409,13 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                             ),
                           },
                           {
-                            title: '替换',
-                            width: 60,
+                            title: '操作',
+                            width: 120,
                             render: (_: any, __: any, idx: number) => (
-                              <Button size="small" type="text" icon={<SwapOutlined />} title="替换工序" onClick={() => openProcessPickerForRow(idx)} />
+                              <Space size={2}>
+                                <Button size="small" type="text" icon={<SwapOutlined />} title="替换工序" onClick={() => openProcessPickerForRow(idx)} />
+                                <Button size="small" type="text" icon={AlphaIcon} title="调参面板" onClick={() => openTuningPanelForProcess(idx)} />
+                              </Space>
                             ),
                           },
                           {
@@ -3489,11 +3516,11 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                     const name = String(info?.process_name ?? r.process_name ?? '').trim()
                                     return (
                                       <Space direction="vertical" size={4}>
-                                        <Text strong>
+                                        <Text strong style={{ color: '#fff' }}>
                                           {code ? `${code} ` : ''}
                                           {name || pid}
                                         </Text>
-                                        <Text style={{ whiteSpace: 'pre-wrap' }}>{desc}</Text>
+                                        <Text style={{ whiteSpace: 'pre-wrap', color: '#fff' }}>{desc}</Text>
                                       </Space>
                                     )
                                   })()}
@@ -3507,19 +3534,6 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                             title: '本品用时',
                             width: 110,
                             render: (_: any, r: any) => <span>{Number(r.sample_minutes ?? 0).toFixed(2)}</span>,
-                          },
-                          {
-                            title: '参数',
-                            width: 90,
-                            render: (_: any, __: any, idx: number) => (
-                              <Button
-                                size="small"
-                                type="text"
-                                icon={AlphaIcon}
-                                title="调参面板"
-                                onClick={() => openTuningPanelForProcess(idx)}
-                              />
-                            ),
                           },
                           {
                             title: '小计',

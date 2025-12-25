@@ -4,6 +4,7 @@
 - **最近校对（北京时间 GMT+8）**：2025-12-25 06:08（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-25 14:40（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-25 16:40（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
+- **最近校对（北京时间 GMT+8）**：2025-12-25 17:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **分支**：`backup/20251214-1535`
 
 - **本轮闭环产物（Planner-Optimization / 方案评审稿）**：
@@ -24,6 +25,16 @@
     - **启用门槛**：启用前必须预演成功，并在 UI 显示最近预演时间/结果摘要（配置变更会标记“预演已过期”）
     - **条件增强（已接入 UI）**：在 token 基础上，额外支持 `width_between/height_between/area_between/perimeter_between`（可选）。若配置了这些条件，启用前要求预演样例能解析出对应数值（避免没测过就启用）。
     - **数量/个数条件（缺口）**：后端 `LineVariantCondition` 暂无 `quantity_between` 等字段；如业务必须支持“个数”，需要下一轮后端补字段或通过 token 离散化临时承载。
+
+- **本轮闭环产物（Frontend / 打样管理：清单编辑 UI 修复）**：
+  - 位置：`/costing/sample-models` → 打开抽屉 → `清单编辑`
+  - 修复点：
+    - 工序组“计量方式”右侧圆感叹号 tooltip：文本改为白色（深色 tooltip 背景可读）
+    - 新增物料/新增工序：手动新增的行统一灰底（不再使用彩色模块背景）
+    - 工序组列收口：将“替换”列更名为“操作”，并把 `α`（调参面板）按钮移入“操作”列与“替换”合并（宽度与物料组操作列一致）
+    - 避免“打开抽屉/切版本”时尺寸联动重算覆盖已保存的本品用量/用时：仅当用户实际修改尺寸输入框时才触发联动重算
+  - 关键文件：`frontend/src/components/costing/ProductModelEditorDrawer.tsx`
+  - 本轮验收命令：`npm -C frontend run build`（已通过）
 
 - **重要修复（Backend / 使 between 条件可落库）**：
   - 修复 `line-variants` 在写入 JSON 列时 `Decimal`/`tuple` 不可序列化导致 500：将 `conditions/metadata` 递归转为 JSON-safe（Decimal→字符串、tuple→list）。

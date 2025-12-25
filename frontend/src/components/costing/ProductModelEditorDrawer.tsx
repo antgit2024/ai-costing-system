@@ -479,38 +479,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   const [versionStatsById, setVersionStatsById] = useState<Record<string, any>>({})
   const [versionStatsLoadingById, setVersionStatsLoadingById] = useState<Record<string, boolean>>({})
 
-  const materialImageIds = useMemo(() => {
-    const ids = new Set<string>()
-    for (const r of materials as any[]) {
-      const kind = String((r as any)?.material_kind ?? (r as any)?.material_type ?? '').toLowerCase()
-      if (kind === 'virtual') continue
-      const id = String((r as any)?.material_ref_id ?? '').trim()
-      if (id) ids.add(id)
-    }
-    return Array.from(ids).sort()
-  }, [materials])
-
-  const materialImagesQuery = useQuery({
-    queryKey: ['materialImagesById', materialImageIds],
-    enabled: open && activeTab === 'lines' && materialImageIds.length > 0,
-    queryFn: async () => {
-      const results = await Promise.allSettled(materialImageIds.map((id) => fetchMaterial(id)))
-      const map = new Map<string, string>()
-      for (let i = 0; i < results.length; i += 1) {
-        const id = materialImageIds[i]
-        const r = results[i]
-        if (r.status !== 'fulfilled') continue
-        const m: any = r.value
-        const url =
-          m?.image_url ||
-          (Array.isArray(m?.images) && m.images.length > 0 ? m.images[0] : undefined) ||
-          (m?.metadata_json ?? {})?.image_url ||
-          undefined
-        if (url) map.set(id, String(url))
-      }
-      return map
-    },
-  })
+  // 物料组已移除“图片”列，避免额外请求与表格噪音
 
   const previewKind = String(materialPreviewRow?.material_kind ?? materialPreviewRow?.material_type ?? '').toLowerCase()
   const previewRefId = String(materialPreviewRow?.material_ref_id ?? '').trim()
@@ -2937,36 +2906,6 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                             ),
                           },
                           {
-                            title: '图片',
-                            width: 70,
-                            render: (_: any, r: any) => {
-                              const kind = String((r as any)?.material_kind ?? (r as any)?.material_type ?? '').toLowerCase()
-                              if (kind === 'virtual') return <span style={{ color: '#bfbfbf' }}>-</span>
-                              const id = String((r as any)?.material_ref_id ?? '').trim()
-                              const url = (id ? materialImagesQuery.data?.get(id) : undefined) || undefined
-                              if (!url) return <span style={{ color: '#bfbfbf' }}>-</span>
-                              return (
-                                <Tooltip
-                                  getPopupContainer={() => document.body}
-                                  title={<Image src={String(url)} width={160} style={{ borderRadius: 8 }} />}
-                                >
-                                  <img
-                                    src={String(url)}
-                                    alt="material"
-                                    style={{
-                                      width: 32,
-                                      height: 32,
-                                      objectFit: 'cover',
-                                      borderRadius: 6,
-                                      border: '1px solid #f0f0f0',
-                                      cursor: 'pointer',
-                                    }}
-                                  />
-                                </Tooltip>
-                              )
-                            },
-                          },
-                          {
                             title: '操作',
                             width: 120,
                             render: (_: any, row: any, idx: number) => {
@@ -3483,6 +3422,20 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                   const unit = getProcessMeasureUnit(r)
                                   const allowed = new Set(allowedCalcMethodsByBomUnit(unit))
                                   const cur = String(r.pricing_method ?? '').trim() as any
+                                  const labelOf = (v: string) => {
+                                    const m: Record<string, string> = {
+                                      count: '数量',
+                                      area: '面积',
+                                      perimeter: '周长',
+                                      width: '宽度',
+                                      height: '高度',
+                                      long_side: '长边',
+                                      short_side: '短边',
+                                      fixed: '固定',
+                                      length: '长度',
+                                    }
+                                    return m[v] || v
+                                  }
                                   const base = [
                                     { label: '数量', value: 'count' as const },
                                     { label: '面积', value: 'area' as const },
@@ -3491,13 +3444,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                     { label: '高度', value: 'height' as const },
                                   ].filter((o) => allowed.has(o.value as any))
                                   if (cur && !allowed.has(cur)) {
-                                    const legacyLabel =
-                                      cur === 'fixed'
-                                        ? '固定（legacy）'
-                                        : cur === 'length'
-                                          ? '长度（legacy）'
-                                          : `${cur}（legacy）`
-                                    return [{ label: legacyLabel, value: cur as any }, ...base]
+                                    // 未匹配单位限制时，仍显示中文（避免直接露出 count/area 等英文值）
+                                    return [{ label: `${labelOf(cur)}（不适用）`, value: cur as any }, ...base]
                                   }
                                   return base
                                 })()}

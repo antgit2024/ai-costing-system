@@ -208,6 +208,7 @@ export default function SkuSpecMatchingPage() {
         include_terms: includeTerms || undefined,
         exclude_terms: excludeTerms || undefined,
         match_scope: matchScope,
+        preparse_state: listTab === 'parsed' ? 'parsed' : listTab === 'unparsed' ? 'unparsed' : undefined,
       })
     },
     onSuccess: (res) => {
@@ -236,7 +237,13 @@ export default function SkuSpecMatchingPage() {
       setPreviewSaved(false)
       setPreviewItems(rows as any[])
       setPreviewSelectedKeys(rows.map((r) => String(r.id)))
-      message.success(`预览解析完成：${rows.length} 条（默认全选）`)
+      const skippedEmpty = Number((res as any)?.skipped_empty_spec ?? 0)
+      const errs = ((res as any)?.errors ?? []) as any[]
+      if (skippedEmpty || (errs?.length ?? 0)) {
+        message.warning(`预览解析完成：${rows.length} 条（默认全选），跳过空规格${skippedEmpty}，错误${errs?.length ?? 0}`)
+      } else {
+        message.success(`预览解析完成：${rows.length} 条（默认全选）`)
+      }
     },
     onError: (err: any) => {
       message.error(err?.response?.data?.detail ?? err?.message ?? '预览解析失败')

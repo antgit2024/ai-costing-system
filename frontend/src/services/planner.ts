@@ -1132,8 +1132,11 @@ export const previewSkuMasterSpecPreparse = async (payload: {
   include_terms?: string
   exclude_terms?: string
   match_scope?: string
+  preparse_state?: 'parsed' | 'unparsed'
 } = {}): Promise<{
   scanned: number
+  skipped_empty_spec?: number
+  errors?: Array<Record<string, unknown>>
   items: Array<{
     sku_id: string
     erp_sku_barcode: string

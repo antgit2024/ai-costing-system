@@ -160,6 +160,7 @@ def preview_spec_preparse(
         include_terms=payload.include_terms,
         exclude_terms=payload.exclude_terms,
         match_scope=payload.match_scope,
+        preparse_state=payload.preparse_state,
     )
 
 

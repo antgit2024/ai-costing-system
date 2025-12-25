@@ -1923,10 +1923,13 @@ class SkuMasterSpecPreparsePreviewRequest(BaseModel):
     include_terms: Optional[str] = None
     exclude_terms: Optional[str] = None
     match_scope: Optional[str] = None
+    preparse_state: Optional[str] = None
 
 
 class SkuMasterSpecPreparsePreviewResponse(BaseModel):
     scanned: int
+    skipped_empty_spec: int = 0
+    errors: List[Dict[str, Any]] = Field(default_factory=list)
     items: List[SkuMasterSpecPreparsePreviewItem] = Field(default_factory=list)
 
 

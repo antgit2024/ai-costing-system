@@ -837,6 +837,7 @@ def preview_spec_preparse(
     include_terms: Optional[str],
     exclude_terms: Optional[str],
     match_scope: Optional[str],
+    preparse_state: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Preview parsed dimensions for bound SKUs, without persisting.
@@ -849,6 +850,7 @@ def preview_spec_preparse(
         match_status=match_status,
         bound_state="bound",
         spec_mismatch=None,
+        preparse_state=preparse_state,
         include_terms=include_terms,
         exclude_terms=exclude_terms,
         match_scope=match_scope,
@@ -856,33 +858,39 @@ def preview_spec_preparse(
         page_size=limit,
     )
     items: List[Dict[str, Any]] = []
+    skipped_empty_spec = 0
+    errors: List[Dict[str, Any]] = []
     for r in rows:
-        meta = dict(r.metadata_json or {})
-        spec_text_used = (meta.get("last_shipment_spec_text") or r.spec_text or "").strip()
-        if not spec_text_used:
-            continue
-        parsed = spec_parser_service.parse_spec(spec_text_used)
-        items.append(
-            {
-                "sku_id": r.id,
-                "erp_sku_barcode": r.erp_sku_barcode,
-                "channel": r.channel,
-                "product_name": getattr(r, "product_name", None),
-                "product_code": getattr(r, "product_code", None),
-                "spec_text": getattr(r, "spec_text", None),
-                "bound_model_code": getattr(r, "bound_model_code", None),
-                "bound_model_name": getattr(r, "bound_model_name", None),
-                "bound_version_label": getattr(r, "bound_version_label", None),
-                "spec_text_used": spec_text_used,
-                "spec_hash": _sha1_text(spec_text_used),
-                "width_cm": parsed.get("width_cm"),
-                "height_cm": parsed.get("height_cm"),
-                "diameter_cm": parsed.get("diameter_cm"),
-                "area_m2": parsed.get("area_m2"),
-                "perimeter_m": parsed.get("perimeter_m"),
-            }
-        )
-    return {"scanned": len(rows), "items": items}
+        try:
+            meta = dict(r.metadata_json or {})
+            spec_text_used = (meta.get("last_shipment_spec_text") or r.spec_text or "").strip()
+            if not spec_text_used:
+                skipped_empty_spec += 1
+                continue
+            parsed = spec_parser_service.parse_spec(spec_text_used)
+            items.append(
+                {
+                    "sku_id": r.id,
+                    "erp_sku_barcode": r.erp_sku_barcode,
+                    "channel": r.channel,
+                    "product_name": getattr(r, "product_name", None),
+                    "product_code": getattr(r, "product_code", None),
+                    "spec_text": getattr(r, "spec_text", None),
+                    "bound_model_code": getattr(r, "bound_model_code", None),
+                    "bound_model_name": getattr(r, "bound_model_name", None),
+                    "bound_version_label": getattr(r, "bound_version_label", None),
+                    "spec_text_used": spec_text_used,
+                    "spec_hash": _sha1_text(spec_text_used),
+                    "width_cm": parsed.get("width_cm"),
+                    "height_cm": parsed.get("height_cm"),
+                    "diameter_cm": parsed.get("diameter_cm"),
+                    "area_m2": parsed.get("area_m2"),
+                    "perimeter_m": parsed.get("perimeter_m"),
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            errors.append({"sku_id": getattr(r, "id", None), "sku_code": getattr(r, "erp_sku_barcode", None), "error": str(exc)})
+    return {"scanned": len(rows), "skipped_empty_spec": skipped_empty_spec, "errors": errors, "items": items}
 
 
 def execute_spec_preparse(

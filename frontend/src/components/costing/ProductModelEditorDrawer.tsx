@@ -5,6 +5,7 @@ import {
   Button,
   Card,
   Col,
+  Collapse,
   Row,
   Drawer,
   Divider,
@@ -3922,18 +3923,27 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                   />
                 </Col>
                 <Col span={8}>
-                  <Tooltip title={entryContext === 'sample' ? '用于上浮本品用量：×(1+耗损/100)' : '仅打样口径可编辑'}>
-                    <InputNumber
-                      min={0}
-                      max={100}
-                      precision={2}
-                      disabled={entryContext !== 'sample'}
-                      value={tuningLossRatePercent}
-                      onChange={(v) => setTuningLossRatePercent(Number(v ?? 0))}
-                      addonBefore={addonLabel('耗损%')}
-                      style={{ width: '100%' }}
-                    />
-                  </Tooltip>
+                  {entryContext === 'sample' ? (
+                    <Tooltip title="用于上浮本品用量：×(1+耗损/100)。该值会随推导带入标准版本（也会影响最终BOM）">
+                      <InputNumber
+                        min={0}
+                        max={100}
+                        precision={2}
+                        value={tuningLossRatePercent}
+                        onChange={(v) => setTuningLossRatePercent(Number(v ?? 0))}
+                        addonBefore={addonLabel('耗损%')}
+                        style={{ width: '100%' }}
+                      />
+                    </Tooltip>
+                  ) : (
+                    <Tooltip title="标准口径：耗损%建议在打样口径里调整并重新推导到标准。此处仅展示当前值。">
+                      <Input
+                        value={`${Number(tuningLossRatePercent ?? 0).toFixed(2)}%`}
+                        readOnly
+                        addonBefore={addonLabel('耗损%(只读)')}
+                      />
+                    </Tooltip>
+                  )}
                 </Col>
               </Row>
               <Text type="secondary" style={{ display: 'block', marginTop: 8 }}>
@@ -4007,11 +4017,17 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
             </Card>
 
             {entryContext === 'sample' ? (
-              <Card size="small" title="高级公式模板（用于推导标准每平米）">
-                <Space direction="vertical" style={{ width: '100%' }} size={12}>
-                  <Text type="secondary">
-                    推导标准版本时（后端）：以打样“总用量(sample_used_quantity)”反推 β，并按标准口径(100CM×100CM×1)重算，写入标准版本的 base_quantity。
-                  </Text>
+              <Collapse
+                defaultActiveKey={[]}
+                items={[
+                  {
+                    key: 'derive-template',
+                    label: '高级公式模板（用于推导标准每平米）',
+                    children: (
+                      <Space direction="vertical" style={{ width: '100%' }} size={12}>
+                        <Text type="secondary">
+                          只用于“打样 → 推导标准每平米”。标准口径不需要填写这里；你只要把打样口径的本品用量调准，再点“推导标准模型”即可。
+                        </Text>
 
                   <Row gutter={12}>
                     <Col span={8}>
@@ -4157,8 +4173,11 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                       </Space>
                     }
                   />
-                </Space>
-              </Card>
+                      </Space>
+                    ),
+                  },
+                ]}
+              />
             ) : null}
           </Space>
         ) : (

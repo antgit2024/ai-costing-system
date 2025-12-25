@@ -1637,7 +1637,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     } as any)
     await queryClient.invalidateQueries({ queryKey: ['productModelVersionLines', selectedVersionId] })
     // 保存后：立刻刷新版本统计（用于“标准版本/打样版本”Tab上方展示）
-    await computeVersionStats(selectedVersionId)
+      await computeVersionStats(selectedVersionId)
     // 版本列表的统计是从 version.metadata_json.ui_stats 读取的；refetch 后能保持刷新不丢
     await versionsQuery.refetch()
     message.success('已保存清单')
@@ -2254,12 +2254,12 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                     extra={
                       <Space>
                         <Button size="small" type="primary" onClick={openCreateVersionModal} disabled={!modelId}>
-                          新增版本
-                        </Button>
+                        新增版本
+                      </Button>
                         <Button size="small" onClick={() => versionsQuery.refetch()} disabled={!modelId} icon={<ReloadOutlined />}>
-                          刷新
-                        </Button>
-                      </Space>
+                        刷新
+                      </Button>
+                    </Space>
                     }
                   >
                     <Table
@@ -3769,8 +3769,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
 
                           const bomUnitPrice = await computeVirtualBomUnitPrice()
 
-                          applyPickedMaterialToRow({
-                            kind: 'virtual',
+                      applyPickedMaterialToRow({
+                        kind: 'virtual',
                             id: vm.id,
                             code: vm.virtual_code,
                             name: vm.name,
@@ -3779,7 +3779,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                             // 虚拟物料的计量方式仍由单位口径决定（area/perimeter/count），这里不强塞
                             calculation_method: null,
                             bom_unit_price: bomUnitPrice,
-                          })
+                      })
                         } catch (err: any) {
                           message.error(err?.response?.data?.detail ?? '读取虚拟物料详情失败')
                         } finally {
@@ -3901,14 +3901,13 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
             <Card size="small" title="调参（α / 覆盖率 / 耗损）">
               <Row gutter={12}>
                 <Col span={8}>
-                  <InputNumber
-                    min={0}
-                    precision={2}
-                    value={tuningFixedQty}
-                    onChange={(v) => setTuningFixedQty(Number(v ?? 0))}
-                    addonBefore={addonLabel('固定用量α')}
-                    style={{ width: '100%' }}
-                  />
+                  <Tooltip title="当前阶段：α 暂不开放编辑（避免把“订单/包裹级共享物料”误建成行级固定项，造成扣库/追溯歧义）。如需固定余量/余头请用下方“工艺修正”。">
+                    <Input
+                      value={Number(tuningFixedQty ?? 0).toFixed(2)}
+                      readOnly
+                      addonBefore={addonLabel('固定用量α(只读)')}
+                    />
+                  </Tooltip>
                 </Col>
                 <Col span={8}>
                   <InputNumber
@@ -3925,16 +3924,16 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                 <Col span={8}>
                   {entryContext === 'sample' ? (
                     <Tooltip title="用于上浮本品用量：×(1+耗损/100)。该值会随推导带入标准版本（也会影响最终BOM）">
-                      <InputNumber
-                        min={0}
-                        max={100}
-                        precision={2}
-                        value={tuningLossRatePercent}
-                        onChange={(v) => setTuningLossRatePercent(Number(v ?? 0))}
-                        addonBefore={addonLabel('耗损%')}
-                        style={{ width: '100%' }}
-                      />
-                    </Tooltip>
+                    <InputNumber
+                      min={0}
+                      max={100}
+                      precision={2}
+                      value={tuningLossRatePercent}
+                      onChange={(v) => setTuningLossRatePercent(Number(v ?? 0))}
+                      addonBefore={addonLabel('耗损%')}
+                      style={{ width: '100%' }}
+                    />
+                  </Tooltip>
                   ) : (
                     <Tooltip title="标准口径：耗损%建议在打样口径里调整并重新推导到标准。此处仅展示当前值。">
                       <Input
@@ -4024,10 +4023,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                     key: 'derive-template',
                     label: '高级公式模板（用于推导标准每平米）',
                     children: (
-                      <Space direction="vertical" style={{ width: '100%' }} size={12}>
-                        <Text type="secondary">
+                <Space direction="vertical" style={{ width: '100%' }} size={12}>
+                  <Text type="secondary">
                           只用于“打样 → 推导标准每平米”。标准口径不需要填写这里；你只要把打样口径的本品用量调准，再点“推导标准模型”即可。
-                        </Text>
+                  </Text>
 
                   <Row gutter={12}>
                     <Col span={8}>
@@ -4173,7 +4172,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                       </Space>
                     }
                   />
-                      </Space>
+                </Space>
                     ),
                   },
                 ]}

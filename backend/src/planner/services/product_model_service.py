@@ -636,28 +636,68 @@ def sync_version_lines_from_modules(
         existing_by_source_proc[key] = row
 
     selected = {str(x).strip() for x in (module_ids or []) if str(x).strip()}
-    if not selected:
-        # Original behavior: rebuild all lines from scratch.
+    # Decide which existing rows should be removed for re-sync.
+    # - selected empty: sync all modules
+    #   - keep_overrides=True: keep user-added (non-module) rows; refresh module-derived rows
+    #   - keep_overrides=False: wipe everything (original behavior)
+    # - selected non-empty: only refresh selected modules; keep others (and keep user-added rows)
+    to_delete_mat: list[models.ModelVersionMaterial] = []
+    to_delete_proc: list[models.ModelVersionProcess] = []
+    if not selected and not keep_overrides:
         db.query(models.ModelVersionMaterial).filter(models.ModelVersionMaterial.version_id == version.id).delete(
             synchronize_session=False
         )
         db.query(models.ModelVersionProcess).filter(models.ModelVersionProcess.version_id == version.id).delete(
             synchronize_session=False
         )
+        kept_mat_max_seq = 0
+        kept_proc_max_seq = 0
     else:
-        # Selected sync: only remove rows belonging to selected modules; keep other modules' tuned rows untouched.
-        for row in existing_materials:
-            meta = row.metadata_json or {}
-            if str(meta.get("source_module_id") or "").strip() in selected:
-                db.delete(row)
-        for row in existing_processes:
-            meta = row.metadata_json or {}
-            if str(meta.get("source_module_id") or "").strip() in selected:
-                db.delete(row)
+        # Row-by-row delete to preserve non-module rows (and/or unselected modules)
+        kept_mat_max_seq = 0
+        kept_proc_max_seq = 0
+        if not selected:
+            # sync all modules but keep non-module rows
+            for row in existing_materials:
+                meta = row.metadata_json or {}
+                src = str(meta.get("source_module_id") or "").strip()
+                if src:
+                    to_delete_mat.append(row)
+                else:
+                    kept_mat_max_seq = max(kept_mat_max_seq, int(row.sequence_order or 0))
+            for row in existing_processes:
+                meta = row.metadata_json or {}
+                src = str(meta.get("source_module_id") or "").strip()
+                if src:
+                    to_delete_proc.append(row)
+                else:
+                    kept_proc_max_seq = max(kept_proc_max_seq, int(row.sequence_order or 0))
+        else:
+            # selected sync: only delete rows belonging to selected modules
+            for row in existing_materials:
+                meta = row.metadata_json or {}
+                src = str(meta.get("source_module_id") or "").strip()
+                if src and src in selected:
+                    to_delete_mat.append(row)
+                else:
+                    kept_mat_max_seq = max(kept_mat_max_seq, int(row.sequence_order or 0))
+            for row in existing_processes:
+                meta = row.metadata_json or {}
+                src = str(meta.get("source_module_id") or "").strip()
+                if src and src in selected:
+                    to_delete_proc.append(row)
+                else:
+                    kept_proc_max_seq = max(kept_proc_max_seq, int(row.sequence_order or 0))
+
+        for row in to_delete_mat:
+            db.delete(row)
+        for row in to_delete_proc:
+            db.delete(row)
         db.flush()
 
-    seq_mat = 0
-    seq_proc = 0
+    # Ensure new rows get non-conflicting sequence_order (append after kept rows)
+    seq_mat = kept_mat_max_seq
+    seq_proc = kept_proc_max_seq
     for link in module_links:
         module = module_by_id.get(link.module_id)
         if not module:

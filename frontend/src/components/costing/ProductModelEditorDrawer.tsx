@@ -1500,15 +1500,6 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     try {
       setSyncingFromModules(true)
       const vid = await ensureVersion()
-      // 保留调参模式下：先保存当前清单，避免“同步返回覆盖编辑态”导致已调参数丢失
-      if (syncKeepOverrides && selectedVersionId) {
-        await updateProductModelVersionLines(selectedVersionId, {
-          sample: entryContext === 'standard' ? lockStandardSpec() : sampleSpec,
-          standard: lockStandardSpec(),
-          materials,
-          processes,
-        } as any)
-      }
       await updateProductModel(modelId, {
         modules: nextModules
           .slice()
@@ -1521,6 +1512,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
           })),
       } as any)
       const appendedIds = appended.map((x) => x.module_id)
+      if (appendedIds.length === 0) {
+        message.info('所选模块已存在，本次未新增（不触发同步）')
+        return
+      }
       const res = await syncProductModelVersionFromModules(vid, { keep_overrides: true, module_ids: appendedIds })
       hydrateLinesFromApi(res)
       await queryClient.invalidateQueries({ queryKey: ['productModel', modelId] })
@@ -1599,15 +1594,6 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       setSyncingFromModules(true)
       try {
         const vid = await ensureVersion()
-        if (syncKeepOverrides) {
-          // 重要：保留调参=以后端已保存为准；先保存避免同步覆盖编辑态导致丢参
-          await updateProductModelVersionLines(vid, {
-            sample: entryContext === 'standard' ? lockStandardSpec() : sampleSpec,
-            standard: lockStandardSpec(),
-            materials,
-            processes,
-          } as any)
-        }
         // 先把当前模块列表写回主档（保证同步读取到最新 modules）
         await updateProductModel(modelId, {
           modules: modules

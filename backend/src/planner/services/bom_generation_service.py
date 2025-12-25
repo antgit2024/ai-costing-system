@@ -696,13 +696,24 @@ def _build_line_payload(
     metadata: Dict[str, Any],
 ) -> Dict[str, Any]:
     method = calculation_method or "count"
+    # 工艺余量：用于“宽/高不固定，但固定扎口/封边/包边”等确定性规则
+    # 约定：metadata_json.extra_width_mm / extra_height_mm（单位：mm，>=0）
+    extra_w = _to_decimal((metadata or {}).get("extra_width_mm"), Decimal("0"))
+    extra_h = _to_decimal((metadata or {}).get("extra_height_mm"), Decimal("0"))
+    eff_w = measurement["width_mm"] + max(Decimal("0"), extra_w)
+    eff_h = measurement["height_mm"] + max(Decimal("0"), extra_h)
     measure_qty = product_model_service._measure_qty(
         method,
-        width_mm=measurement["width_mm"],
-        height_mm=measurement["height_mm"],
+        width_mm=eff_w,
+        height_mm=eff_h,
         quantity=measurement["quantity"],
     )
     total = fixed_quantity + (base_quantity * coverage_ratio * measure_qty)
+    if (extra_w or extra_h) and isinstance(metadata, dict):
+        # 仅用于审计/排查；不影响扣库/成本的关键字段
+        metadata = dict(metadata)
+        metadata.setdefault("extra_width_mm", str(extra_w))
+        metadata.setdefault("extra_height_mm", str(extra_h))
     return {
         "source_type": source_type,
         "base_line_id": base_line_id,

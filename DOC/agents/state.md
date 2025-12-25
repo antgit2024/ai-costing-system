@@ -3,7 +3,7 @@
 - **最近校对（北京时间 GMT+8）**：2025-12-25 04:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-25 06:08（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-25 14:40（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
-- **最近校对（北京时间 GMT+8）**：2025-12-25 15:25（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
+- **最近校对（北京时间 GMT+8）**：2025-12-25 16:05（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **分支**：`backup/20251214-1535`
 
 - **本轮闭环产物（Planner-Optimization / 方案评审稿）**：
@@ -67,6 +67,11 @@
   - 目标覆盖：约 200 行
   - 成本口径阶段性固定：物料 + 工序 + 制造费 30%
   - 验收清单（可勾选）：`DOC/costing/manuals/real_data_uat_checklist_20251225.md`
+
+- **本轮补充（确定性工艺余量：扎口/封边等固定长度）**：
+  - 背景：宽度不固定，但扎口固定（例如两边各 +10cm），属于“确定性尺寸修正”，不应使用损耗%硬凑。
+  - 后端：BOM 计算支持物料行 `metadata_json.extra_width_mm/extra_height_mm`（单位mm），计量时使用 `(width_mm+extra_width_mm, height_mm+extra_height_mm)`。
+  - 前端：标准模型清单物料行增加列 **工艺余量(mm)**（+宽 / +高），录入后会联动重算本品用量/标准用量。
 
 - **本轮验收命令（必须）**：
   - Frontend：`npm -C frontend run build`

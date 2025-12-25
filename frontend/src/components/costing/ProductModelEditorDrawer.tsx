@@ -802,7 +802,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
         const costType = String(p.cost_type ?? meta.cost_type ?? 'time')
         const pricingMethod = String(p.pricing_method ?? meta.pricing_method ?? 'count')
         const methodForMeasure = pricingMethod === 'fixed' ? 'count' : pricingMethod
-        const mq = Math.max(0, measureQty(methodForMeasure as any, sampleSpec))
+        const mq = Math.max(0, measureQty(methodForMeasure as any, sampleSpec, meta))
 
         if (costType === 'piece') {
           const pieceRate = Number(p.piece_rate ?? meta.piece_rate)
@@ -884,9 +884,11 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     }
   }
 
-  const measureQty = (method: any, spec: ProductModelSampleSpec): number => {
-    const w = Number(spec.width_mm || 0)
-    const h = Number(spec.height_mm || 0)
+  const measureQty = (method: any, spec: ProductModelSampleSpec, meta?: any): number => {
+    const extraW = Math.max(0, Number(meta?.extra_width_mm ?? 0))
+    const extraH = Math.max(0, Number(meta?.extra_height_mm ?? 0))
+    const w = Number(spec.width_mm || 0) + extraW
+    const h = Number(spec.height_mm || 0) + extraH
     const q = Number(spec.quantity || 1)
     if (method === 'count') return q
     if (method === 'width') return (w / 1000) * q
@@ -962,7 +964,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       let changed = false
       const next = prev.map((r) => {
         const method = (r.calculation_method as any) ?? 'count'
-        const mq = Math.max(0, measureQty(method, sampleSpec))
+        const mq = Math.max(0, measureQty(method, sampleSpec, (r?.metadata_json as any) ?? {}))
         const baseQty = Number(r.base_quantity ?? 0)
         const fixedQty = Number(r.fixed_quantity ?? 0)
         const cov = Number(r.coverage_ratio ?? 1)
@@ -983,7 +985,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
         if (costType !== 'time') return p
         const pricingMethod = String(p.pricing_method ?? meta.pricing_method ?? 'count')
         const methodForMeasure = pricingMethod === 'fixed' ? 'count' : pricingMethod
-        const mq = Math.max(0, measureQty(methodForMeasure as any, sampleSpec))
+        const mq = Math.max(0, measureQty(methodForMeasure as any, sampleSpec, meta))
         const baseMin = Number(p.base_minutes ?? meta.base_minutes ?? 0)
         const unitMin = Number(p.unit_minutes ?? meta.unit_minutes ?? 0)
         const minutes = Math.max(0, baseMin) + Math.max(0, unitMin) * mq
@@ -1120,8 +1122,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       const loss = Number(tuningLossRatePercent ?? 0)
       const method = (row.calculation_method as any) ?? 'count'
       const baseQty = Number(row.base_quantity ?? 0)
-      const mqSample = Math.max(0, measureQty(method, sampleSpec))
-      const mqStandard = Math.max(0, measureQty(method, standardSpec))
+      const mqSample = Math.max(0, measureQty(method, sampleSpec, (row?.metadata_json as any) ?? {}))
+      const mqStandard = Math.max(0, measureQty(method, standardSpec, (row?.metadata_json as any) ?? {}))
       const sampleUsed = fixedQty + mqSample * baseQty * cov
       const standardUsed = fixedQty + mqStandard * baseQty * cov
 
@@ -1170,8 +1172,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     const rate = Number(tuningRatePerMinute ?? 0)
     const pm = row.pricing_method ?? 'count'
     const method = pm === 'fixed' ? 'count' : pm
-    const mqSample = Math.max(0, measureQty(method, sampleSpec))
-    const stdMq = Math.max(0, measureQty(method, standardSpec))
+    const mqSample = Math.max(0, measureQty(method, sampleSpec, (row?.metadata_json as any) ?? {}))
+    const stdMq = Math.max(0, measureQty(method, standardSpec, (row?.metadata_json as any) ?? {}))
     const meta = (row.metadata_json as any) ?? {}
 
     const deriveTemplate =
@@ -1242,8 +1244,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       const baseQty = 0
       const fixedQty = payload.defaults?.fixed_quantity != null ? Number(payload.defaults.fixed_quantity) : 0
       const cov = payload.defaults?.coverage_ratio != null ? Number(payload.defaults.coverage_ratio) : 1
-      const mqSample = Math.max(0, measureQty(calcMethod, sampleSpec))
-      const mqStandard = Math.max(0, measureQty(calcMethod, standardSpec))
+      const mqSample = Math.max(0, measureQty(calcMethod, sampleSpec, {}))
+      const mqStandard = Math.max(0, measureQty(calcMethod, standardSpec, {}))
       const sampleUsed = fixedQty + mqSample * baseQty * cov
       const standardUsed = fixedQty + mqStandard * baseQty * cov
 
@@ -1280,8 +1282,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     const row = next[pickerRowIndex] as any
     if (!row) return
     const calcMethod = deriveCalcMethod(payload.calculation_method ?? row.calculation_method)
-    const mqSample = Math.max(0, measureQty(calcMethod, sampleSpec))
-    const mqStandard = Math.max(0, measureQty(calcMethod, standardSpec))
+    const mqSample = Math.max(0, measureQty(calcMethod, sampleSpec, (row?.metadata_json as any) ?? {}))
+    const mqStandard = Math.max(0, measureQty(calcMethod, standardSpec, (row?.metadata_json as any) ?? {}))
     const baseQty = row.base_quantity != null ? Number(row.base_quantity) : 0
     const fixedQty = row.fixed_quantity != null ? Number(row.fixed_quantity) : 0
     const cov = row.coverage_ratio != null ? Number(row.coverage_ratio) : 1
@@ -1344,8 +1346,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       const base = 0
       const unit = 0
       const method = pricingByUnit === 'fixed' ? 'count' : pricingByUnit
-      const mqSample = Math.max(0, measureQty(method as any, sampleSpec))
-      const stdMq = Math.max(0, measureQty(method as any, standardSpec))
+      const mqSample = Math.max(0, measureQty(method as any, sampleSpec, {}))
+      const stdMq = Math.max(0, measureQty(method as any, standardSpec, {}))
       const appended: any = {
         id: undefined,
         source_module_id: null,
@@ -2655,7 +2657,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                 setMaterials((prev: any[]) =>
                                   (prev ?? []).map((r) => {
                                     const method = (r.calculation_method as any) ?? 'count'
-                                    const mq = Math.max(0, measureQty(method, sampleSpec))
+                                    const mq = Math.max(0, measureQty(method, sampleSpec, (r.metadata_json as any) ?? {}))
                                     const baseQty = Number(r.base_quantity ?? 0)
                                     const fixedQty = Number(r.fixed_quantity ?? 0)
                                     const cov = Number(r.coverage_ratio ?? 1)
@@ -2669,7 +2671,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                     if (costType !== 'time') return p
                                     const pricingMethod = String(p.pricing_method ?? meta.pricing_method ?? 'count')
                                     const methodForMeasure = pricingMethod === 'fixed' ? 'count' : pricingMethod
-                                    const mq = Math.max(0, measureQty(methodForMeasure as any, sampleSpec))
+                                    const mq = Math.max(0, measureQty(methodForMeasure as any, sampleSpec, meta))
                                     const baseMin = Number(p.base_minutes ?? meta.base_minutes ?? 0)
                                     const unitMin = Number(p.unit_minutes ?? meta.unit_minutes ?? 0)
                                     const minutes = Math.max(0, baseMin) + Math.max(0, unitMin) * mq
@@ -2980,8 +2982,9 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                         const fixedQty = Number(next[idx].fixed_quantity ?? 0)
                                         const cov = Number(next[idx].coverage_ratio ?? 1)
                                         const v = allowedList[0]!
-                                        const mqSample = Math.max(0, measureQty(v, sampleSpec))
-                                        const mqStandard = Math.max(0, measureQty(v, standardSpec))
+                                        const rowMeta = ((next[idx]?.metadata_json as any) ?? {})
+                                        const mqSample = Math.max(0, measureQty(v, sampleSpec, rowMeta))
+                                        const mqStandard = Math.max(0, measureQty(v, standardSpec, rowMeta))
                                         const sampleUsed = fixedQty + mqSample * baseQty * cov
                                         const standardUsed = fixedQty + mqStandard * baseQty * cov
                                         next[idx] = {
@@ -3006,8 +3009,9 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                     const baseQty = Number(next[idx].base_quantity ?? 0)
                                     const fixedQty = Number(next[idx].fixed_quantity ?? 0)
                                     const cov = Number(next[idx].coverage_ratio ?? 1)
-                                    const mqSample = Math.max(0, measureQty(v, sampleSpec))
-                                    const mqStandard = Math.max(0, measureQty(v, standardSpec))
+                                    const rowMeta = ((next[idx]?.metadata_json as any) ?? {})
+                                    const mqSample = Math.max(0, measureQty(v, sampleSpec, rowMeta))
+                                    const mqStandard = Math.max(0, measureQty(v, standardSpec, rowMeta))
                                     const sampleUsed = fixedQty + mqSample * baseQty * cov
                                     const standardUsed = fixedQty + mqStandard * baseQty * cov
                                     next[idx] = {
@@ -3025,6 +3029,69 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                 </Tooltip>
                               </Space>
                             ),
+                          },
+                          {
+                            title: '工艺余量(mm)',
+                            width: 140,
+                            render: (_: any, r: any, idx: number) => {
+                              const meta = (r.metadata_json as any) ?? {}
+                              return (
+                                <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                                  <InputNumber
+                                    size="small"
+                                    min={0}
+                                    precision={0}
+                                    addonBefore="+宽"
+                                    value={Number(meta.extra_width_mm ?? 0)}
+                                    onChange={(v) => {
+                                      const next = (materials as any[]).slice()
+                                      const rowMeta = ((next[idx]?.metadata_json as any) ?? {})
+                                      const metaNext = { ...rowMeta, extra_width_mm: Number(v ?? 0) }
+                                      const method = (next[idx].calculation_method as any) ?? 'count'
+                                      const baseQty = Number(next[idx].base_quantity ?? 0)
+                                      const fixedQty = Number(next[idx].fixed_quantity ?? 0)
+                                      const cov = Number(next[idx].coverage_ratio ?? 1)
+                                      const mqSample = Math.max(0, measureQty(method, sampleSpec, metaNext))
+                                      const mqStandard = Math.max(0, measureQty(method, standardSpec, metaNext))
+                                      next[idx] = {
+                                        ...next[idx],
+                                        metadata_json: metaNext,
+                                        sample_used_quantity: fixedQty + mqSample * baseQty * cov,
+                                        standard_used_quantity: fixedQty + mqStandard * baseQty * cov,
+                                      }
+                                      setMaterials(next as any)
+                                    }}
+                                    style={{ width: '100%' }}
+                                  />
+                                  <InputNumber
+                                    size="small"
+                                    min={0}
+                                    precision={0}
+                                    addonBefore="+高"
+                                    value={Number(meta.extra_height_mm ?? 0)}
+                                    onChange={(v) => {
+                                      const next = (materials as any[]).slice()
+                                      const rowMeta = ((next[idx]?.metadata_json as any) ?? {})
+                                      const metaNext = { ...rowMeta, extra_height_mm: Number(v ?? 0) }
+                                      const method = (next[idx].calculation_method as any) ?? 'count'
+                                      const baseQty = Number(next[idx].base_quantity ?? 0)
+                                      const fixedQty = Number(next[idx].fixed_quantity ?? 0)
+                                      const cov = Number(next[idx].coverage_ratio ?? 1)
+                                      const mqSample = Math.max(0, measureQty(method, sampleSpec, metaNext))
+                                      const mqStandard = Math.max(0, measureQty(method, standardSpec, metaNext))
+                                      next[idx] = {
+                                        ...next[idx],
+                                        metadata_json: metaNext,
+                                        sample_used_quantity: fixedQty + mqSample * baseQty * cov,
+                                        standard_used_quantity: fixedQty + mqStandard * baseQty * cov,
+                                      }
+                                      setMaterials(next as any)
+                                    }}
+                                    style={{ width: '100%' }}
+                                  />
+                                </Space>
+                              )
+                            },
                           },
                           {
                             title: 'BOM单价/单位',
@@ -3420,8 +3487,9 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                   if (!row) return
                                   const base = Number(row.base_minutes ?? 0)
                                   const unit = Number(row.unit_minutes ?? 0)
-                                  const mqSample = Math.max(0, measureQty(v, sampleSpec))
-                                  const stdMq = Math.max(0, measureQty(v, standardSpec))
+                                  const rowMeta = ((next[idx]?.metadata_json as any) ?? {})
+                                  const mqSample = Math.max(0, measureQty(v, sampleSpec, rowMeta))
+                                  const stdMq = Math.max(0, measureQty(v, standardSpec, rowMeta))
                                   next[idx] = {
                                     ...row,
                                     pricing_method: v,

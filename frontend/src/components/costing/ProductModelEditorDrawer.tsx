@@ -36,6 +36,7 @@ import {
   DeleteOutlined,
   EditOutlined,
   FileTextOutlined,
+  ExclamationCircleOutlined,
   InfoCircleOutlined,
   LockOutlined,
   ReloadOutlined,
@@ -61,6 +62,7 @@ import {
   fetchProductModelVersions,
   fetchProcessModules,
   fetchProcesses,
+  fetchProcess,
   listLineVariants,
   publishProductModelVersion,
   refreshProductModelMaterialPrices,
@@ -352,6 +354,37 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   const [sampleImages, setSampleImages] = useState<string[]>([])
   const [imagePreviewOpen, setImagePreviewOpen] = useState(false)
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string>('')
+
+  // 工序描述：用于“计量方式”右侧提示（从工序库拉取）
+  const processIdsForDesc = useMemo(() => {
+    const ids = new Set<string>()
+    for (const r of processes as any[]) {
+      const id = String((r as any)?.process_id ?? '').trim()
+      if (id) ids.add(id)
+    }
+    return Array.from(ids).sort()
+  }, [processes])
+
+  const processDescByIdQuery = useQuery({
+    queryKey: ['processDescById', processIdsForDesc],
+    enabled: open && activeTab === 'lines' && processIdsForDesc.length > 0,
+    queryFn: async () => {
+      const results = await Promise.allSettled(processIdsForDesc.map((id) => fetchProcess(id)))
+      const map = new Map<string, { description?: string | null; process_code?: string; process_name?: string }>()
+      for (let i = 0; i < results.length; i += 1) {
+        const id = processIdsForDesc[i]
+        const r = results[i]
+        if (r.status !== 'fulfilled') continue
+        const p: any = r.value
+        map.set(id, {
+          description: (p?.description ?? null) as any,
+          process_code: p?.process_code,
+          process_name: p?.process_name,
+        })
+      }
+      return map
+    },
+  })
 
   const desiredKind = entryContext === 'sample' ? 'sample' : 'standard'
   const specLocked = entryContext === 'standard' || sampleSpecLocked
@@ -3386,14 +3419,15 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                             title: '计量方式',
                             width: 90,
                             render: (_: any, r: any, idx: number) => (
-                              <Select
-                                size="small"
-                                className="pm-lines-select"
-                                popupClassName="pm-lines-select-dropdown"
-                                getPopupContainer={() => document.body}
-                                style={{ width: '100%' }}
-                                value={r.pricing_method}
-                                options={(() => {
+                              <Space size={6} style={{ width: '100%' }}>
+                                <Select
+                                  size="small"
+                                  className="pm-lines-select"
+                                  popupClassName="pm-lines-select-dropdown"
+                                  getPopupContainer={() => document.body}
+                                  style={{ width: '100%' }}
+                                  value={r.pricing_method}
+                                  options={(() => {
                                   // 工序组口径与物料组一致：按“单位→计量方式”限制候选
                                   const unit = getProcessMeasureUnit(r)
                                   const allowed = new Set(allowedCalcMethodsByBomUnit(unit))
@@ -3425,7 +3459,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                   }
                                   return base
                                 })()}
-                                onChange={(v) => {
+                                  onChange={(v) => {
                                   const next = (processes as any[]).slice()
                                   const row = next[idx]
                                   if (!row) return
@@ -3441,8 +3475,32 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                     standard_minutes: base + unit * stdMq,
                                   }
                                   setProcesses(next as any)
-                                }}
-                              />
+                                  }}
+                                />
+                                <Tooltip
+                                  getPopupContainer={() => document.body}
+                                  title={(() => {
+                                    const pid = String(r.process_id ?? '').trim()
+                                    const info = pid ? processDescByIdQuery.data?.get(pid) : undefined
+                                    const desc = String(info?.description ?? '').trim()
+                                    if (!pid) return '未选择工序'
+                                    if (!desc) return '工序库未填写“描述”'
+                                    const code = String(info?.process_code ?? r.process_code ?? '').trim()
+                                    const name = String(info?.process_name ?? r.process_name ?? '').trim()
+                                    return (
+                                      <Space direction="vertical" size={4}>
+                                        <Text strong>
+                                          {code ? `${code} ` : ''}
+                                          {name || pid}
+                                        </Text>
+                                        <Text style={{ whiteSpace: 'pre-wrap' }}>{desc}</Text>
+                                      </Space>
+                                    )
+                                  })()}
+                                >
+                                  <ExclamationCircleOutlined style={{ color: '#8c8c8c', cursor: 'help' }} />
+                                </Tooltip>
+                              </Space>
                             ),
                           },
                           {
@@ -4200,6 +4258,16 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
               <Text type="secondary" style={{ display: 'block', marginTop: 8 }}>
                 用时计算：<Text code>分钟 = base_minutes + unit_minutes × M</Text>；人工费：<Text code>人工费 = 分钟 × 单价(元/分)</Text>（计时口径）。
               </Text>
+            </Card>
+
+            <Card size="small" title="备注（随本次调参一起应用）">
+              <Input.TextArea
+                rows={3}
+                value={tuningNotesDraft}
+                onChange={(e) => setTuningNotesDraft(e.target.value)}
+                placeholder="可选：填写备注（例如适用范围、工艺说明、责任人/日期等）"
+                allowClear
+              />
             </Card>
 
             {entryContext === 'sample' ? (

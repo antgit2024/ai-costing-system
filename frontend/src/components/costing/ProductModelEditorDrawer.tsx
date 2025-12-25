@@ -322,10 +322,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   const [pickerProcessKeyword, setPickerProcessKeyword] = useState<string>('')
   const [pickerProcessCategory, setPickerProcessCategory] = useState<string | undefined>(undefined)
 
-  const [notesModalOpen, setNotesModalOpen] = useState(false)
-  const [notesModalKind, setNotesModalKind] = useState<'material' | 'process'>('material')
-  const [notesModalIndex, setNotesModalIndex] = useState<number | null>(null)
-  const [notesDraft, setNotesDraft] = useState<string>('')
+  // 备注已合并到“调参面板”（与同一个“应用”按钮一起保存）
 
   const [deriveGuideOpen, setDeriveGuideOpen] = useState(false)
 
@@ -349,6 +346,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     template_kind: 'linear',
     calibrate_from_sample: true,
   })
+  const [tuningNotesDraft, setTuningNotesDraft] = useState<string>('')
 
   const [skuBindCode, setSkuBindCode] = useState('')
   const [sampleImages, setSampleImages] = useState<string[]>([])
@@ -1045,6 +1043,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     setTuningFixedPerCountQty(Number(meta.fixed_per_count_quantity ?? 0))
     const cur = (row.metadata_json as any)?.derive_template
     setTuningDeriveTemplateDraft(cur ?? { template_kind: 'linear', calibrate_from_sample: true })
+    setTuningNotesDraft(String(row?.notes ?? ''))
     setTuningOpen(true)
   }
 
@@ -1073,36 +1072,11 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     setTuningRatePerMinute(Number(row.rate_per_minute ?? 0))
     const cur = (row.metadata_json as any)?.derive_template
     setTuningDeriveTemplateDraft(cur ?? { template_kind: 'linear', calibrate_from_sample: true })
+    setTuningNotesDraft(String(row?.notes ?? ''))
     setTuningOpen(true)
   }
 
-  const openNotesModal = (kind: 'material' | 'process', index: number) => {
-    setNotesModalKind(kind)
-    setNotesModalIndex(index)
-    const row = kind === 'material' ? (materials[index] as any) : (processes[index] as any)
-    setNotesDraft(String(row?.notes ?? ''))
-    setNotesModalOpen(true)
-  }
-
-  const applyNotesModal = () => {
-    if (notesModalIndex == null) return
-    const idx = notesModalIndex
-    const text = notesDraft
-    if (notesModalKind === 'material') {
-      const next = materials.slice()
-      const row = next[idx]
-      if (!row) return
-      next[idx] = { ...(row as any), notes: text }
-      setMaterials(next)
-    } else {
-      const next = processes.slice()
-      const row = next[idx]
-      if (!row) return
-      next[idx] = { ...(row as any), notes: text }
-      setProcesses(next)
-    }
-    setNotesModalOpen(false)
-  }
+  // notes modal removed
 
   const moveInArray = <T,>(arr: T[], from: number, to: number): T[] => {
     if (from === to) return arr
@@ -1178,6 +1152,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
 
       next[idx] = {
         ...row,
+        notes: tuningNotesDraft,
         fixed_quantity: fixedQty,
         coverage_ratio: cov,
         loss_rate: entryContext === 'sample' ? loss : row.loss_rate,
@@ -1222,6 +1197,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
 
     next[idx] = {
       ...row,
+      notes: tuningNotesDraft,
       base_minutes: base,
       unit_minutes: unit,
       rate_per_minute: rate,
@@ -3094,7 +3070,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                   type="text"
                                   icon={<FileTextOutlined style={{ color: has ? '#1677ff' : '#bfbfbf' }} />}
                                   title={has ? '查看/编辑备注' : '添加备注'}
-                                  onClick={() => openNotesModal('material', idx)}
+                                  onClick={() => openTuningPanelForMaterial(idx)}
                                 />
                               )
                             },
@@ -3508,7 +3484,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                   type="text"
                                   icon={<FileTextOutlined style={{ color: has ? '#1677ff' : '#bfbfbf' }} />}
                                   title={has ? '查看/编辑备注' : '添加备注'}
-                                  onClick={() => openNotesModal('process', idx)}
+                                  onClick={() => openTuningPanelForProcess(idx)}
                                 />
                               )
                             },
@@ -4005,6 +3981,16 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
               </Row>
             </Card>
 
+            <Card size="small" title="备注（随本次调参一起应用）">
+              <Input.TextArea
+                rows={3}
+                value={tuningNotesDraft}
+                onChange={(e) => setTuningNotesDraft(e.target.value)}
+                placeholder="可选：填写备注（例如适用范围、工艺说明、责任人/日期等）"
+                allowClear
+              />
+            </Card>
+
             {entryContext === 'sample' ? (
               <Collapse
                 defaultActiveKey={[]}
@@ -4395,24 +4381,6 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
         tip="本指南用于培训新同事：从“打样版本”如何配置到“推导标准每平米”的口径与字段填写方式。"
         onClose={() => setDeriveGuideOpen(false)}
       />
-
-      {/* Notes modal */}
-      <Modal
-        title={notesModalKind === 'material' ? '物料备注' : '工序备注'}
-        open={notesModalOpen}
-        onCancel={() => setNotesModalOpen(false)}
-        onOk={applyNotesModal}
-        okText="保存"
-        cancelText="取消"
-        destroyOnClose
-      >
-        <Input.TextArea
-          rows={4}
-          value={notesDraft}
-          placeholder="可选：填写备注"
-          onChange={(e) => setNotesDraft(e.target.value)}
-        />
-      </Modal>
 
       {/* Module picker */}
       <Modal

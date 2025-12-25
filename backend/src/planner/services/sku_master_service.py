@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
 
 from openpyxl import load_workbook
@@ -15,6 +16,25 @@ from . import product_model_service, spec_parser_service
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _json_safe(value: Any) -> Any:
+    """
+    Ensure JSON-serializable payloads for JSON columns (metadata_json / SpecParseSnapshot JSON fields).
+    """
+    if value is None:
+        return None
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, tuple):
+        return [_json_safe(v) for v in value]
+    return value
 
 
 def _norm_str(value: Any) -> Optional[str]:

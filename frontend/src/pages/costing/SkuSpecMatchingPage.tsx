@@ -249,6 +249,12 @@ export default function SkuSpecMatchingPage() {
       return executeSkuMasterSpecPreparse({ sku_ids: ids, skip_if_same_hash: true })
     },
     onSuccess: (res) => {
+      const errs = (res as any)?.errors ?? []
+      if (Array.isArray(errs) && errs.length) {
+        const first = errs[0] ?? {}
+        message.error(`保存失败：${first?.error ?? '未知错误'}`)
+        return
+      }
       message.success(`保存完成：扫描${res.scanned}，保存${res.saved}，跳过${res.skipped_same_hash}`)
       // 保存后，保留预览列表作为“回执确认”，避免用户觉得记录消失
       setPreviewSaved(true)

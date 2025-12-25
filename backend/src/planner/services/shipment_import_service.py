@@ -749,3 +749,68 @@ def list_bom_snapshots(
     return query.order_by(models.BomSnapshot.created_at.desc()).limit(limit).all()
 
 
+def recompute_bom_snapshot(db: Session, *, snapshot_id: str, operator_id: Optional[str]) -> models.BomSnapshot:
+    """
+    Recompute and backfill an existing BOM snapshot (for historical records).
+    This will overwrite:
+    - final_lines_json
+    - trace_json
+    - model_version_id/spec_hash/qty (based on current shipment_line)
+    - generated_at
+    """
+    snap = db.get(models.BomSnapshot, snapshot_id)
+    if not snap:
+        raise ValueError("BOM快照不存在")
+
+    line = db.get(models.ShipmentLine, snap.shipment_line_id)
+    if not line or line.is_archived:
+        raise ValueError("关联的发货行不存在或已归档")
+
+    sku = (line.sku_code or "").strip()
+    if not sku:
+        raise ValueError("发货行 sku_code 为空，无法回填")
+
+    spec_text = (line.spec_text or "").strip()
+    if not spec_text:
+        raise ValueError("发货行 spec_text 为空，无法回填")
+
+    binding = product_model_service.get_active_sku_binding(db, sku)
+    if not binding:
+        raise ValueError("SKU 未绑定已发布标准版本，无法回填")
+
+    spec_snap = _upsert_spec_snapshot(db, spec_text=spec_text)
+    qty = line.qty if line.qty is not None else Decimal("1")
+
+    bom = bom_generation_service.generate_bom(
+        db,
+        spec_text=spec_text,
+        model_version_id=None,
+        sku_code=sku,
+        quantity=Decimal(str(qty)),
+    )
+
+    trace = dict(bom.get("trace") or {})
+    trace.update(
+        {
+            "bound_version_id": binding.model_version_id,
+            "spec_hash": spec_snap.spec_hash,
+            "shipment_line_id": line.id,
+            "batch_id": line.batch_id,
+            "recomputed_at": _utcnow().isoformat(),
+            "recomputed_by": operator_id or "",
+        }
+    )
+
+    snap.shipment_no = line.shipment_no
+    snap.sku_code = sku
+    snap.model_version_id = trace.get("model_version_id") or binding.model_version_id
+    snap.spec_hash = spec_snap.spec_hash
+    snap.qty = Decimal(str(qty))
+    snap.final_lines_json = _json_safe(list(bom.get("final_material_lines") or []))
+    snap.trace_json = _json_safe(trace)
+    snap.generated_at = _utcnow()
+    db.add(snap)
+    db.commit()
+    db.refresh(snap)
+    return snap
+

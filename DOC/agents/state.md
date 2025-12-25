@@ -2,6 +2,7 @@
 
 - **最近校对（北京时间 GMT+8）**：2025-12-25 04:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-25 06:08（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
+- **最近校对（北京时间 GMT+8）**：2025-12-25 14:40（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **分支**：`backup/20251214-1535`
 
 - **本轮闭环产物（Planner-Optimization / 方案评审稿）**：
@@ -38,6 +39,25 @@
   - `backend/src/planner/routers/shipments.py`
   - `backend/src/planner/services/shipment_import_service.py`
   - `backend/src/planner/schemas.py`
+
+- **本轮闭环产物（BOM 成本展示 + 工序明细 + 历史快照回填）**：
+  - 动态 BOM 成本口径：
+    - `POST /api/planner/bom/generate` 返回每条物料行 `bom_unit_price/line_cost`
+    - `trace.costing` 返回 `material_cost_total/process_cost_total/overhead_cost(默认30%)/total_cost/unit_cost`
+    - 并补充 `trace.costing.process_lines`（工序明细，含计价参数/行成本/警告）
+  - 发货监控页（`/costing/shipments`）抽屉重构：
+    - 解析队列 BOM 预览抽屉、BOM 快照详情抽屉统一为 Tabs：汇总 / 物料 / 工序 / Trace
+  - 新增“历史快照回填”：
+    - 后端：`POST /api/planner/shipments/bom-snapshots/{snapshot_id}/recompute`
+    - 前端：BOM 快照列表新增“回填”按钮（回填后刷新并打开详情）
+
+- **盘点/扣库模式确认（待后续实现）**：
+  - 当前业务走“发货触发标准回冲（Backflush）按 BOM 标准比例扣真实物料”，月底盘点对真实物料做差异调整；虚拟物料不作为盘点库存对象。
+
+- **本轮验收命令（必须）**：
+  - Frontend：`npm -C frontend run build`
+  - Backend（快速 smoke）：`curl -sS "http://127.0.0.1:8800/api/planner/shipments/bom-snapshots?limit=1" | python -m json.tool`
+  - Backfill API（示例）：`curl -sS -X POST "http://127.0.0.1:8800/api/planner/shipments/bom-snapshots/<snapshot_id>/recompute" -H "Content-Type: application/json" -d '{"operator_id":"planner_user"}' | python -m json.tool`
 
 - **本轮补充（Frontend / 模型清单：替换物料自动回填口径统一）**：
   - 问题：替换物料后，`unit_of_measure` / `metadata_json.bom_unit` / `calculation_method` / `bom_unit_price` 未同步更新，导致“计量方式与 BOM 单位不配套”、且表现为“所有行看起来都像同一种计量方式”。

@@ -27,6 +27,7 @@ def generate_bom(
     metrics = _build_metrics(spec_result, measurement)
 
     base_lines = product_model_service.list_version_material_lines(db, version.id)
+    process_lines = product_model_service.list_version_process_lines(db, version.id)
     variants = line_variant_service.list_variants(db, version_id=version.id)
     variants_by_line: Dict[str, List[models.ProductModelLineVariant]] = {}
     for variant in variants:
@@ -112,6 +113,8 @@ def generate_bom(
             for add_line in additions:
                 _push(add_line)
 
+    costing = _attach_costing(db, final_lines, process_lines=process_lines, measurement=measurement)
+
     return {
         "final_material_lines": final_lines,
         "trace": {
@@ -121,9 +124,263 @@ def generate_bom(
             "parsed": spec_result,
             "measurement_mm": measurement,
             "matched_variants": trace_hits,
+            "costing": costing,
         },
     }
 
+
+def _attach_costing(
+    db: Session,
+    final_lines: List[Dict[str, Any]],
+    *,
+    process_lines: List[models.ModelVersionProcess],
+    measurement: Dict[str, Decimal],
+) -> Dict[str, Any]:
+    """
+    Compute and attach costing fields (read-only):
+    - bom_unit_price: CNY per BOM unit
+    - line_cost: computed_quantity * bom_unit_price
+    Also compute process (labor) cost from model_version_processes and include in totals.
+    """
+    real_ids: List[str] = []
+    for line in final_lines:
+        if (line.get("material_kind") or "real") == "real" and line.get("material_ref_id"):
+            real_ids.append(str(line["material_ref_id"]))
+
+    materials: Dict[str, models.Material] = {}
+    if real_ids:
+        rows = (
+            db.query(models.Material)
+            .filter(models.Material.id.in_(list({*real_ids})))
+            .all()
+        )
+        materials = {m.id: m for m in rows}
+
+    material_cost_total = Decimal("0")
+    priced_lines = 0
+    missing_price_lines = 0
+    missing_price_material_codes: List[str] = []
+
+    for line in final_lines:
+        price: Optional[Decimal] = None
+
+        if (line.get("material_kind") or "real") == "real" and line.get("material_ref_id"):
+            m = materials.get(str(line.get("material_ref_id")))
+            if m is not None:
+                price = product_model_service._derive_bom_unit_price(m)
+
+        if price is None:
+            meta = line.get("metadata") or {}
+            raw_price = meta.get("bom_unit_price") or meta.get("unit_price")
+            if raw_price not in (None, ""):
+                try:
+                    price = Decimal(str(raw_price))
+                except Exception:  # noqa: BLE001
+                    price = None
+
+        qty = line.get("computed_quantity")
+        if not isinstance(qty, Decimal):
+            try:
+                qty = Decimal(str(qty))
+            except Exception:  # noqa: BLE001
+                qty = None
+
+        line_cost: Optional[Decimal] = None
+        if price is not None and qty is not None:
+            try:
+                line_cost = qty * price
+            except Exception:  # noqa: BLE001
+                line_cost = None
+
+        line["bom_unit_price"] = price
+        line["line_cost"] = line_cost
+
+        if line_cost is not None:
+            material_cost_total += line_cost
+            priced_lines += 1
+        else:
+            missing_price_lines += 1
+            code = line.get("material_code")
+            if code:
+                missing_price_material_codes.append(str(code))
+
+    process_cost_total, process_costing = _compute_process_costing(
+        db,
+        process_lines=process_lines,
+        width_mm=measurement["width_mm"],
+        height_mm=measurement["height_mm"],
+        quantity=measurement["quantity"],
+    )
+
+    overhead_rate = _resolve_overhead_rate(db, model_version_processes=process_lines)
+    overhead_cost = (material_cost_total + process_cost_total) * overhead_rate
+    total_cost = material_cost_total + process_cost_total + overhead_cost
+    unit_cost = None
+    try:
+        if measurement.get("quantity") and measurement["quantity"] > 0:
+            unit_cost = total_cost / measurement["quantity"]
+    except Exception:  # noqa: BLE001
+        unit_cost = None
+
+    return {
+        "currency": "CNY",
+        "material_cost_total": material_cost_total,
+        "process_cost_total": process_cost_total,
+        "overhead_rate": overhead_rate,
+        "overhead_cost": overhead_cost,
+        "total_cost": total_cost,
+        "unit_cost": unit_cost,
+        "priced_material_lines": priced_lines,
+        "missing_price_material_lines": missing_price_lines,
+        "missing_price_material_codes": missing_price_material_codes[:50],
+        **process_costing,
+    }
+
+
+def _compute_process_costing(
+    db: Session,
+    *,
+    process_lines: List[models.ModelVersionProcess],
+    width_mm: Decimal,
+    height_mm: Decimal,
+    quantity: Decimal,
+) -> tuple[Decimal, Dict[str, Any]]:
+    """
+    Compute process(labor) costs from version process lines.
+
+    Expected metadata on each process line (stored in metadata_json):
+    - pricing_method: fixed/count/area/perimeter/width/height
+    - cost_type: time/piece
+    - base_minutes, unit_minutes
+    - rate_per_minute, piece_rate
+    """
+    process_cost_total = Decimal("0")
+    priced_process_lines = 0
+    missing_price_process_lines = 0
+    missing_price_process_codes: List[str] = []
+    process_cost_lines: List[Dict[str, Any]] = []
+
+    for row in process_lines or []:
+        meta = row.metadata_json or {}
+        proc = db.get(models.Process, row.process_id)
+
+        pricing_method = str(meta.get("pricing_method") or "count")
+        measure_method = (
+            pricing_method
+            if pricing_method in ("fixed", "count", "area", "perimeter", "width", "height")
+            else "count"
+        )
+        measure_qty = product_model_service._measure_qty(
+            measure_method if measure_method != "fixed" else "count",
+            width_mm=width_mm,
+            height_mm=height_mm,
+            quantity=quantity,
+        )
+
+        cost_type = str(meta.get("cost_type") or "").strip() or None
+        base_minutes = _to_decimal(meta.get("base_minutes"), Decimal("0"))
+        unit_minutes = _to_decimal(meta.get("unit_minutes"), Decimal("0"))
+        rate_per_minute = meta.get("rate_per_minute")
+        piece_rate = meta.get("piece_rate")
+        rate = _to_decimal(rate_per_minute, Decimal("0")) if rate_per_minute not in (None, "") else None
+        piece = _to_decimal(piece_rate, Decimal("0")) if piece_rate not in (None, "") else None
+
+        total_minutes: Optional[Decimal] = None
+        total_cost: Optional[Decimal] = None
+        warnings: List[str] = []
+        if cost_type == "time":
+            total_minutes = base_minutes + (unit_minutes * measure_qty)
+            if rate is not None and rate > 0:
+                total_cost = total_minutes * rate
+            else:
+                warnings.append("未配置分钟单价（rate_per_minute）")
+                missing_price_process_lines += 1
+                if proc and proc.process_code:
+                    missing_price_process_codes.append(str(proc.process_code))
+        elif cost_type == "piece":
+            if piece is not None and piece > 0:
+                total_cost = measure_qty * piece
+            else:
+                warnings.append("未配置计件单价（piece_rate）")
+                missing_price_process_lines += 1
+                if proc and proc.process_code:
+                    missing_price_process_codes.append(str(proc.process_code))
+        else:
+            warnings.append("未配置工序计价类型（cost_type=time/piece）")
+            missing_price_process_lines += 1
+            if proc and proc.process_code:
+                missing_price_process_codes.append(str(proc.process_code))
+
+        if total_cost is not None:
+            process_cost_total += total_cost
+            priced_process_lines += 1
+
+        process_cost_lines.append(
+            {
+                "process_id": row.process_id,
+                "process_code": proc.process_code if proc else None,
+                "process_name": proc.process_name if proc else None,
+                "team_name": meta.get("team_name") or (proc.team_name if proc else None),
+                "pricing_method": pricing_method,
+                "measure_quantity": measure_qty,
+                "cost_type": cost_type,
+                "base_minutes": base_minutes,
+                "unit_minutes": unit_minutes,
+                "rate_per_minute": rate,
+                "piece_rate": piece,
+                "total_minutes": total_minutes,
+                "total_cost": total_cost,
+                "warnings": warnings,
+            }
+        )
+
+    return process_cost_total, {
+        "priced_process_lines": priced_process_lines,
+        "missing_price_process_lines": missing_price_process_lines,
+        "missing_price_process_codes": missing_price_process_codes[:50],
+        "process_lines": process_cost_lines,
+    }
+
+
+def _resolve_overhead_rate(db: Session, *, model_version_processes: List[models.ModelVersionProcess]) -> Decimal:
+    """
+    Resolve manufacturing overhead rate for costing.
+    Priority:
+    - version.metadata_json.costing.overhead_rate / manufacturing_overhead_rate
+    - model.metadata_json.costing.overhead_rate / manufacturing_overhead_rate
+    Fallback: 0.3 (consistent with existing UI stats / preview_model_cost).
+    """
+    version_id = model_version_processes[0].version_id if model_version_processes else None
+    version = db.get(models.ProductModelVersion, version_id) if version_id else None
+    model = db.get(models.ProductModel, version.model_id) if version else None
+
+    def _read(meta: Any) -> Optional[Decimal]:
+        if not isinstance(meta, dict):
+            return None
+        costing = meta.get("costing") if isinstance(meta.get("costing"), dict) else {}
+        raw = (
+            costing.get("overhead_rate")
+            or costing.get("manufacturing_overhead_rate")
+            or meta.get("overhead_rate")
+            or meta.get("manufacturing_overhead_rate")
+        )
+        if raw in (None, ""):
+            return None
+        try:
+            r = Decimal(str(raw))
+            if r < 0:
+                return Decimal("0")
+            # 0-100 => 0-1
+            if r > Decimal("1.5"):
+                r = r / Decimal("100")
+            return r
+        except Exception:  # noqa: BLE001
+            return None
+
+    rate = _read(version.metadata_json if version else None)
+    if rate is None:
+        rate = _read(model.metadata_json if model else None)
+    return rate if rate is not None else Decimal("0.3")
 
 def _resolve_version(
     db: Session,

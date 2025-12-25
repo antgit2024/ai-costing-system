@@ -21,6 +21,9 @@ coverage.xml
 # Local media / persisted downloads (never commit)
 backend/media/
 
+# Local logs / previews (never commit)
+backend/logs/
+
 
 
 

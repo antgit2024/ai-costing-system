@@ -1049,6 +1049,11 @@ export const fetchShipmentBomSnapshots = async (
   return response.data
 }
 
+export const recomputeShipmentBomSnapshot = async (snapshot_id: string, payload?: { operator_id?: string }): Promise<BomSnapshot> => {
+  const response = await plannerClient.post(`/shipments/bom-snapshots/${snapshot_id}/recompute`, payload ?? {})
+  return response.data
+}
+
 export const importSkuMasterXlsx = async (params: {
   file: File
   requested_by?: string

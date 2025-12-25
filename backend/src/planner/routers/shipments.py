@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from ..dependencies import get_db_session
 from ..schemas import (
     BomSnapshotRead,
+    BomSnapshotRecomputeRequest,
     PaginatedShipmentImportBatchResponse,
   ShipmentImportPreviewResponse,
   ShipmentImportExecuteRequest,
@@ -119,5 +120,19 @@ def list_bom_snapshots(
         spec_hash=spec_hash,
         limit=limit,
     )
+
+
+@router.post("/bom-snapshots/{snapshot_id}/recompute", response_model=BomSnapshotRead)
+def recompute_bom_snapshot(
+    snapshot_id: str,
+    payload: BomSnapshotRecomputeRequest,
+    db: Session = Depends(get_db_session),
+):
+    try:
+        return shipment_import_service.recompute_bom_snapshot(
+            db, snapshot_id=snapshot_id, operator_id=payload.operator_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 

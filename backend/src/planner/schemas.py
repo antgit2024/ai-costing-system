@@ -1691,6 +1691,8 @@ class BomLineRead(BaseModel):
     coverage_ratio: Decimal
     loss_rate: Decimal
     computed_quantity: Decimal
+    bom_unit_price: Optional[Decimal] = None
+    line_cost: Optional[Decimal] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
     class Config:
@@ -1838,6 +1840,9 @@ class BomSnapshotRead(BaseModel):
         orm_mode = True
         allow_population_by_field_name = True
 
+
+class BomSnapshotRecomputeRequest(BaseModel):
+    operator_id: Optional[str] = Field(None, max_length=64)
 
 class SkuMasterRead(BaseModel):
     id: str

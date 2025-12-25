@@ -30,6 +30,7 @@ import {
   fetchShipmentImportBatches,
   generateBom,
   previewShipmentsXlsx,
+  recomputeShipmentBomSnapshot,
 } from '@/services/planner'
 import type { BomGenerateResponse, BomSnapshot, ShipmentException, ShipmentImportBatch } from '@/types/planner'
 
@@ -46,6 +47,47 @@ const formatTime = (v?: string | null) => {
 const safeString = (v: unknown): string => {
   if (v === null || v === undefined) return ''
   return String(v)
+}
+
+const toNumberOrNull = (v: unknown): number | null => {
+  if (v === null || v === undefined) return null
+  if (typeof v === 'number' && Number.isFinite(v)) return v
+  if (typeof v === 'string') {
+    const s = v.trim()
+    if (!s) return null
+    const n = Number(s)
+    return Number.isFinite(n) ? n : null
+  }
+  return null
+}
+
+const formatMoney = (v: unknown): string => {
+  const n = toNumberOrNull(v)
+  if (n === null) return '-'
+  return n.toFixed(4)
+}
+
+const computeLineCost = (line: any): number | null => {
+  const direct = toNumberOrNull(line?.line_cost)
+  if (direct !== null) return direct
+  const qty = toNumberOrNull(line?.computed_quantity ?? line?.quantity ?? line?.qty)
+  const price = toNumberOrNull(line?.bom_unit_price ?? line?.metadata?.bom_unit_price)
+  if (qty === null || price === null) return null
+  return qty * price
+}
+
+const computeTotalCostFromLines = (lines: any[]): number | null => {
+  if (!Array.isArray(lines) || lines.length === 0) return null
+  let sum = 0
+  let hasAny = false
+  for (const l of lines) {
+    const c = computeLineCost(l)
+    if (c !== null) {
+      sum += c
+      hasAny = true
+    }
+  }
+  return hasAny ? sum : null
 }
 
 const jsonPretty = (obj: unknown) => {
@@ -102,6 +144,7 @@ const ShipmentMonitorPage = () => {
 
   const [snapshotDrawerOpen, setSnapshotDrawerOpen] = useState(false)
   const [activeSnapshot, setActiveSnapshot] = useState<BomSnapshot | null>(null)
+  const [recomputingSnapshotId, setRecomputingSnapshotId] = useState<string | null>(null)
 
   const batchesQuery = useQuery({
     queryKey: ['shipments', 'import-batches', batchPage, batchPageSize],
@@ -297,17 +340,42 @@ const ShipmentMonitorPage = () => {
     {
       title: '操作',
       key: 'actions',
-      width: 110,
+      width: 180,
       render: (_, record) => (
-        <Button
-          size="small"
-          onClick={() => {
-            setActiveSnapshot(record)
-            setSnapshotDrawerOpen(true)
-          }}
-        >
-          查看
-        </Button>
+        <Space size={8}>
+          <Button
+            size="small"
+            onClick={() => {
+              setActiveSnapshot(record)
+              setSnapshotDrawerOpen(true)
+            }}
+          >
+            查看
+          </Button>
+          <Button
+            size="small"
+            loading={recomputingSnapshotId === record.id}
+            onClick={async () => {
+              try {
+                setRecomputingSnapshotId(record.id)
+                const updated = await recomputeShipmentBomSnapshot(record.id, {
+                  operator_id: uploadRequestedBy?.trim() || undefined,
+                })
+                message.success('回填完成：已重算工序+成本并更新快照')
+                // refresh list + open updated snapshot
+                snapshotsQuery.refetch()
+                setActiveSnapshot(updated)
+                setSnapshotDrawerOpen(true)
+              } catch (err: any) {
+                message.error(`回填失败：${err?.response?.data?.detail ?? err?.message ?? 'unknown error'}`)
+              } finally {
+                setRecomputingSnapshotId(null)
+              }
+            }}
+          >
+            回填
+          </Button>
+        </Space>
       ),
     },
   ]
@@ -324,9 +392,19 @@ const ShipmentMonitorPage = () => {
         name: guessLineName(obj) || '-',
         quantity: guessLineQty(obj) || '-',
         unit: guessLineUnit(obj) || '-',
+        bom_unit_price: (obj as any).bom_unit_price ?? ((obj as any).metadata ?? {})?.bom_unit_price ?? null,
+        line_cost: (obj as any).line_cost ?? null,
         raw: obj,
       }
     })
+  }, [activeSnapshot])
+
+  const snapshotTotalCost = useMemo(() => {
+    if (!activeSnapshot) return null
+    const traceCost = (activeSnapshot as any)?.trace?.costing?.total_cost
+    const n = toNumberOrNull(traceCost)
+    if (n !== null) return n
+    return computeTotalCostFromLines((activeSnapshot as any)?.final_material_lines ?? [])
   }, [activeSnapshot])
 
   const snapshotLineCols: ColumnsType<any> = [
@@ -335,6 +413,8 @@ const ShipmentMonitorPage = () => {
     { title: '名称', dataIndex: 'name', ellipsis: true },
     { title: '数量', dataIndex: 'quantity', width: 120 },
     { title: '单位', dataIndex: 'unit', width: 90 },
+    { title: 'BOM单价', dataIndex: 'bom_unit_price', width: 120, render: (v) => formatMoney(v) },
+    { title: '行成本', dataIndex: 'line_cost', width: 120, render: (_, r) => formatMoney(computeLineCost(r?.raw)) },
   ]
 
   const handleBatchPaginationChange = (pagination: TablePaginationConfig) => {
@@ -784,31 +864,129 @@ const ShipmentMonitorPage = () => {
                 {safeString(activeQueueRow.spec_text) || '-'}
               </Descriptions.Item>
             </Descriptions>
-            <Card size="small" title="最终BOM（可扣库存行）">
-              {queueBomPreview ? (
-                <Table
-                  rowKey={(r) => safeString((r as any).line_index) + '-' + safeString((r as any).material_code)}
-                  size="small"
-                  pagination={false}
-                  columns={[
-                    { title: '#', dataIndex: 'line_index', width: 60 },
-                    { title: '编码', dataIndex: 'material_code', width: 140, ellipsis: true },
-                    { title: '名称', dataIndex: 'material_name', ellipsis: true },
-                    { title: '数量', dataIndex: 'computed_quantity', width: 120 },
-                    { title: '单位', dataIndex: 'unit_of_measure', width: 90 },
-                    { title: '计量', dataIndex: 'calculation_method', width: 110 },
-                  ]}
-                  dataSource={(queueBomPreview.final_material_lines ?? []) as any[]}
-                />
-              ) : (
-                <Text type="secondary">加载中…（若失败会在顶部提示）</Text>
-              )}
-            </Card>
-            {queueBomPreview?.trace ? (
-              <Card size="small" title="Trace（用于审计/排查）">
-                <pre style={{ margin: 0, maxHeight: 240, overflow: 'auto' }}>{jsonPretty(queueBomPreview.trace)}</pre>
-              </Card>
-            ) : null}
+            {queueBomPreview ? (
+              <Tabs
+                items={[
+                  {
+                    key: 'summary',
+                    label: '汇总',
+                    children: (
+                      <Descriptions bordered size="small" column={3}>
+                        <Descriptions.Item label="合计成本（CNY）">
+                          <b>
+                            {formatMoney(
+                              toNumberOrNull((queueBomPreview as any)?.trace?.costing?.total_cost) ??
+                                computeTotalCostFromLines((queueBomPreview.final_material_lines ?? []) as any[]),
+                            )}
+                          </b>
+                        </Descriptions.Item>
+                        <Descriptions.Item label="物料成本（CNY）">
+                          {formatMoney(toNumberOrNull((queueBomPreview as any)?.trace?.costing?.material_cost_total))}
+                        </Descriptions.Item>
+                        <Descriptions.Item label="工序成本（CNY）">
+                          {formatMoney(toNumberOrNull((queueBomPreview as any)?.trace?.costing?.process_cost_total))}
+                        </Descriptions.Item>
+                        <Descriptions.Item label="制造费用（CNY）">
+                          {formatMoney(toNumberOrNull((queueBomPreview as any)?.trace?.costing?.overhead_cost))}
+                        </Descriptions.Item>
+                        <Descriptions.Item label="制造费率（当前默认）">
+                          {safeString((queueBomPreview as any)?.trace?.costing?.overhead_rate) || '0.3'}
+                        </Descriptions.Item>
+                        <Descriptions.Item label="单位成本（CNY/件）">
+                          {formatMoney(toNumberOrNull((queueBomPreview as any)?.trace?.costing?.unit_cost))}
+                        </Descriptions.Item>
+                        <Descriptions.Item label="已计价物料行">
+                          {safeString((queueBomPreview as any)?.trace?.costing?.priced_material_lines) ||
+                            safeString((queueBomPreview as any)?.trace?.costing?.priced_lines) ||
+                            '-'}
+                        </Descriptions.Item>
+                        <Descriptions.Item label="缺物料单价行">
+                          {safeString((queueBomPreview as any)?.trace?.costing?.missing_price_material_lines) ||
+                            safeString((queueBomPreview as any)?.trace?.costing?.missing_price_lines) ||
+                            '-'}
+                        </Descriptions.Item>
+                        <Descriptions.Item label="缺工序单价行">
+                          {safeString((queueBomPreview as any)?.trace?.costing?.missing_price_process_lines) || '-'}
+                        </Descriptions.Item>
+                      </Descriptions>
+                    ),
+                  },
+                  {
+                    key: 'materials',
+                    label: `物料（${(queueBomPreview.final_material_lines ?? []).length}）`,
+                    children: (
+                      <Table
+                        rowKey={(r) =>
+                          safeString((r as any).line_index) + '-' + safeString((r as any).material_code)
+                        }
+                        size="small"
+                        pagination={false}
+                        columns={[
+                          { title: '#', dataIndex: 'line_index', width: 60 },
+                          { title: '编码', dataIndex: 'material_code', width: 140, ellipsis: true },
+                          { title: '名称', dataIndex: 'material_name', ellipsis: true },
+                          { title: '数量', dataIndex: 'computed_quantity', width: 110 },
+                          { title: '单位', dataIndex: 'unit_of_measure', width: 80 },
+                          { title: '计量', dataIndex: 'calculation_method', width: 100 },
+                          { title: 'BOM单价', dataIndex: 'bom_unit_price', width: 120, render: (v) => formatMoney(v) },
+                          {
+                            title: '行成本',
+                            key: 'line_cost',
+                            width: 120,
+                            render: (_, r) => formatMoney(computeLineCost(r)),
+                          },
+                        ]}
+                        dataSource={(queueBomPreview.final_material_lines ?? []) as any[]}
+                      />
+                    ),
+                  },
+                  {
+                    key: 'processes',
+                    label: `工序（${(((queueBomPreview as any)?.trace?.costing?.process_lines ?? []) as any[]).length}）`,
+                    children: Array.isArray((queueBomPreview as any)?.trace?.costing?.process_lines) ? (
+                      <Table
+                        size="small"
+                        pagination={false}
+                        rowKey={(r) => safeString((r as any).process_id) + '-' + safeString((r as any).process_code)}
+                        columns={[
+                          { title: '工序编码', dataIndex: 'process_code', width: 120, ellipsis: true },
+                          { title: '工序名称', dataIndex: 'process_name', ellipsis: true },
+                          { title: '班组', dataIndex: 'team_name', width: 110, ellipsis: true },
+                          { title: '计量', dataIndex: 'pricing_method', width: 90 },
+                          { title: '计量值', dataIndex: 'measure_quantity', width: 90 },
+                          { title: '计价', dataIndex: 'cost_type', width: 90 },
+                          { title: '分钟', dataIndex: 'total_minutes', width: 90 },
+                          { title: '分钟单价', dataIndex: 'rate_per_minute', width: 90 },
+                          { title: '计件单价', dataIndex: 'piece_rate', width: 90 },
+                          { title: '行成本', dataIndex: 'total_cost', width: 110, render: (v) => formatMoney(v) },
+                          {
+                            title: '警告',
+                            dataIndex: 'warnings',
+                            width: 220,
+                            render: (v) =>
+                              Array.isArray(v) && v.length ? <Text type="warning">{String(v.join('；'))}</Text> : '-',
+                          },
+                        ]}
+                        dataSource={((queueBomPreview as any)?.trace?.costing?.process_lines ?? []) as any[]}
+                      />
+                    ) : (
+                      <Alert type="info" showIcon message="该模型版本未配置工序行，或未返回工序明细。" />
+                    ),
+                  },
+                  {
+                    key: 'trace',
+                    label: 'Trace',
+                    children: (
+                      <pre style={{ margin: 0, maxHeight: 420, overflow: 'auto' }}>
+                        {jsonPretty(queueBomPreview.trace)}
+                      </pre>
+                    ),
+                  },
+                ]}
+              />
+            ) : (
+              <Alert type="info" showIcon message="加载中…（若失败会在顶部提示）" />
+            )}
           </Space>
         ) : (
           <Alert type="info" showIcon message="请选择一条解析队列记录" />
@@ -843,26 +1021,93 @@ const ShipmentMonitorPage = () => {
               </Descriptions.Item>
             </Descriptions>
 
-            <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
-              <Col span={14}>
-                <Card title="final_material_lines（概要）" size="small">
-                  <Table
-                    size="small"
-                    columns={snapshotLineCols}
-                    dataSource={snapshotLines}
-                    pagination={false}
-                    scroll={{ x: 720 }}
-                  />
-                </Card>
-              </Col>
-              <Col span={10}>
-                <Card title="trace（JSON）" size="small">
-                  <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
-                    {jsonPretty(activeSnapshot.trace)}
-                  </pre>
-                </Card>
-              </Col>
-            </Row>
+            <div style={{ marginTop: 16 }}>
+              <Tabs
+                items={[
+                  {
+                    key: 'summary',
+                    label: '汇总',
+                    children: (
+                      <Descriptions bordered size="small" column={3}>
+                        <Descriptions.Item label="合计成本（CNY）">
+                          <b>{formatMoney(snapshotTotalCost)}</b>
+                        </Descriptions.Item>
+                        <Descriptions.Item label="物料成本（CNY）">
+                          {formatMoney(toNumberOrNull((activeSnapshot as any)?.trace?.costing?.material_cost_total))}
+                        </Descriptions.Item>
+                        <Descriptions.Item label="工序成本（CNY）">
+                          {formatMoney(toNumberOrNull((activeSnapshot as any)?.trace?.costing?.process_cost_total))}
+                        </Descriptions.Item>
+                        <Descriptions.Item label="制造费用（CNY）">
+                          {formatMoney(toNumberOrNull((activeSnapshot as any)?.trace?.costing?.overhead_cost))}
+                        </Descriptions.Item>
+                        <Descriptions.Item label="制造费率（当前默认）">
+                          {safeString((activeSnapshot as any)?.trace?.costing?.overhead_rate) || '0.3'}
+                        </Descriptions.Item>
+                        <Descriptions.Item label="单位成本（CNY/件）">
+                          {formatMoney(toNumberOrNull((activeSnapshot as any)?.trace?.costing?.unit_cost))}
+                        </Descriptions.Item>
+                      </Descriptions>
+                    ),
+                  },
+                  {
+                    key: 'materials',
+                    label: `物料（${snapshotLines.length}）`,
+                    children: (
+                      <Table
+                        size="small"
+                        columns={snapshotLineCols}
+                        dataSource={snapshotLines}
+                        pagination={false}
+                        scroll={{ x: 960 }}
+                      />
+                    ),
+                  },
+                  {
+                    key: 'processes',
+                    label: `工序（${(((activeSnapshot as any)?.trace?.costing?.process_lines ?? []) as any[]).length}）`,
+                    children: Array.isArray((activeSnapshot as any)?.trace?.costing?.process_lines) ? (
+                      <Table
+                        size="small"
+                        pagination={false}
+                        rowKey={(r) => safeString((r as any).process_id) + '-' + safeString((r as any).process_code)}
+                        columns={[
+                          { title: '工序编码', dataIndex: 'process_code', width: 120, ellipsis: true },
+                          { title: '工序名称', dataIndex: 'process_name', ellipsis: true },
+                          { title: '班组', dataIndex: 'team_name', width: 110, ellipsis: true },
+                          { title: '计量', dataIndex: 'pricing_method', width: 90 },
+                          { title: '计量值', dataIndex: 'measure_quantity', width: 90 },
+                          { title: '计价', dataIndex: 'cost_type', width: 90 },
+                          { title: '分钟', dataIndex: 'total_minutes', width: 90 },
+                          { title: '分钟单价', dataIndex: 'rate_per_minute', width: 90 },
+                          { title: '计件单价', dataIndex: 'piece_rate', width: 90 },
+                          { title: '行成本', dataIndex: 'total_cost', width: 110, render: (v) => formatMoney(v) },
+                          {
+                            title: '警告',
+                            dataIndex: 'warnings',
+                            width: 220,
+                            render: (v) =>
+                              Array.isArray(v) && v.length ? <Text type="warning">{String(v.join('；'))}</Text> : '-',
+                          },
+                        ]}
+                        dataSource={(((activeSnapshot as any)?.trace?.costing?.process_lines ?? []) as any[]).slice(0, 500)}
+                      />
+                    ) : (
+                      <Alert type="info" showIcon message="该快照未包含工序明细（可能当时未开启/未配置）。" />
+                    ),
+                  },
+                  {
+                    key: 'trace',
+                    label: 'Trace',
+                    children: (
+                      <pre style={{ margin: 0, maxHeight: 520, overflow: 'auto' }}>
+                        {jsonPretty(activeSnapshot.trace)}
+                      </pre>
+                    ),
+                  },
+                ]}
+              />
+            </div>
           </div>
         ) : (
           <Alert type="info" showIcon message="未选择快照" />

@@ -1105,6 +1105,8 @@ export interface BomLineRead {
   coverage_ratio: string | number
   loss_rate: string | number
   computed_quantity: string | number
+  bom_unit_price?: string | number | null
+  line_cost?: string | number | null
   metadata: Record<string, unknown>
 }
 

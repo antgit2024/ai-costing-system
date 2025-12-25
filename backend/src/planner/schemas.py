@@ -1896,6 +1896,13 @@ class SkuMasterSpecPreparsePreviewItem(BaseModel):
     sku_id: str
     erp_sku_barcode: str
     channel: Optional[str] = None
+    # for table display (same as sku master list)
+    product_name: Optional[str] = None
+    product_code: Optional[str] = None
+    spec_text: Optional[str] = None
+    bound_model_code: Optional[str] = None
+    bound_model_name: Optional[str] = None
+    bound_version_label: Optional[str] = None
     spec_text_used: str
     spec_hash: str
     width_cm: Optional[Decimal] = None

@@ -200,6 +200,12 @@ export default function SkuSpecMatchingPage() {
         id: x.sku_id,
         erp_sku_barcode: x.erp_sku_barcode,
         channel: x.channel ?? null,
+        product_name: (x as any).product_name ?? null,
+        product_code: (x as any).product_code ?? null,
+        spec_text: (x as any).spec_text ?? null,
+        bound_model_code: (x as any).bound_model_code ?? null,
+        bound_model_name: (x as any).bound_model_name ?? null,
+        bound_version_label: (x as any).bound_version_label ?? null,
         // show used spec as shipment spec column
         last_shipment_spec_text: x.spec_text_used,
         _preview_dims: {

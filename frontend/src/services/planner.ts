@@ -1103,6 +1103,26 @@ export const saveSkuMasterSpecPreparse = async (
   return response.data
 }
 
+export const bulkSaveSkuMasterSpecPreparse = async (payload: {
+  limit?: number
+  search?: string
+  channel?: string
+  match_status?: string
+  include_terms?: string
+  exclude_terms?: string
+  match_scope?: string
+  skip_if_same_hash?: boolean
+  requested_by?: string
+} = {}): Promise<{
+  scanned: number
+  saved: number
+  skipped_same_hash: number
+  errors: Array<Record<string, unknown>>
+}> => {
+  const response = await plannerClient.post('/sku-master/spec-preparse/bulk', payload)
+  return response.data
+}
+
 export const validateProductModelRecognitionKeywords = async (
   modelId: string,
   payload: { keywords: string[] },

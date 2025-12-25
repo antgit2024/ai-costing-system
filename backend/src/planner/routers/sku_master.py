@@ -122,3 +122,25 @@ def save_spec_preparse(
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+@router.post("/spec-preparse/bulk", response_model=schemas.SkuMasterSpecPreparseBulkResponse)
+def bulk_save_spec_preparse(
+    payload: schemas.SkuMasterSpecPreparseBulkRequest,
+    db: Session = Depends(get_db_session),
+):
+    try:
+        return sku_master_service.bulk_save_spec_preparse(
+            db,
+            limit=payload.limit,
+            search=payload.search,
+            channel=payload.channel,
+            match_status=payload.match_status,
+            include_terms=payload.include_terms,
+            exclude_terms=payload.exclude_terms,
+            match_scope=payload.match_scope,
+            skip_if_same_hash=payload.skip_if_same_hash,
+            requested_by=payload.requested_by,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+

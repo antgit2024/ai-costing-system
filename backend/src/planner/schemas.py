@@ -1870,6 +1870,28 @@ class SkuMasterSpecPreparseSaveResponse(BaseModel):
     preparse_saved_by: Optional[str] = None
 
 
+class SkuMasterSpecPreparseBulkRequest(BaseModel):
+    # only process bound SKUs in bulk
+    limit: int = Field(200, ge=1, le=5000)
+    # filters (same as list_sku_master)
+    search: Optional[str] = None
+    channel: Optional[str] = None
+    match_status: Optional[str] = None
+    include_terms: Optional[str] = None
+    exclude_terms: Optional[str] = None
+    match_scope: Optional[str] = None
+    # behavior
+    skip_if_same_hash: bool = True
+    requested_by: Optional[str] = None
+
+
+class SkuMasterSpecPreparseBulkResponse(BaseModel):
+    scanned: int
+    saved: int
+    skipped_same_hash: int
+    errors: List[Dict[str, Any]] = Field(default_factory=list)
+
+
 class SkuMasterImportResponse(BaseModel):
     total: int
     inserted: int

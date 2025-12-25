@@ -4,7 +4,7 @@ import dayjs from 'dayjs'
 import { useEffect, useMemo, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery } from '@tanstack/react-query'
 
-import { fetchSkuMaster, parseSpec, saveSkuMasterSpecPreparse } from '@/services/planner'
+import { bulkSaveSkuMasterSpecPreparse, fetchSkuMaster, parseSpec, saveSkuMasterSpecPreparse } from '@/services/planner'
 import type { SkuMaster, SpecParseResponse } from '@/types/planner'
 
 const { Title, Text } = Typography
@@ -55,6 +55,7 @@ export default function SkuSpecMatchingPage() {
   const [manualWidthCm, setManualWidthCm] = useState<number | null>(null)
   const [manualHeightCm, setManualHeightCm] = useState<number | null>(null)
   const [manualDiameterCm, setManualDiameterCm] = useState<number | null>(null)
+  const [bulkLimit, setBulkLimit] = useState<number>(200)
 
   useEffect(() => {
     try {
@@ -168,6 +169,28 @@ export default function SkuSpecMatchingPage() {
     },
     onError: (err: any) => {
       message.error(err?.response?.data?.detail ?? err?.message ?? '保存失败')
+    },
+  })
+
+  const bulkPreparseMutation = useMutation({
+    mutationFn: async () => {
+      return bulkSaveSkuMasterSpecPreparse({
+        limit: bulkLimit,
+        search: search || undefined,
+        channel: channel || undefined,
+        match_status: matchStatus || undefined,
+        include_terms: includeTerms || undefined,
+        exclude_terms: excludeTerms || undefined,
+        match_scope: matchScope,
+        skip_if_same_hash: true,
+      })
+    },
+    onSuccess: (res) => {
+      message.success(`自动识别完成：扫描${res.scanned}，保存${res.saved}，跳过${res.skipped_same_hash}`)
+      listQuery.refetch()
+    },
+    onError: (err: any) => {
+      message.error(err?.response?.data?.detail ?? err?.message ?? '自动识别失败')
     },
   })
 
@@ -345,6 +368,21 @@ export default function SkuSpecMatchingPage() {
             title="已绑定SKU列表"
             extra={
               <Space wrap>
+                <Tag color="purple">模式：自动识别</Tag>
+                <InputNumber
+                  addonBefore="批量数"
+                  min={1}
+                  max={5000}
+                  value={bulkLimit}
+                  onChange={(v) => setBulkLimit(typeof v === 'number' ? v : 200)}
+                />
+                <Button
+                  type="primary"
+                  loading={bulkPreparseMutation.isPending}
+                  onClick={() => bulkPreparseMutation.mutate()}
+                >
+                  按当前筛选批量保存预解析
+                </Button>
                 <Input
                   style={{ width: 240 }}
                   placeholder="搜索：条码/商品名/编码"

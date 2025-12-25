@@ -687,6 +687,116 @@ def save_spec_preparse(
     }
 
 
+def bulk_save_spec_preparse(
+    db: Session,
+    *,
+    limit: int,
+    search: Optional[str],
+    channel: Optional[str],
+    match_status: Optional[str],
+    include_terms: Optional[str],
+    exclude_terms: Optional[str],
+    match_scope: Optional[str],
+    skip_if_same_hash: bool = True,
+    requested_by: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Bulk pre-parse & persist cache for bound SKUs.
+    NOTE: only touches sku_master.metadata_json (preparse_*), and SpecParseSnapshot upsert for audit.
+    """
+    limit = max(min(int(limit or 200), 5000), 1)
+
+    total, rows = list_sku_master(
+        db,
+        search=search,
+        channel=channel,
+        match_status=match_status,
+        bound_state="bound",
+        spec_mismatch=None,
+        include_terms=include_terms,
+        exclude_terms=exclude_terms,
+        match_scope=match_scope,
+        page=1,
+        page_size=limit,
+    )
+    _ = total  # kept for future extension
+
+    scanned = 0
+    saved = 0
+    skipped_same_hash = 0
+    errors: List[Dict[str, Any]] = []
+
+    for r in rows:
+        scanned += 1
+        try:
+            meta = dict(r.metadata_json or {})
+            spec_text = (meta.get("last_shipment_spec_text") or r.spec_text or "").strip()
+            if not spec_text:
+                raise ValueError("spec_text empty")
+            spec_hash = _sha1_text(spec_text)
+            if skip_if_same_hash and meta.get("preparse_spec_hash") == spec_hash and meta.get("preparse_parser_version") == PARSER_VERSION:
+                skipped_same_hash += 1
+                continue
+
+            # Upsert SpecParseSnapshot
+            existing = (
+                db.query(models.SpecParseSnapshot)
+                .filter(models.SpecParseSnapshot.spec_hash == spec_hash)
+                .first()
+            )
+            if not existing:
+                parsed0 = spec_parser_service.parse_spec(spec_text)
+                dimensions0 = {
+                    "width_cm": parsed0.get("width_cm"),
+                    "height_cm": parsed0.get("height_cm"),
+                    "diameter_cm": parsed0.get("diameter_cm"),
+                    "area_m2": parsed0.get("area_m2"),
+                    "perimeter_m": parsed0.get("perimeter_m"),
+                }
+                snap = models.SpecParseSnapshot(
+                    spec_hash=spec_hash,
+                    spec_text=spec_text,
+                    tokens_json=list(parsed0.get("tokens") or []),
+                    dimensions_json=_json_safe(dimensions0),
+                    parser_version=PARSER_VERSION,
+                    parse_json=_json_safe(parsed0),
+                )
+                db.add(snap)
+                db.flush()
+
+            parsed = spec_parser_service.parse_spec(spec_text)
+            dims = {
+                "width_cm": parsed.get("width_cm"),
+                "height_cm": parsed.get("height_cm"),
+                "diameter_cm": parsed.get("diameter_cm"),
+                "area_m2": parsed.get("area_m2"),
+                "perimeter_m": parsed.get("perimeter_m"),
+            }
+            meta.update(
+                {
+                    "preparse_spec_text": spec_text,
+                    "preparse_spec_hash": spec_hash,
+                    "preparse_parser_version": PARSER_VERSION,
+                    "preparse_dimensions": _json_safe(dims),
+                    "preparse_tokens": list(parsed.get("tokens") or []),
+                    "preparse_saved_at": _utcnow().isoformat(),
+                    "preparse_saved_by": (requested_by or meta.get("requested_by") or None),
+                }
+            )
+            r.metadata_json = meta
+            saved += 1
+        except Exception as exc:  # noqa: BLE001
+            errors.append({"sku_id": getattr(r, "id", None), "sku_code": getattr(r, "erp_sku_barcode", None), "error": str(exc)})
+
+    db.commit()
+    return {
+        "scanned": scanned,
+        "saved": saved,
+        "skipped_same_hash": skipped_same_hash,
+        "errors": errors,
+    }
+
+
 def list_published_standard_model_candidates(
     db: Session,
     *,

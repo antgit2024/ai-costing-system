@@ -65,6 +65,7 @@ export default function SkuSpecMatchingPage() {
   const [isPreviewMode, setIsPreviewMode] = useState<boolean>(false)
   const [previewItems, setPreviewItems] = useState<any[]>([])
   const [previewSelectedKeys, setPreviewSelectedKeys] = useState<string[]>([])
+  const [previewSaved, setPreviewSaved] = useState<boolean>(false)
   const [listTab, setListTab] = useState<'all' | 'parsed' | 'unparsed'>('all')
 
   useEffect(() => {
@@ -222,6 +223,7 @@ export default function SkuSpecMatchingPage() {
         bound_version_label: (x as any).bound_version_label ?? null,
         // show used spec as shipment spec column
         last_shipment_spec_text: x.spec_text_used,
+        _preview_spec_hash: x.spec_hash,
         _preview_dims: {
           width_cm: x.width_cm ?? null,
           height_cm: x.height_cm ?? null,
@@ -231,6 +233,7 @@ export default function SkuSpecMatchingPage() {
         },
       }))
       setIsPreviewMode(true)
+      setPreviewSaved(false)
       setPreviewItems(rows as any[])
       setPreviewSelectedKeys(rows.map((r) => String(r.id)))
       message.success(`预览解析完成：${rows.length} 条（默认全选）`)
@@ -247,12 +250,17 @@ export default function SkuSpecMatchingPage() {
     },
     onSuccess: (res) => {
       message.success(`保存完成：扫描${res.scanned}，保存${res.saved}，跳过${res.skipped_same_hash}`)
-      setIsPreviewMode(false)
-      setPreviewItems([])
-      setPreviewSelectedKeys([])
-      // 保存后这些记录会从“未解析”列表中移除；自动切到“已解析”避免用户以为丢了
-      setListTab('parsed')
-      setPage(1)
+      // 保存后，保留预览列表作为“回执确认”，避免用户觉得记录消失
+      setPreviewSaved(true)
+      setPreviewItems((prev) =>
+        (prev ?? []).map((r) => ({
+          ...r,
+          preparse_spec_hash: r?._preview_spec_hash ?? r?.preparse_spec_hash ?? 'saved',
+          preparse_dimensions: r?._preview_dims ?? r?.preparse_dimensions ?? {},
+          preparse_saved_at: new Date().toISOString(),
+        })),
+      )
+      // 同步刷新后台列表数据（退出预览后会自动落到“已解析”Tab）
       listQuery.refetch()
     },
     onError: (err: any) => {
@@ -401,9 +409,14 @@ export default function SkuSpecMatchingPage() {
                 {isPreviewMode ? (
                   <Button
                     onClick={() => {
+                      // 退出预览：回到“已解析”视图查看落库结果
                       setIsPreviewMode(false)
                       setPreviewItems([])
                       setPreviewSelectedKeys([])
+                      setPreviewSaved(false)
+                      setListTab('parsed')
+                      setPage(1)
+                      listQuery.refetch()
                     }}
                   >
                     退出预览
@@ -416,6 +429,14 @@ export default function SkuSpecMatchingPage() {
                   type="info"
                   showIcon
                   message={`当前为预览模式：右侧列表默认全选 ${previewItems.length} 条；可取消勾选后再“保存预览解析”。`}
+                />
+              ) : null}
+              {isPreviewMode && previewSaved ? (
+                <Alert
+                  style={{ marginTop: 8 }}
+                  type="success"
+                  showIcon
+                  message="已落库成功：右侧仍展示本次保存的记录作为回执；点击“退出预览”将自动切到“已解析”TAB。"
                 />
               ) : null}
             </Card>

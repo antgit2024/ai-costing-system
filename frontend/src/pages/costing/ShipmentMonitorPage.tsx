@@ -23,7 +23,13 @@ import dayjs from 'dayjs'
 import { useMemo, useState } from 'react'
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { fetchShipmentBomSnapshots, fetchShipmentExceptions, fetchShipmentImportBatches, importShipmentsXlsx } from '@/services/planner'
+import {
+  executeShipmentsFromPreview,
+  fetchShipmentBomSnapshots,
+  fetchShipmentExceptions,
+  fetchShipmentImportBatches,
+  previewShipmentsXlsx,
+} from '@/services/planner'
 import type { BomSnapshot, ShipmentException, ShipmentImportBatch } from '@/types/planner'
 
 const { Title, Text } = Typography
@@ -74,6 +80,7 @@ const ShipmentMonitorPage = () => {
     dayjs().format('YYYY-MM-DD'),
   )
   const [uploadRequestedBy, setUploadRequestedBy] = useState<string>('planner_user')
+  const [previewData, setPreviewData] = useState<any>(null)
 
   const [exceptionResolved, setExceptionResolved] = useState<'unresolved' | 'resolved' | 'all'>(
     'unresolved',
@@ -317,25 +324,49 @@ const ShipmentMonitorPage = () => {
     setBatchPageSize(nextSize)
   }
 
-  const handleUploadImport = async () => {
+  const handleUploadPreview = async () => {
     if (!uploadFile) {
       message.warning('请先选择一个 .xlsx 文件')
       return
     }
     try {
       setUploading(true)
-      const batch = await importShipmentsXlsx({
+      const res = await previewShipmentsXlsx({
         file: uploadFile,
         export_date: uploadExportDate,
         requested_by: uploadRequestedBy?.trim() || undefined,
       })
-      message.success(`导入完成：batch=${batch.id}（inserted=${batch.inserted_rows}, skipped=${batch.skipped_rows}, exceptions=${batch.exception_rows}）`)
+      setPreviewData(res)
+      message.success(`预览完成：可执行 ${res.ready_rows}/${res.total_rows}`)
+    } catch (err: any) {
+      setPreviewData(null)
+      message.error(`预览失败：${err?.response?.data?.detail ?? err?.message ?? 'unknown error'}`)
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  const handleUploadExecute = async () => {
+    if (!previewData?.preview_id) {
+      message.warning('请先完成“预览”')
+      return
+    }
+    try {
+      setUploading(true)
+      const batch = await executeShipmentsFromPreview({
+        preview_id: previewData.preview_id,
+        export_date: uploadExportDate,
+        requested_by: uploadRequestedBy?.trim() || undefined,
+      })
+      message.success(`执行完成：batch=${batch.id}（inserted=${batch.inserted_rows}, skipped=${batch.skipped_rows}, exceptions=${batch.exception_rows}）`)
       setSelectedBatchId(batch.id)
       setActiveTab('batches')
       setBatchPage(1)
+      setUploadFile(null)
+      setPreviewData(null)
       queryClient.invalidateQueries({ queryKey: ['shipments'] })
     } catch (err: any) {
-      message.error(`导入失败：${err?.response?.data?.detail ?? err?.message ?? 'unknown error'}`)
+      message.error(`执行失败：${err?.response?.data?.detail ?? err?.message ?? 'unknown error'}`)
     } finally {
       setUploading(false)
     }
@@ -369,7 +400,7 @@ const ShipmentMonitorPage = () => {
       </div>
 
       <div style={{ marginTop: 16 }}>
-        <Card title="上传发货单（xlsx 导入）" size="small">
+        <Card title="上传发货单（预览→执行）" size="small">
           <Row gutter={[16, 16]} align="middle">
             <Col xs={24} lg={10}>
               <Upload
@@ -377,10 +408,12 @@ const ShipmentMonitorPage = () => {
                 maxCount={1}
                 beforeUpload={(file) => {
                   setUploadFile(file as any)
+                  setPreviewData(null)
                   return false
                 }}
                 onRemove={() => {
                   setUploadFile(null)
+                  setPreviewData(null)
                 }}
               >
                 <Button disabled={uploading}>选择文件（.xlsx）</Button>
@@ -408,14 +441,43 @@ const ShipmentMonitorPage = () => {
               />
             </Col>
             <Col xs={24} lg={3}>
-              <Button type="primary" loading={uploading} onClick={handleUploadImport} block>
-                上传并导入
-              </Button>
+              <Space direction="vertical" style={{ width: '100%' }}>
+                <Button type="primary" loading={uploading} onClick={handleUploadPreview} block>
+                  预览
+                </Button>
+                <Button
+                  type="primary"
+                  danger
+                  loading={uploading}
+                  onClick={handleUploadExecute}
+                  disabled={!previewData?.preview_id}
+                  block
+                >
+                  执行
+                </Button>
+              </Space>
             </Col>
           </Row>
+          {previewData ? (
+            <Alert
+              style={{ marginTop: 12 }}
+              type="info"
+              showIcon
+              message={`预览结果：总行${previewData.total_rows}，可执行${previewData.ready_rows}，未绑定${previewData.unbound_sku_rows}，缺条码${previewData.missing_sku_rows}，缺规格${previewData.missing_spec_rows}`}
+              description={
+                (previewData.issues ?? []).length ? (
+                  <div style={{ maxHeight: 180, overflow: 'auto', marginTop: 8 }}>
+                    <pre style={{ margin: 0 }}>{jsonPretty((previewData.issues ?? []).slice(0, 50))}</pre>
+                  </div>
+                ) : (
+                  <Text type="secondary">无问题明细（或问题数为0）。</Text>
+                )
+              }
+            />
+          ) : null}
           <div style={{ marginTop: 8 }}>
             <Text type="secondary">
-              说明：后端按 file_hash 做文件级幂等；重复上传同文件会直接返回已成功的 batch。
+              说明：先预览再执行。后端按 file_hash（preview_id）做文件级幂等；执行会使用预览阶段缓存的文件。
             </Text>
           </div>
         </Card>

@@ -1750,6 +1750,33 @@ class PaginatedShipmentImportBatchResponse(BaseModel):
     items: List[ShipmentImportBatchRead]
 
 
+class ShipmentImportPreviewIssue(BaseModel):
+    row_index: Optional[int] = None
+    shipment_no: Optional[str] = None
+    sku_code: Optional[str] = None
+    spec_text: Optional[str] = None
+    reason: str
+
+
+class ShipmentImportPreviewResponse(BaseModel):
+    preview_id: str  # file_hash
+    file_name: str
+    export_date: Optional[str] = None
+    total_rows: int
+    ready_rows: int
+    missing_sku_rows: int
+    missing_spec_rows: int
+    unbound_sku_rows: int
+    warnings: List[Dict[str, Any]] = Field(default_factory=list)
+    issues: List[ShipmentImportPreviewIssue] = Field(default_factory=list)
+
+
+class ShipmentImportExecuteRequest(BaseModel):
+    preview_id: str
+    export_date: Optional[str] = None
+    requested_by: Optional[str] = None
+
+
 class ShipmentExceptionRead(BaseModel):
     id: str
     batch_id: str

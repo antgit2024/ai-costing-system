@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+from pathlib import Path
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -15,6 +16,7 @@ from . import bom_generation_service, product_model_service, spec_parser_service
 
 
 PARSER_VERSION = "v1"
+PREVIEW_CACHE_DIR = Path("logs") / "shipment_previews"
 
 
 def _sha1_bytes(data: bytes) -> str:
@@ -27,6 +29,15 @@ def _sha1_text(text: str) -> str:
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _ensure_preview_dir() -> None:
+    PREVIEW_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _preview_cache_path(file_hash: str) -> Path:
+    safe = str(file_hash or "").strip()
+    return PREVIEW_CACHE_DIR / f"{safe}.xlsx"
 
 
 def _json_safe(value: Any) -> Any:
@@ -480,6 +491,129 @@ def import_shipment_xlsx(
     db.commit()
     db.refresh(batch)
     return batch
+
+
+def preview_shipment_xlsx(
+    db: Session,
+    *,
+    file_name: str,
+    file_bytes: bytes,
+    export_date: Optional[str],
+    requested_by: Optional[str],
+    issue_limit: int = 200,
+) -> Dict[str, Any]:
+    """
+    Preview-only: parse xlsx rows, compute readiness & issues, and cache file bytes for later execute.
+    Does NOT write shipment_lines / bom_snapshots.
+    """
+    issue_limit = max(min(int(issue_limit or 200), 2000), 1)
+    file_hash = _sha1_bytes(file_bytes)
+    rows, warnings = _normalize_rows_from_xlsx(file_bytes)
+
+    total_rows = 0
+    ready_rows = 0
+    missing_sku_rows = 0
+    missing_spec_rows = 0
+    unbound_sku_rows = 0
+    issues: List[Dict[str, Any]] = []
+
+    for payload in rows:
+        total_rows += 1
+        shipment_no = payload.get("shipment_no")
+        sku_code = payload.get("sku_code")
+        spec_text = payload.get("spec_text")
+        row_index = payload.get("row_index")
+
+        if not sku_code:
+            missing_sku_rows += 1
+            if len(issues) < issue_limit:
+                issues.append(
+                    {
+                        "row_index": row_index,
+                        "shipment_no": shipment_no,
+                        "sku_code": sku_code,
+                        "spec_text": spec_text,
+                        "reason": "MISSING_SKU",
+                    }
+                )
+            continue
+        if not spec_text:
+            missing_spec_rows += 1
+            if len(issues) < issue_limit:
+                issues.append(
+                    {
+                        "row_index": row_index,
+                        "shipment_no": shipment_no,
+                        "sku_code": sku_code,
+                        "spec_text": spec_text,
+                        "reason": "SPEC_EMPTY",
+                    }
+                )
+            continue
+        binding = product_model_service.get_active_sku_binding(db, str(sku_code))
+        if not binding:
+            unbound_sku_rows += 1
+            if len(issues) < issue_limit:
+                issues.append(
+                    {
+                        "row_index": row_index,
+                        "shipment_no": shipment_no,
+                        "sku_code": sku_code,
+                        "spec_text": spec_text,
+                        "reason": "SKU_NOT_BOUND",
+                    }
+                )
+            continue
+        ready_rows += 1
+
+    # cache file for execute step
+    _ensure_preview_dir()
+    path = _preview_cache_path(file_hash)
+    try:
+        path.write_bytes(file_bytes)
+    except Exception:  # noqa: BLE001
+        # If cache fails, still return preview (but execute will require re-upload)
+        pass
+
+    return {
+        "preview_id": file_hash,
+        "file_name": file_name,
+        "export_date": export_date,
+        "total_rows": total_rows,
+        "ready_rows": ready_rows,
+        "missing_sku_rows": missing_sku_rows,
+        "missing_spec_rows": missing_spec_rows,
+        "unbound_sku_rows": unbound_sku_rows,
+        "warnings": warnings,
+        "issues": issues,
+        "requested_by": requested_by,
+    }
+
+
+def execute_shipment_xlsx_from_preview(
+    db: Session,
+    *,
+    preview_id: str,
+    export_date: Optional[str],
+    requested_by: Optional[str],
+) -> models.ShipmentImportBatch:
+    """
+    Execute import using cached preview file (by file_hash).
+    """
+    pid = (preview_id or "").strip()
+    if not pid:
+        raise ValueError("preview_id 不能为空")
+    path = _preview_cache_path(pid)
+    if not path.exists():
+        raise ValueError("预览缓存文件不存在，请重新预览上传")
+    file_bytes = path.read_bytes()
+    return import_shipment_xlsx(
+        db,
+        file_name=f"preview:{pid}.xlsx",
+        file_bytes=file_bytes,
+        export_date=export_date,
+        requested_by=requested_by,
+    )
 
 
 def get_batch(db: Session, batch_id: str) -> Optional[models.ShipmentImportBatch]:

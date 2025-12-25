@@ -992,6 +992,41 @@ export const importShipmentsXlsx = async (params: {
   return response.data
 }
 
+export const previewShipmentsXlsx = async (params: {
+  file: File
+  export_date?: string
+  requested_by?: string
+}): Promise<{
+  preview_id: string
+  file_name: string
+  export_date?: string | null
+  total_rows: number
+  ready_rows: number
+  missing_sku_rows: number
+  missing_spec_rows: number
+  unbound_sku_rows: number
+  warnings: Array<Record<string, unknown>>
+  issues: Array<Record<string, unknown>>
+}> => {
+  const formData = new FormData()
+  formData.append('file', params.file)
+  if (params.export_date) formData.append('export_date', params.export_date)
+  if (params.requested_by) formData.append('requested_by', params.requested_by)
+  const response = await plannerClient.post('/shipments/import/preview', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+  return response.data
+}
+
+export const executeShipmentsFromPreview = async (payload: {
+  preview_id: string
+  export_date?: string
+  requested_by?: string
+}): Promise<ShipmentImportBatch> => {
+  const response = await plannerClient.post('/shipments/import/execute', payload)
+  return response.data
+}
+
 export const fetchShipmentExceptions = async (
   params: { batch_id?: string; resolved?: boolean; limit?: number } = {},
 ): Promise<ShipmentException[]> => {

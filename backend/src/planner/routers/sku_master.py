@@ -144,3 +144,33 @@ def bulk_save_spec_preparse(
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+@router.post("/spec-preparse/preview", response_model=schemas.SkuMasterSpecPreparsePreviewResponse)
+def preview_spec_preparse(
+    payload: schemas.SkuMasterSpecPreparsePreviewRequest,
+    db: Session = Depends(get_db_session),
+):
+    return sku_master_service.preview_spec_preparse(
+        db,
+        limit=payload.limit,
+        search=payload.search,
+        channel=payload.channel,
+        match_status=payload.match_status,
+        include_terms=payload.include_terms,
+        exclude_terms=payload.exclude_terms,
+        match_scope=payload.match_scope,
+    )
+
+
+@router.post("/spec-preparse/execute", response_model=schemas.SkuMasterSpecPreparseExecuteResponse)
+def execute_spec_preparse(
+    payload: schemas.SkuMasterSpecPreparseExecuteRequest,
+    db: Session = Depends(get_db_session),
+):
+    return sku_master_service.execute_spec_preparse(
+        db,
+        sku_ids=payload.sku_ids,
+        skip_if_same_hash=payload.skip_if_same_hash,
+        requested_by=payload.requested_by,
+    )
+
+

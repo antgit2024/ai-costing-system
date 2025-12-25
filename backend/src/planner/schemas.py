@@ -1892,6 +1892,50 @@ class SkuMasterSpecPreparseBulkResponse(BaseModel):
     errors: List[Dict[str, Any]] = Field(default_factory=list)
 
 
+class SkuMasterSpecPreparsePreviewItem(BaseModel):
+    sku_id: str
+    erp_sku_barcode: str
+    channel: Optional[str] = None
+    spec_text_used: str
+    spec_hash: str
+    width_cm: Optional[Decimal] = None
+    height_cm: Optional[Decimal] = None
+    diameter_cm: Optional[Decimal] = None
+    area_m2: Optional[Decimal] = None
+    perimeter_m: Optional[Decimal] = None
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class SkuMasterSpecPreparsePreviewRequest(BaseModel):
+    limit: int = Field(200, ge=1, le=5000)
+    search: Optional[str] = None
+    channel: Optional[str] = None
+    match_status: Optional[str] = None
+    include_terms: Optional[str] = None
+    exclude_terms: Optional[str] = None
+    match_scope: Optional[str] = None
+
+
+class SkuMasterSpecPreparsePreviewResponse(BaseModel):
+    scanned: int
+    items: List[SkuMasterSpecPreparsePreviewItem] = Field(default_factory=list)
+
+
+class SkuMasterSpecPreparseExecuteRequest(BaseModel):
+    sku_ids: List[str] = Field(default_factory=list)
+    skip_if_same_hash: bool = True
+    requested_by: Optional[str] = None
+
+
+class SkuMasterSpecPreparseExecuteResponse(BaseModel):
+    scanned: int
+    saved: int
+    skipped_same_hash: int
+    errors: List[Dict[str, Any]] = Field(default_factory=list)
+
+
 class SkuMasterImportResponse(BaseModel):
     total: int
     inserted: int

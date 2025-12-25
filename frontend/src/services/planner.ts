@@ -1123,6 +1123,47 @@ export const bulkSaveSkuMasterSpecPreparse = async (payload: {
   return response.data
 }
 
+export const previewSkuMasterSpecPreparse = async (payload: {
+  limit?: number
+  search?: string
+  channel?: string
+  match_status?: string
+  include_terms?: string
+  exclude_terms?: string
+  match_scope?: string
+} = {}): Promise<{
+  scanned: number
+  items: Array<{
+    sku_id: string
+    erp_sku_barcode: string
+    channel?: string | null
+    spec_text_used: string
+    spec_hash: string
+    width_cm?: string | number | null
+    height_cm?: string | number | null
+    diameter_cm?: string | number | null
+    area_m2?: string | number | null
+    perimeter_m?: string | number | null
+  }>
+}> => {
+  const response = await plannerClient.post('/sku-master/spec-preparse/preview', payload)
+  return response.data
+}
+
+export const executeSkuMasterSpecPreparse = async (payload: {
+  sku_ids: string[]
+  skip_if_same_hash?: boolean
+  requested_by?: string
+}): Promise<{
+  scanned: number
+  saved: number
+  skipped_same_hash: number
+  errors: Array<Record<string, unknown>>
+}> => {
+  const response = await plannerClient.post('/sku-master/spec-preparse/execute', payload)
+  return response.data
+}
+
 export const validateProductModelRecognitionKeywords = async (
   modelId: string,
   payload: { keywords: string[] },

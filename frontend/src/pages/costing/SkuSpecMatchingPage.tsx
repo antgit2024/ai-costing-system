@@ -4,7 +4,13 @@ import dayjs from 'dayjs'
 import { useEffect, useMemo, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery } from '@tanstack/react-query'
 
-import { bulkSaveSkuMasterSpecPreparse, fetchSkuMaster, parseSpec, saveSkuMasterSpecPreparse } from '@/services/planner'
+import {
+  executeSkuMasterSpecPreparse,
+  fetchSkuMaster,
+  parseSpec,
+  previewSkuMasterSpecPreparse,
+  saveSkuMasterSpecPreparse,
+} from '@/services/planner'
 import type { SkuMaster, SpecParseResponse } from '@/types/planner'
 
 const { Title, Text } = Typography
@@ -56,6 +62,9 @@ export default function SkuSpecMatchingPage() {
   const [manualHeightCm, setManualHeightCm] = useState<number | null>(null)
   const [manualDiameterCm, setManualDiameterCm] = useState<number | null>(null)
   const [bulkLimit, setBulkLimit] = useState<number>(200)
+  const [isPreviewMode, setIsPreviewMode] = useState<boolean>(false)
+  const [previewItems, setPreviewItems] = useState<any[]>([])
+  const [previewSelectedKeys, setPreviewSelectedKeys] = useState<string[]>([])
 
   useEffect(() => {
     try {
@@ -84,6 +93,8 @@ export default function SkuSpecMatchingPage() {
 
   const items = (listQuery.data?.items ?? []) as SkuMaster[]
   const total = listQuery.data?.total ?? 0
+  const tableRows = isPreviewMode ? previewItems : items
+  const tableTotal = isPreviewMode ? previewItems.length : total
 
   const channelOptions = useMemo(() => {
     const set = new Set<string>()
@@ -172,9 +183,9 @@ export default function SkuSpecMatchingPage() {
     },
   })
 
-  const bulkPreparseMutation = useMutation({
+  const previewMutation = useMutation({
     mutationFn: async () => {
-      return bulkSaveSkuMasterSpecPreparse({
+      return previewSkuMasterSpecPreparse({
         limit: bulkLimit,
         search: search || undefined,
         channel: channel || undefined,
@@ -182,19 +193,51 @@ export default function SkuSpecMatchingPage() {
         include_terms: includeTerms || undefined,
         exclude_terms: excludeTerms || undefined,
         match_scope: matchScope,
-        skip_if_same_hash: true,
       })
     },
     onSuccess: (res) => {
-      message.success(`自动识别完成：扫描${res.scanned}，保存${res.saved}，跳过${res.skipped_same_hash}`)
-      listQuery.refetch()
+      const rows = (res.items ?? []).map((x) => ({
+        id: x.sku_id,
+        erp_sku_barcode: x.erp_sku_barcode,
+        channel: x.channel ?? null,
+        // show used spec as shipment spec column
+        last_shipment_spec_text: x.spec_text_used,
+        _preview_dims: {
+          width_cm: x.width_cm ?? null,
+          height_cm: x.height_cm ?? null,
+          diameter_cm: x.diameter_cm ?? null,
+          area_m2: x.area_m2 ?? null,
+          perimeter_m: x.perimeter_m ?? null,
+        },
+      }))
+      setIsPreviewMode(true)
+      setPreviewItems(rows as any[])
+      setPreviewSelectedKeys(rows.map((r) => String(r.id)))
+      message.success(`预览解析完成：${rows.length} 条（默认全选）`)
     },
     onError: (err: any) => {
-      message.error(err?.response?.data?.detail ?? err?.message ?? '自动识别失败')
+      message.error(err?.response?.data?.detail ?? err?.message ?? '预览解析失败')
     },
   })
 
-  const columns: ColumnsType<SkuMaster> = useMemo(
+  const executePreviewSaveMutation = useMutation({
+    mutationFn: async () => {
+      const ids = previewSelectedKeys
+      return executeSkuMasterSpecPreparse({ sku_ids: ids, skip_if_same_hash: true })
+    },
+    onSuccess: (res) => {
+      message.success(`保存完成：扫描${res.scanned}，保存${res.saved}，跳过${res.skipped_same_hash}`)
+      setIsPreviewMode(false)
+      setPreviewItems([])
+      setPreviewSelectedKeys([])
+      listQuery.refetch()
+    },
+    onError: (err: any) => {
+      message.error(err?.response?.data?.detail ?? err?.message ?? '保存失败')
+    },
+  })
+
+  const columns: ColumnsType<any> = useMemo(
     () => [
       {
         title: '货品条码（系统）',
@@ -240,9 +283,23 @@ export default function SkuSpecMatchingPage() {
         title: '发货规格（优先用于解析）',
         dataIndex: 'last_shipment_spec_text',
         width: 360,
-        render: (v) => (
-          <div style={{ whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.2 }}>{safeString(v) || '-'}</div>
-        ),
+        render: (v, row) => {
+          const text = safeString(v) || '-'
+          const dims = (row as any)?._preview_dims
+          if (!dims) {
+            return <div style={{ whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.2 }}>{text}</div>
+          }
+          const w = dims?.width_cm ?? '-'
+          const h = dims?.height_cm ?? '-'
+          return (
+            <div style={{ whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.2 }}>
+              <div>{text}</div>
+              <Tag color="purple" style={{ marginTop: 4 }}>
+                解析尺寸：宽{w}cm × 高{h}cm
+              </Tag>
+            </div>
+          )
+        },
       },
       { title: '宽(cm)(ERP缓存)', dataIndex: 'erp_dimensions', width: 120, render: (dims) => dimGet(dims, 'width_cm') },
       { title: '高(cm)(ERP缓存)', dataIndex: 'erp_dimensions', width: 120, render: (dims) => dimGet(dims, 'height_cm') },
@@ -272,7 +329,55 @@ export default function SkuSpecMatchingPage() {
         {/* 左侧 1/4：解析工作台 */}
         <Col xs={24} lg={6}>
           <Space direction="vertical" style={{ width: '100%' }}>
-            <Card size="small" title="第一步：规格解析（尺寸提取）">
+            <Card
+              size="small"
+              title="工作台（与商品匹配同款：预览解析 → 保存落库）"
+              extra={isPreviewMode ? <Tag color="purple">预览中</Tag> : <Tag>未预览</Tag>}
+            >
+              <Space wrap>
+                <Tag color="purple">模式：自动识别</Tag>
+                <InputNumber
+                  addonBefore="预览数"
+                  min={1}
+                  max={5000}
+                  value={bulkLimit}
+                  onChange={(v) => setBulkLimit(typeof v === 'number' ? v : 200)}
+                />
+                <Button type="primary" loading={previewMutation.isPending} onClick={() => previewMutation.mutate()}>
+                  预览解析
+                </Button>
+                <Button
+                  type="primary"
+                  danger
+                  loading={executePreviewSaveMutation.isPending}
+                  disabled={!isPreviewMode || previewSelectedKeys.length === 0}
+                  onClick={() => executePreviewSaveMutation.mutate()}
+                >
+                  保存预览解析
+                </Button>
+                {isPreviewMode ? (
+                  <Button
+                    onClick={() => {
+                      setIsPreviewMode(false)
+                      setPreviewItems([])
+                      setPreviewSelectedKeys([])
+                    }}
+                  >
+                    退出预览
+                  </Button>
+                ) : null}
+              </Space>
+              {isPreviewMode ? (
+                <Alert
+                  style={{ marginTop: 8 }}
+                  type="info"
+                  showIcon
+                  message={`当前为预览模式：右侧列表默认全选 ${previewItems.length} 条；可取消勾选后再“保存预览解析”。`}
+                />
+              ) : null}
+            </Card>
+
+            <Card size="small" title="单条人工审核（可选）">
               {!activeSku ? (
                 <Alert type="info" showIcon message="请在右侧列表选择一条已绑定SKU，系统会自动解析尺寸。" />
               ) : (
@@ -368,21 +473,6 @@ export default function SkuSpecMatchingPage() {
             title="已绑定SKU列表"
             extra={
               <Space wrap>
-                <Tag color="purple">模式：自动识别</Tag>
-                <InputNumber
-                  addonBefore="批量数"
-                  min={1}
-                  max={5000}
-                  value={bulkLimit}
-                  onChange={(v) => setBulkLimit(typeof v === 'number' ? v : 200)}
-                />
-                <Button
-                  type="primary"
-                  loading={bulkPreparseMutation.isPending}
-                  onClick={() => bulkPreparseMutation.mutate()}
-                >
-                  按当前筛选批量保存预解析
-                </Button>
                 <Input
                   style={{ width: 240 }}
                   placeholder="搜索：条码/商品名/编码"
@@ -450,13 +540,30 @@ export default function SkuSpecMatchingPage() {
               size="small"
               loading={listQuery.isFetching}
               columns={columns}
-              dataSource={items}
-              pagination={{
-                current: page,
-                pageSize,
-                total,
-                showSizeChanger: true,
-              }}
+              dataSource={tableRows}
+              rowSelection={
+                isPreviewMode
+                  ? {
+                      selectedRowKeys: previewSelectedKeys,
+                      onChange: (keys) => setPreviewSelectedKeys((keys ?? []) as string[]),
+                    }
+                  : undefined
+              }
+              pagination={
+                isPreviewMode
+                  ? {
+                      current: 1,
+                      pageSize: tableTotal,
+                      total: tableTotal,
+                      showSizeChanger: false,
+                    }
+                  : {
+                      current: page,
+                      pageSize,
+                      total: tableTotal,
+                      showSizeChanger: true,
+                    }
+              }
               onChange={handlePaginationChange}
               onRow={(record) => ({
                 onClick: () => setActiveSku(record),

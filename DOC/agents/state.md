@@ -3,7 +3,7 @@
 - **最近校对（北京时间 GMT+8）**：2025-12-25 04:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-25 06:08（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-25 14:40（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
-- **最近校对（北京时间 GMT+8）**：2025-12-25 15:10（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
+- **最近校对（北京时间 GMT+8）**：2025-12-25 15:25（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **分支**：`backup/20251214-1535`
 
 - **本轮闭环产物（Planner-Optimization / 方案评审稿）**：
@@ -60,6 +60,13 @@
   - 实现：`POST /api/planner/bom/generate` 的 `trace.inventory.inventory_lines` 返回“真实物料扣库清单”（把 virtual 行按 `virtual_material_bindings` 展开并聚合）。
   - 前端：`/costing/shipments` 的 BOM 预览抽屉 / 快照详情抽屉新增 Tab：**扣库清单（真实物料）**，用于对账与后续扣库/盘点闭环。
   - 提示：历史快照若缺失该字段，可用“回填”重算后补齐。
+
+- **下一阶段（真实数据实测 + UI 整理规划）**：
+  - 线上直接跑：`47.99.89.206`
+  - 首批真实文件：由业务侧上传（平台商品列表 / 发货单）
+  - 目标覆盖：约 200 行
+  - 成本口径阶段性固定：物料 + 工序 + 制造费 30%
+  - 验收清单（可勾选）：`DOC/costing/manuals/real_data_uat_checklist_20251225.md`
 
 - **本轮验收命令（必须）**：
   - Frontend：`npm -C frontend run build`

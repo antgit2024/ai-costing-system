@@ -333,10 +333,11 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   const [tuningFixedQty, setTuningFixedQty] = useState<number>(0)
   const [tuningCoverageRatio, setTuningCoverageRatio] = useState<number>(1)
   const [tuningLossRatePercent, setTuningLossRatePercent] = useState<number>(0)
-  const [tuningExtraWidthMm, setTuningExtraWidthMm] = useState<number>(0)
-  const [tuningExtraHeightMm, setTuningExtraHeightMm] = useState<number>(0)
-  const [tuningExtraLongSideMm, setTuningExtraLongSideMm] = useState<number>(0)
-  const [tuningExtraShortSideMm, setTuningExtraShortSideMm] = useState<number>(0)
+  // 工艺修正：界面统一以 CM 输入；落库仍按 mm（便于与 width_mm/height_mm 对齐）
+  const [tuningExtraWidthCm, setTuningExtraWidthCm] = useState<number>(0)
+  const [tuningExtraHeightCm, setTuningExtraHeightCm] = useState<number>(0)
+  const [tuningExtraLongSideCm, setTuningExtraLongSideCm] = useState<number>(0)
+  const [tuningExtraShortSideCm, setTuningExtraShortSideCm] = useState<number>(0)
   const [tuningFixedPerCountQty, setTuningFixedPerCountQty] = useState<number>(0)
   const [tuningBaseMinutes, setTuningBaseMinutes] = useState<number>(0)
   const [tuningUnitMinutes, setTuningUnitMinutes] = useState<number>(0)
@@ -1045,10 +1046,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     setTuningCoverageRatio(Number(row.coverage_ratio ?? 1))
     setTuningLossRatePercent(Number(row.loss_rate ?? 0))
     const meta = (row.metadata_json as any) ?? {}
-    setTuningExtraWidthMm(Number(meta.extra_width_mm ?? 0))
-    setTuningExtraHeightMm(Number(meta.extra_height_mm ?? 0))
-    setTuningExtraLongSideMm(Number(meta.extra_long_side_mm ?? 0))
-    setTuningExtraShortSideMm(Number(meta.extra_short_side_mm ?? 0))
+    setTuningExtraWidthCm(Number(meta.extra_width_mm ?? 0) / 10)
+    setTuningExtraHeightCm(Number(meta.extra_height_mm ?? 0) / 10)
+    setTuningExtraLongSideCm(Number(meta.extra_long_side_mm ?? 0) / 10)
+    setTuningExtraShortSideCm(Number(meta.extra_short_side_mm ?? 0) / 10)
     setTuningFixedPerCountQty(Number(meta.fixed_per_count_quantity ?? 0))
     const cur = (row.metadata_json as any)?.derive_template
     setTuningDeriveTemplateDraft(cur ?? { template_kind: 'linear', calibrate_from_sample: true })
@@ -1152,10 +1153,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       const metaCur = ((row?.metadata_json as any) ?? {}) as any
       const metaNext = {
         ...metaCur,
-        extra_width_mm: Number(tuningExtraWidthMm ?? 0),
-        extra_height_mm: Number(tuningExtraHeightMm ?? 0),
-        extra_long_side_mm: Number(tuningExtraLongSideMm ?? 0),
-        extra_short_side_mm: Number(tuningExtraShortSideMm ?? 0),
+        extra_width_mm: Math.max(0, Number(tuningExtraWidthCm ?? 0)) * 10,
+        extra_height_mm: Math.max(0, Number(tuningExtraHeightCm ?? 0)) * 10,
+        extra_long_side_mm: Math.max(0, Number(tuningExtraLongSideCm ?? 0)) * 10,
+        extra_short_side_mm: Math.max(0, Number(tuningExtraShortSideCm ?? 0)) * 10,
         fixed_per_count_quantity: Number(tuningFixedPerCountQty ?? 0),
       }
       const mqSample = Math.max(0, measureQty(method, sampleSpec, metaNext))
@@ -3946,20 +3947,20 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                 <Col span={8}>
                   <InputNumber
                     min={0}
-                    precision={0}
-                    value={tuningExtraWidthMm}
-                    onChange={(v) => setTuningExtraWidthMm(Number(v ?? 0))}
-                    addonBefore={addonLabel('+宽(mm)')}
+                    precision={1}
+                    value={tuningExtraWidthCm}
+                    onChange={(v) => setTuningExtraWidthCm(Number(v ?? 0))}
+                    addonBefore={addonLabel('+宽(cm)')}
                     style={{ width: '100%' }}
                   />
                 </Col>
                 <Col span={8}>
                   <InputNumber
                     min={0}
-                    precision={0}
-                    value={tuningExtraHeightMm}
-                    onChange={(v) => setTuningExtraHeightMm(Number(v ?? 0))}
-                    addonBefore={addonLabel('+高(mm)')}
+                    precision={1}
+                    value={tuningExtraHeightCm}
+                    onChange={(v) => setTuningExtraHeightCm(Number(v ?? 0))}
+                    addonBefore={addonLabel('+高(cm)')}
                     style={{ width: '100%' }}
                   />
                 </Col>
@@ -3980,26 +3981,26 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                 <Col span={8}>
                   <InputNumber
                     min={0}
-                    precision={0}
-                    value={tuningExtraLongSideMm}
-                    onChange={(v) => setTuningExtraLongSideMm(Number(v ?? 0))}
-                    addonBefore={addonLabel('+长边(mm)')}
+                    precision={1}
+                    value={tuningExtraLongSideCm}
+                    onChange={(v) => setTuningExtraLongSideCm(Number(v ?? 0))}
+                    addonBefore={addonLabel('+长边(cm)')}
                     style={{ width: '100%' }}
                   />
                 </Col>
                 <Col span={8}>
                   <InputNumber
                     min={0}
-                    precision={0}
-                    value={tuningExtraShortSideMm}
-                    onChange={(v) => setTuningExtraShortSideMm(Number(v ?? 0))}
-                    addonBefore={addonLabel('+短边(mm)')}
+                    precision={1}
+                    value={tuningExtraShortSideCm}
+                    onChange={(v) => setTuningExtraShortSideCm(Number(v ?? 0))}
+                    addonBefore={addonLabel('+短边(cm)')}
                     style={{ width: '100%' }}
                   />
                 </Col>
                 <Col span={8}>
                   <Text type="secondary">
-                    说明：桌布折边用 +宽/+高；编织袋按卷向用“长边/短边”计量并配 +长边/+短边；画框下料余头用“按件固定追加”。
+                    说明：桌布折边用 +宽/+高；编织袋按卷向用“长边/短边”计量并配 +长边/+短边；画框下料余头用“按件固定追加”。（尺寸类统一用 CM 输入）
                   </Text>
                 </Col>
               </Row>

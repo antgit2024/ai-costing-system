@@ -3,7 +3,7 @@
 - **最近校对（北京时间 GMT+8）**：2025-12-25 04:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-25 06:08（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-25 14:40（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
-- **最近校对（北京时间 GMT+8）**：2025-12-25 16:05（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
+- **最近校对（北京时间 GMT+8）**：2025-12-25 16:40（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **分支**：`backup/20251214-1535`
 
 - **本轮闭环产物（Planner-Optimization / 方案评审稿）**：
@@ -72,6 +72,13 @@
   - 背景：宽度不固定，但扎口固定（例如两边各 +10cm），属于“确定性尺寸修正”，不应使用损耗%硬凑。
   - 后端：BOM 计算支持物料行 `metadata_json.extra_width_mm/extra_height_mm`（单位mm），计量时使用 `(width_mm+extra_width_mm, height_mm+extra_height_mm)`。
   - 前端：标准模型清单物料行增加列 **工艺余量(mm)**（+宽 / +高），录入后会联动重算本品用量/标准用量。
+
+- **本轮补充（计量方式扩展：长边/短边，单位=米）**：
+  - 背景：编织袋/包装类材料存在“宽度不固定，但用料沿长边/短边卷”的口径；仅靠 width/height 无法表达“取最长边/最短边”。
+  - 后端：`_measure_qty` 新增 `long_side/short_side`（分别取 `max(width,height)` / `min(width,height)`，并乘以数量）。
+  - 前端：
+    - 物料详情（`/costing/materials`）“计算方式”支持 **长边/短边**，并校验其 BOM 单位只能为“米”。
+    - 模型清单“计量方式”下拉补充 **长边/短边**（仅单位=米时允许选择）。
 
 - **本轮验收命令（必须）**：
   - Frontend：`npm -C frontend run build`

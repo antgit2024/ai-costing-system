@@ -9,9 +9,9 @@ import json
 from pydantic import BaseModel, Field, root_validator, validator
 from src.config import settings
 
-CalculationMethod = Literal["area", "perimeter", "count", "width", "height"]
-ProcessChargingMode = Literal["fixed", "count", "area", "perimeter", "width", "height"]
-LaborPricingMethod = Literal["fixed", "count", "area", "perimeter", "width", "height"]
+CalculationMethod = Literal["area", "perimeter", "count", "width", "height", "long_side", "short_side"]
+ProcessChargingMode = Literal["fixed", "count", "area", "perimeter", "width", "height", "long_side", "short_side"]
+LaborPricingMethod = Literal["fixed", "count", "area", "perimeter", "width", "height", "long_side", "short_side"]
 MaterialReferenceKind = Literal["real", "bom", "virtual"]
 ProductCalcMode = Literal["ratio", "fixed", "independent"]
 VariantTriggerType = Literal["sku_contains", "area_gte", "perimeter_gte"]

@@ -200,7 +200,7 @@ export interface ScenarioDiffResponse {
   total: number
 }
 
-export type CalculationMethod = 'area' | 'perimeter' | 'count' | 'width' | 'height'
+export type CalculationMethod = 'area' | 'perimeter' | 'count' | 'width' | 'height' | 'long_side' | 'short_side'
 
 export interface ScenarioListItem extends ScenarioSummary {
   owner_id: string

@@ -11,6 +11,8 @@ export const CALCULATION_METHOD_OPTIONS: Array<{
   { label: '数量', value: 'count', unit: '个' },
   { label: '宽度', value: 'width', unit: '米' },
   { label: '高度', value: 'height', unit: '米' },
+  { label: '长边', value: 'long_side', unit: '米' },
+  { label: '短边', value: 'short_side', unit: '米' },
 ]
 
 export const BOM_UNIT_SELECT_OPTIONS = [

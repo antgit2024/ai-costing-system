@@ -93,7 +93,7 @@ type EntryContext = 'sample' | 'standard'
 
 type MaterialKind = 'real' | 'bom' | 'virtual'
 
-type CalcMethod = 'count' | 'area' | 'perimeter' | 'width' | 'height'
+type CalcMethod = 'count' | 'area' | 'perimeter' | 'width' | 'height' | 'long_side' | 'short_side'
 
 type ModuleLinkDraft = {
   module_id: string
@@ -403,6 +403,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     { label: '周长', value: 'perimeter' },
     { label: '宽度', value: 'width' },
     { label: '高度', value: 'height' },
+    { label: '长边', value: 'long_side' },
+    { label: '短边', value: 'short_side' },
   ]
 
   const modelQuery = useQuery({
@@ -904,10 +906,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     const u = normalizeUnit(raw) || raw
     if (!u) return ['count', 'area', 'perimeter', 'width', 'height']
     if (u === '平米') return ['area']
-    if (u === '米') return ['perimeter', 'width', 'height']
+    if (u === '米') return ['perimeter', 'width', 'height', 'long_side', 'short_side']
     if (u === '个' || u === '套') return ['count']
     // unknown: allow all to avoid breaking rare units
-    return ['count', 'area', 'perimeter', 'width', 'height']
+    return ['count', 'area', 'perimeter', 'width', 'height', 'long_side', 'short_side']
   }
 
   const getBomUnitForRow = (row: any) => {
@@ -948,6 +950,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     if (method === 'count') return `计价量=数量；当前数量=${q}`
     if (method === 'width') return `计价量=宽(m)×数量；宽=${(w / 1000).toFixed(4)}m，数量=${q}`
     if (method === 'height') return `计价量=高(m)×数量；高=${(h / 1000).toFixed(4)}m，数量=${q}`
+    if (method === 'long_side')
+      return `计价量=长边(m)×数量；长边=${(Math.max(w, h) / 1000).toFixed(4)}m，数量=${q}`
+    if (method === 'short_side')
+      return `计价量=短边(m)×数量；短边=${(Math.min(w, h) / 1000).toFixed(4)}m，数量=${q}`
     if (method === 'perimeter')
       return `计价量=周长(m)×数量；周长=${(2 * (w + h) / 1000).toFixed(4)}m，数量=${q}`
     return `计价量=面积(㎡)×数量；面积=${((w * h) / 1_000_000).toFixed(4)}㎡，数量=${q}`

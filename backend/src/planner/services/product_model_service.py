@@ -2215,6 +2215,10 @@ def _measure_qty(method: str, *, width_mm: Decimal, height_mm: Decimal, quantity
         return (w / Decimal("1000")) * q
     if method == "height":
         return (h / Decimal("1000")) * q
+    if method == "long_side":
+        return (max(w, h) / Decimal("1000")) * q
+    if method == "short_side":
+        return (min(w, h) / Decimal("1000")) * q
     if method == "perimeter":
         return ((Decimal("2") * (w + h)) / Decimal("1000")) * q
     # area

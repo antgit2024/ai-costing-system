@@ -599,6 +599,8 @@ const MaterialMasterPage = () => {
       perimeter: ['米'],
       width: ['米'],
       height: ['米'],
+      long_side: ['米'],
+      short_side: ['米'],
       // 专业做法通常会有“单位主数据表”来管理 pcs/sheet/block 等。当前系统先用“个”作为数量的规范单位。
       count: ['个', '套'],
     }

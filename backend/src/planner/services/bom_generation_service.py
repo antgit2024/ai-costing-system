@@ -697,23 +697,44 @@ def _build_line_payload(
 ) -> Dict[str, Any]:
     method = calculation_method or "count"
     # 工艺余量：用于“宽/高不固定，但固定扎口/封边/包边”等确定性规则
-    # 约定：metadata_json.extra_width_mm / extra_height_mm（单位：mm，>=0）
+    # 约定（单位：mm，>=0）：
+    # - extra_width_mm / extra_height_mm：对宽/高做确定性尺寸修正（如桌布四周折边）
+    # - extra_long_side_mm / extra_short_side_mm：对长边/短边做确定性修正（如编织袋按短边卷 + 固定放量）
+    # 以及：
+    # - fixed_per_count_quantity：按件固定追加用量（与数量线性相关），用于“每根切割余头”类场景的近似表达
     extra_w = _to_decimal((metadata or {}).get("extra_width_mm"), Decimal("0"))
     extra_h = _to_decimal((metadata or {}).get("extra_height_mm"), Decimal("0"))
+    extra_long = _to_decimal((metadata or {}).get("extra_long_side_mm"), Decimal("0"))
+    extra_short = _to_decimal((metadata or {}).get("extra_short_side_mm"), Decimal("0"))
+    fixed_per_count = _to_decimal((metadata or {}).get("fixed_per_count_quantity"), Decimal("0"))
     eff_w = measurement["width_mm"] + max(Decimal("0"), extra_w)
     eff_h = measurement["height_mm"] + max(Decimal("0"), extra_h)
-    measure_qty = product_model_service._measure_qty(
-        method,
-        width_mm=eff_w,
-        height_mm=eff_h,
-        quantity=measurement["quantity"],
-    )
-    total = fixed_quantity + (base_quantity * coverage_ratio * measure_qty)
-    if (extra_w or extra_h) and isinstance(metadata, dict):
+    q = measurement["quantity"]
+    if method == "long_side":
+        side = max(eff_w, eff_h) + max(Decimal("0"), extra_long)
+        measure_qty = (side / Decimal("1000")) * q
+    elif method == "short_side":
+        side = min(eff_w, eff_h) + max(Decimal("0"), extra_short)
+        measure_qty = (side / Decimal("1000")) * q
+    else:
+        measure_qty = product_model_service._measure_qty(
+            method,
+            width_mm=eff_w,
+            height_mm=eff_h,
+            quantity=q,
+        )
+
+    per_count = max(Decimal("0"), fixed_per_count) * q
+    total = fixed_quantity + per_count + (base_quantity * coverage_ratio * measure_qty)
+
+    if (extra_w or extra_h or extra_long or extra_short or fixed_per_count) and isinstance(metadata, dict):
         # 仅用于审计/排查；不影响扣库/成本的关键字段
         metadata = dict(metadata)
         metadata.setdefault("extra_width_mm", str(extra_w))
         metadata.setdefault("extra_height_mm", str(extra_h))
+        metadata.setdefault("extra_long_side_mm", str(extra_long))
+        metadata.setdefault("extra_short_side_mm", str(extra_short))
+        metadata.setdefault("fixed_per_count_quantity", str(fixed_per_count))
     return {
         "source_type": source_type,
         "base_line_id": base_line_id,

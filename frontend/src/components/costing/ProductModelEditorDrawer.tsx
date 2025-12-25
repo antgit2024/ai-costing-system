@@ -333,6 +333,11 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   const [tuningFixedQty, setTuningFixedQty] = useState<number>(0)
   const [tuningCoverageRatio, setTuningCoverageRatio] = useState<number>(1)
   const [tuningLossRatePercent, setTuningLossRatePercent] = useState<number>(0)
+  const [tuningExtraWidthMm, setTuningExtraWidthMm] = useState<number>(0)
+  const [tuningExtraHeightMm, setTuningExtraHeightMm] = useState<number>(0)
+  const [tuningExtraLongSideMm, setTuningExtraLongSideMm] = useState<number>(0)
+  const [tuningExtraShortSideMm, setTuningExtraShortSideMm] = useState<number>(0)
+  const [tuningFixedPerCountQty, setTuningFixedPerCountQty] = useState<number>(0)
   const [tuningBaseMinutes, setTuningBaseMinutes] = useState<number>(0)
   const [tuningUnitMinutes, setTuningUnitMinutes] = useState<number>(0)
   const [tuningRatePerMinute, setTuningRatePerMinute] = useState<number>(0)
@@ -889,6 +894,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   const measureQty = (method: any, spec: ProductModelSampleSpec, meta?: any): number => {
     const extraW = Math.max(0, Number(meta?.extra_width_mm ?? 0))
     const extraH = Math.max(0, Number(meta?.extra_height_mm ?? 0))
+    const extraLong = Math.max(0, Number(meta?.extra_long_side_mm ?? 0))
+    const extraShort = Math.max(0, Number(meta?.extra_short_side_mm ?? 0))
     const w = Number(spec.width_mm || 0) + extraW
     const h = Number(spec.height_mm || 0) + extraH
     const q = Number(spec.quantity || 1)
@@ -896,6 +903,14 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     if (method === 'width') return (w / 1000) * q
     if (method === 'height') return (h / 1000) * q
     if (method === 'perimeter') return (2 * (w + h)) / 1000 * q
+    if (method === 'long_side') {
+      const side = Math.max(w, h) + extraLong
+      return (side / 1000) * q
+    }
+    if (method === 'short_side') {
+      const side = Math.min(w, h) + extraShort
+      return (side / 1000) * q
+    }
     // area
     return (w * h) / 1_000_000 * q
   }
@@ -1029,6 +1044,12 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     setTuningFixedQty(Number(row.fixed_quantity ?? 0))
     setTuningCoverageRatio(Number(row.coverage_ratio ?? 1))
     setTuningLossRatePercent(Number(row.loss_rate ?? 0))
+    const meta = (row.metadata_json as any) ?? {}
+    setTuningExtraWidthMm(Number(meta.extra_width_mm ?? 0))
+    setTuningExtraHeightMm(Number(meta.extra_height_mm ?? 0))
+    setTuningExtraLongSideMm(Number(meta.extra_long_side_mm ?? 0))
+    setTuningExtraShortSideMm(Number(meta.extra_short_side_mm ?? 0))
+    setTuningFixedPerCountQty(Number(meta.fixed_per_count_quantity ?? 0))
     const cur = (row.metadata_json as any)?.derive_template
     setTuningDeriveTemplateDraft(cur ?? { template_kind: 'linear', calibrate_from_sample: true })
     setTuningOpen(true)
@@ -1128,10 +1149,21 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       const loss = Number(tuningLossRatePercent ?? 0)
       const method = (row.calculation_method as any) ?? 'count'
       const baseQty = Number(row.base_quantity ?? 0)
-      const mqSample = Math.max(0, measureQty(method, sampleSpec, (row?.metadata_json as any) ?? {}))
-      const mqStandard = Math.max(0, measureQty(method, standardSpec, (row?.metadata_json as any) ?? {}))
-      const sampleUsed = fixedQty + mqSample * baseQty * cov
-      const standardUsed = fixedQty + mqStandard * baseQty * cov
+      const metaCur = ((row?.metadata_json as any) ?? {}) as any
+      const metaNext = {
+        ...metaCur,
+        extra_width_mm: Number(tuningExtraWidthMm ?? 0),
+        extra_height_mm: Number(tuningExtraHeightMm ?? 0),
+        extra_long_side_mm: Number(tuningExtraLongSideMm ?? 0),
+        extra_short_side_mm: Number(tuningExtraShortSideMm ?? 0),
+        fixed_per_count_quantity: Number(tuningFixedPerCountQty ?? 0),
+      }
+      const mqSample = Math.max(0, measureQty(method, sampleSpec, metaNext))
+      const mqStandard = Math.max(0, measureQty(method, standardSpec, metaNext))
+      const perCount = Math.max(0, Number(metaNext.fixed_per_count_quantity ?? 0)) * Number(sampleSpec.quantity || 1)
+      const stdPerCount = Math.max(0, Number(metaNext.fixed_per_count_quantity ?? 0)) * Number(standardSpec.quantity || 1)
+      const sampleUsed = fixedQty + perCount + mqSample * baseQty * cov
+      const standardUsed = fixedQty + stdPerCount + mqStandard * baseQty * cov
 
       // 推导模板（后端：仅从 sample 版本行读取 metadata_json.derive_template）
       const deriveTemplate =
@@ -1159,7 +1191,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
         sample_used_quantity: sampleUsed,
         standard_used_quantity: standardUsed,
         metadata_json: {
-          ...(row.metadata_json ?? {}),
+          ...metaNext,
           ...(entryContext === 'sample' ? { derive_template: deriveTemplate } : {}),
         },
       }
@@ -3036,69 +3068,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                               </Space>
                             ),
                           },
-                          {
-                            title: '工艺余量(mm)',
-                            width: 140,
-                            render: (_: any, r: any, idx: number) => {
-                              const meta = (r.metadata_json as any) ?? {}
-                              return (
-                                <Space direction="vertical" size={2} style={{ width: '100%' }}>
-                                  <InputNumber
-                                    size="small"
-                                    min={0}
-                                    precision={0}
-                                    addonBefore="+宽"
-                                    value={Number(meta.extra_width_mm ?? 0)}
-                                    onChange={(v) => {
-                                      const next = (materials as any[]).slice()
-                                      const rowMeta = ((next[idx]?.metadata_json as any) ?? {})
-                                      const metaNext = { ...rowMeta, extra_width_mm: Number(v ?? 0) }
-                                      const method = (next[idx].calculation_method as any) ?? 'count'
-                                      const baseQty = Number(next[idx].base_quantity ?? 0)
-                                      const fixedQty = Number(next[idx].fixed_quantity ?? 0)
-                                      const cov = Number(next[idx].coverage_ratio ?? 1)
-                                      const mqSample = Math.max(0, measureQty(method, sampleSpec, metaNext))
-                                      const mqStandard = Math.max(0, measureQty(method, standardSpec, metaNext))
-                                      next[idx] = {
-                                        ...next[idx],
-                                        metadata_json: metaNext,
-                                        sample_used_quantity: fixedQty + mqSample * baseQty * cov,
-                                        standard_used_quantity: fixedQty + mqStandard * baseQty * cov,
-                                      }
-                                      setMaterials(next as any)
-                                    }}
-                                    style={{ width: '100%' }}
-                                  />
-                                  <InputNumber
-                                    size="small"
-                                    min={0}
-                                    precision={0}
-                                    addonBefore="+高"
-                                    value={Number(meta.extra_height_mm ?? 0)}
-                                    onChange={(v) => {
-                                      const next = (materials as any[]).slice()
-                                      const rowMeta = ((next[idx]?.metadata_json as any) ?? {})
-                                      const metaNext = { ...rowMeta, extra_height_mm: Number(v ?? 0) }
-                                      const method = (next[idx].calculation_method as any) ?? 'count'
-                                      const baseQty = Number(next[idx].base_quantity ?? 0)
-                                      const fixedQty = Number(next[idx].fixed_quantity ?? 0)
-                                      const cov = Number(next[idx].coverage_ratio ?? 1)
-                                      const mqSample = Math.max(0, measureQty(method, sampleSpec, metaNext))
-                                      const mqStandard = Math.max(0, measureQty(method, standardSpec, metaNext))
-                                      next[idx] = {
-                                        ...next[idx],
-                                        metadata_json: metaNext,
-                                        sample_used_quantity: fixedQty + mqSample * baseQty * cov,
-                                        standard_used_quantity: fixedQty + mqStandard * baseQty * cov,
-                                      }
-                                      setMaterials(next as any)
-                                    }}
-                                    style={{ width: '100%' }}
-                                  />
-                                </Space>
-                              )
-                            },
-                          },
+                          // 工艺余量/固定追加等高级参数已收敛到“α 调参面板”，避免清单列膨胀
                           {
                             title: 'BOM单价/单位',
                             width: 170,
@@ -3969,6 +3939,70 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                 用量计算（当前行）：<Text code>用量_total = α + β × M × 覆盖率</Text>；其中 <Text code>β</Text> 为清单里的“基数(base_quantity)”，
                 <Text code>M</Text> 为计量值（按数量/面积/周长/宽/高计算）。
               </Text>
+            </Card>
+
+            <Card size="small" title="工艺修正（余量 / 按件固定追加）">
+              <Row gutter={12}>
+                <Col span={8}>
+                  <InputNumber
+                    min={0}
+                    precision={0}
+                    value={tuningExtraWidthMm}
+                    onChange={(v) => setTuningExtraWidthMm(Number(v ?? 0))}
+                    addonBefore={addonLabel('+宽(mm)')}
+                    style={{ width: '100%' }}
+                  />
+                </Col>
+                <Col span={8}>
+                  <InputNumber
+                    min={0}
+                    precision={0}
+                    value={tuningExtraHeightMm}
+                    onChange={(v) => setTuningExtraHeightMm(Number(v ?? 0))}
+                    addonBefore={addonLabel('+高(mm)')}
+                    style={{ width: '100%' }}
+                  />
+                </Col>
+                <Col span={8}>
+                  <Tooltip title="用于‘每件固定余头/每根下料余头’：总用量会额外 +（该值 × 数量）">
+                    <InputNumber
+                      min={0}
+                      precision={4}
+                      value={tuningFixedPerCountQty}
+                      onChange={(v) => setTuningFixedPerCountQty(Number(v ?? 0))}
+                      addonBefore={addonLabel('按件固定追加')}
+                      style={{ width: '100%' }}
+                    />
+                  </Tooltip>
+                </Col>
+              </Row>
+              <Row gutter={12} style={{ marginTop: 12 }}>
+                <Col span={8}>
+                  <InputNumber
+                    min={0}
+                    precision={0}
+                    value={tuningExtraLongSideMm}
+                    onChange={(v) => setTuningExtraLongSideMm(Number(v ?? 0))}
+                    addonBefore={addonLabel('+长边(mm)')}
+                    style={{ width: '100%' }}
+                  />
+                </Col>
+                <Col span={8}>
+                  <InputNumber
+                    min={0}
+                    precision={0}
+                    value={tuningExtraShortSideMm}
+                    onChange={(v) => setTuningExtraShortSideMm(Number(v ?? 0))}
+                    addonBefore={addonLabel('+短边(mm)')}
+                    style={{ width: '100%' }}
+                  />
+                </Col>
+                <Col span={8}>
+                  <Text type="secondary">
+                    说明：桌布折边用 +宽/+高；编织袋按卷向用“长边/短边”计量并配 +长边/+短边；画框下料余头用“按件固定追加”。
+                  </Text>
+                </Col>
+              </Row>
             </Card>
 
             {entryContext === 'sample' ? (

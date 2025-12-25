@@ -66,6 +66,7 @@ def execute_shipments_from_preview(
         return shipment_import_service.execute_shipment_xlsx_from_preview(
             db,
             preview_id=payload.preview_id,
+            file_name=payload.file_name,
             export_date=payload.export_date,
             requested_by=payload.requested_by,
         )

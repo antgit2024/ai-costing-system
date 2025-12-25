@@ -1021,6 +1021,7 @@ export const previewShipmentsXlsx = async (params: {
 
 export const executeShipmentsFromPreview = async (payload: {
   preview_id: string
+  file_name?: string
   export_date?: string
   requested_by?: string
 }): Promise<ShipmentImportBatch> => {

@@ -642,6 +642,7 @@ def execute_shipment_xlsx_from_preview(
     db: Session,
     *,
     preview_id: str,
+    file_name: Optional[str] = None,
     export_date: Optional[str],
     requested_by: Optional[str],
 ) -> models.ShipmentImportBatch:
@@ -657,7 +658,7 @@ def execute_shipment_xlsx_from_preview(
     file_bytes = path.read_bytes()
     return import_shipment_xlsx(
         db,
-        file_name=f"preview:{pid}.xlsx",
+        file_name=(file_name or f"preview:{pid}.xlsx"),
         file_bytes=file_bytes,
         export_date=export_date,
         requested_by=requested_by,

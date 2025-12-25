@@ -371,10 +371,15 @@ const ShipmentMonitorPage = () => {
       message.warning('请先完成“预览”')
       return
     }
+    if (uploadFile?.name && previewData?.file_name && String(previewData.file_name) !== String(uploadFile.name)) {
+      message.error(`当前选择文件与预览不一致：已选"${uploadFile.name}"，预览的是"${previewData.file_name}"。请重新点击“预览”。`)
+      return
+    }
     try {
       setUploading(true)
       const batch = await executeShipmentsFromPreview({
         preview_id: previewData.preview_id,
+        file_name: previewData.file_name,
         export_date: uploadExportDate,
         requested_by: uploadRequestedBy?.trim() || undefined,
       })

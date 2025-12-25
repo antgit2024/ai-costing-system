@@ -1789,6 +1789,7 @@ class ShipmentImportPreviewResponse(BaseModel):
 
 class ShipmentImportExecuteRequest(BaseModel):
     preview_id: str
+    file_name: Optional[str] = None
     export_date: Optional[str] = None
     requested_by: Optional[str] = None
 

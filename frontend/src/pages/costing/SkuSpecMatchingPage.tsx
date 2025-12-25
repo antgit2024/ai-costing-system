@@ -1,4 +1,4 @@
-import { Alert, Button, Card, Col, Descriptions, Input, InputNumber, Row, Select, Space, Table, Tag, Typography, message } from 'antd'
+import { Alert, Button, Card, Col, Descriptions, Input, InputNumber, Row, Select, Space, Table, Tabs, Tag, Typography, message } from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { useEffect, useMemo, useState } from 'react'
@@ -65,6 +65,7 @@ export default function SkuSpecMatchingPage() {
   const [isPreviewMode, setIsPreviewMode] = useState<boolean>(false)
   const [previewItems, setPreviewItems] = useState<any[]>([])
   const [previewSelectedKeys, setPreviewSelectedKeys] = useState<string[]>([])
+  const [listTab, setListTab] = useState<'all' | 'parsed' | 'unparsed'>('all')
 
   useEffect(() => {
     try {
@@ -75,7 +76,19 @@ export default function SkuSpecMatchingPage() {
   }, [pageSize])
 
   const listQuery = useQuery({
-    queryKey: ['sku-spec-matching', 'list', page, pageSize, search, channel, matchStatus, includeTerms, excludeTerms, matchScope],
+    queryKey: [
+      'sku-spec-matching',
+      'list',
+      listTab,
+      page,
+      pageSize,
+      search,
+      channel,
+      matchStatus,
+      includeTerms,
+      excludeTerms,
+      matchScope,
+    ],
     queryFn: () =>
       fetchSkuMaster({
         page,
@@ -87,6 +100,7 @@ export default function SkuSpecMatchingPage() {
         exclude_terms: excludeTerms || undefined,
         match_scope: matchScope,
         bound_state: 'bound', // 规格模块：只看已绑定模型的商品
+        preparse_state: listTab === 'parsed' ? 'parsed' : listTab === 'unparsed' ? 'unparsed' : undefined,
       }),
     placeholderData: keepPreviousData,
   })
@@ -304,6 +318,26 @@ export default function SkuSpecMatchingPage() {
                 解析尺寸：宽{w}cm × 高{h}cm
               </Tag>
             </div>
+          )
+        },
+      },
+      {
+        title: '预解析尺寸（已落库）',
+        dataIndex: 'preparse_dimensions',
+        width: 220,
+        render: (_v, row) => {
+          const dims = (row as any)?.preparse_dimensions
+          const hash = (row as any)?.preparse_spec_hash
+          if (!hash) return <Tag>未解析</Tag>
+          const w = dimGet(dims, 'width_cm')
+          const h = dimGet(dims, 'height_cm')
+          return (
+            <Space size={6} wrap>
+              <Tag color="geekblue">已解析</Tag>
+              <Tag color="purple">
+                宽{w}×高{h}cm
+              </Tag>
+            </Space>
           )
         },
       },
@@ -541,6 +575,20 @@ export default function SkuSpecMatchingPage() {
               </Space>
             }
           >
+            {!isPreviewMode ? (
+              <Tabs
+                activeKey={listTab}
+                onChange={(k) => {
+                  setListTab(k as any)
+                  setPage(1)
+                }}
+                items={[
+                  { key: 'all', label: '全部' },
+                  { key: 'parsed', label: '已解析' },
+                  { key: 'unparsed', label: '未解析' },
+                ]}
+              />
+            ) : null}
             <Table
               rowKey="id"
               size="small"

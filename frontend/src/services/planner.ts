@@ -1033,6 +1033,7 @@ export const fetchSkuMaster = async (
     channel?: string
     match_status?: string
     bound_state?: 'bound' | 'unbound'
+    preparse_state?: 'parsed' | 'unparsed'
     spec_mismatch?: boolean
     include_terms?: string
     exclude_terms?: string

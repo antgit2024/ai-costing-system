@@ -294,6 +294,7 @@ def list_sku_master(
     match_status: Optional[str],
     bound_state: Optional[str] = None,
     spec_mismatch: Optional[bool] = None,
+    preparse_state: Optional[str] = None,
     include_terms: Optional[str] = None,
     exclude_terms: Optional[str] = None,
     match_scope: Optional[str] = None,
@@ -331,6 +332,15 @@ def list_sku_master(
             q = q.filter(subq.exists())
         else:
             q = q.filter(~subq.exists())
+
+    # preparse state filter (server-side; avoid empty pages)
+    if preparse_state:
+        state = str(preparse_state).strip().lower()
+        ph = models.SkuMaster.metadata_json["preparse_spec_hash"].as_string()
+        if state in ("parsed", "done", "yes", "1", "true"):
+            q = q.filter(ph.isnot(None)).filter(ph != "")
+        elif state in ("unparsed", "none", "no", "0", "false"):
+            q = q.filter((ph.is_(None)) | (ph == ""))
 
     def _parse_terms(raw: Optional[str]) -> List[str]:
         if not raw:

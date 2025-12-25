@@ -842,7 +842,9 @@ def refresh_model_material_price_snapshots(db: Session, model: models.ProductMod
     """
     rows = list_model_material_lines(db, model.id)
     for row in rows:
-        meta = row.metadata_json or {}
+        # NOTE: SQLAlchemy JSON columns won't reliably detect in-place dict mutations unless using mutable types.
+        # Always assign a fresh dict to ensure updates are persisted.
+        meta = dict(row.metadata_json or {})
         kind = str(row.material_type or "real")
         ref_id = str(row.material_ref_id or "").strip()
 
@@ -921,7 +923,9 @@ def refresh_version_material_price_snapshots(db: Session, version: models.Produc
     """
     rows = list_version_material_lines(db, version.id)
     for row in rows:
-        meta = row.metadata_json or {}
+        # NOTE: SQLAlchemy JSON columns won't reliably detect in-place dict mutations unless using mutable types.
+        # Always assign a fresh dict to ensure updates are persisted.
+        meta = dict(row.metadata_json or {})
         kind = str(row.material_type or "real")
         ref_id = str(row.material_ref_id or "").strip()
 

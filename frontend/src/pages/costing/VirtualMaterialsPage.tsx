@@ -182,6 +182,7 @@ import {
   createVirtualMaterial,
   deactivateVirtualMaterial,
   generateNextCode,
+  fetchMaterial,
   fetchMaterials,
   fetchVirtualMaterial,
   fetchVirtualMaterials,
@@ -287,6 +288,7 @@ const VirtualMaterialsPage = () => {
   const [drawerMode, setDrawerMode] = useState<'create' | 'view'>('view')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [materialPickerOpen, setMaterialPickerOpen] = useState(false)
+  const [syncingBindingData, setSyncingBindingData] = useState(false)
   const [guideOpen, setGuideOpen] = useState(false)
   const [inventoryResult, setInventoryResult] = useState<VirtualMaterialInventoryResponse | null>(
     null,
@@ -860,6 +862,71 @@ const VirtualMaterialsPage = () => {
     bindingsMutation.mutate({ id: selectedId, bindings: activeBindings })
   }
 
+  const handleSyncBindingData = async () => {
+    if (!selectedId) {
+      message.warning('请先选择一个虚拟物料')
+      return
+    }
+    if (virtualKind === 'placeholder') {
+      message.info('占位型不绑定子物料，无需同步')
+      return
+    }
+    const current = (bindingForm.getFieldValue('bindings') as BindingFormValue[]) ?? []
+    const ids = current.map((b) => String(b.material_id || '').trim()).filter(Boolean)
+    if (!ids.length) {
+      message.info('当前没有绑定真实物料')
+      return
+    }
+    try {
+      setSyncingBindingData(true)
+      const results = await Promise.allSettled(ids.map((id) => fetchMaterial(id)))
+      const byId = new Map<string, Material>()
+      const failed: string[] = []
+      results.forEach((r, idx) => {
+        const id = ids[idx]!
+        if (r.status === 'fulfilled') {
+          byId.set(id, r.value)
+          materialCacheRef.current[id] = r.value
+        } else {
+          failed.push(id)
+        }
+      })
+      if (!byId.size) {
+        message.error('同步失败：未获取到任何物料数据')
+        return
+      }
+      bindingUpdateRef.current = true
+      bindingForm.setFieldsValue({
+        bindings: current.map((item) => {
+          const id = String(item.material_id || '').trim()
+          const m = id ? byId.get(id) : undefined
+          if (!m) return item
+          return {
+            ...item,
+            currency: m.currency,
+            purchase_unit_price: m.unit_price != null ? Number(m.unit_price) : undefined,
+            purchase_unit: m.purchase_unit || m.unit || item.unit || null,
+            bom_unit_price: deriveBomUnitPrice(m),
+            bom_unit: m.unit || item.unit || null,
+            unit: m.unit || item.unit || null,
+            image_url: item.image_url || getPrimaryImage(m, 96),
+          }
+        }),
+      })
+      bindingUpdateRef.current = false
+      if (failed.length) {
+        message.warning(`已同步 ${byId.size} 条；${failed.length} 条失败（可重试）`)
+      } else {
+        message.success(`已同步 ${byId.size} 条：BOM单价/单位已刷新`)
+      }
+    } catch (error) {
+      message.error(getErrorMessage(error))
+    } finally {
+      setSyncingBindingData(false)
+      bindingUpdateRef.current = false
+    }
+  }
+
   const handleInventoryCalculate = async () => {
     if (!selectedId) {
       message.warning('请先选择虚拟物料')
@@ -1314,6 +1381,11 @@ const VirtualMaterialsPage = () => {
               bordered={false}
               extra={
                 <Space>
+                  {virtualKind !== 'placeholder' ? (
+                    <Button icon={<ReloadOutlined />} loading={syncingBindingData} onClick={handleSyncBindingData}>
+                      同步数据
+                    </Button>
+                  ) : null}
                   {virtualKind !== 'placeholder' ? (
                     <Button icon={<PlusOutlined />} onClick={() => setMaterialPickerOpen(true)}>
                       添加物料

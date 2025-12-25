@@ -197,6 +197,18 @@ def sync_version_from_modules(
     return get_version_lines(version_id, db)
 
 
+@router.post("/product-model-versions/{version_id}/refresh-material-prices", response_model=schemas.ProductModelLinesResponse)
+def refresh_version_material_prices(version_id: str, db: Session = Depends(get_db)):
+    """
+    Refresh *version* material lines' BOM unit price/unit snapshots from latest master data.
+    This does NOT change quantities; it only updates metadata_json.{bom_unit_price,bom_unit}.
+    """
+    v = _get_version_or_404(db, version_id)
+    product_model_service.refresh_version_material_price_snapshots(db, v)
+    db.commit()
+    return get_version_lines(version_id, db)
+
+
 @router.post("/product-model-versions/{version_id}/preview", response_model=schemas.ProductModelPreviewResponse)
 def preview_version_cost(
     version_id: str, payload: schemas.ProductModelPreviewRequest, db: Session = Depends(get_db)

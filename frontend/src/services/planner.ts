@@ -940,6 +940,13 @@ export const refreshProductModelMaterialPrices = async (
   return response.data
 }
 
+export const refreshProductModelVersionMaterialPrices = async (
+  versionId: string,
+): Promise<ProductModelLinesResponse> => {
+  const response = await plannerClient.post(`/product-model-versions/${versionId}/refresh-material-prices`, {})
+  return response.data
+}
+
 export const fetchProductModelLines = async (modelId: string): Promise<ProductModelLinesResponse> => {
   const response = await plannerClient.get(`/product-models/${modelId}/lines`)
   return response.data

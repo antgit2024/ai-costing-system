@@ -908,6 +908,85 @@ def refresh_model_material_price_snapshots(db: Session, model: models.ProductMod
     db.commit()
 
 
+def refresh_version_material_price_snapshots(db: Session, version: models.ProductModelVersion) -> None:
+    """
+    Refresh BOM unit price/unit snapshots for *version* material lines.
+
+    Background:
+    - Version lines are often synced from modules and may carry stale metadata_json.{bom_unit_price,bom_unit}.
+    - Virtual materials' BOM prices are derived from bindings and may change over time.
+
+    This does NOT change quantities/measurements; it only updates metadata_json.{bom_unit_price,bom_unit} for display and
+    for cases where frontend wants a persisted snapshot without forcing preview refresh.
+    """
+    rows = list_version_material_lines(db, version.id)
+    for row in rows:
+        meta = row.metadata_json or {}
+        kind = str(row.material_type or "real")
+        ref_id = str(row.material_ref_id or "").strip()
+
+        if kind in ("real", "bom"):
+            material = db.get(models.Material, ref_id) if ref_id else None
+            if not material or material.is_archived:
+                continue
+            price = _derive_bom_unit_price(material)
+            if price is not None:
+                meta["bom_unit_price"] = float(price)
+            meta["bom_unit"] = material.unit
+            row.metadata_json = meta
+            continue
+
+        if kind != "virtual":
+            continue
+
+        virtual = db.get(models.VirtualMaterial, ref_id) if ref_id else None
+        if not virtual or virtual.is_archived:
+            continue
+
+        v_kind = _get_virtual_kind(virtual)
+        if v_kind == "placeholder":
+            meta["bom_unit_price"] = 0.0
+            meta["bom_unit"] = virtual.unit
+            row.metadata_json = meta
+            continue
+
+        # unit semantics
+        meta["bom_unit"] = "套" if v_kind == "kit" else (virtual.unit or meta.get("bom_unit"))
+
+        binds = (
+            db.query(models.VirtualMaterialBinding)
+            .filter(models.VirtualMaterialBinding.virtual_material_id == virtual.id)
+            .all()
+        )
+        if not binds:
+            row.metadata_json = meta
+            continue
+
+        v_price: Decimal = Decimal("0")
+        hit_any = False
+        for bind in binds:
+            material = db.get(models.Material, bind.material_id)
+            if not material or material.is_archived:
+                continue
+            price = _derive_bom_unit_price(material)
+            if price is None:
+                continue
+
+            qty = _decimal(bind.quantity_ratio, Decimal("0"))
+            if v_kind == "recipe" and qty > Decimal("1.5"):
+                qty = qty / Decimal("100")
+
+            bind_loss = _decimal(bind.loss_rate, Decimal("0"))
+            loss_factor = Decimal("1") + (bind_loss / Decimal("100"))
+            v_price += price * qty * loss_factor
+            hit_any = True
+
+        if hit_any:
+            meta["bom_unit_price"] = float(v_price)
+        row.metadata_json = meta
+    db.commit()
+
+
 def replace_model_lines(
     db: Session,
     model: models.ProductModel,

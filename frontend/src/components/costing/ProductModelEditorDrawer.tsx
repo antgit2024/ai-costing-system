@@ -64,6 +64,7 @@ import {
   listLineVariants,
   publishProductModelVersion,
   refreshProductModelMaterialPrices,
+  refreshProductModelVersionMaterialPrices,
   syncProductModelVersionFromModules,
   updateProductModel,
   updateProductModelVersionLines,
@@ -858,9 +859,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     if (refreshingMaterialPrices) return
     setRefreshingMaterialPrices(true)
     try {
-      // 后端当前只提供“模型层”刷新：更新 metadata_json.{bom_unit_price,bom_unit} 快照
-      // 我们将其结果 merge 到当前“版本清单编辑态”，并提示用户保存以固化到该版本。
-      const refreshed = (await refreshProductModelMaterialPrices(modelId)) as ProductModelLinesResponseModel
+      // 优先刷新“版本层”（覆盖模块同步带来的陈旧快照）；无 versionId 时回退到模型层刷新。
+      const refreshed = (selectedVersionId
+        ? ((await refreshProductModelVersionMaterialPrices(selectedVersionId)) as ProductModelLinesResponseModel)
+        : ((await refreshProductModelMaterialPrices(modelId)) as ProductModelLinesResponseModel)) as ProductModelLinesResponseModel
       const refreshedMaterials = (refreshed.materials ?? []) as any[]
       const priceByKey = new Map<string, { bom_unit_price?: any; bom_unit?: any }>()
       for (const r of refreshedMaterials) {

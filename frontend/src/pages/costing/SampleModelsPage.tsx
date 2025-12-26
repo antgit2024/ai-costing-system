@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react'
-import { Button, Card, Col, Input, Modal, Row, Space, Table, Tag, Typography, message } from 'antd'
+import { Button, Card, Col, Input, Modal, Row, Space, Table, Tag, Tooltip, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useQuery } from '@tanstack/react-query'
 
-import { createProductModel, fetchProductModels } from '@/services/planner'
+import { createProductModel, deleteProductModel, fetchProductModels } from '@/services/planner'
 import type { ProductModel } from '@/types/planner'
 import ProductModelEditorDrawer from '@/components/costing/ProductModelEditorDrawer'
 
@@ -31,6 +31,25 @@ export default function SampleModelsPage() {
     queryFn: () => fetchProductModels(params as any),
   })
 
+  const handleDeleteModel = async (model: ProductModel) => {
+    Modal.confirm({
+      title: '删除模型',
+      content: `确认删除（归档）模型：${model.model_code} - ${model.model_name}？`,
+      okText: '删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await deleteProductModel(model.id)
+          message.success('已删除（归档）')
+          await listQuery.refetch()
+        } catch (err: any) {
+          message.error(err?.response?.data?.detail ?? err?.message ?? '删除失败')
+        }
+      },
+    })
+  }
+
   const columns: ColumnsType<ProductModel> = [
     { title: '总编码', dataIndex: 'model_code', width: 120 },
     { title: '模型名称', dataIndex: 'model_name' },
@@ -41,17 +60,24 @@ export default function SampleModelsPage() {
     { title: '更新时间', dataIndex: 'updated_at', width: 180 },
     {
       title: '操作',
-      width: 140,
+      width: 240,
       render: (_, r) => (
-        <Button
-          type="primary"
-          onClick={() => {
-            setEditingModelId(r.id)
-            setEditorOpen(true)
-          }}
-        >
-          进入打样管理
-        </Button>
+        <Space>
+          <Button
+            type="primary"
+            onClick={() => {
+              setEditingModelId(r.id)
+              setEditorOpen(true)
+            }}
+          >
+            进入打样管理
+          </Button>
+          <Tooltip title="删除为“归档删除”。规则：存在已发布标准版本或存在SKU绑定则不允许删除；否则允许删除。">
+            <Button danger disabled={Boolean((r as any).current_published_standard_version_id)} onClick={() => handleDeleteModel(r)}>
+              删除
+            </Button>
+          </Tooltip>
+        </Space>
       ),
     },
   ]

@@ -658,3 +658,46 @@ def delete_product_model(model_id: str, db: Session = Depends(get_db)):
     return None
 
 
+@router.post("/{model_id}/archive-sample", status_code=status.HTTP_204_NO_CONTENT)
+def archive_sample_versions_only(model_id: str, db: Session = Depends(get_db)):
+    """
+    Archive sample versions of a model only (do NOT archive standard versions).
+
+    Rationale:
+    - The UI has separate entrances: 打样模型 / 标准模型.
+    - Users may want to "删除打样" without affecting derived 标准版本.
+    """
+    model = _get_model_or_404(model_id, db)
+
+    # Archive sample versions
+    (
+        db.query(models.ProductModelVersion)
+        .filter(
+            models.ProductModelVersion.model_id == model.id,
+            models.ProductModelVersion.version_kind == "sample",
+            models.ProductModelVersion.is_archived.is_(False),
+        )
+        .update({"is_archived": True}, synchronize_session=False)
+    )
+
+    # If model has no remaining non-archived versions, archive model as well.
+    remain_cnt = (
+        db.query(models.ProductModelVersion)
+        .filter(models.ProductModelVersion.model_id == model.id, models.ProductModelVersion.is_archived.is_(False))
+        .count()
+    )
+    if remain_cnt == 0:
+        model.is_archived = True
+
+    audit_service.log_audit_event(
+        db,
+        target_type="product_model",
+        target_id=model.id,
+        action="archive_sample_versions",
+        actor_id="system",
+        payload={"model_code": model.model_code},
+    )
+    db.commit()
+    return None
+
+

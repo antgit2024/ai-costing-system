@@ -684,6 +684,10 @@ export const deleteProductModel = async (modelId: string): Promise<void> => {
   await plannerClient.delete(`/product-models/${modelId}`)
 }
 
+export const archiveSampleVersionsOnly = async (modelId: string): Promise<void> => {
+  await plannerClient.post(`/product-models/${modelId}/archive-sample`)
+}
+
 export const createProductModel = async (
   payload: ProductModelCreatePayload,
 ): Promise<ProductModel> => {

@@ -4,7 +4,7 @@ import { Button, Card, Col, Image, Input, Modal, Row, Space, Table, Tag, Tooltip
 import type { ColumnsType } from 'antd/es/table'
 import { useQuery } from '@tanstack/react-query'
 
-import { createProductModel, deleteProductModel, fetchProductModels, fetchProductModelVersions } from '@/services/planner'
+import { archiveSampleVersionsOnly, createProductModel, fetchProductModels, fetchProductModelVersions } from '@/services/planner'
 import type { ProductModel } from '@/types/planner'
 import ProductModelEditorDrawer from '@/components/costing/ProductModelEditorDrawer'
 
@@ -69,15 +69,15 @@ export default function SampleModelsPage() {
 
   const handleDeleteModel = async (model: ProductModel) => {
     Modal.confirm({
-      title: '删除模型',
-      content: `确认删除（归档）模型：${model.model_code} - ${model.model_name}？`,
-      okText: '删除',
+      title: '删除打样',
+      content: `确认删除（归档）打样版本：${model.model_code} - ${model.model_name}？（不会影响标准版本）`,
+      okText: '删除打样',
       okButtonProps: { danger: true },
       cancelText: '取消',
       onOk: async () => {
         try {
-          await deleteProductModel(model.id)
-          message.success('已删除（归档）')
+          await archiveSampleVersionsOnly(model.id)
+          message.success('已删除打样（归档打样版本）')
           await listQuery.refetch()
         } catch (err: any) {
           message.error(err?.response?.data?.detail ?? err?.message ?? '删除失败')

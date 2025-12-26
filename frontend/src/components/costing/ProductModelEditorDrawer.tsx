@@ -1945,12 +1945,16 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       title={entryContext === 'sample' ? '打样管理' : '标准模型管理'}
       extra={
         <Space>
-          <Button onClick={() => saveBasicMutation.mutate()} loading={saveBasicMutation.isPending} disabled={!modelId}>
-            保存基础信息
-          </Button>
-          <Button type="primary" onClick={runSaveLines} loading={savingLines} disabled={!selectedVersionId || !canEditSelectedVersion}>
-            保存清单
-          </Button>
+          {activeTab === 'basic' ? (
+            <Button onClick={() => saveBasicMutation.mutate()} loading={saveBasicMutation.isPending} disabled={!modelId}>
+              保存基础信息
+            </Button>
+          ) : null}
+          {activeTab === 'lines' ? (
+            <Button type="primary" onClick={runSaveLines} loading={savingLines} disabled={!selectedVersionId || !canEditSelectedVersion}>
+              保存清单
+            </Button>
+          ) : null}
         </Space>
       }
     >

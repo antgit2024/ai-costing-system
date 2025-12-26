@@ -280,6 +280,9 @@ def clone_model_from_version(
         "current_published_standard_version_label",
     ):
         src_model_meta.pop(k, None)
+    # Cloning must NOT carry recognition keywords because they are globally unique.
+    # New model should start with empty keywords and let user configure explicitly.
+    src_model_meta.pop("recognition_keywords", None)
 
     new_name = (payload.model_name or "").strip() or f"{src_model.model_name}（克隆）"
 

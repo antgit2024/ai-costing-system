@@ -13,7 +13,7 @@ def test_clone_model_from_standard_version_creates_new_model_and_copies_lines_an
             "calc_mode": "ratio",
             "status": "draft",
             "tags": [],
-            "metadata_json": {},
+            "metadata_json": {"recognition_keywords": ["丝圈地垫"]},
             "modules": [],
         },
     )
@@ -112,6 +112,13 @@ def test_clone_model_from_standard_version_creates_new_model_and_copies_lines_an
     assert data["new_model_id"] != model_id
     assert data["new_standard_version_id"] != src_version_id
     assert data["new_model_code"] != "AAA"
+
+    # 6) Verify cloned model does NOT carry recognition keywords (must be globally unique)
+    new_model_id = data["new_model_id"]
+    r = client.get(f"/api/planner/product-models/{new_model_id}")
+    assert r.status_code == 200, r.text
+    meta = r.json().get("metadata_json") or {}
+    assert "recognition_keywords" not in meta or not meta.get("recognition_keywords")
 
     # 6) Verify lines copied
     new_vid = data["new_standard_version_id"]

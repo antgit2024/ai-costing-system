@@ -2382,7 +2382,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                 onClick={() => openCopyVersionModal(v.id)}
                                 disabled={String(v.version_status) === 'archived'}
                               >
-                                复制版
+                                复制版本
                               </Button>
                               <Button
                                 size="small"

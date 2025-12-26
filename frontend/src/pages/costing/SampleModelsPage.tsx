@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react'
-import { Button, Card, Col, Input, Modal, Row, Space, Table, Tag, Tooltip, Typography, message } from 'antd'
+import dayjs from 'dayjs'
+import { Button, Card, Col, Image, Input, Modal, Row, Space, Table, Tag, Tooltip, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useQuery } from '@tanstack/react-query'
 
-import { createProductModel, deleteProductModel, fetchProductModels } from '@/services/planner'
+import { createProductModel, deleteProductModel, fetchProductModels, fetchProductModelVersions } from '@/services/planner'
 import type { ProductModel } from '@/types/planner'
 import ProductModelEditorDrawer from '@/components/costing/ProductModelEditorDrawer'
 
@@ -31,6 +32,41 @@ export default function SampleModelsPage() {
     queryFn: () => fetchProductModels(params as any),
   })
 
+  const ModelThumb = ({ modelId }: { modelId: string }) => {
+    const versionsQuery = useQuery({
+      queryKey: ['productModelVersionsForThumb', modelId],
+      queryFn: () => fetchProductModelVersions(modelId),
+      staleTime: 5 * 60 * 1000,
+    })
+    const versions = (versionsQuery.data ?? []) as any[]
+    const candidates = versions
+      .filter((v) => String(v?.version_kind) === 'sample' && String(v?.version_status) !== 'archived')
+      .sort((a, b) => String(b?.updated_at ?? '').localeCompare(String(a?.updated_at ?? '')))
+    const v0 = candidates[0]
+    const vid = String(v0?.id ?? '').trim()
+    const meta: any = v0?.metadata_json ?? {}
+    const imgs = meta?.version_images
+    const has = !!vid && Array.isArray(imgs) && imgs.length > 0
+    const url = has ? `/api/planner/product-model-versions/${vid}/images/0` : ''
+    return (
+      <div
+        style={{
+          width: 48,
+          height: 48,
+          borderRadius: 8,
+          background: '#f5f5f5',
+          border: '1px solid #f0f0f0',
+          overflow: 'hidden',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        {has ? <Image src={url} width={48} height={48} style={{ objectFit: 'cover' }} preview={false} /> : <span>-</span>}
+      </div>
+    )
+  }
+
   const handleDeleteModel = async (model: ProductModel) => {
     Modal.confirm({
       title: '删除模型',
@@ -51,13 +87,37 @@ export default function SampleModelsPage() {
   }
 
   const columns: ColumnsType<ProductModel> = [
+    {
+      title: '缩略图',
+      width: 72,
+      render: (_: any, r: any) => <ModelThumb modelId={String(r.id)} />,
+    },
     { title: '总编码', dataIndex: 'model_code', width: 120 },
     { title: '模型名称', dataIndex: 'model_name' },
+    {
+      title: '打样人',
+      width: 120,
+      render: (_: any, r: any) => {
+        const meta: any = (r as any)?.metadata_json ?? {}
+        const owner = String(meta?.sample_owner ?? '').trim()
+        return owner || '-'
+      },
+    },
     { title: '状态', dataIndex: 'status', width: 110, render: (v: string) => <Tag>{v}</Tag> },
     { title: '打样版本数', width: 110, render: (_, r) => (r.sample_version_count ?? '-') },
     { title: '标准版本数', width: 110, render: (_, r) => (r.standard_version_count ?? '-') },
     { title: '当前发布标准', width: 180, render: (_, r) => r.current_published_standard_version_label ?? '-' },
-    { title: '更新时间', dataIndex: 'updated_at', width: 180 },
+    {
+      title: '更新时间',
+      dataIndex: 'updated_at',
+      width: 170,
+      render: (v: any) => {
+        const s = String(v ?? '').trim()
+        if (!s) return '-'
+        const d = dayjs(s)
+        return d.isValid() ? d.format('YYYY-MM-DD HH:mm') : s
+      },
+    },
     {
       title: '操作',
       width: 240,
@@ -70,7 +130,7 @@ export default function SampleModelsPage() {
               setEditorOpen(true)
             }}
           >
-            进入打样管理
+            管理
           </Button>
           <Tooltip title="删除为“归档删除”。规则：存在已发布标准版本或存在SKU绑定则不允许删除；否则允许删除。">
             <Button danger disabled={Boolean((r as any).current_published_standard_version_id)} onClick={() => handleDeleteModel(r)}>

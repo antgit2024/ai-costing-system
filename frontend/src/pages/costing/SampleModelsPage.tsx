@@ -32,6 +32,17 @@ export default function SampleModelsPage() {
     queryFn: () => fetchProductModels(params as any),
   })
 
+  const listItems = useMemo(() => {
+    const items = (((listQuery.data as any)?.items ?? []) as any[]).slice()
+    return items.filter((m) => {
+      const meta: any = m?.metadata_json ?? {}
+      const entry = String(meta?.entry_context ?? '').trim()
+      const sampleCnt = Number(m?.sample_version_count ?? 0)
+      // 打样列表：只展示“打样入口创建/维护”的模型，避免标准模型克隆/新建混进来
+      return entry === 'sample' || sampleCnt > 0
+    })
+  }, [listQuery.data])
+
   const ModelThumb = ({ modelId }: { modelId: string }) => {
     const versionsQuery = useQuery({
       queryKey: ['productModelVersionsForThumb', modelId],
@@ -209,7 +220,7 @@ export default function SampleModelsPage() {
             <Table
               rowKey="id"
               loading={listQuery.isLoading}
-              dataSource={(listQuery.data as any)?.items ?? []}
+              dataSource={listItems}
               columns={columns}
               pagination={false}
               scroll={{ x: 1100 }}

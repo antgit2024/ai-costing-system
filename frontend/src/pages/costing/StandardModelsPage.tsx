@@ -72,6 +72,17 @@ export default function StandardModelsPage() {
     queryFn: () => fetchProductModels(params as any),
   })
 
+  const listItems = useMemo(() => {
+    const items = (((listQuery.data as any)?.items ?? []) as any[]).slice()
+    return items.filter((m) => {
+      const meta: any = m?.metadata_json ?? {}
+      const entry = String(meta?.entry_context ?? '').trim()
+      const stdCnt = Number(m?.standard_version_count ?? 0)
+      // 标准列表：只展示“标准入口创建/维护”的模型，避免打样模型混进来
+      return entry === 'standard' || stdCnt > 0
+    })
+  }, [listQuery.data])
+
   const getBaselineTotalFromPublished = async (modelId: string, publishedVersionId: string) => {
     const versions = await fetchProductModelVersions(modelId)
     const v = versions.find((x) => x.id === publishedVersionId)
@@ -311,9 +322,7 @@ export default function StandardModelsPage() {
             <Table
               rowKey={(r) => r.id}
               loading={listQuery.isLoading}
-              dataSource={(((listQuery.data as any)?.items ?? []) as ProductModel[]).filter(
-                (m) => Number(m.standard_version_count ?? 0) > 0,
-              )}
+              dataSource={listItems as ProductModel[]}
               columns={columns}
               pagination={false}
               scroll={{ x: 980 }}

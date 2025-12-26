@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import dayjs from 'dayjs'
 import { Button, Card, Col, Input, Modal, Row, Space, Table, Tag, Tooltip, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useQuery } from '@tanstack/react-query'
@@ -170,7 +171,6 @@ export default function StandardModelsPage() {
     { title: '总编码', dataIndex: 'model_code', width: 120 },
     { title: '模型名称', dataIndex: 'model_name' },
     { title: '状态', dataIndex: 'status', width: 110, render: (v: string) => <Tag>{v}</Tag> },
-    { title: '打样版本数', width: 110, render: (_, r) => (r.sample_version_count ?? '-') },
     { title: '标准版本数', width: 110, render: (_, r) => (r.standard_version_count ?? '-') },
     { title: '当前发布标准', width: 180, render: (_, r) => r.current_published_standard_version_label ?? '-' },
     {
@@ -194,7 +194,17 @@ export default function StandardModelsPage() {
         return <Tag color={warn ? 'red' : 'green'}>{warn ? `预警 ${text}` : text}</Tag>
       },
     },
-    { title: '更新时间', dataIndex: 'updated_at', width: 180 },
+    {
+      title: '更新时间',
+      dataIndex: 'updated_at',
+      width: 170,
+      render: (v: any) => {
+        const s = String(v ?? '').trim()
+        if (!s) return '-'
+        const d = dayjs(s)
+        return d.isValid() ? d.format('YYYY-MM-DD HH:mm') : s
+      },
+    },
     {
       title: '操作',
       width: 260,

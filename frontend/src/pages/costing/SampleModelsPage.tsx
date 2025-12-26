@@ -117,7 +117,6 @@ export default function SampleModelsPage() {
     },
     { title: '状态', dataIndex: 'status', width: 110, render: (v: string) => <Tag>{v}</Tag> },
     { title: '打样版本数', width: 110, render: (_, r) => (r.sample_version_count ?? '-') },
-    { title: '标准版本数', width: 110, render: (_, r) => (r.standard_version_count ?? '-') },
     { title: '当前发布标准', width: 180, render: (_, r) => r.current_published_standard_version_label ?? '-' },
     {
       title: '更新时间',

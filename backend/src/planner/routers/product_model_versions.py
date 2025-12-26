@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import io
+import json
 from decimal import Decimal
-from typing import List
+from typing import List, Optional
+
+from fastapi import File, UploadFile
+from fastapi.responses import StreamingResponse
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from ...database import get_db
 from .. import models, schemas
-from ..services import audit_service, line_variant_service, product_model_service
+from ..services import audit_service, line_variant_service, model_version_image_storage, product_model_service
 
 router = APIRouter(tags=["product-model-versions"])
 
@@ -25,6 +30,101 @@ def _get_version_or_404(db: Session, version_id: str) -> models.ProductModelVers
     if not v:
         raise HTTPException(status_code=404, detail="Product model version not found")
     return v
+
+
+def _serialize_version_images(version: models.ProductModelVersion) -> schemas.ModelVersionImagesResponse:
+    meta = version.metadata_json or {}
+    items = meta.get("version_images") or []
+    if not isinstance(items, list):
+        items = []
+    out: List[schemas.ModelVersionImageRead] = []
+    for idx, it in enumerate(items):
+        if isinstance(it, dict) and it.get("path"):
+            out.append(
+                schemas.ModelVersionImageRead(
+                    index=idx,
+                    url=f"/api/planner/product-model-versions/{version.id}/images/{idx}",
+                    filename=it.get("filename"),
+                    content_type=it.get("content_type"),
+                )
+            )
+        elif isinstance(it, str) and it:
+            out.append(
+                schemas.ModelVersionImageRead(
+                    index=idx,
+                    url=f"/api/planner/product-model-versions/{version.id}/images/{idx}",
+                    filename=None,
+                    content_type=None,
+                )
+            )
+    return schemas.ModelVersionImagesResponse(version_id=version.id, images=out)
+
+
+@router.get(
+    "/product-model-versions/{version_id}/images/{image_index}",
+    response_class=StreamingResponse,
+)
+def download_model_version_image(
+    version_id: str,
+    image_index: int,
+    db: Session = Depends(get_db),
+) -> StreamingResponse:
+    v = _get_version_or_404(db, version_id)
+    meta = dict(v.metadata_json or {})
+    ref = model_version_image_storage.get_local_image_ref(meta, image_index)
+    if ref is None:
+        raise HTTPException(status_code=404, detail="Image not found")
+    try:
+        content = model_version_image_storage.read_local_bytes(ref)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Image file missing")
+    media_type = ref.content_type or "application/octet-stream"
+    return StreamingResponse(io.BytesIO(content), media_type=media_type)
+
+
+@router.post(
+    "/product-model-versions/{version_id}/images",
+    response_model=schemas.ModelVersionImagesResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_model_version_image(
+    version_id: str,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> schemas.ModelVersionImagesResponse:
+    """
+    Upload an image for a specific model version.
+    Images are persisted to PLANNER_MEDIA_DIR and referenced via version.metadata_json.version_images.
+    Limit: 10MB.
+    """
+    v = _get_version_or_404(db, version_id)
+    content = await file.read()
+    if content is None:
+        raise HTTPException(status_code=400, detail="Empty file")
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="文件过大：请控制在 10MB 内")
+
+    meta0 = v.metadata_json or {}
+    items0 = meta0.get("version_images") or []
+    if not isinstance(items0, list):
+        items0 = []
+    idx = len(items0)
+
+    ref = model_version_image_storage.persist_bytes(
+        version_id=str(v.id),
+        image_index=idx,
+        filename=str(file.filename or f"image_{idx}"),
+        content=content,
+        content_type=file.content_type,
+    )
+
+    # Deep-copy to avoid SQLAlchemy JSON change-tracking pitfalls on nested mutables.
+    meta2 = json.loads(json.dumps(v.metadata_json or {}, ensure_ascii=False))
+    model_version_image_storage.set_local_image_ref(meta2, idx, ref)
+    v.metadata_json = meta2
+    db.commit()
+    db.refresh(v)
+    return _serialize_version_images(v)
 
 
 @router.get("/product-models/{model_id}/versions", response_model=List[schemas.ProductModelVersionRead])

@@ -1748,6 +1748,18 @@ class BomGenerateResponse(BaseModel):
         json_encoders = {Decimal: _decimal_to_str}
 
 
+class ModelVersionImageRead(BaseModel):
+    index: int
+    url: str
+    filename: Optional[str] = None
+    content_type: Optional[str] = None
+
+
+class ModelVersionImagesResponse(BaseModel):
+    version_id: str
+    images: List[ModelVersionImageRead] = Field(default_factory=list)
+
+
 class ShipmentImportBatchRead(BaseModel):
     id: str
     file_name: Optional[str] = None

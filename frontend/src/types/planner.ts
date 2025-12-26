@@ -917,6 +917,18 @@ export interface ProductModelVersionPublishPayload {
   note?: string
 }
 
+export interface ModelVersionImageRead {
+  index: number
+  url: string
+  filename?: string | null
+  content_type?: string | null
+}
+
+export interface ModelVersionImagesResponse {
+  version_id: string
+  images: ModelVersionImageRead[]
+}
+
 export interface SkuModelVersionMappingCreatePayload {
   sku_code: string
   model_version_id: string

@@ -60,6 +60,7 @@ import type {
   ProductModelVersionCreatePayload,
   ProductModelVersionPublishPayload,
   ProductModelVersionRead,
+  ModelVersionImagesResponse,
   RandomCodeGenerateRequest,
   RandomCodeGenerateResponse,
   ModelVariantRuleRead,
@@ -753,6 +754,15 @@ export const createProductModelVersion = async (
 
 export const fetchProductModelVersionLines = async (versionId: string): Promise<ProductModelLinesResponse> => {
   const response = await plannerClient.get(`/product-model-versions/${versionId}/lines`)
+  return response.data
+}
+
+export const uploadProductModelVersionImage = async (versionId: string, file: File): Promise<ModelVersionImagesResponse> => {
+  const fd = new FormData()
+  fd.append('file', file)
+  const response = await plannerClient.post(`/product-model-versions/${versionId}/images`, fd, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
   return response.data
 }
 

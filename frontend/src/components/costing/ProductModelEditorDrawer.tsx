@@ -26,7 +26,7 @@ import {
   Typography,
   Upload,
 } from 'antd'
-import type { UploadFile } from 'antd'
+// import type { UploadFile } from 'antd'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import {
@@ -74,6 +74,7 @@ import {
   validateProductModelRecognitionKeywords,
   fetchVirtualMaterial,
   fetchVirtualMaterials,
+  uploadProductModelVersionImage,
 } from '@/services/planner'
 import type {
   Material,
@@ -90,6 +91,7 @@ import type {
   ProductModelLinesResponse as ProductModelLinesResponseModel,
   VirtualMaterial,
   VirtualMaterialQueryParams,
+  ModelVersionImageRead,
 } from '@/types/planner'
 
 const { Text } = Typography
@@ -352,9 +354,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   const [tuningNotesDraft, setTuningNotesDraft] = useState<string>('')
 
   const [skuBindCode, setSkuBindCode] = useState('')
-  const [sampleImages, setSampleImages] = useState<string[]>([])
-  const [imagePreviewOpen, setImagePreviewOpen] = useState(false)
-  const [imagePreviewUrl, setImagePreviewUrl] = useState<string>('')
+  // 版本图片：每个版本独立上传/展示（存储在 version.metadata_json.version_images）
+  const [versionImages, setVersionImages] = useState<ModelVersionImageRead[]>([])
+  const [versionImageCursor, setVersionImageCursor] = useState(0)
+  const [uploadingVersionImage, setUploadingVersionImage] = useState(false)
 
   // 工序描述：用于“计量方式”右侧提示（从工序库拉取）
   const processIdsForDesc = useMemo(() => {
@@ -732,7 +735,6 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       sample_owner: meta.sample_owner ?? '',
       ...(entryContext === 'sample' ? { sample_code: deriveSampleCodeFromModel(m) } : {}),
     })
-    setSampleImages(Array.isArray(meta.sample_images) ? meta.sample_images.filter(Boolean) : [])
 
     // modules（左侧工艺模块栏）
     setModules(
@@ -750,6 +752,34 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     )
 
   }, [modelQuery.data, form])
+
+  // hydrate version images from selectedVersion.metadata_json.version_images
+  useEffect(() => {
+    if (!open) return
+    if (!selectedVersionId || !selectedVersion) {
+      setVersionImages([])
+      setVersionImageCursor(0)
+      return
+    }
+    const meta: any = (selectedVersion as any)?.metadata_json ?? {}
+    const items = meta?.version_images
+    if (!Array.isArray(items)) {
+      setVersionImages([])
+      setVersionImageCursor(0)
+      return
+    }
+    const list: ModelVersionImageRead[] = items.map((it: any, idx: number) => ({
+      index: idx,
+      url: `/api/planner/product-model-versions/${selectedVersionId}/images/${idx}`,
+      filename: typeof it?.filename === 'string' ? it.filename : null,
+      content_type: typeof it?.content_type === 'string' ? it.content_type : null,
+    }))
+    setVersionImages(list)
+    setVersionImageCursor((cur) => {
+      if (list.length === 0) return 0
+      return Math.min(Math.max(0, cur), list.length - 1)
+    })
+  }, [open, selectedVersionId, selectedVersion])
 
   useEffect(() => {
     if (!versionsQuery.data) return
@@ -1716,7 +1746,6 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
         ...existingMeta,
         ...(entryContext === 'sample' ? { sample_owner: String(values.sample_owner ?? '').trim() } : {}),
         ...(entryContext === 'sample' ? { sample_code: String(values.sample_code ?? '').trim() } : {}),
-        sample_images: sampleImages,
       }
       await updateProductModel(modelId, {
         model_name: values.model_name,
@@ -2102,57 +2131,34 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                   <Form.Item label="描述" name="description">
                     <Input.TextArea rows={3} placeholder="描述/备注（可选）" allowClear />
                   </Form.Item>
-                  {entryContext === 'sample' ? (
-                    <Form.Item label="打样图片">
-                      <Upload
-                        accept="image/*"
-                        listType="picture-card"
-                        fileList={sampleImages.map((url, idx) => ({
-                          uid: `img-${idx}`,
-                          name: `image-${idx + 1}`,
-                          status: 'done',
-                          url,
-                        })) as UploadFile[]}
-                        beforeUpload={async (file) => {
-                          const f = file as File
-                          if (f.size > 2 * 1024 * 1024) {
-                            message.error('图片过大：请控制在 2MB 内')
-                            return Upload.LIST_IGNORE
-                          }
-                          const toDataUrl = (ff: File) =>
-                            new Promise<string>((resolve, reject) => {
-                              const reader = new FileReader()
-                              reader.onload = () => resolve(String(reader.result || ''))
-                              reader.onerror = () => reject(new Error('读取失败'))
-                              reader.readAsDataURL(ff)
-                            })
-                          try {
-                            const dataUrl = await toDataUrl(f)
-                            setSampleImages((prev) => [...prev, dataUrl])
-                          } catch {
-                            message.error('图片读取失败')
-                          }
-                          return false
-                        }}
-                        onRemove={(file) => {
-                          const url = (file as any)?.url
-                          setSampleImages((prev) => prev.filter((x) => x !== url))
-                          return true
-                        }}
-                        onPreview={(file) => {
-                          const url = (file as any)?.url
-                          if (!url) return
-                          setImagePreviewUrl(url)
-                          setImagePreviewOpen(true)
-                        }}
-                      >
-                        {sampleImages.length >= 10 ? null : <div>上传</div>}
-                      </Upload>
-                      <Text type="secondary" style={{ display: 'block' }}>
-                        当前为最小可用上传：以 dataURL 形式保存到 metadata_json.sample_images（后续可替换为对象存储/文件服务）。
-                      </Text>
-                    </Form.Item>
-                  ) : null}
+                  <Form.Item label="版本图片">
+                    {!selectedVersionId ? (
+                      <Text type="secondary">请先选择版本；上传入口在“清单编辑 → 工艺模块”下方。</Text>
+                    ) : versionImages.length === 0 ? (
+                      <Text type="secondary">暂无图片（请到“清单编辑 → 工艺模块”上传）。</Text>
+                    ) : (
+                      <Image.PreviewGroup>
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          {versionImages.map((img, idx) => (
+                            <Image
+                              key={img.url}
+                              src={img.url}
+                              width={84}
+                              height={84}
+                              style={{
+                                objectFit: 'cover',
+                                borderRadius: 6,
+                                border: idx === versionImageCursor ? '2px solid #1677ff' : '1px solid #f0f0f0',
+                                cursor: 'pointer',
+                              }}
+                              preview={{ mask: '预览' }}
+                              onClick={() => setVersionImageCursor(idx)}
+                            />
+                          ))}
+                        </div>
+                      </Image.PreviewGroup>
+                    )}
+                  </Form.Item>
                 </Form>
               </Card>
             ),
@@ -2943,6 +2949,96 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                           },
                         ]}
                       />
+
+                      {/* 版本图片上传入口（每个版本独立） */}
+                      <div style={{ marginTop: 12 }}>
+                        <div
+                          style={{
+                            width: '100%',
+                            aspectRatio: '1 / 1',
+                            border: '1px dashed #d9d9d9',
+                            borderRadius: 8,
+                            background: '#fafafa',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            overflow: 'hidden',
+                          }}
+                        >
+                          {versionImages.length > 0 ? (
+                            <Image
+                              src={versionImages[Math.min(versionImageCursor, versionImages.length - 1)]?.url}
+                              alt="version"
+                              preview
+                              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                            />
+                          ) : (
+                            <Text type="secondary">暂无图片</Text>
+                          )}
+                        </div>
+                        <div style={{ marginTop: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <Space size={6}>
+                            <Button
+                              size="small"
+                              disabled={versionImages.length === 0 || versionImageCursor <= 0}
+                              onClick={() => setVersionImageCursor((c) => Math.max(0, c - 1))}
+                            >
+                              上一张
+                            </Button>
+                            <Button
+                              size="small"
+                              disabled={versionImages.length === 0 || versionImageCursor >= versionImages.length - 1}
+                              onClick={() => setVersionImageCursor((c) => Math.min(versionImages.length - 1, c + 1))}
+                            >
+                              下一张
+                            </Button>
+                            <Text type="secondary" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                              {versionImages.length === 0 ? '-' : `${versionImageCursor + 1}/${versionImages.length}`}
+                            </Text>
+                          </Space>
+
+                          <Upload
+                            accept="image/*"
+                            showUploadList={false}
+                            disabled={!selectedVersionId || !canEditSelectedVersion || uploadingVersionImage}
+                            beforeUpload={(f) => {
+                              if (!selectedVersionId) {
+                                message.warning('请先选择版本')
+                                return Upload.LIST_IGNORE
+                              }
+                              const file = f as File
+                              if (file.size > 10 * 1024 * 1024) {
+                                message.error('图片过大：请控制在 10MB 内')
+                                return Upload.LIST_IGNORE
+                              }
+                              return true
+                            }}
+                            customRequest={async (opt) => {
+                              const vid = String(selectedVersionId ?? '').trim()
+                              if (!vid) return
+                              try {
+                                setUploadingVersionImage(true)
+                                const file = opt.file as File
+                                const res = await uploadProductModelVersionImage(vid, file)
+                                setVersionImages(res.images ?? [])
+                                setVersionImageCursor(Math.max(0, (res.images?.length ?? 1) - 1))
+                                await versionsQuery.refetch()
+                                message.success('上传成功')
+                                opt.onSuccess?.({}, new XMLHttpRequest())
+                              } catch (err: any) {
+                                message.error(err?.response?.data?.detail ?? err?.message ?? '上传失败')
+                                opt.onError?.(err)
+                              } finally {
+                                setUploadingVersionImage(false)
+                              }
+                            }}
+                          >
+                            <Button size="small" loading={uploadingVersionImage}>
+                              上传
+                            </Button>
+                          </Upload>
+                        </div>
+                      </div>
                     </Card>
                   </Col>
 
@@ -4019,10 +4115,6 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
             <Text code>metadata_json.ui_label</Text> 并在前端优先展示。
           </Text>
         </Space>
-      </Modal>
-
-      <Modal open={imagePreviewOpen} footer={null} onCancel={() => setImagePreviewOpen(false)} width={860} destroyOnClose>
-        <img alt="preview" style={{ width: '100%' }} src={imagePreviewUrl} />
       </Modal>
 
       {/* Tuning panel (material/process) */}

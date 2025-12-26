@@ -499,6 +499,16 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     [desiredKind, versions],
   )
 
+  const selectedVersion = useMemo(() => {
+    const sid = String(selectedVersionId ?? '').trim()
+    if (!sid) return null
+    return ((filteredVersions as any[]) ?? []).find((v: any) => String(v?.id ?? '').trim() === sid) ?? null
+  }, [filteredVersions, selectedVersionId])
+
+  const selectedVersionStatus = String((selectedVersion as any)?.version_status ?? '').trim()
+  // 规则：标准版本仅 draft 允许修改；已发布/已归档禁止修改
+  const canEditSelectedVersion = entryContext === 'sample' ? true : selectedVersionStatus === 'draft'
+
   const hasDerivedStandardFromSample = (sampleVersionId: string): boolean => {
     if (!sampleVersionId) return false
     return (versions ?? []).some((v: any) => {
@@ -1222,7 +1232,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
         notes: tuningNotesDraft,
         fixed_quantity: fixedQty,
         coverage_ratio: cov,
-        loss_rate: entryContext === 'sample' ? loss : row.loss_rate,
+        loss_rate: entryContext === 'sample' || canEditSelectedVersion ? loss : row.loss_rate,
         sample_used_quantity: sampleUsed,
         standard_used_quantity: standardUsed,
         metadata_json: {
@@ -1659,6 +1669,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       message.warning('请先选择版本')
       return
     }
+    if (!canEditSelectedVersion) {
+      message.error('该版本不是草稿（draft），不允许修改/保存。请先“复制版本”生成草稿后再编辑。')
+      return
+    }
 
     const badMatIdx = materials.findIndex((m: any) => !String(m.material_ref_id || '').trim())
     if (badMatIdx >= 0) {
@@ -1934,7 +1948,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
           <Button onClick={() => saveBasicMutation.mutate()} loading={saveBasicMutation.isPending} disabled={!modelId}>
             保存基础信息
           </Button>
-          <Button type="primary" onClick={runSaveLines} loading={savingLines} disabled={!selectedVersionId}>
+          <Button type="primary" onClick={runSaveLines} loading={savingLines} disabled={!selectedVersionId || !canEditSelectedVersion}>
             保存清单
           </Button>
         </Space>
@@ -4042,26 +4056,31 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                   />
                 </Col>
                 <Col span={8}>
-                  {entryContext === 'sample' ? (
-                    <Tooltip title="用于上浮本品用量：×(1+耗损/100)。该值会随推导带入标准版本（也会影响最终BOM）">
-                    <InputNumber
-                      min={0}
-                      max={100}
-                      precision={2}
-                      value={tuningLossRatePercent}
-                      onChange={(v) => setTuningLossRatePercent(Number(v ?? 0))}
-                      addonBefore={addonLabel('耗损%')}
-                      style={{ width: '100%' }}
-                    />
-                  </Tooltip>
-                  ) : (
-                    <Tooltip title="标准口径：耗损%建议在打样口径里调整并重新推导到标准。此处仅展示当前值。">
-                      <Input
-                        value={`${Number(tuningLossRatePercent ?? 0).toFixed(2)}%`}
-                        readOnly
-                        addonBefore={addonLabel('耗损%(只读)')}
+                  {entryContext === 'sample' || canEditSelectedVersion ? (
+                    <Tooltip
+                      title={
+                        entryContext === 'sample'
+                          ? '用于上浮本品用量：×(1+耗损/100)。该值会随推导带入标准版本（也会影响最终BOM）'
+                          : '标准版本（draft）允许微调耗损%；已发布版本禁止修改。'
+                      }
+                    >
+                      <InputNumber
+                        min={0}
+                        max={100}
+                        precision={2}
+                        value={tuningLossRatePercent}
+                        onChange={(v) => setTuningLossRatePercent(Number(v ?? 0))}
+                        addonBefore={addonLabel('耗损%')}
+                        style={{ width: '100%' }}
+                        disabled={entryContext !== 'sample' && !canEditSelectedVersion}
                       />
                     </Tooltip>
+                  ) : (
+                    <Input
+                      value={`${Number(tuningLossRatePercent ?? 0).toFixed(2)}%`}
+                      readOnly
+                      addonBefore={addonLabel('耗损%(只读)')}
+                    />
                   )}
                 </Col>
               </Row>

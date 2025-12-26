@@ -187,6 +187,17 @@ def _attach_costing(
             except Exception:  # noqa: BLE001
                 qty = None
 
+        # Apply line-level loss_rate for costing.
+        # 口径：computed_quantity 为“净用量（未计损耗）”；成本按“含损耗用量”计算，
+        # 与扣库（inventory）一致。
+        if qty is not None:
+            try:
+                loss_rate = Decimal(str(line.get("loss_rate") or 0))
+            except Exception:  # noqa: BLE001
+                loss_rate = Decimal("0")
+            if loss_rate > 0:
+                qty = qty * (Decimal("1") + (loss_rate / Decimal("100")))
+
         line_cost: Optional[Decimal] = None
         if price is not None and qty is not None:
             try:
@@ -431,6 +442,11 @@ def _build_inventory_lines(db: Session, final_lines: List[Dict[str, Any]]) -> Di
     for line in final_lines:
         kind = str(line.get("material_kind") or "real")
         qty = _d(line.get("computed_quantity"), Decimal("0"))
+        # Apply line-level loss_rate (0-100%) for inventory deduction.
+        # 口径：computed_quantity 为“净用量”；扣库应按“含损耗用量”扣。
+        line_loss = _d(line.get("loss_rate"), Decimal("0"))
+        if line_loss > 0:
+            qty = qty * (Decimal("1") + (line_loss / Decimal("100")))
         if qty <= 0:
             continue
 

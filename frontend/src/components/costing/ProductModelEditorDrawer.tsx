@@ -3195,8 +3195,21 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                             },
                           },
                           {
-                            title: '小计',
-                            width: 80,
+                            title: '扣库用量',
+                            width: 110,
+                            render: (_: any, r: any) => {
+                              const qty = Number(r.sample_used_quantity ?? 0)
+                              const lossRatePct = Number(r.loss_rate ?? 0)
+                              if (Number.isFinite(qty) && Number.isFinite(lossRatePct)) {
+                                const used = qty * (1 + Math.max(0, lossRatePct) / 100)
+                                return used.toFixed(2)
+                              }
+                              return '-'
+                            },
+                          },
+                          {
+                            title: '扣库小计',
+                            width: 90,
                             render: (_: any, r: any) => {
                               const meta = (r.metadata_json as any) ?? {}
                               const unitPrice = meta.bom_unit_price != null ? Number(meta.bom_unit_price) : NaN

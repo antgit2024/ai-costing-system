@@ -4,14 +4,7 @@ import type { ColumnsType } from 'antd/es/table'
 import { useQuery } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
 
-import {
-  createProductModel,
-  createProductModelVersion,
-  deleteProductModel,
-  fetchProductModelVersions,
-  fetchProductModels,
-  previewProductModel,
-} from '@/services/planner'
+import { createProductModel, deleteProductModel, fetchProductModelVersions, fetchProductModels, previewProductModel } from '@/services/planner'
 import type { ProductModel } from '@/types/planner'
 import ProductModelEditorDrawer from '@/components/costing/ProductModelEditorDrawer'
 
@@ -265,11 +258,14 @@ export default function StandardModelsPage() {
         model_name: name,
         metadata_json: { created_from: 'ui', entry_context: 'standard', note: 'direct_create_standard' },
       })
-      const version = await createProductModelVersion(model.id, { version_kind: 'standard', metadata_json: {} } as any)
+      const draftId = String((model as any)?.metadata_json?.current_draft_version_id ?? '').trim()
+      if (!draftId) {
+        throw new Error('创建失败：未返回 current_draft_version_id')
+      }
       message.success(`已创建标准模型：${model.model_code}`)
       setCreateModalOpen(false)
       setEditingModelId(model.id)
-      setEditingVersionId(version.id)
+      setEditingVersionId(draftId)
       setEditorOpen(true)
       await listQuery.refetch()
     } catch (err: any) {

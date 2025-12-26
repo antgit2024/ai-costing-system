@@ -119,6 +119,7 @@ def test_clone_model_from_standard_version_creates_new_model_and_copies_lines_an
     assert r.status_code == 200, r.text
     meta = r.json().get("metadata_json") or {}
     assert "recognition_keywords" not in meta or not meta.get("recognition_keywords")
+    assert meta.get("entry_context") == "standard"
 
     # 6) Verify lines copied
     new_vid = data["new_standard_version_id"]
@@ -128,6 +129,12 @@ def test_clone_model_from_standard_version_creates_new_model_and_copies_lines_an
     assert len(new_lines["materials"]) == 1
     assert len(new_lines["processes"]) == 1
     assert str(new_lines["materials"][0]["material_ref_id"]) == "MAT-1"
+
+    # Verify no extra sample versions are created for cloned standard models
+    r = client.get(f"/api/planner/product-models/{new_model_id}/versions")
+    assert r.status_code == 200, r.text
+    kinds = {str(v.get("version_kind")) for v in r.json()}
+    assert "sample" not in kinds
 
     # 7) Verify variants copied and base_line_id remapped
     r = client.get(f"/api/planner/product-model-versions/{new_vid}/line-variants")

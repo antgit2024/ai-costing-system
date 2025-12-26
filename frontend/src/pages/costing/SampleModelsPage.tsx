@@ -39,6 +39,7 @@ export default function SampleModelsPage() {
       const entry = String(meta?.entry_context ?? '').trim()
       const sampleCnt = Number(m?.sample_version_count ?? 0)
       // 打样列表：只展示“打样入口创建/维护”的模型，避免标准模型克隆/新建混进来
+      if (entry === 'standard') return false
       return entry === 'sample' || sampleCnt > 0
     })
   }, [listQuery.data])

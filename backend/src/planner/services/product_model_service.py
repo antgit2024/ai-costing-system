@@ -1467,8 +1467,12 @@ def create_model(
     if modules is not None:
         _replace_modules(db, model, modules)
     # Create an initial draft version so UI can immediately work in version dimension.
-    # Keep backward compatibility: model-level endpoints still operate on model ledger.
-    v = create_model_version(db, model=model, version_kind="sample", metadata=None, commit=False)
+    # Default is sample for backward compatibility, but if entry_context indicates standard,
+    # create a standard draft as the initial version to avoid "standard model shows up in sample list".
+    meta0 = model.metadata_json or {}
+    entry_ctx = str(meta0.get("entry_context") or "").strip().lower()
+    initial_kind = "standard" if entry_ctx == "standard" else "sample"
+    v = create_model_version(db, model=model, version_kind=initial_kind, metadata=None, commit=False)
     meta = model.metadata_json or {}
     meta["current_draft_version_id"] = v.id
     model.metadata_json = meta

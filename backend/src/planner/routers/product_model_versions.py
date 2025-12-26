@@ -383,6 +383,8 @@ def clone_model_from_version(
     # Cloning must NOT carry recognition keywords because they are globally unique.
     # New model should start with empty keywords and let user configure explicitly.
     src_model_meta.pop("recognition_keywords", None)
+    # Ensure this cloned model is treated as "standard entry" (affects initial version kind & list filters)
+    src_model_meta["entry_context"] = "standard"
 
     new_name = (payload.model_name or "").strip() or f"{src_model.model_name}（克隆）"
 
@@ -396,7 +398,7 @@ def clone_model_from_version(
         for link in product_model_service.list_model_modules(db, src_model.id)
     ]
 
-    # Create a new model (auto model_code) and then a new STANDARD draft version.
+    # Create a new model (auto model_code). Initial draft version kind depends on entry_context.
     new_model = product_model_service.create_model(
         db,
         model_code=None,
@@ -416,13 +418,25 @@ def clone_model_from_version(
 
     # Copy version metadata as a base (keeps placeholder_mappings/derive_template etc if stored there).
     src_vmeta = dict(src_version.metadata_json or {})
-    new_std_version = product_model_service.create_model_version(
-        db,
-        model=new_model,
-        version_kind="standard",
-        metadata=src_vmeta,
-        commit=True,
-    )
+    # Prefer using the auto-created draft version (if it is already standard); otherwise create one.
+    draft_vid = str((new_model.metadata_json or {}).get("current_draft_version_id") or "").strip()
+    draft_v = db.get(models.ProductModelVersion, draft_vid) if draft_vid else None
+    if draft_v and str(draft_v.version_kind or "").strip().lower() == "standard":
+        # Merge source version metadata into draft version metadata (keep existing sample/standard spec keys)
+        merged = dict(draft_v.metadata_json or {})
+        merged.update(src_vmeta)
+        draft_v.metadata_json = merged
+        db.commit()
+        db.refresh(draft_v)
+        new_std_version = draft_v
+    else:
+        new_std_version = product_model_service.create_model_version(
+            db,
+            model=new_model,
+            version_kind="standard",
+            metadata=src_vmeta,
+            commit=True,
+        )
 
     # Copy lines
     sample, standard = product_model_service._extract_sample_and_standard_from_version(src_model, src_version)  # noqa: SLF001

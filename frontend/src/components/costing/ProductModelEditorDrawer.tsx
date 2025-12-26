@@ -3037,7 +3037,34 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                   value={r.sample_used_quantity}
                                   onChange={(v) => {
                                     const next = (materials as any[]).slice()
-                                    next[idx] = { ...next[idx], sample_used_quantity: Number(v ?? 0) }
+                                    const newUsed = Number(v ?? 0)
+                                    const curRow = next[idx] ?? {}
+                                    const metaCur = ((curRow?.metadata_json as any) ?? {}) as any
+                                    const method = (curRow.calculation_method as any) ?? 'count'
+                                    const fixedQty = Number(curRow.fixed_quantity ?? 0)
+                                    const cov = Number(curRow.coverage_ratio ?? 1)
+                                    const mqSample = Math.max(0, measureQty(method, sampleSpec, metaCur))
+                                    const mqStandard = Math.max(0, measureQty(method, standardSpec, metaCur))
+                                    const perCount = Math.max(0, Number(metaCur.fixed_per_count_quantity ?? 0)) * Number(sampleSpec.quantity || 1)
+                                    const stdPerCount =
+                                      Math.max(0, Number(metaCur.fixed_per_count_quantity ?? 0)) * Number(standardSpec.quantity || 1)
+                                    // 关键：用户手工改“本品用量”时，同步反推 β(base_quantity)，否则调参面板仍会按旧 β(例如 0.1) 重算回去。
+                                    const denom = mqSample * Math.max(0, cov)
+                                    const baseNewRaw = denom > 0 ? (newUsed - fixedQty - perCount) / denom : Number(curRow.base_quantity ?? 0)
+                                    const baseNew = Number.isFinite(baseNewRaw) ? Math.max(0, baseNewRaw) : Number(curRow.base_quantity ?? 0)
+                                    const standardUsed = fixedQty + stdPerCount + mqStandard * baseNew * cov
+
+                                    next[idx] = {
+                                      ...curRow,
+                                      base_quantity: baseNew,
+                                      sample_used_quantity: newUsed,
+                                      standard_used_quantity: standardUsed,
+                                      metadata_json: {
+                                        ...metaCur,
+                                        sample_used_quantity: newUsed,
+                                        standard_used_quantity: standardUsed,
+                                      },
+                                    }
                                     // 标记该行“本品用量”为用户手工调整过（供调参面板做 delta 叠加，避免回滚旧基数）
                                     const key = String(next[idx]?.id ?? `mat-${idx}`)
                                     manualMaterialUsedQtyTouchedRef.current.add(key)

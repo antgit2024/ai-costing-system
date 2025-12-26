@@ -188,6 +188,52 @@ const hexToRgba = (hex: string, alpha: number) => {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`
 }
 
+const compressImageToTarget = async (file: File, targetBytes: number): Promise<File> => {
+  try {
+    // Only compress common image types; leave others as-is.
+    if (!file.type.startsWith('image/')) return file
+
+    const inputBytes = file.size
+    if (inputBytes <= targetBytes) return file
+
+    const arrayBuf = await file.arrayBuffer()
+    const blob = new Blob([arrayBuf], { type: file.type })
+    const img = await createImageBitmap(blob)
+
+    // Start with a gentle downscale based on size ratio, then iteratively reduce quality/scale.
+    const ratio = Math.sqrt(targetBytes / inputBytes)
+    let w = Math.max(320, Math.floor(img.width * Math.min(1, ratio)))
+    let h = Math.max(320, Math.floor(img.height * Math.min(1, ratio)))
+
+    const canvas = document.createElement('canvas')
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return file
+
+    const toJpegBlob = (quality: number) =>
+      new Promise<Blob | null>((resolve) => canvas.toBlob((b) => resolve(b), 'image/jpeg', quality))
+
+    // loop: adjust size and quality to get under targetBytes
+    let quality = 0.85
+    for (let i = 0; i < 8; i += 1) {
+      canvas.width = w
+      canvas.height = h
+      ctx.clearRect(0, 0, w, h)
+      ctx.drawImage(img, 0, 0, w, h)
+      const out = await toJpegBlob(quality)
+      if (out && out.size <= targetBytes) {
+        return new File([out], file.name.replace(/\.\w+$/, '.jpg'), { type: 'image/jpeg' })
+      }
+      // reduce quality then downscale a bit more
+      quality = Math.max(0.55, quality - 0.08)
+      w = Math.max(320, Math.floor(w * 0.9))
+      h = Math.max(320, Math.floor(h * 0.9))
+    }
+  } catch {
+    // ignore and fallback to original file
+  }
+  return file
+}
+
 const getModuleColor = (moduleKey?: string | null) => {
   const key = String(moduleKey ?? 'model')
   const idx = hashToIndex(key, MODULE_COLOR_PALETTE.length)
@@ -3011,6 +3057,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                 message.error('图片过大：请控制在 10MB 内')
                                 return Upload.LIST_IGNORE
                               }
+                              // nginx 常见默认 1MB 限制；为避免 413，>1MB 会在 customRequest 里自动压缩
+                              if (file.size > 1024 * 1024) {
+                                message.info('图片较大：将自动压缩以避免上传 413（后续可通过 Nginx 配置放开到 10MB）')
+                              }
                               return true
                             }}
                             customRequest={async (opt) => {
@@ -3018,7 +3068,9 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                               if (!vid) return
                               try {
                                 setUploadingVersionImage(true)
-                                const file = opt.file as File
+                                const file0 = opt.file as File
+                                // Try to keep under ~900KB to survive default nginx limits with multipart overhead
+                                const file = await compressImageToTarget(file0, 900 * 1024)
                                 const res = await uploadProductModelVersionImage(vid, file)
                                 setVersionImages(res.images ?? [])
                                 setVersionImageCursor(Math.max(0, (res.images?.length ?? 1) - 1))

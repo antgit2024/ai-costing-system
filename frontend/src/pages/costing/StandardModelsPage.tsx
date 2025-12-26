@@ -209,8 +209,12 @@ export default function StandardModelsPage() {
           <Button loading={Boolean(auditingModelIds[r.id])} onClick={() => handleRealtimeAudit(r)}>
             实时核价
           </Button>
-          <Tooltip title="当前后端规则：只要存在 standard 版本（哪怕未发布），为了避免 SKU 绑定/历史口径断裂，不允许删除。后续如需放开需改后端规则。">
-            <Button danger disabled={Number(r.standard_version_count ?? 0) > 0} onClick={() => handleDeleteModel(r)}>
+          <Tooltip title="删除为“归档删除”。规则：存在已发布标准版本或存在SKU绑定则不允许删除；否则允许删除。">
+            <Button
+              danger
+              disabled={Boolean((r as any).current_published_standard_version_id)}
+              onClick={() => handleDeleteModel(r)}
+            >
               删除
             </Button>
           </Tooltip>

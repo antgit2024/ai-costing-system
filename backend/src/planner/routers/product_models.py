@@ -595,24 +595,57 @@ def delete_product_model(model_id: str, db: Session = Depends(get_db)):
     Soft delete (archive) a product model.
 
     Rule:
-    - If the model already has any non-archived standard versions, deletion is disallowed
-      to avoid breaking SKU bindings / published standard usage.
+    - If the model has any published standard versions, deletion is disallowed.
+    - If any SKU is actively bound to any standard version of this model, deletion is disallowed.
+    - Otherwise, allow soft-delete (archive) the model and archive its versions.
     """
     model = _get_model_or_404(model_id, db)
 
-    std_cnt = (
+    published_std_cnt = (
         db.query(models.ProductModelVersion)
+        .filter(
+            models.ProductModelVersion.model_id == model.id,
+            models.ProductModelVersion.version_kind == "standard",
+            models.ProductModelVersion.version_status == "published",
+            models.ProductModelVersion.is_archived.is_(False),
+        )
+        .count()
+    )
+    if published_std_cnt > 0:
+        raise HTTPException(status_code=400, detail="该模型存在已发布标准版本（published），不允许删除")
+
+    # Block if any active SKU binding exists for this model's standard versions.
+    std_version_ids = [
+        x[0]
+        for x in db.query(models.ProductModelVersion.id)
         .filter(
             models.ProductModelVersion.model_id == model.id,
             models.ProductModelVersion.version_kind == "standard",
             models.ProductModelVersion.is_archived.is_(False),
         )
-        .count()
-    )
-    if std_cnt > 0:
-        raise HTTPException(status_code=400, detail="该打样模型已生成标准版本（standard），不允许删除")
+        .all()
+        if x and x[0]
+    ]
+    if std_version_ids:
+        bound_cnt = (
+            db.query(models.SkuModelVersionMapping)
+            .filter(
+                models.SkuModelVersionMapping.model_version_id.in_(std_version_ids),
+                models.SkuModelVersionMapping.is_archived.is_(False),
+                models.SkuModelVersionMapping.is_active.is_(True),
+            )
+            .count()
+        )
+        if bound_cnt > 0:
+            raise HTTPException(status_code=400, detail="该模型存在SKU绑定关系（active），不允许删除")
 
+    # Archive model and its versions
     model.is_archived = True
+    (
+        db.query(models.ProductModelVersion)
+        .filter(models.ProductModelVersion.model_id == model.id, models.ProductModelVersion.is_archived.is_(False))
+        .update({"is_archived": True}, synchronize_session=False)
+    )
     audit_service.log_audit_event(
         db,
         target_type="product_model",

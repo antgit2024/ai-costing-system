@@ -1002,6 +1002,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   // 尺寸是否由用户交互修改（而非接口 hydrate / 版本切换）：
   // 只在用户确实改了尺寸时才重算，避免“打开抽屉/切版本时把已保存的本品用量覆盖成 0”。
   const sampleSpecTouchedRef = useRef(false)
+  // 记录：用户是否手工改过“本品用量”（避免调参面板把手工值覆盖回旧公式结果）
+  const manualMaterialUsedQtyTouchedRef = useRef<Set<string>>(new Set())
 
   // 当用户修改“打样尺寸（实际尺寸）”时：按计价方式自动重算“本品用量/本品用时”（基数不变）
   // 说明：该行为与旧抽屉一致，会覆盖依赖尺寸口径的 computed 字段（sample_used_quantity / sample_minutes）。
@@ -1169,8 +1171,28 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       const mqStandard = Math.max(0, measureQty(method, standardSpec, metaNext))
       const perCount = Math.max(0, Number(metaNext.fixed_per_count_quantity ?? 0)) * Number(sampleSpec.quantity || 1)
       const stdPerCount = Math.max(0, Number(metaNext.fixed_per_count_quantity ?? 0)) * Number(standardSpec.quantity || 1)
-      const sampleUsed = fixedQty + perCount + mqSample * baseQty * cov
-      const standardUsed = fixedQty + stdPerCount + mqStandard * baseQty * cov
+
+      // 若用户在表格里手工改过“本品用量”，调参面板改“工艺修正”应以当前值为基准叠加变化量，
+      // 而不是回滚到旧基数的公式结果。
+      const rowKey = String(row.id ?? `mat-${idx}`)
+      const manualTouched = manualMaterialUsedQtyTouchedRef.current.has(rowKey)
+      const oldFixed = Number(row.fixed_quantity ?? 0)
+      const oldCov = Number(row.coverage_ratio ?? 1)
+      const oldMqSample = Math.max(0, measureQty(method, sampleSpec, metaCur))
+      const oldMqStandard = Math.max(0, measureQty(method, standardSpec, metaCur))
+      const oldPerCount = Math.max(0, Number(metaCur.fixed_per_count_quantity ?? 0)) * Number(sampleSpec.quantity || 1)
+      const oldStdPerCount = Math.max(0, Number(metaCur.fixed_per_count_quantity ?? 0)) * Number(standardSpec.quantity || 1)
+      const oldSampleComputed = oldFixed + oldPerCount + oldMqSample * baseQty * oldCov
+      const oldStandardComputed = oldFixed + oldStdPerCount + oldMqStandard * baseQty * oldCov
+      const newSampleComputed = fixedQty + perCount + mqSample * baseQty * cov
+      const newStandardComputed = fixedQty + stdPerCount + mqStandard * baseQty * cov
+
+      const curSampleUsed = Number(row.sample_used_quantity ?? 0)
+      const curStandardUsed = Number(row.standard_used_quantity ?? 0)
+      const sampleUsed = manualTouched ? curSampleUsed + (newSampleComputed - oldSampleComputed) : newSampleComputed
+      const standardUsed = manualTouched
+        ? curStandardUsed + (newStandardComputed - oldStandardComputed)
+        : newStandardComputed
 
       // 推导模板（后端：仅从 sample 版本行读取 metadata_json.derive_template）
       const deriveTemplate =
@@ -3020,6 +3042,9 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                   onChange={(v) => {
                                     const next = (materials as any[]).slice()
                                     next[idx] = { ...next[idx], sample_used_quantity: Number(v ?? 0) }
+                                    // 标记该行“本品用量”为用户手工调整过（供调参面板做 delta 叠加，避免回滚旧基数）
+                                    const key = String(next[idx]?.id ?? `mat-${idx}`)
+                                    manualMaterialUsedQtyTouchedRef.current.add(key)
                                     setMaterials(next as any)
                                   }}
                                   style={{ width: '100%' }}

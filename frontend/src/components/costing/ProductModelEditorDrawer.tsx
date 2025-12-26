@@ -1004,6 +1004,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   const sampleSpecTouchedRef = useRef(false)
   // 记录：用户是否手工改过“本品用量”（避免调参面板把手工值覆盖回旧公式结果）
   const manualMaterialUsedQtyTouchedRef = useRef<Set<string>>(new Set())
+  // 记录：用户手工输入的最新“本品用量”（解决：刚输入后立刻点调参面板时，读取到旧值的问题）
+  const manualMaterialUsedQtyValueRef = useRef<Map<string, number>>(new Map())
 
   // 当用户修改“打样尺寸（实际尺寸）”时：按计价方式自动重算“本品用量/本品用时”（基数不变）
   // 说明：该行为与旧抽屉一致，会覆盖依赖尺寸口径的 computed 字段（sample_used_quantity / sample_minutes）。
@@ -1187,7 +1189,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       const newSampleComputed = fixedQty + perCount + mqSample * baseQty * cov
       const newStandardComputed = fixedQty + stdPerCount + mqStandard * baseQty * cov
 
-      const curSampleUsed = Number(row.sample_used_quantity ?? 0)
+      const curSampleUsed =
+        manualMaterialUsedQtyValueRef.current.get(rowKey) != null
+          ? Number(manualMaterialUsedQtyValueRef.current.get(rowKey))
+          : Number(row.sample_used_quantity ?? 0)
       const curStandardUsed = Number(row.standard_used_quantity ?? 0)
       const sampleUsed = manualTouched ? curSampleUsed + (newSampleComputed - oldSampleComputed) : newSampleComputed
       const standardUsed = manualTouched
@@ -2695,14 +2700,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                   </Space>
                 </Card>
 
-                {entryContext === 'standard' ? (
-                  <Alert
-                    type="warning"
-                    showIcon
-                    message="标准模型编辑口径"
-                    description="标准模型固定 100×100×1（cm，1㎡）。编辑时请以该口径填写基数/分钟等参数。"
-                  />
-                ) : null}
+                {entryContext === 'standard' ? null : null}
 
                 <Card
                   size="small"
@@ -2850,9 +2848,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                     <Tag color="orange">制造费(30%)：{summary.overhead_cost.toFixed(2)}</Tag>
                     <Tag color="green">合计：{summary.total_cost.toFixed(2)}</Tag>
                   </Space>
-                  <Text type="secondary" style={{ display: 'block', marginTop: 8 }}>
-                    说明：汇总按当前编辑态即时计算；“同步物料价格”只刷新 BOM 单价快照，需点“保存清单”才会固化到该版本。
-                  </Text>
+                  {null}
                 </Card>
 
                 <Row gutter={12}>
@@ -3045,6 +3041,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                     // 标记该行“本品用量”为用户手工调整过（供调参面板做 delta 叠加，避免回滚旧基数）
                                     const key = String(next[idx]?.id ?? `mat-${idx}`)
                                     manualMaterialUsedQtyTouchedRef.current.add(key)
+                                    manualMaterialUsedQtyValueRef.current.set(key, Number(v ?? 0))
                                     setMaterials(next as any)
                                   }}
                                   style={{ width: '100%' }}

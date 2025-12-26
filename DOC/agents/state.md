@@ -5,6 +5,7 @@
 - **最近校对（北京时间 GMT+8）**：2025-12-25 14:40（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-25 16:40（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-25 17:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
+- **最近校对（北京时间 GMT+8）**：2025-12-26 10:20（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **分支**：`backup/20251214-1535`
 
 - **本轮闭环产物（Planner-Optimization / 方案评审稿）**：
@@ -35,6 +36,24 @@
     - 避免“打开抽屉/切版本”时尺寸联动重算覆盖已保存的本品用量/用时：仅当用户实际修改尺寸输入框时才触发联动重算
   - 关键文件：`frontend/src/components/costing/ProductModelEditorDrawer.tsx`
   - 本轮验收命令：`npm -C frontend run build`（已通过）
+
+- **本轮闭环产物（Standard Models / 标准版本 → 克隆为新标准模型）**：
+  - 需求：在“标准模型管理 → 标准版本”中，从某个标准版本生成一个**全新的标准模型**（新编码 + 新版本号），用于大量相似型号的快速复用
+  - 前端：
+    - 标准版本列表：将“复制”更名为“复制版”，并新增按钮“克隆模型”
+    - 点击“克隆模型”：调用后端 `POST /api/planner/product-model-versions/{version_id}/clone-model`，成功后跳转到 `/costing/standard-models` 自动打开新模型抽屉并定位新标准版本
+  - 后端：
+    - 新接口：`POST /api/planner/product-model-versions/{version_id}/clone-model`
+    - 行为：从源 standard version 克隆出新 ProductModel（model_code 自动生成）+ 新 standard draft version（version_label 自动生成）+ 复制版本清单；可选复制 line-variants（overlay）并按行序映射 base_line_id
+  - 关键文件：
+    - `backend/src/planner/routers/product_model_versions.py`
+    - `backend/src/planner/schemas.py`
+    - `frontend/src/components/costing/ProductModelEditorDrawer.tsx`
+    - `frontend/src/services/planner.ts`
+    - `frontend/src/types/planner.ts`
+  - 验收命令：
+    - Backend：`./backend/venv/bin/python -m pytest backend/tests/planner/test_clone_model_from_standard_version.py -q`
+    - Frontend：`npm -C frontend run build`
 
 - **重要修复（Backend / 使 between 条件可落库）**：
   - 修复 `line-variants` 在写入 JSON 列时 `Decimal`/`tuple` 不可序列化导致 500：将 `conditions/metadata` 递归转为 JSON-safe（Decimal→字符串、tuple→list）。

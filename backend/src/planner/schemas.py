@@ -982,6 +982,26 @@ class DeriveStandardResponse(BaseModel):
     line_stats: Dict[str, Any] = Field(default_factory=dict)
 
 
+class CloneModelFromVersionRequest(BaseModel):
+    """
+    Clone a *new* product model from an existing model version (typically a standard version).
+    Creates a new ProductModel (auto model_code if empty) and a new draft standard version,
+    and copies version lines (and optionally line-variants).
+    """
+
+    model_name: Optional[str] = Field(None, max_length=255, description="新模型名称；为空则使用“源模型名（克隆）”")
+    include_line_variants: bool = Field(True, description="是否复制行级变体（overlay）")
+    operator_id: Optional[str] = Field(None, max_length=64)
+
+
+class CloneModelFromVersionResponse(BaseModel):
+    new_model_id: str
+    new_model_code: str
+    new_model_name: str
+    new_standard_version_id: str
+    new_standard_version_label: Optional[str] = None
+
+
 class ProductModelSampleSpec(BaseModel):
     width_mm: Decimal = Field(..., ge=0)
     height_mm: Decimal = Field(..., ge=0)

@@ -53,6 +53,8 @@ import type {
   ProductModelSkuPreviewResponse,
   DeriveStandardRequest,
   DeriveStandardResponse,
+  CloneModelFromVersionRequest,
+  CloneModelFromVersionResponse,
   ProductModelSyncFromModulesRequest,
   ProductModelUpdatePayload,
   ProductModelVersionCreatePayload,
@@ -764,6 +766,14 @@ export const updateProductModelVersionLines = async (
 
 export const deleteProductModelVersion = async (versionId: string): Promise<void> => {
   await plannerClient.delete(`/product-model-versions/${versionId}`)
+}
+
+export const cloneProductModelFromStandardVersion = async (
+  sourceVersionId: string,
+  payload: CloneModelFromVersionRequest = {},
+): Promise<CloneModelFromVersionResponse> => {
+  const response = await plannerClient.post(`/product-model-versions/${sourceVersionId}/clone-model`, payload)
+  return response.data
 }
 
 export const syncProductModelVersionFromModules = async (

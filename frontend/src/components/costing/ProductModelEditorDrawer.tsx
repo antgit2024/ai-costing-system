@@ -64,6 +64,7 @@ import {
   fetchProcesses,
   fetchProcess,
   listLineVariants,
+  cloneProductModelFromStandardVersion,
   publishProductModelVersion,
   refreshProductModelMaterialPrices,
   refreshProductModelVersionMaterialPrices,
@@ -2381,7 +2382,39 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                 onClick={() => openCopyVersionModal(v.id)}
                                 disabled={String(v.version_status) === 'archived'}
                               >
-                                复制
+                                复制版
+                              </Button>
+                              <Button
+                                size="small"
+                                onClick={() => {
+                                  Modal.confirm({
+                                    title: '克隆为新标准模型？',
+                                    content:
+                                      '系统将基于该标准版本创建一个全新的标准模型（自动生成新编码/新版本号），并复制清单与行级变体（Overlay）。继续？',
+                                    okText: '继续克隆',
+                                    cancelText: '取消',
+                                    onOk: async () => {
+                                      try {
+                                        const res = await cloneProductModelFromStandardVersion(v.id, {
+                                          include_line_variants: true,
+                                        })
+                                        message.success(`已克隆新模型：${res.new_model_code}`)
+                                        // 打开新模型抽屉并定位到新标准版本
+                                        navigate('/costing/standard-models', {
+                                          state: {
+                                            openModelId: res.new_model_id,
+                                            openVersionId: res.new_standard_version_id,
+                                          },
+                                        })
+                                      } catch (err: any) {
+                                        message.error(err?.response?.data?.detail ?? '克隆模型失败')
+                                      }
+                                    },
+                                  })
+                                }}
+                                disabled={String(v.version_status) === 'archived'}
+                              >
+                                克隆模型
                               </Button>
                               <Button
                                 size="small"

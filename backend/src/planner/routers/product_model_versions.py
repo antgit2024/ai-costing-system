@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from ...database import get_db
 from .. import models, schemas
-from ..services import product_model_service
+from ..services import audit_service, line_variant_service, product_model_service
 
 router = APIRouter(tags=["product-model-versions"])
 
@@ -248,6 +248,211 @@ def publish_product_model_version(
         return schemas.ProductModelVersionRead.from_orm(v)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post(
+    "/product-model-versions/{version_id}/clone-model",
+    response_model=schemas.CloneModelFromVersionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def clone_model_from_version(
+    version_id: str,
+    payload: schemas.CloneModelFromVersionRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Create a brand new ProductModel (with auto-generated model_code) from a source version.
+    Intended for cloning an existing STANDARD version into a new "standard model" template.
+    """
+    src_version = _get_version_or_404(db, version_id)
+    if str(src_version.version_kind or "").strip().lower() != "standard":
+        raise HTTPException(status_code=400, detail="仅支持从标准版本（standard）克隆模型")
+
+    src_model = db.get(models.ProductModel, src_version.model_id)
+    if not src_model or src_model.is_archived:
+        raise HTTPException(status_code=404, detail="Source product model not found")
+
+    # Build new model meta (avoid carrying pointers of the old model).
+    src_model_meta = dict(src_model.metadata_json or {})
+    for k in (
+        "current_draft_version_id",
+        "current_published_standard_version_id",
+        "current_published_standard_version_label",
+    ):
+        src_model_meta.pop(k, None)
+
+    new_name = (payload.model_name or "").strip() or f"{src_model.model_name}（克隆）"
+
+    modules_payload = [
+        {
+            "module_id": link.module_id,
+            "sequence_order": link.sequence_order,
+            "notes": link.notes,
+            "metadata_json": link.metadata_json or {},
+        }
+        for link in product_model_service.list_model_modules(db, src_model.id)
+    ]
+
+    # Create a new model (auto model_code) and then a new STANDARD draft version.
+    new_model = product_model_service.create_model(
+        db,
+        model_code=None,
+        model_name=new_name,
+        description=src_model.description,
+        category=src_model.category,
+        calc_mode=src_model.calc_mode,
+        fixed_price=src_model.fixed_price,
+        status="draft",
+        tags=list(src_model.tags or []),
+        standard_width_mm=src_model.standard_width_mm,
+        standard_height_mm=src_model.standard_height_mm,
+        unit_of_measure=src_model.unit_of_measure,
+        metadata=src_model_meta,
+        modules=modules_payload,
+    )
+
+    # Copy version metadata as a base (keeps placeholder_mappings/derive_template etc if stored there).
+    src_vmeta = dict(src_version.metadata_json or {})
+    new_std_version = product_model_service.create_model_version(
+        db,
+        model=new_model,
+        version_kind="standard",
+        metadata=src_vmeta,
+        commit=True,
+    )
+
+    # Copy lines
+    sample, standard = product_model_service._extract_sample_and_standard_from_version(src_model, src_version)  # noqa: SLF001
+
+    src_materials = product_model_service.list_version_material_lines(db, src_version.id)
+    src_processes = product_model_service.list_version_process_lines(db, src_version.id)
+
+    materials_payload = []
+    for item in src_materials:
+        meta = dict(item.metadata_json or {})
+        materials_payload.append(
+            {
+                "material_kind": item.material_type,
+                "material_ref_id": item.material_ref_id,
+                "material_code": item.material_code,
+                "material_name": item.material_name,
+                "calculation_method": item.calculation_method,
+                "sample_used_quantity": meta.get("sample_used_quantity"),
+                "standard_used_quantity": meta.get("standard_used_quantity"),
+                "fixed_quantity": meta.get("fixed_quantity"),
+                "coverage_ratio": meta.get("coverage_ratio"),
+                "base_quantity": item.base_quantity,
+                "loss_rate": item.loss_rate,
+                "notes": item.notes,
+                "source_module_id": meta.get("source_module_id"),
+                "source_module_code": meta.get("source_module_code"),
+                "source_module_name": meta.get("source_module_name"),
+                "metadata_json": meta,
+            }
+        )
+
+    processes_payload = []
+    for item in src_processes:
+        meta = dict(item.metadata_json or {})
+        processes_payload.append(
+            {
+                "process_id": item.process_id,
+                "process_code": None,
+                "process_name": None,
+                "team_name": meta.get("team_name"),
+                "pricing_method": meta.get("pricing_method") or "count",
+                "sample_minutes": meta.get("sample_minutes"),
+                "standard_minutes": meta.get("standard_minutes"),
+                "base_minutes": meta.get("base_minutes") or 0,
+                "unit_minutes": meta.get("unit_minutes") or 0,
+                "rate_per_minute": meta.get("rate_per_minute"),
+                "piece_rate": meta.get("piece_rate"),
+                "cost_type": meta.get("cost_type"),
+                "notes": item.notes,
+                "source_module_id": meta.get("source_module_id"),
+                "source_module_code": meta.get("source_module_code"),
+                "source_module_name": meta.get("source_module_name"),
+                "metadata_json": meta,
+            }
+        )
+
+    product_model_service.replace_version_lines(
+        db,
+        version=new_std_version,
+        sample=dict(sample),
+        standard=dict(standard),
+        materials=materials_payload,
+        processes=processes_payload,
+    )
+    db.commit()
+
+    # Optionally copy line variants (overlay) and remap base_line_id by sequence_order
+    if payload.include_line_variants:
+        old_lines = product_model_service.list_version_material_lines(db, src_version.id)
+        new_lines = product_model_service.list_version_material_lines(db, new_std_version.id)
+        old_by_seq = {int(l.sequence_order or 0): str(l.id) for l in old_lines}
+        new_by_seq = {int(l.sequence_order or 0): str(l.id) for l in new_lines}
+        old_id_to_new_id = {}
+        for seq, old_id in old_by_seq.items():
+            if seq in new_by_seq:
+                old_id_to_new_id[old_id] = new_by_seq[seq]
+
+        for v0 in line_variant_service.list_variants(db, version_id=src_version.id):
+            base_old = str(v0.base_line_id)
+            base_new = old_id_to_new_id.get(base_old)
+            # If mapping fails (shouldn't), skip to avoid creating broken variants.
+            if not base_new:
+                continue
+            items0 = line_variant_service.list_items(db, v0.id)
+            items_payload = []
+            for it in items0:
+                items_payload.append(
+                    {
+                        "sequence_order": it.sequence_order,
+                        "material_kind": it.material_kind,
+                        "material_ref_id": it.material_ref_id,
+                        "material_code": it.material_code,
+                        "material_name": it.material_name,
+                        "unit_of_measure": it.unit_of_measure,
+                        "calculation_method": it.calculation_method,
+                        "base_quantity": it.base_quantity,
+                            "fixed_quantity": it.fixed_quantity,
+                        "coverage_ratio": it.coverage_ratio,
+                        "loss_rate": it.loss_rate,
+                        "metadata_json": it.metadata_json or {},
+                    }
+                )
+            line_variant_service.create_variant(
+                db,
+                version_id=new_std_version.id,
+                base_line_id=base_new,
+                priority=int(v0.priority or 0),
+                enabled=bool(v0.enabled),
+                action=str(v0.action),
+                stop_on_hit=bool(v0.stop_on_hit),
+                notes=v0.notes,
+                conditions=dict(v0.conditions_json or {}),
+                metadata=dict(v0.metadata_json or {}),
+                items=items_payload,
+            )
+
+    audit_service.log_audit_event(
+        db,
+        target_type="product_model",
+        target_id=new_model.id,
+        action="clone_from_version",
+        actor_id=payload.operator_id or "system",
+        payload={"source_version_id": src_version.id, "source_model_id": src_model.id},
+    )
+    db.commit()
+
+    return schemas.CloneModelFromVersionResponse(
+        new_model_id=new_model.id,
+        new_model_code=new_model.model_code,
+        new_model_name=new_model.model_name,
+        new_standard_version_id=new_std_version.id,
+        new_standard_version_label=new_std_version.version_label,
+    )
 
 
 @router.post(

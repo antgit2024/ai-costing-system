@@ -987,6 +987,20 @@ export interface DeriveStandardResponse {
   line_stats: Record<string, unknown>
 }
 
+export interface CloneModelFromVersionRequest {
+  model_name?: string
+  include_line_variants?: boolean
+  operator_id?: string
+}
+
+export interface CloneModelFromVersionResponse {
+  new_model_id: string
+  new_model_code: string
+  new_model_name: string
+  new_standard_version_id: string
+  new_standard_version_label?: string | null
+}
+
 // --- Line variants (version-scoped) + spec parser + dynamic BOM (MVP) ---
 
 export interface SpecTokenExplanation {

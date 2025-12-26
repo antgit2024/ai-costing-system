@@ -3179,37 +3179,33 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                           },
                           // 工艺余量/固定追加等高级参数已收敛到“α 调参面板”，避免清单列膨胀
                           {
-                            title: 'BOM单价/单位',
-                            width: 170,
+                            title: 'BOM单价/单位*扣库',
+                            width: 190,
                             render: (_: any, r: any) => {
                               const meta = (r.metadata_json as any) ?? {}
-                              const price = meta.bom_unit_price != null ? Number(meta.bom_unit_price) : NaN
+                              const unitPrice = meta.bom_unit_price != null ? Number(meta.bom_unit_price) : NaN
                               const unit = normalizeUnit(meta.bom_unit ?? meta.display_unit) || ''
-                              const priceText = Number.isFinite(price) ? price.toFixed(2) : '-'
+                              const qty = Number(r.sample_used_quantity ?? 0)
+                              const lossRatePct = Number(r.loss_rate ?? 0)
+
+                              const priceText = Number.isFinite(unitPrice) ? unitPrice.toFixed(2) : '-'
                               const unitText = unit || '-'
+                              const used =
+                                Number.isFinite(qty) && Number.isFinite(lossRatePct)
+                                  ? qty * (1 + Math.max(0, lossRatePct) / 100)
+                                  : NaN
+                              const usedText = Number.isFinite(used) ? used.toFixed(2) : '-'
+
                               return (
                                 <span style={{ whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
-                                  {priceText}/{unitText}
+                                  {priceText}/{unitText}*{usedText}
                                 </span>
                               )
                             },
                           },
                           {
-                            title: '扣库用量',
-                            width: 110,
-                            render: (_: any, r: any) => {
-                              const qty = Number(r.sample_used_quantity ?? 0)
-                              const lossRatePct = Number(r.loss_rate ?? 0)
-                              if (Number.isFinite(qty) && Number.isFinite(lossRatePct)) {
-                                const used = qty * (1 + Math.max(0, lossRatePct) / 100)
-                                return used.toFixed(2)
-                              }
-                              return '-'
-                            },
-                          },
-                          {
-                            title: '扣库小计',
-                            width: 90,
+                            title: '小计',
+                            width: 80,
                             render: (_: any, r: any) => {
                               const meta = (r.metadata_json as any) ?? {}
                               const unitPrice = meta.bom_unit_price != null ? Number(meta.bom_unit_price) : NaN

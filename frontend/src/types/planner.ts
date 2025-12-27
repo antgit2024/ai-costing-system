@@ -1218,6 +1218,7 @@ export interface ProcessQueryParams
   search?: string
   status?: string
   charging_mode?: string
+  category?: string
   page?: number
   page_size?: number
 }

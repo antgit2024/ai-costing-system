@@ -28,6 +28,7 @@ def list_processes(
     search: Optional[str] = Query(None, max_length=128),
     status_filter: Optional[str] = Query(None, alias="status", max_length=32),
     charging_mode: Optional[str] = Query(None, max_length=32),
+    category: Optional[str] = Query(None, max_length=128),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -36,6 +37,7 @@ def list_processes(
         search=search,
         status=status_filter,
         charging_mode=charging_mode,
+        category=category,
     )
     total, items = process_service.list_processes(db, filters=filters, page=page, page_size=page_size)
     return schemas.PaginatedProcessResponse(

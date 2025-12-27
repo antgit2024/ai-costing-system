@@ -17,10 +17,12 @@ class ProcessFilters:
         search: Optional[str] = None,
         status: Optional[str] = None,
         charging_mode: Optional[str] = None,
+        category: Optional[str] = None,
     ):
         self.search = search
         self.status = status
         self.charging_mode = charging_mode
+        self.category = category
 
 
 def list_processes(
@@ -40,6 +42,8 @@ def list_processes(
         query = query.filter(models.Process.status == filters.status)
     if filters.charging_mode:
         query = query.filter(models.Process.charging_mode == filters.charging_mode)
+    if filters.category:
+        query = query.filter(models.Process.category == filters.category)
     total = query.count()
     items = (
         query.order_by(models.Process.updated_at.desc())

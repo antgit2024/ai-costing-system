@@ -76,6 +76,13 @@ const CHARGING_MODE_OPTIONS: Array<{ label: string; value: ProcessChargingMode }
   { label: '按高度', value: 'height' },
 ]
 
+const chargingModeToUnit = (mode?: ProcessChargingMode | null): '平米' | '米' | '个' => {
+  if (mode === 'area') return '平米'
+  if (mode === 'perimeter' || mode === 'width' || mode === 'height') return '米'
+  // fixed/count fallback
+  return '个'
+}
+
 /**
  * 【单位口径-禁止随意改动】
  * 本项目统一单位口径以 `frontend/src/utils/unit.ts` 的 `normalizeUnit()` 为准：
@@ -87,19 +94,7 @@ const CHARGING_MODE_OPTIONS: Array<{ label: string; value: ProcessChargingMode }
  * 这里的 Select 选项必须与 normalizeUnit 的返回值一致，否则会出现“编辑时回显为空/掉值”的历史问题。
  * ❌ 不要改回 `㎡/m` 作为 value（显示可以写“平米（㎡）/米（m）”，但 value 必须是“平米/米/个/套”）。
  */
-const MEASURE_UNIT_OPTIONS = [
-  { label: '平米', value: '平米' },
-  { label: '米', value: '米' },
-  { label: '个', value: '个' },
-  { label: '套', value: '套' },
-]
-
-const unitToChargingMode = (unit?: string | null): ProcessChargingMode => {
-  const u = normalizeUnit(unit)
-  if (u === '平米') return 'area'
-  if (u === '米') return 'perimeter'
-  return 'count'
-}
+// NOTE: 计量单位由“计量类型(charging_mode)”自动推导，不再由用户在工序库维护。
 
 const fallbackProcessCode = () => {
   const suffix = String(Date.now() % 100000).padStart(5, '0')
@@ -171,7 +166,6 @@ const ProcessesPage = () => {
       cost_type?: ProcessCostType
       base_minutes?: number
       unit_minutes?: number
-      measure_unit?: '平米' | '米' | '个' | '套'
       rate_per_minute?: number
       piece_rate?: number
       standard_time_minutes?: number
@@ -315,7 +309,6 @@ const ProcessesPage = () => {
       charging_mode: 'count',
       status: 'draft',
       unit_of_measure: '个',
-      measure_unit: '个',
     })
     setDrawerOpen(true)
     generateNextCode({ prefix: 'PR', width: 5 })
@@ -342,7 +335,6 @@ const ProcessesPage = () => {
       cost_type: costType,
       base_minutes: safeNumber(meta?.base_minutes),
       unit_minutes: safeNumber(meta?.unit_minutes),
-      measure_unit: normalizeUnit((meta?.measure_unit as any) ?? record.unit_of_measure) || '个',
       rate_per_minute: safeNumber(meta?.rate_per_minute),
       piece_rate: safeNumber(meta?.piece_rate) ?? safeNumber(record.standard_rate),
       charging_mode: record.charging_mode,
@@ -369,7 +361,6 @@ const ProcessesPage = () => {
       cost_type: costType,
       base_minutes: safeNumber(meta?.base_minutes),
       unit_minutes: safeNumber(meta?.unit_minutes),
-      measure_unit: normalizeUnit((meta?.measure_unit as any) ?? record.unit_of_measure) || '个',
       rate_per_minute: safeNumber(meta?.rate_per_minute),
       piece_rate: safeNumber(meta?.piece_rate) ?? safeNumber(record.standard_rate),
       charging_mode: record.charging_mode,
@@ -413,8 +404,8 @@ const ProcessesPage = () => {
     }
 
     const costType = (values.cost_type ?? 'piece') as ProcessCostType
-    const measureUnit = values.measure_unit ?? values.unit_of_measure ?? '个'
-    const chargingMode = unitToChargingMode(measureUnit)
+    const chargingMode = (values.charging_mode ?? 'count') as ProcessChargingMode
+    const measureUnit = chargingModeToUnit(chargingMode)
     const unitOfMeasure = measureUnit
 
     // keep both sets of fields in metadata; only validate the active one
@@ -428,10 +419,6 @@ const ProcessesPage = () => {
     let standardRate: number | undefined
     if (costType === 'time') {
       standardRate = values.rate_per_minute ?? undefined
-      if (values.status === 'active' && !standardRate) {
-        message.error('启用状态下：计时工序必须配置“分钟单价”')
-        return
-      }
     } else {
       standardRate = values.piece_rate ?? undefined
       if (values.status === 'active' && !standardRate) {
@@ -578,18 +565,8 @@ const ProcessesPage = () => {
   const statusValue = Form.useWatch('status', form) as string | undefined
   const isActive = statusValue === 'active'
   const costTypeValue = (Form.useWatch('cost_type', form) as ProcessCostType | undefined) ?? 'piece'
-  const measureUnitValue =
-    (Form.useWatch('measure_unit', form) as '平米' | '米' | '个' | '套' | undefined) ?? '个'
-
-  // keep unit hint stable (user can override by switching measure_unit)
-  useEffect(() => {
-    if (drawerMode === 'view') return
-    if (costTypeValue === 'piece') {
-      if (measureUnitValue !== '个') {
-        form.setFieldValue('measure_unit', '个')
-      }
-    }
-  }, [costTypeValue, drawerMode, form, measureUnitValue])
+  const chargingModeValue = (Form.useWatch('charging_mode', form) as ProcessChargingMode | undefined) ?? 'count'
+  const derivedMeasureUnit = chargingModeToUnit(chargingModeValue)
 
   // Drawer destroyOnClose + Form preserve={false} 会导致“先 setFieldsValue 再打开抽屉”失效；
   // 统一在抽屉打开后回填，避免编辑时掉值。
@@ -630,6 +607,7 @@ const ProcessesPage = () => {
             search: filters.search,
             status: filters.status,
             charging_mode: filters.charging_mode,
+            category: (filters as any).category,
           }}
           onFinish={() => {
             const values = filtersForm.getFieldsValue()
@@ -638,6 +616,7 @@ const ProcessesPage = () => {
               search: values.search?.trim() || undefined,
               status: values.status || undefined,
               charging_mode: values.charging_mode || undefined,
+              category: values.category || undefined,
               page: 1,
             }))
           }}
@@ -648,7 +627,10 @@ const ProcessesPage = () => {
           <AntForm.Item name="status" label="状态">
             <Select allowClear placeholder="全部" options={PROCESS_STATUS_OPTIONS} style={{ width: 160 }} />
           </AntForm.Item>
-          <AntForm.Item name="charging_mode" label="计价量类型">
+          <AntForm.Item name="category" label="分类">
+            <Select allowClear placeholder="全部" options={categoryOptions} style={{ width: 180 }} showSearch optionFilterProp="label" />
+          </AntForm.Item>
+          <AntForm.Item name="charging_mode" label="计量类型">
             <Select allowClear placeholder="全部" options={CHARGING_MODE_OPTIONS} style={{ width: 180 }} />
           </AntForm.Item>
           <AntForm.Item>
@@ -659,7 +641,14 @@ const ProcessesPage = () => {
               <Button
                 onClick={() => {
                   filtersForm.resetFields()
-                  setFilters((prev) => ({ ...prev, search: undefined, status: undefined, charging_mode: undefined, page: 1 }))
+                  setFilters((prev) => ({
+                    ...prev,
+                    search: undefined,
+                    status: undefined,
+                    charging_mode: undefined,
+                    category: undefined,
+                    page: 1,
+                  }))
                 }}
               >
                 重置
@@ -806,6 +795,21 @@ const ProcessesPage = () => {
             <Select placeholder="请选择" options={categoryOptions} showSearch optionFilterProp="label" />
           </Form.Item>
 
+          <Space style={{ width: '100%' }} size={16} align="start">
+            <Form.Item
+              label="计量类型"
+              name="charging_mode"
+              style={{ width: 220 }}
+              rules={[{ required: true, message: '请选择计量类型' }]}
+              tooltip="按周长/面积/宽度/高度等，用于后续在工艺模块/模型中自动推导计量单位。"
+            >
+              <Select options={CHARGING_MODE_OPTIONS} />
+            </Form.Item>
+            <Form.Item label="计量单位（自动）" style={{ width: 220 }}>
+              <Text>{derivedMeasureUnit}</Text>
+            </Form.Item>
+          </Space>
+
           <Text type="secondary" style={{ display: 'block', marginTop: -8, marginBottom: 12 }}>
             班组/工价/工时/计量等调参请在工艺模块（工艺模板）步骤行维护；工序管理仅维护通用工序字典。
           </Text>
@@ -819,21 +823,12 @@ const ProcessesPage = () => {
                 <Form.Item label="单位工时（分钟）" name="unit_minutes" style={{ width: 220 }}>
                   <InputNumber min={0} precision={4} style={{ width: '100%' }} placeholder="每单位耗时" />
                 </Form.Item>
-                <Form.Item
-                  label="计量单位"
-                  name="measure_unit"
-                  style={{ width: 220 }}
-                  tooltip="平米/米/个（建议与 BOM 单位配对；可在工艺模块按业务选择按周长/按长度）"
-                >
-                  <Select options={MEASURE_UNIT_OPTIONS} />
-                </Form.Item>
               </Space>
           <Space style={{ width: '100%' }} size={16} align="start">
             <Form.Item
-                  label={isActive ? '分钟单价（元/分钟）（必填）' : '分钟单价（元/分钟）'}
+                  label="分钟单价（元/分钟）"
                   name="rate_per_minute"
                   style={{ width: 320 }}
-                  rules={isActive ? [{ required: true, message: '启用状态下必须配置分钟单价' }] : undefined}
                 >
                   <InputNumber min={0} precision={6} style={{ width: '100%' }} placeholder="未配置（无法算成本）" />
                 </Form.Item>

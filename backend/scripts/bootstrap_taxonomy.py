@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Iterable, Set, Tuple
 
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -88,9 +89,27 @@ def main() -> None:
 
     with SessionLocal() as db:  # type: ignore[misc]
         # Real materials
+        # NOTE: Current production data keeps category in metadata_json.raw_form_data['textField_jacd537']
+        # (materials.category column may be empty). Bootstrap both sources.
         material_categories = _distinct_non_empty(
             v for (v,) in db.query(models.Material.category).filter(models.Material.is_archived.is_(False)).all()
         )
+        # best-effort: also bootstrap from metadata->raw_form_data->>'textField_jacd537'
+        # (PostgreSQL JSON operators)
+        try:
+            rows = db.execute(
+                text(
+                    """
+                    select distinct trim(coalesce((metadata->'raw_form_data'->>'textField_jacd537'), '')) as c
+                    from materials
+                    where is_archived = false
+                    """
+                )
+            ).fetchall()
+            material_categories |= _distinct_non_empty(r[0] for r in rows)
+        except Exception:
+            # keep compatible with non-Postgres backends
+            pass
         # Virtual materials
         virtual_categories = _distinct_non_empty(
             v

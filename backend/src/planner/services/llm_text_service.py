@@ -84,6 +84,51 @@ def generate_process_module_description(payload: Dict[str, Any]) -> Tuple[str, s
         f"工艺模块信息(JSON)：{payload}\n"
     )
 
+    provider = str(settings.llm_provider or "openai_compatible").strip().lower()
+
+    # Provider A: DashScope (百炼) native API
+    # POST {base_url}/api/v1/services/aigc/text-generation/generation
+    # Payload:
+    # {
+    #   "model": "qwen-plus",
+    #   "input": {"messages":[...]},
+    #   "parameters": {"result_format":"message","temperature":0.2}
+    # }
+    if provider in {"dashscope", "bailian"}:
+        url = settings.llm_base_url.rstrip("/") + "/api/v1/services/aigc/text-generation/generation"
+        headers = {
+            "Authorization": f"Bearer {settings.llm_api_key}",
+            "Content-Type": "application/json",
+        }
+        body = {
+            "model": settings.llm_model,
+            "input": {
+                "messages": [
+                    {"role": "system", "content": "你是企业ERP工艺知识库助手。"},
+                    {"role": "user", "content": prompt},
+                ]
+            },
+            "parameters": {"result_format": "message", "temperature": 0.2},
+        }
+        try:
+            with httpx.Client(timeout=settings.llm_timeout_seconds) as client:
+                resp = client.post(url, headers=headers, json=body)
+                resp.raise_for_status()
+                data = resp.json() or {}
+                out = data.get("output") or {}
+                choices = out.get("choices") or data.get("choices") or []
+                first = (choices[0] if choices else {}) or {}
+                msg = first.get("message") or {}
+                content = str(msg.get("content") or "").strip()
+                if not content and out.get("text"):
+                    content = str(out.get("text") or "").strip()
+                if not content:
+                    return _fallback_description(payload), "fallback"
+                return content, "llm"
+        except Exception:
+            return _fallback_description(payload), "fallback"
+
+    # Provider B: OpenAI-compatible
     url = settings.llm_base_url.rstrip("/") + "/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {settings.llm_api_key}",
@@ -103,11 +148,7 @@ def generate_process_module_description(payload: Dict[str, Any]) -> Tuple[str, s
             resp = client.post(url, headers=headers, json=body)
             resp.raise_for_status()
             data = resp.json()
-            content = (
-                (data.get("choices") or [{}])[0]
-                .get("message", {})
-                .get("content", "")
-            )
+            content = ((data.get("choices") or [{}])[0].get("message", {}) or {}).get("content", "")
             content = str(content or "").strip()
             if not content:
                 return _fallback_description(payload), "fallback"

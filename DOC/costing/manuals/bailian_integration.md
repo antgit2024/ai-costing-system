@@ -17,6 +17,7 @@
 
 ## 配置方式（推荐：环境变量）
 后端进程（8800）读取以下环境变量（不写死在代码里）：
+- `PLANNER_LLM_PROVIDER`（`dashscope` / `openai_compatible`）
 - `PLANNER_LLM_BASE_URL`
 - `PLANNER_LLM_API_KEY`
 - `PLANNER_LLM_MODEL`（默认：`qwen-plus`）
@@ -27,6 +28,15 @@
 如果你们的百炼网关提供 OpenAI 兼容模式，请把 `PLANNER_LLM_BASE_URL` 配成对应的兼容前缀。
 
 > 备注：你提供的 `base_url=https://dashscope.aliyuncs.com` 是百炼根域名，实际兼容模式路径可能需要额外前缀（由你们的主项目/网关决定）。
+
+### 百炼原生模式（DashScope）
+如果你希望本项目直接调用百炼原生接口：
+- 设置 `PLANNER_LLM_PROVIDER=dashscope`
+- 设置 `PLANNER_LLM_BASE_URL=https://dashscope.aliyuncs.com`
+
+后端会调用：
+- `POST https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation`
+并使用 `Authorization: Bearer <PLANNER_LLM_API_KEY>` 鉴权。
 
 ---
 

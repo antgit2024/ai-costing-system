@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     # ===== Optional LLM (e.g. 百炼/通义等) integration =====
     # We use an OpenAI-compatible endpoint by default:
     #   POST {base_url}/v1/chat/completions
+    llm_provider: str = Field(default="openai_compatible", env="PLANNER_LLM_PROVIDER")
     llm_base_url: str | None = Field(default=None, env="PLANNER_LLM_BASE_URL")
     llm_api_key: str | None = Field(default=None, env="PLANNER_LLM_API_KEY")
     llm_model: str = Field(default="qwen-plus", env="PLANNER_LLM_MODEL")

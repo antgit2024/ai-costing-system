@@ -217,6 +217,17 @@
     - `npm -C frontend run build`
   - 最近校对（北京时间 GMT+8）：2025-12-27 19:45
 
+- **本轮闭环产物（Standard Models / “直接新建标准（高级）”误报失败修复）**：
+  - 现象：点击“直接新建标准（高级）”创建成功（模型已生成），但 UI 仍提示“新建标准模型失败”。
+  - 根因：创建成功后，后续步骤（取 `current_draft_version_id` / 列表 refetch）任一异常会被 catch，当成创建失败误报。
+  - 修复：`frontend/src/pages/costing/StandardModelsPage.tsx`
+    - `current_draft_version_id` 读取兼容 `metadata_json` / `metadata`
+    - 若未返回 draft id：兜底 `fetchProductModelVersions(model.id)` 自动选取 standard draft
+    - 列表 `refetch` 失败不再覆盖“创建成功”反馈（改为忽略）
+  - 验收命令：
+    - `npm -C frontend run build`
+  - 最近校对（北京时间 GMT+8）：2025-12-27 20:05
+
 - **本轮闭环产物（Frontend / 工艺模块 AI 语义抽屉重构：自动汇总为主、步骤级补丁、手工不覆盖）**：
   - 目标：让员工看懂“这个工艺模块怎么做”，并让模块级 AI 字段主要来自工序库 ai_spec 自动汇总，避免重复手填。
   - 变更点：

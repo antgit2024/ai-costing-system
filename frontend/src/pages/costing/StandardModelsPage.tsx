@@ -5,7 +5,13 @@ import type { ColumnsType } from 'antd/es/table'
 import { useQuery } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
 
-import { createProductModel, deleteProductModel, fetchProductModelVersions, fetchProductModels, previewProductModel } from '@/services/planner'
+import {
+  createProductModel,
+  deleteProductModel,
+  fetchProductModelVersions,
+  fetchProductModels,
+  previewProductModel,
+} from '@/services/planner'
 import type { ProductModel } from '@/types/planner'
 import ProductModelEditorDrawer from '@/components/costing/ProductModelEditorDrawer'
 
@@ -269,18 +275,37 @@ export default function StandardModelsPage() {
         model_name: name,
         metadata_json: { created_from: 'ui', entry_context: 'standard', note: 'direct_create_standard' },
       })
-      const draftId = String((model as any)?.metadata_json?.current_draft_version_id ?? '').trim()
+      // 兼容：后端可能返回 metadata_json 或 metadata（不同 Pydantic by_alias 行为/历史兼容）
+      let draftId = String(
+        (model as any)?.metadata_json?.current_draft_version_id ??
+          (model as any)?.metadata?.current_draft_version_id ??
+          '',
+      ).trim()
       if (!draftId) {
-        throw new Error('创建失败：未返回 current_draft_version_id')
+        // 兜底：若未回传 current_draft_version_id，则主动拉取版本列表并选择 standard draft
+        try {
+          const versions = await fetchProductModelVersions(model.id)
+          const standardDraft =
+            versions.find((v: any) => v?.version_kind === 'standard' && v?.version_status === 'draft') ??
+            versions.find((v: any) => v?.version_kind === 'standard')
+          draftId = String(standardDraft?.id ?? '').trim()
+        } catch {
+          // ignore: keep draftId empty, will still open drawer with modelId only
+        }
       }
       message.success(`已创建标准模型：${model.model_code}`)
       setCreateModalOpen(false)
       setEditingModelId(model.id)
-      setEditingVersionId(draftId)
+      setEditingVersionId(draftId || null)
       setEditorOpen(true)
-      await listQuery.refetch()
+      // 列表刷新失败不应覆盖“创建成功”的反馈（避免出现“已创建但提示失败”的误报）
+      try {
+        await listQuery.refetch()
+      } catch {
+        // ignore
+      }
     } catch (err: any) {
-      message.error(err?.response?.data?.detail ?? '新建标准模型失败')
+      message.error(err?.response?.data?.detail ?? err?.message ?? '新建标准模型失败')
     } finally {
       setCreating(false)
     }

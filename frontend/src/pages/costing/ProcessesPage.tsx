@@ -634,7 +634,11 @@ const ProcessesPage = () => {
         const primary = getProcessCostType(r) // 'time' | 'piece'
         const primaryLabel = primary === 'time' ? '计时' : '计件'
         const secondLine =
-          primary === 'time' ? `${base}分钟+${unit}分钟` : pieceRate ? `${pieceRate}元/件` : '-'
+          primary === 'time'
+            ? `基础工时：${base}分钟+单位工时：${unit}分钟`
+            : pieceRate
+              ? `${pieceRate}元/件`
+              : '-'
 
         return (
           <div style={{ lineHeight: 1.25 }}>

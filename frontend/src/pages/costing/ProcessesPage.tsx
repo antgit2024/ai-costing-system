@@ -68,19 +68,26 @@ const PROCESS_STATUS_OPTIONS = [
 // 班组在工艺模块（工艺模板）的工序行维护；工序管理不承载班组字段
 
 const CHARGING_MODE_OPTIONS: Array<{ label: string; value: ProcessChargingMode }> = [
-  { label: '固定', value: 'fixed' },
-  { label: '按件', value: 'count' },
-  { label: '按面积', value: 'area' },
-  { label: '按周长', value: 'perimeter' },
-  { label: '按宽度', value: 'width' },
-  { label: '按高度', value: 'height' },
+  { label: '面积', value: 'area' },
+  { label: '周长', value: 'perimeter' },
+  { label: '数量', value: 'count' },
+  { label: '宽度', value: 'width' },
+  { label: '高度', value: 'height' },
+  { label: '长边', value: 'long_side' },
+  { label: '短边', value: 'short_side' },
 ]
 
 const chargingModeToUnit = (mode?: ProcessChargingMode | null): '平米' | '米' | '个' => {
   if (mode === 'area') return '平米'
-  if (mode === 'perimeter' || mode === 'width' || mode === 'height') return '米'
+  if (mode === 'perimeter' || mode === 'width' || mode === 'height' || mode === 'long_side' || mode === 'short_side') return '米'
   // fixed/count fallback
   return '个'
+}
+
+const chargingModeLabel = (mode?: string | null): string => {
+  const v = String(mode ?? '').trim()
+  const hit = CHARGING_MODE_OPTIONS.find((x) => x.value === (v as any))
+  return hit?.label ?? (v || '-')
 }
 
 /**
@@ -481,6 +488,12 @@ const ProcessesPage = () => {
       render: (value?: string | null) => (
         <Text ellipsis={{ tooltip: value || '-' }}>{value || '-'}</Text>
       ),
+    },
+    {
+      title: '计量类型',
+      dataIndex: 'charging_mode',
+      width: 100,
+      render: (v: any) => <Text>{chargingModeLabel(v)}</Text>,
     },
     {
       title: '工序类型 / 计价参数',

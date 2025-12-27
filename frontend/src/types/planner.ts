@@ -1192,7 +1192,15 @@ export interface ModelVariantRuleUpdatePayload {
   metadata_json?: Record<string, unknown>
 }
 
-export type ProcessChargingMode = 'fixed' | 'count' | 'area' | 'perimeter' | 'width' | 'height'
+export type ProcessChargingMode =
+  | 'fixed'
+  | 'count'
+  | 'area'
+  | 'perimeter'
+  | 'width'
+  | 'height'
+  | 'long_side'
+  | 'short_side'
 
 export interface ProcessSummary {
   id: string

@@ -7,6 +7,7 @@ import ReloadOutlined from '@ant-design/icons/lib/icons/ReloadOutlined'
 import StopOutlined from '@ant-design/icons/lib/icons/StopOutlined'
 import DeleteOutlined from '@ant-design/icons/lib/icons/DeleteOutlined'
 import EyeOutlined from '@ant-design/icons/lib/icons/EyeOutlined'
+import RobotOutlined from '@ant-design/icons/lib/icons/RobotOutlined'
 import {
   Button,
   Card,
@@ -144,6 +145,7 @@ const ProcessesPage = () => {
   const [copyModalOpen, setCopyModalOpen] = useState(false)
   const [copySource, setCopySource] = useState<ProcessSummary | null>(null)
   const [guideOpen, setGuideOpen] = useState(false)
+  const [aiPanelOpen, setAiPanelOpen] = useState(false)
 
   const [form] = Form.useForm<
     ProcessCreatePayload & {
@@ -311,6 +313,7 @@ const ProcessesPage = () => {
   )
 
   const openCreate = () => {
+    setAiPanelOpen(false)
     setDrawerMode('create')
     setSelected(null)
     // Drawer 使用 destroyOnClose，Form 也设置了 preserve={false}：
@@ -327,6 +330,7 @@ const ProcessesPage = () => {
   }
 
   const openView = (record: ProcessSummary) => {
+    setAiPanelOpen(false)
     setDrawerMode('view')
     setSelected(record)
     form.resetFields()
@@ -362,6 +366,43 @@ const ProcessesPage = () => {
   }
 
   const openEdit = (record: ProcessSummary) => {
+    setAiPanelOpen(false)
+    setDrawerMode('edit')
+    setSelected(record)
+    form.resetFields()
+    const meta = (record.metadata_json ?? {}) as any
+    const ai = (meta?.ai_spec ?? {}) as any
+    const costType = getProcessCostType(record)
+    setPendingFormValues({
+      id: record.id,
+      process_code: record.process_code,
+      process_name: record.process_name,
+      description: record.description ?? undefined,
+      category: record.category ?? undefined,
+      cost_type: costType,
+      base_minutes: safeNumber(meta?.base_minutes),
+      unit_minutes: safeNumber(meta?.unit_minutes),
+      rate_per_minute: safeNumber(meta?.rate_per_minute),
+      piece_rate: safeNumber(meta?.piece_rate) ?? safeNumber(record.standard_rate),
+      charging_mode: record.charging_mode,
+      standard_rate: safeNumber(record.standard_rate),
+      unit_of_measure: normalizeUnit(record.unit_of_measure) || undefined,
+      status: record.status,
+      standard_time_minutes: safeNumber((record.metadata_json as any)?.standard_time_minutes),
+      process_tags: Array.isArray((record.metadata_json as any)?.process_tags) ? (record.metadata_json as any).process_tags : [],
+      ai_intent: String(ai?.intent ?? ''),
+      ai_inputs: String(ai?.inputs ?? ''),
+      ai_outputs: String(ai?.outputs ?? ''),
+      ai_quality_points: String(ai?.quality_points ?? ''),
+      ai_constraints: String(ai?.constraints ?? ''),
+      ai_tools: String(ai?.tools ?? ''),
+      ai_parameter_schema_json: ai?.parameter_schema ? JSON.stringify(ai?.parameter_schema, null, 2) : '',
+    })
+    setDrawerOpen(true)
+  }
+
+  const openAiEdit = (record: ProcessSummary) => {
+    setAiPanelOpen(true)
     setDrawerMode('edit')
     setSelected(record)
     form.resetFields()
@@ -629,6 +670,9 @@ const ProcessesPage = () => {
           </Tooltip>
           <Tooltip title="编辑">
             <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+          </Tooltip>
+          <Tooltip title="AI">
+            <Button size="small" icon={<RobotOutlined />} onClick={() => openAiEdit(record)} />
           </Tooltip>
           <Tooltip title="复制">
             <Button size="small" icon={<CopyOutlined />} onClick={() => openCopy(record)} />
@@ -970,6 +1014,7 @@ const ProcessesPage = () => {
           <Divider />
 
           <Collapse
+            defaultActiveKey={aiPanelOpen ? ['ai'] : []}
             items={[
               {
                 key: 'ai',
@@ -977,7 +1022,10 @@ const ProcessesPage = () => {
                 children: (
                   <Space direction="vertical" size={12} style={{ width: '100%' }}>
                     <Form.Item label="工序意图/目的" name="ai_intent">
-                      <Input.TextArea rows={2} placeholder="这道工序解决什么问题/达到什么效果" />
+                      <Input.TextArea
+                        rows={3}
+                        placeholder="可直接写业务口径/规则说明（例如：用于地垫地毯，按最短边卷起+两头各留15cm扎带…）"
+                      />
                     </Form.Item>
                     <Form.Item label="输入" name="ai_inputs">
                       <Input.TextArea rows={2} placeholder="输入材料/半成品/前置条件" />

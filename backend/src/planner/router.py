@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from .routers import (
     approvals,
+    ai,
     assumptions,
     audit,
     base_config,
@@ -43,6 +44,7 @@ router.include_router(codes.router)
 router.include_router(base_config.router)
 router.include_router(process_modules.router)
 router.include_router(processes.router)
+router.include_router(ai.router)
 router.include_router(product_models.router)
 router.include_router(product_model_versions.router)
 router.include_router(line_variants.router)

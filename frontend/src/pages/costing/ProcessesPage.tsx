@@ -23,6 +23,8 @@ import {
   Table,
   Tag,
   Tooltip,
+  Divider,
+  Collapse,
   Typography,
   message,
 } from 'antd'
@@ -152,6 +154,13 @@ const ProcessesPage = () => {
       rate_per_minute?: number
       piece_rate?: number
       standard_time_minutes?: number
+      ai_intent?: string
+      ai_inputs?: string
+      ai_outputs?: string
+      ai_quality_points?: string
+      ai_constraints?: string
+      ai_tools?: string
+      ai_parameter_schema_json?: string
     }
   >()
   const [copyForm] = Form.useForm<ProcessCopyPayload>()
@@ -322,6 +331,7 @@ const ProcessesPage = () => {
     setSelected(record)
     form.resetFields()
     const meta = (record.metadata_json ?? {}) as any
+    const ai = (meta?.ai_spec ?? {}) as any
     const costType = getProcessCostType(record)
     setPendingFormValues({
       id: record.id,
@@ -340,6 +350,13 @@ const ProcessesPage = () => {
       status: record.status,
       standard_time_minutes: safeNumber((record.metadata_json as any)?.standard_time_minutes),
       process_tags: Array.isArray((record.metadata_json as any)?.process_tags) ? (record.metadata_json as any).process_tags : [],
+      ai_intent: String(ai?.intent ?? ''),
+      ai_inputs: String(ai?.inputs ?? ''),
+      ai_outputs: String(ai?.outputs ?? ''),
+      ai_quality_points: String(ai?.quality_points ?? ''),
+      ai_constraints: String(ai?.constraints ?? ''),
+      ai_tools: String(ai?.tools ?? ''),
+      ai_parameter_schema_json: ai?.parameter_schema ? JSON.stringify(ai?.parameter_schema, null, 2) : '',
     })
     setDrawerOpen(true)
   }
@@ -349,6 +366,7 @@ const ProcessesPage = () => {
     setSelected(record)
     form.resetFields()
     const meta = (record.metadata_json ?? {}) as any
+    const ai = (meta?.ai_spec ?? {}) as any
     const costType = getProcessCostType(record)
     setPendingFormValues({
       id: record.id,
@@ -367,6 +385,13 @@ const ProcessesPage = () => {
       status: record.status,
       standard_time_minutes: safeNumber((record.metadata_json as any)?.standard_time_minutes),
       process_tags: Array.isArray((record.metadata_json as any)?.process_tags) ? (record.metadata_json as any).process_tags : [],
+      ai_intent: String(ai?.intent ?? ''),
+      ai_inputs: String(ai?.inputs ?? ''),
+      ai_outputs: String(ai?.outputs ?? ''),
+      ai_quality_points: String(ai?.quality_points ?? ''),
+      ai_constraints: String(ai?.constraints ?? ''),
+      ai_tools: String(ai?.tools ?? ''),
+      ai_parameter_schema_json: ai?.parameter_schema ? JSON.stringify(ai?.parameter_schema, null, 2) : '',
     })
     setDrawerOpen(true)
   }
@@ -411,6 +436,30 @@ const ProcessesPage = () => {
       ;(metadata as any).process_tags = tags
     } else {
       delete (metadata as any).process_tags
+    }
+
+    // AI 语义字段（可选）：写入 metadata_json.ai_spec
+    const ai_spec: any = {}
+    const s = (v: any) => String(v ?? '').trim()
+    if (s(values.ai_intent)) ai_spec.intent = s(values.ai_intent)
+    if (s(values.ai_inputs)) ai_spec.inputs = s(values.ai_inputs)
+    if (s(values.ai_outputs)) ai_spec.outputs = s(values.ai_outputs)
+    if (s(values.ai_quality_points)) ai_spec.quality_points = s(values.ai_quality_points)
+    if (s(values.ai_constraints)) ai_spec.constraints = s(values.ai_constraints)
+    if (s(values.ai_tools)) ai_spec.tools = s(values.ai_tools)
+    const rawSchema = s(values.ai_parameter_schema_json)
+    if (rawSchema) {
+      try {
+        ai_spec.parameter_schema = JSON.parse(rawSchema)
+      } catch {
+        message.error('AI参数模板必须是合法 JSON')
+        return
+      }
+    }
+    if (Object.keys(ai_spec).length) {
+      ;(metadata as any).ai_spec = ai_spec
+    } else {
+      delete (metadata as any).ai_spec
     }
 
     const costType = (values.cost_type ?? 'piece') as ProcessCostType
@@ -917,6 +966,46 @@ const ProcessesPage = () => {
           <Form.Item label="描述" name="description">
             <Input.TextArea rows={3} placeholder="可选" />
           </Form.Item>
+
+          <Divider />
+
+          <Collapse
+            items={[
+              {
+                key: 'ai',
+                label: 'AI 语义（可选，建议逐步完善）',
+                children: (
+                  <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                    <Form.Item label="工序意图/目的" name="ai_intent">
+                      <Input.TextArea rows={2} placeholder="这道工序解决什么问题/达到什么效果" />
+                    </Form.Item>
+                    <Form.Item label="输入" name="ai_inputs">
+                      <Input.TextArea rows={2} placeholder="输入材料/半成品/前置条件" />
+                    </Form.Item>
+                    <Form.Item label="输出" name="ai_outputs">
+                      <Input.TextArea rows={2} placeholder="输出产物/状态/交付物" />
+                    </Form.Item>
+                    <Form.Item label="质量要点/QC" name="ai_quality_points">
+                      <Input.TextArea rows={2} placeholder="验收点、常见缺陷、容差/注意事项" />
+                    </Form.Item>
+                    <Form.Item label="禁忌/边界条件" name="ai_constraints">
+                      <Input.TextArea rows={2} placeholder="什么时候不能用/风险点" />
+                    </Form.Item>
+                    <Form.Item label="设备/工具" name="ai_tools">
+                      <Input.TextArea rows={2} placeholder="设备、刀具、工装夹具等" />
+                    </Form.Item>
+                    <Form.Item
+                      label="参数模板（JSON）"
+                      name="ai_parameter_schema_json"
+                      tooltip="用于后续 AI 自动生成工艺步骤参数；留空即可。"
+                    >
+                      <Input.TextArea rows={6} placeholder='例如：{"speed": {"type":"number","unit":"mm/s","default":10}}' />
+                    </Form.Item>
+                  </Space>
+                ),
+              },
+            ]}
+          />
         </Form>
       </Drawer>
 

@@ -458,6 +458,41 @@ class Process(Base, TimestampMixin, SoftDeleteMixin):
     metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict)
 
 
+class ProcessFeedback(Base, TimestampMixin, SoftDeleteMixin):
+    """
+    AI/continuous-improvement feedback records for processes.
+
+    This table is designed as a durable learning corpus:
+    - link to a process
+    - store observed execution outcomes (time/cost/quality) with optional context references
+    - keep everything extensible via metadata_json
+    """
+
+    __tablename__ = "process_feedback"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    process_id: Mapped[str] = Column(String(36), ForeignKey("processes.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    # optional context pointers
+    source_type: Mapped[str | None] = Column(String(32))  # e.g. model_version / process_module / order / manual
+    source_id: Mapped[str | None] = Column(String(64))
+
+    product_line_tag: Mapped[str | None] = Column(String(64))  # e.g. 画艺/布艺/通用
+    team_name: Mapped[str | None] = Column(String(128))
+
+    quantity: Mapped[float | None] = Column(Numeric(18, 6))
+    unit_of_measure: Mapped[str | None] = Column(String(32))
+    actual_minutes: Mapped[float | None] = Column(Numeric(10, 2))
+    actual_cost: Mapped[float | None] = Column(Numeric(18, 6))
+    quality_score: Mapped[float | None] = Column(Numeric(5, 2))  # 0-100 or 0-10 (caller defines)
+    is_success: Mapped[bool | None] = Column(Boolean)
+
+    notes: Mapped[str | None] = Column(Text)
+    metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict)
+
+    process: Mapped["Process"] = relationship("Process")
+
+
 class ProductModel(Base, TimestampMixin, SoftDeleteMixin):
     __tablename__ = "product_models"
 

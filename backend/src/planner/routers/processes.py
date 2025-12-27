@@ -309,3 +309,64 @@ def archive_process(process_id: str, db: Session = Depends(get_db)):
     db.commit()
     return None
 
+
+@router.post(
+    "/{process_id}/feedback",
+    response_model=schemas.ProcessFeedbackRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_process_feedback(
+    process_id: str,
+    payload: schemas.ProcessFeedbackCreateRequest,
+    db: Session = Depends(get_db),
+):
+    # process_id in path takes precedence
+    process = _get_process_or_404(process_id, db)
+    fb = models.ProcessFeedback(
+        process_id=process.id,
+        source_type=payload.source_type,
+        source_id=payload.source_id,
+        product_line_tag=payload.product_line_tag,
+        team_name=payload.team_name,
+        quantity=payload.quantity,
+        unit_of_measure=payload.unit_of_measure,
+        actual_minutes=payload.actual_minutes,
+        actual_cost=payload.actual_cost,
+        quality_score=payload.quality_score,
+        is_success=payload.is_success,
+        notes=payload.notes,
+        metadata_json=payload.metadata,
+        is_archived=False,
+    )
+    db.add(fb)
+    db.commit()
+    db.refresh(fb)
+    return schemas.ProcessFeedbackRead.from_orm(fb)
+
+
+@router.get(
+    "/{process_id}/feedback",
+    response_model=schemas.ProcessFeedbackListResponse,
+)
+def list_process_feedback(
+    process_id: str,
+    include_archived: bool = Query(False),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    _ = _get_process_or_404(process_id, db)
+    q = db.query(models.ProcessFeedback).filter(models.ProcessFeedback.process_id == process_id)
+    if not include_archived:
+        q = q.filter(models.ProcessFeedback.is_archived.is_(False))
+    total = q.count()
+    items = (
+        q.order_by(models.ProcessFeedback.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    return schemas.ProcessFeedbackListResponse(
+        total=total, items=[schemas.ProcessFeedbackRead.from_orm(x) for x in items]
+    )
+

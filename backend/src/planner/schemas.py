@@ -1414,6 +1414,73 @@ class ProcessDetailRead(ProcessSummaryRead):
     pass
 
 
+class ProcessFeedbackCreateRequest(BaseModel):
+    process_id: str = Field(..., max_length=36)
+    source_type: Optional[str] = Field(None, max_length=32)
+    source_id: Optional[str] = Field(None, max_length=64)
+    product_line_tag: Optional[str] = Field(None, max_length=64)
+    team_name: Optional[str] = Field(None, max_length=128)
+    quantity: Optional[Decimal] = None
+    unit_of_measure: Optional[str] = Field(None, max_length=32)
+    actual_minutes: Optional[Decimal] = None
+    actual_cost: Optional[Decimal] = None
+    quality_score: Optional[Decimal] = None
+    is_success: Optional[bool] = None
+    notes: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict, alias="metadata_json")
+
+    class Config:
+        allow_population_by_field_name = True
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ProcessFeedbackRead(BaseModel):
+    id: str
+    process_id: str
+    source_type: Optional[str]
+    source_id: Optional[str]
+    product_line_tag: Optional[str]
+    team_name: Optional[str]
+    quantity: Optional[Decimal]
+    unit_of_measure: Optional[str]
+    actual_minutes: Optional[Decimal]
+    actual_cost: Optional[Decimal]
+    quality_score: Optional[Decimal]
+    is_success: Optional[bool]
+    notes: Optional[str]
+    metadata: Dict[str, Any] = Field(alias="metadata_json")
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        orm_mode = True
+        allow_population_by_field_name = True
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ProcessFeedbackListResponse(BaseModel):
+    total: int
+    items: List[ProcessFeedbackRead]
+
+
+class AiProcessCorpusItem(BaseModel):
+    id: str
+    process_code: str
+    process_name: str
+    description: Optional[str]
+    category: Optional[str]
+    charging_mode: ProcessChargingMode
+    unit_of_measure: Optional[str]
+    status: str
+    tags: List[str] = Field(default_factory=list)
+    ai_spec: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AiProcessCorpusResponse(BaseModel):
+    total: int
+    items: List[AiProcessCorpusItem]
+
+
 class PaginatedProcessResponse(BaseModel):
     total: int
     page: int

@@ -15,7 +15,6 @@ import TaskCenterDrawer from '@/components/common/TaskCenterDrawer'
 import { fetchTaskCenter } from '@/services/planner'
 
 const { Header, Sider, Content } = Layout
-const HAS_ADMIN_KEY = Boolean(import.meta.env.VITE_PLANNER_ADMIN_KEY)
 
 const menuItems: MenuProps['items'] = [
   {
@@ -64,7 +63,7 @@ const menuItems: MenuProps['items'] = [
         icon: <SettingOutlined />,
         label: (
           <Link to="/costing/taxonomy">
-            分类管理{HAS_ADMIN_KEY ? '（管理员）' : '（只读）'}
+            分类管理
           </Link>
         ),
       },

@@ -25,7 +25,6 @@ def require_admin_key(x_planner_admin_key: str | None = Header(default=None)) ->
     - If PLANNER_ADMIN_KEY is not set, allow all (dev-friendly).
     - If set, require header X-PLANNER-ADMIN-KEY to match.
     """
-    if not settings.planner_admin_key:
-        return
-    if not x_planner_admin_key or x_planner_admin_key != settings.planner_admin_key:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin key required")
+    # 当前阶段按用户要求：先全开放（不做管理员校验）。
+    # 后续如需恢复权限控制，再启用 PLANNER_ADMIN_KEY 校验逻辑。
+    return

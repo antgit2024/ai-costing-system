@@ -193,6 +193,20 @@ export const fetchTaxonomyScopeOptions = async (): Promise<TaxonomyScopeOptionsR
   return resp.data
 }
 
+const normalizeTaxonomyItem = (raw: any): any => {
+  // Backend responses currently use `scopes_json` / `metadata_json` (FastAPI by_alias).
+  // Normalize to frontend-friendly `scopes` / `metadata` so UI forms work correctly.
+  if (!raw || typeof raw !== 'object') return raw
+  const scopes = Array.isArray(raw.scopes) ? raw.scopes : Array.isArray(raw.scopes_json) ? raw.scopes_json : []
+  const metadata =
+    raw.metadata && typeof raw.metadata === 'object'
+      ? raw.metadata
+      : raw.metadata_json && typeof raw.metadata_json === 'object'
+        ? raw.metadata_json
+        : {}
+  return { ...raw, scopes, metadata }
+}
+
 export const fetchTaxonomyItems = async (
   domain: string,
   opts: { include_inactive?: boolean } = {},
@@ -200,7 +214,9 @@ export const fetchTaxonomyItems = async (
   const resp = await plannerClient.get('/taxonomy/items', {
     params: sanitizeParams({ domain, include_inactive: opts.include_inactive }),
   })
-  return resp.data
+  return {
+    items: (resp.data?.items ?? []).map(normalizeTaxonomyItem),
+  }
 }
 
 export const createTaxonomyItem = async (payload: {
@@ -213,7 +229,7 @@ export const createTaxonomyItem = async (payload: {
   metadata?: Record<string, unknown>
 }): Promise<TaxonomyItemRead> => {
   const resp = await plannerClient.post('/taxonomy/items', payload, { headers: adminHeaders() })
-  return resp.data
+  return normalizeTaxonomyItem(resp.data)
 }
 
 export const updateTaxonomyItem = async (
@@ -221,7 +237,7 @@ export const updateTaxonomyItem = async (
   payload: { name?: string; scopes?: string[]; is_active?: boolean; sort_order?: number; metadata?: Record<string, unknown> },
 ): Promise<TaxonomyItemRead> => {
   const resp = await plannerClient.patch(`/taxonomy/items/${id}`, payload, { headers: adminHeaders() })
-  return resp.data
+  return normalizeTaxonomyItem(resp.data)
 }
 
 export const archiveTaxonomyItem = async (id: string): Promise<void> => {

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Button, Card, Form, Input, Modal, Select, Space, Switch, Table, Tabs, Tag, Typography, message } from 'antd'
+import { Button, Card, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tabs, Tag, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useMutation, useQuery } from '@tanstack/react-query'
 
@@ -40,6 +40,7 @@ const TaxonomyManagementPage = () => {
     scopes: string[]
     is_active: boolean
     sort_order: number
+    rate_per_minute?: number
   }>()
 
   const scopeOptionsQuery = useQuery({
@@ -75,7 +76,13 @@ const TaxonomyManagementPage = () => {
   const openCreate = () => {
     setEditing(null)
     form.resetFields()
-    form.setFieldsValue({ name: '', scopes: [scopeOptionsQuery.data?.universal_scope ?? '*'], is_active: true, sort_order: 0 })
+    form.setFieldsValue({
+      name: '',
+      scopes: [scopeOptionsQuery.data?.universal_scope ?? '*'],
+      is_active: true,
+      sort_order: 0,
+      rate_per_minute: undefined,
+    })
     setModalOpen(true)
   }
 
@@ -87,6 +94,7 @@ const TaxonomyManagementPage = () => {
       scopes: item.scopes,
       is_active: item.is_active,
       sort_order: item.sort_order ?? 0,
+      rate_per_minute: Number((item as any)?.metadata?.rate_per_minute ?? (item as any)?.metadata_json?.rate_per_minute),
     })
     setModalOpen(true)
   }
@@ -144,6 +152,19 @@ const TaxonomyManagementPage = () => {
 
   const columns: ColumnsType<TaxonomyItemRead> = [
     { title: '名称', dataIndex: 'name', ellipsis: true },
+    ...(activeDomain === 'team'
+      ? ([
+          {
+            title: '默认单价(元/分)',
+            width: 140,
+            render: (_: any, r: TaxonomyItemRead) => {
+              const meta: any = (r as any)?.metadata ?? (r as any)?.metadata_json ?? {}
+              const v = Number(meta?.rate_per_minute)
+              return Number.isFinite(v) ? v.toFixed(2) : '-'
+            },
+          },
+        ] as ColumnsType<TaxonomyItemRead>)
+      : []),
     {
       title: '适用范围',
       width: 220,
@@ -249,6 +270,15 @@ const TaxonomyManagementPage = () => {
             message.error('适用范围为必选')
             return
           }
+          const metadata =
+            activeDomain === 'team'
+              ? {
+                  rate_per_minute:
+                    values.rate_per_minute === undefined || values.rate_per_minute === null
+                      ? undefined
+                      : Number(values.rate_per_minute),
+                }
+              : undefined
           if (editing) {
             updateMutation.mutate({
               id: editing.id,
@@ -256,6 +286,7 @@ const TaxonomyManagementPage = () => {
               scopes,
               is_active: values.is_active,
               sort_order: values.sort_order,
+              ...(metadata ? { metadata } : {}),
             })
             return
           }
@@ -265,6 +296,7 @@ const TaxonomyManagementPage = () => {
             scopes,
             is_active: values.is_active,
             sort_order: values.sort_order,
+            ...(metadata ? { metadata } : {}),
           })
         }}
         confirmLoading={createMutation.isPending || updateMutation.isPending}
@@ -308,6 +340,15 @@ const TaxonomyManagementPage = () => {
               />
             </Form.Item>
           </Space>
+          {activeDomain === 'team' ? (
+            <Form.Item
+              label="默认单价（元/分）"
+              name="rate_per_minute"
+              tooltip="选择该班组后，工艺模块会自动带出此分钟单价（仅在该步骤未手填单价时生效）。"
+            >
+              <InputNumber min={0} precision={2} style={{ width: 220 }} placeholder="例如：0.80" />
+            </Form.Item>
+          ) : null}
           <div style={{ marginTop: 8 }}>
             <Text type="secondary">
               快捷标签：布艺 / 画艺（可点击选择）。若选“通用(*)”，将自动覆盖所有品类并清空其它标签。

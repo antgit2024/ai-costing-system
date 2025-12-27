@@ -291,7 +291,8 @@ class YidaMaterialMapper:
             material_code=material_code,
             material_name=material_name,
             material_type=_clean_str(self._get_value(form_data, "material_type")),
-            category=_clean_str(self._get_value(form_data, "category")),
+            # category: config mapping may be missing/placeholder; fallback to raw field id used in production
+            category=_clean_str(self._get_value(form_data, "category")) or _clean_str(form_data.get("textField_jacd537")),
             model_category=_clean_str(self._get_value(form_data, "model_category")),
             unit=unit,
             unit_price=unit_price,
@@ -506,6 +507,36 @@ class MaterialSyncService:
 
             if not data.is_active:
                 result.disabled += 1
+
+        # Best-effort: ensure taxonomy item exists for material_category, so UI dropdown updates automatically.
+        try:
+            cat = (data.category or "").strip()
+            if cat:
+                existed = (
+                    self.db.query(models.TaxonomyItem)
+                    .filter(
+                        models.TaxonomyItem.domain == "material_category",
+                        models.TaxonomyItem.name == cat,
+                        models.TaxonomyItem.is_archived.is_(False),
+                    )
+                    .one_or_none()
+                )
+                if not existed:
+                    self.db.add(
+                        models.TaxonomyItem(
+                            domain="material_category",
+                            name=cat,
+                            scopes_json=["*"],
+                            is_active=True,
+                            sort_order=0,
+                            source="yida",
+                            metadata_json={"bootstrap_from": "yida_sync"},
+                            is_archived=False,
+                        )
+                    )
+        except Exception:
+            # don't break sync job
+            pass
 
 
 @dataclass

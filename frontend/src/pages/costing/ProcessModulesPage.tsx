@@ -311,6 +311,17 @@ const ProcessModulesPage = () => {
     queryFn: () => fetchTaxonomyItems('team', { include_inactive: true }),
   })
 
+  const teamRateByName = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const it of teamQuery.data?.items ?? []) {
+      const name = String((it as any)?.name ?? '').trim()
+      const meta = (it as any)?.metadata ?? (it as any)?.metadata_json ?? {}
+      const rate = Number(meta?.rate_per_minute)
+      if (name && Number.isFinite(rate) && rate >= 0) m.set(name, rate)
+    }
+    return m
+  }, [teamQuery.data?.items])
+
   const detailQuery = useQuery({
     queryKey: ['process-module', selectedId],
     queryFn: () => fetchProcessModule(selectedId as string),
@@ -1110,6 +1121,22 @@ const ProcessModulesPage = () => {
             placeholder="选择班组"
             options={(teamQuery.data?.items ?? []).map((it: any) => ({ label: it.name, value: it.name }))}
             optionFilterProp="label"
+            onChange={(v) => {
+              // 同步到本地 stepsLocal（用于行标题等）
+              setStepsLocal((prev) => {
+                const base = (prev.length ? prev : (editorForm.getFieldValue('steps') as EditorStepValue[]) ?? []).slice()
+                if (base[index]) base[index] = { ...base[index], team_name: v ?? '' }
+                return base
+              })
+
+              // 自动带出该班组的默认分钟单价（仅在当前步骤未填写时）
+              const rate = v ? teamRateByName.get(String(v)) : undefined
+              if (rate === undefined) return
+              const cur = Number(editorForm.getFieldValue(['steps', index, 'metadata_json', 'rate_per_minute']))
+              if (!Number.isFinite(cur) || cur <= 0) {
+                editorForm.setFieldValue(['steps', index, 'metadata_json', 'rate_per_minute'], rate)
+              }
+            }}
           />
         </Form.Item>
       ),

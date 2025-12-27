@@ -17,6 +17,7 @@ import {
   Table,
   Tag,
   Tabs,
+  Tooltip,
   Typography,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
@@ -26,6 +27,7 @@ import {
   CopyOutlined,
   DeleteOutlined,
   EditOutlined,
+  ExclamationCircleOutlined,
   EyeOutlined,
   LinkOutlined,
   PlusOutlined,
@@ -1100,13 +1102,21 @@ const ProcessModulesPage = () => {
         const canEdit = drawerMode === 'create' || drawerMode === 'edit'
         const code = snapshot?.process_code ?? '-'
         const name = snapshot?.process_name ?? '-'
+        const desc = String((snapshot as any)?.description ?? '').trim()
         return (
           <Space direction="vertical" size={4} style={{ width: '100%' }}>
             <Space size={8}>
               {renderCodePill(code, { solid: false })}
-              <Text ellipsis={{ tooltip: name }} style={{ maxWidth: 240 }}>
-                {name}
-              </Text>
+              <Space size={6}>
+                <Text ellipsis={{ tooltip: name }} style={{ maxWidth: 200 }}>
+                  {name}
+                </Text>
+                {desc ? (
+                  <Tooltip title={desc}>
+                    <ExclamationCircleOutlined style={{ color: 'rgba(0,0,0,0.45)' }} />
+                  </Tooltip>
+                ) : null}
+              </Space>
               {canEdit ? (
                 <Button
                   size="small"
@@ -1306,14 +1316,15 @@ const ProcessModulesPage = () => {
       if (ctx?.targetIndex !== undefined) {
         const next = [...prev]
         const bomUnitPrice = deriveBomUnitPrice(records[0])
-        const calcMethod = (records[0].calculation_method as any) ?? 'count'
+        const bomUnit = normalizeUnit(records[0].unit || records[0].purchase_unit) || ''
+        const calcMethod = deriveCalcMethodByUnit(bomUnit, (records[0].calculation_method as any) ?? null)
         next[ctx.targetIndex] = {
           ...(next[ctx.targetIndex] ?? createEmptyMaterial()),
           material_kind: kind as MaterialReferenceKind,
           material_ref_id: records[0].id,
           material_code: records[0].material_code,
           material_name: records[0].material_name,
-          unit_of_measure: normalizeUnit(records[0].unit || records[0].purchase_unit) || '',
+          unit_of_measure: bomUnit,
           // 替换物料：以新物料主数据为准（否则会出现“计量方式与单位不配套/不更新”的回归问题）
           calculation_method: calcMethod,
           quantity: safeNum((next[ctx.targetIndex] as any)?.quantity, 1) || 1,
@@ -1322,7 +1333,7 @@ const ProcessModulesPage = () => {
           metadata_json: {
             ...(((next[ctx.targetIndex] ?? {}) as any).metadata_json ?? {}),
             bom_unit_price: bomUnitPrice,
-            bom_unit: normalizeUnit(records[0].unit || records[0].purchase_unit) || '',
+            bom_unit: bomUnit,
             currency: records[0].currency,
           },
         }
@@ -1335,7 +1346,10 @@ const ProcessModulesPage = () => {
         material_code: record.material_code,
         material_name: record.material_name,
         unit_of_measure: normalizeUnit(record.unit || record.purchase_unit) || '',
-        calculation_method: (record.calculation_method as any) ?? 'count',
+        calculation_method: deriveCalcMethodByUnit(
+          normalizeUnit(record.unit || record.purchase_unit) || '',
+          (record.calculation_method as any) ?? null,
+        ),
         material_category: record.category || undefined,
         metadata_json: {
           bom_unit_price: deriveBomUnitPrice(record),
@@ -1486,7 +1500,10 @@ const ProcessModulesPage = () => {
                 measure_type: (current.metadata_json as any)?.measure_type ?? measureType,
                 rate_per_minute: costType === 'time' ? ratePerMinute : null,
                 piece_rate: costType === 'piece' ? pieceRate : null,
-                process_snapshot: process,
+                process_snapshot: {
+                  ...process,
+                  description: detail.description,
+                },
               },
             }
             message.success(`已选择工序：${process.process_code}（更新第 ${targetIndex + 1} 行）`)
@@ -1510,7 +1527,10 @@ const ProcessModulesPage = () => {
                 measure_type: measureType,
                 rate_per_minute: costType === 'time' ? ratePerMinute : null,
                 piece_rate: costType === 'piece' ? pieceRate : null,
-                process_snapshot: process,
+                process_snapshot: {
+                  ...process,
+                  description: detail.description,
+                },
               },
             },
           ]

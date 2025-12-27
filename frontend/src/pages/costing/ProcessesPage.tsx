@@ -139,6 +139,7 @@ const ProcessesPage = () => {
   const [drawerMode, setDrawerMode] = useState<'create' | 'edit' | 'view'>('create')
   const [selected, setSelected] = useState<ProcessSummary | null>(null)
   const [pendingFormValues, setPendingFormValues] = useState<Record<string, unknown> | null>(null)
+  const [allocatingCode, setAllocatingCode] = useState(false)
   const [copyModalOpen, setCopyModalOpen] = useState(false)
   const [copySource, setCopySource] = useState<ProcessSummary | null>(null)
   const [guideOpen, setGuideOpen] = useState(false)
@@ -187,7 +188,22 @@ const ProcessesPage = () => {
   }, [listQuery.data?.items, taxonomyCategoriesQuery.data?.items])
 
   const createMutation = useMutation({
-    mutationFn: (payload: ProcessCreatePayload) => createProcess(payload),
+    mutationFn: async (payload: ProcessCreatePayload) => {
+      try {
+        return await createProcess(payload)
+      } catch (error) {
+        // 兜底：编码冲突则自动重新取号并重试一次（避免并发/回填覆盖导致的冲突）
+        if (isAxiosError(error)) {
+          const detail = String(error.response?.data?.detail ?? '')
+          if (detail.includes('process_code already exists')) {
+            const next = await generateNextCode({ prefix: 'PR', width: 5 })
+            form.setFieldValue('process_code', next.code)
+            return await createProcess({ ...payload, process_code: next.code })
+          }
+        }
+        throw error
+      }
+    },
     onSuccess: () => {
       message.success('已创建')
       setDrawerOpen(false)
@@ -293,20 +309,14 @@ const ProcessesPage = () => {
     // 必须在 Drawer 打开且 Form 挂载后再回填，否则会出现“编辑/新建掉值”。
     form.resetFields()
     setPendingFormValues({
-      process_code: fallbackProcessCode(),
+      // 不填 fallback，避免后续异步生成的编码被回填覆盖导致“编码冲突”
+      process_code: '',
       cost_type: 'time',
       charging_mode: 'count',
       status: 'draft',
       unit_of_measure: '个',
     })
     setDrawerOpen(true)
-    generateNextCode({ prefix: 'PR', width: 5 })
-      .then((res) => {
-        form.setFieldValue('process_code', res.code)
-      })
-      .catch(() => {
-        // keep fallback
-    })
   }
 
   const openView = (record: ProcessSummary) => {
@@ -564,6 +574,22 @@ const ProcessesPage = () => {
     setPendingFormValues(null)
   }, [drawerOpen, form, pendingFormValues])
 
+  const processCodeValue = Form.useWatch('process_code', form) as string | undefined
+
+  // 新建：在抽屉打开且表单已挂载后再生成编码（避免被 pendingFormValues 覆盖）
+  useEffect(() => {
+    if (!drawerOpen) return
+    if (drawerMode !== 'create') return
+    const current = String(processCodeValue ?? '').trim()
+    if (current) return
+    setAllocatingCode(true)
+    generateNextCode({ prefix: 'PR', width: 5 })
+      .then((res) => {
+        form.setFieldValue('process_code', res.code)
+      })
+      .finally(() => setAllocatingCode(false))
+  }, [drawerMode, drawerOpen, form, processCodeValue])
+
   return (
     <Space direction="vertical" style={{ width: '100%' }} size={24}>
       <div>
@@ -690,6 +716,7 @@ const ProcessesPage = () => {
                 type="primary"
                 onClick={handleSubmit}
                 loading={createMutation.isPending || updateMutation.isPending}
+                disabled={drawerMode === 'create' && (allocatingCode || !String(processCodeValue ?? '').trim())}
               >
                 保存
               </Button>

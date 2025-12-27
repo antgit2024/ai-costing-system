@@ -130,6 +130,52 @@ const safeNum = (value: unknown, fallback = 0) => {
   return Number.isFinite(n) ? n : fallback
 }
 
+const truncateText = (value: unknown, maxLen = 600): string | undefined => {
+  const s = String(value ?? '').trim()
+  if (!s) return undefined
+  if (s.length <= maxLen) return s
+  return s.slice(0, maxLen) + '…'
+}
+
+// 只保留工序 ai_spec 的关键字段，避免 payload 过大导致 LLM 调用变慢
+const pickProcessAiSpec = (raw: any): Record<string, any> | undefined => {
+  if (!raw || typeof raw !== 'object') return undefined
+  const src = raw as Record<string, any>
+  const out: Record<string, any> = {}
+  const keys = [
+    'intent',
+    'input',
+    'output',
+    'scenarios',
+    'qc',
+    'safety',
+    'tools',
+    'params_schema',
+  ]
+  for (const k of keys) {
+    const v = src[k]
+    if (v === undefined || v === null) continue
+    if (typeof v === 'string') {
+      const t = truncateText(v, 800)
+      if (t) out[k] = t
+      continue
+    }
+    // params_schema 可能是 JSON 对象/数组：控制大小
+    if (k === 'params_schema') {
+      try {
+        const dumped = JSON.stringify(v)
+        out[k] = dumped.length > 2000 ? dumped.slice(0, 2000) + '…' : v
+      } catch {
+        // ignore
+      }
+      continue
+    }
+    // 其他字段：尽量保留简单结构
+    out[k] = v
+  }
+  return Object.keys(out).length ? out : undefined
+}
+
 const fallbackModuleCode = () => {
   const suffix = String(Date.now() % 10000).padStart(4, '0')
   return `MOD${suffix}`
@@ -208,6 +254,21 @@ const parseNum = (value: unknown): number | undefined => {
   if (value === undefined || value === null) return undefined
   const n = Number(value)
   return Number.isFinite(n) ? n : undefined
+}
+
+const buildShortDescription = (text: unknown, maxLen = 90): string => {
+  const s = String(text ?? '').trim()
+  if (!s) return ''
+  // 取第一句/前 maxLen
+  const cutAt = Math.min(
+    ...[s.indexOf('。'), s.indexOf('！'), s.indexOf('？'), s.indexOf('\n')]
+      .filter((x) => x >= 0)
+      .map((x) => x + 1),
+    maxLen,
+    s.length,
+  )
+  const out = s.slice(0, cutAt).trim()
+  return out.length > maxLen ? out.slice(0, maxLen).trim() + '…' : out
 }
 
 const deriveBomUnitPrice = (material: Material): number | undefined => {
@@ -1481,6 +1542,7 @@ const ProcessModulesPage = () => {
       try {
         const detail = await fetchProcess(process.id)
         const meta = ((detail as any).metadata_json ?? {}) as any
+        const aiSpec = meta?.ai_spec && typeof meta.ai_spec === 'object' ? meta.ai_spec : undefined
         const costType: StepCostMode =
           meta.cost_type === 'time' || meta.cost_type === 'piece'
             ? meta.cost_type
@@ -1523,6 +1585,7 @@ const ProcessModulesPage = () => {
                 process_snapshot: {
                   ...process,
                   description: detail.description,
+                  ai_spec: aiSpec,
                 },
               },
             }
@@ -1550,6 +1613,7 @@ const ProcessModulesPage = () => {
                 process_snapshot: {
                   ...process,
                   description: detail.description,
+                  ai_spec: aiSpec,
                 },
               },
             },
@@ -1787,7 +1851,8 @@ const ProcessModulesPage = () => {
                             return {
                               process_code: snap.process_code,
                               process_name: snap.process_name,
-                              process_description: snap.description,
+                              process_description: truncateText(snap.description, 800),
+                              process_ai_spec: pickProcessAiSpec(snap.ai_spec),
                               team_name: s.team_name,
                               cost_type: meta.cost_type,
                               base_minutes: meta.base_minutes,
@@ -1796,7 +1861,7 @@ const ProcessModulesPage = () => {
                               measure_unit: meta.measure_unit,
                               rate_per_minute: meta.rate_per_minute,
                               piece_rate: meta.piece_rate,
-                              notes: s.notes,
+                              notes: truncateText(s.notes, 300),
                             }
                           }),
                       }
@@ -1804,8 +1869,35 @@ const ProcessModulesPage = () => {
                       setGeneratingDescription(true)
                       try {
                         const res = await generateProcessModuleDescription(payload as any)
-                        editorForm.setFieldValue('description', res.description)
-                        message.success(res.provider === 'llm' ? '已生成描述（LLM）' : '已生成描述（模板）')
+                        const longText = String(res.description ?? '').trim()
+                        const shortText = buildShortDescription(longText, 90)
+
+                        // 1) 基础信息的“描述”保持短，便于列表/快速浏览
+                        editorForm.setFieldValue('description', shortText || longText)
+
+                        // 2) 长文写入模块 ai_spec，直接保存（避免再手工复制到 AI 抽屉）
+                        if (selectedId && detailQuery.data) {
+                          const baseMeta = ((detailQuery.data.metadata_json ?? {}) as any) || {}
+                          const baseAi = (baseMeta.ai_spec && typeof baseMeta.ai_spec === 'object') ? baseMeta.ai_spec : {}
+                          const nextMeta = {
+                            ...baseMeta,
+                            ai_spec: {
+                              ...baseAi,
+                              narrative_short: shortText || undefined,
+                              narrative_long: longText || undefined,
+                              narrative_provider: res.provider,
+                              narrative_generated_at: new Date().toISOString(),
+                            },
+                          }
+                          await updateProcessModule(selectedId, {
+                            description: shortText || undefined,
+                            metadata_json: nextMeta,
+                          } as any)
+                          queryClient.invalidateQueries({ queryKey: ['process-modules'] })
+                          detailQuery.refetch()
+                        }
+
+                        message.success(res.provider === 'llm' ? 'AI生成完成（已写入AI语义长文）' : '生成完成（模板，已写入AI语义长文）')
                       } catch (e: any) {
                         message.error(e?.response?.data?.detail ?? '生成失败')
                       } finally {
@@ -1813,10 +1905,10 @@ const ProcessModulesPage = () => {
                       }
                     }}
                   >
-                    生成
+                    AI生成
                   </Button>
                   <Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>
-                    将当前物料组+工序组汇总生成模块描述
+                    将当前物料组+工序组汇总生成模块描述（通常 5-20 秒）
                   </Text>
                 </div>
               </Col>

@@ -1,5 +1,5 @@
-import { Drawer, Form, Input, Space, Button, Typography, Divider, Card, message } from 'antd'
-import { useEffect, useMemo, useState } from 'react'
+import { Drawer, Form, Input, Space, Button, Typography, Divider, Card, message, Modal } from 'antd'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { isAxiosError } from 'axios'
 import { fetchProcess, fetchProcessModule, updateProcessModule } from '@/services/planner'
@@ -15,6 +15,10 @@ type AIPartial = {
   constraints?: string
   tools?: string
   parameter_schema?: any
+  narrative_short?: string
+  narrative_long?: string
+  _manual_overrides?: Record<string, boolean>
+  _sources?: any
 }
 
 type StepAIEdit = {
@@ -36,6 +40,8 @@ type ModuleAIFormValues = {
   ai_constraints?: string
   ai_tools?: string
   ai_parameter_schema_json?: string
+  ai_narrative_short?: string
+  ai_narrative_long?: string
 }
 
 type Props = {
@@ -54,6 +60,8 @@ const normalizeAiSpecToForm = (ai: any): ModuleAIFormValues => {
     ai_constraints: String(ai?.constraints ?? ''),
     ai_tools: String(ai?.tools ?? ''),
     ai_parameter_schema_json: ai?.parameter_schema ? JSON.stringify(ai?.parameter_schema, null, 2) : '',
+    ai_narrative_short: String(ai?.narrative_short ?? ''),
+    ai_narrative_long: String(ai?.narrative_long ?? ''),
   }
 }
 
@@ -65,6 +73,8 @@ const buildAiSpecFromValues = (values: {
   ai_constraints?: any
   ai_tools?: any
   ai_parameter_schema_json?: any
+  ai_narrative_short?: any
+  ai_narrative_long?: any
 }): AIPartial | null => {
   const s = (v: any) => String(v ?? '').trim()
   const ai_spec: any = {}
@@ -74,6 +84,8 @@ const buildAiSpecFromValues = (values: {
   if (s(values.ai_quality_points)) ai_spec.quality_points = s(values.ai_quality_points)
   if (s(values.ai_constraints)) ai_spec.constraints = s(values.ai_constraints)
   if (s(values.ai_tools)) ai_spec.tools = s(values.ai_tools)
+  if (s(values.ai_narrative_short)) ai_spec.narrative_short = s(values.ai_narrative_short)
+  if (s(values.ai_narrative_long)) ai_spec.narrative_long = s(values.ai_narrative_long)
 
   const rawSchema = s(values.ai_parameter_schema_json)
   if (rawSchema) {
@@ -87,9 +99,28 @@ const buildAiSpecFromValues = (values: {
   return Object.keys(ai_spec).length ? ai_spec : null
 }
 
+const toLines = (value: unknown): string[] => {
+  const raw = String(value ?? '').trim()
+  if (!raw) return []
+  return raw
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
+
+const uniq = (items: string[]) => Array.from(new Set(items.map((x) => x.trim()).filter(Boolean)))
+
+const joinAsBullets = (items: string[]) => {
+  const u = uniq(items)
+  if (!u.length) return ''
+  return u.map((x) => `- ${x}`).join('\n')
+}
+
 export default function ProcessModuleAIDrawer({ open, moduleId, onClose, onSaved }: Props) {
   const [form] = Form.useForm<ModuleAIFormValues>()
   const [stepEdits, setStepEdits] = useState<StepAIEdit[]>([])
+  const initialFormRef = useRef<ModuleAIFormValues | null>(null)
+  const initialStepEditsRef = useRef<StepAIEdit[] | null>(null)
 
   const moduleQuery = useQuery<ProcessModuleDetail>({
     queryKey: ['process-module', moduleId],
@@ -114,6 +145,7 @@ export default function ProcessModuleAIDrawer({ open, moduleId, onClose, onSaved
     if (!open) return
     if (!module) return
     form.setFieldsValue(initialModuleAI)
+    initialFormRef.current = initialModuleAI
 
     const nextSteps: StepAIEdit[] = (module.steps ?? []).map((s) => {
       const meta = (s.metadata_json ?? {}) as any
@@ -126,6 +158,7 @@ export default function ProcessModuleAIDrawer({ open, moduleId, onClose, onSaved
       return { step_id: s.id, ...base }
     })
     setStepEdits(nextSteps)
+    initialStepEditsRef.current = nextSteps
   }, [form, initialModuleAI, module, open])
 
   const updateMutation = useMutation({
@@ -146,6 +179,69 @@ export default function ProcessModuleAIDrawer({ open, moduleId, onClose, onSaved
       message.error('保存失败')
     },
   })
+
+  const handleAggregateFromProcesses = async (mode: 'fill_empty' | 'overwrite') => {
+    if (!module) return
+    const steps = module.steps ?? []
+    const processIds = uniq(steps.map((s) => String(s.process_id ?? '').trim()).filter(Boolean))
+    if (!processIds.length) {
+      message.warning('该模块尚未选择工序，无法汇总')
+      return
+    }
+
+    const baseModuleMeta = (module.metadata_json ?? {}) as any
+    const baseAi = (baseModuleMeta?.ai_spec ?? {}) as any
+    const locked: Record<string, boolean> = (baseAi?._manual_overrides ?? {}) as any
+
+    const hide = message.loading('正在从工序库汇总 AI 语义...', 0)
+    try {
+      const details = await Promise.all(processIds.map((pid) => fetchProcess(pid)))
+      const aiList = details.map((d) => {
+        const meta = (d.metadata_json ?? {}) as any
+        const ai = (meta?.ai_spec ?? {}) as any
+        return { description: d.description, ai }
+      })
+
+      const aggregated: Partial<ModuleAIFormValues> = {
+        ai_intent: joinAsBullets(aiList.flatMap((x) => toLines(x.ai?.intent || x.description))),
+        ai_inputs: joinAsBullets(aiList.flatMap((x) => toLines(x.ai?.inputs))),
+        ai_outputs: joinAsBullets(aiList.flatMap((x) => toLines(x.ai?.outputs))),
+        ai_quality_points: joinAsBullets(aiList.flatMap((x) => toLines(x.ai?.quality_points || x.ai?.qc))),
+        ai_constraints: joinAsBullets(aiList.flatMap((x) => toLines(x.ai?.constraints || x.ai?.safety))),
+        ai_tools: joinAsBullets(aiList.flatMap((x) => toLines(x.ai?.tools))),
+      }
+
+      const current = form.getFieldsValue() as ModuleAIFormValues
+      const next: ModuleAIFormValues = { ...current }
+
+      const applyField = (field: keyof ModuleAIFormValues, lockKey: string) => {
+        const incoming = String((aggregated as any)[field] ?? '').trim()
+        if (!incoming) return
+        const cur = String((current as any)[field] ?? '').trim()
+        const isLocked = !!locked[lockKey]
+        if (isLocked) return
+        if (mode === 'fill_empty') {
+          if (!cur) (next as any)[field] = incoming
+          return
+        }
+        ;(next as any)[field] = incoming
+      }
+
+      applyField('ai_intent', 'intent')
+      applyField('ai_inputs', 'inputs')
+      applyField('ai_outputs', 'outputs')
+      applyField('ai_quality_points', 'quality_points')
+      applyField('ai_constraints', 'constraints')
+      applyField('ai_tools', 'tools')
+
+      form.setFieldsValue(next)
+      message.success(mode === 'fill_empty' ? '已从工序汇总（只填空）' : '已从工序汇总（覆盖未锁定字段）')
+    } catch (e: any) {
+      message.error(e?.response?.data?.detail ?? e?.message ?? '汇总失败')
+    } finally {
+      hide()
+    }
+  }
 
   const handleImportFromProcess = async (stepIndex: number) => {
     if (!module) return
@@ -194,8 +290,28 @@ export default function ProcessModuleAIDrawer({ open, moduleId, onClose, onSaved
     }
 
     const baseModuleMeta = (module.metadata_json ?? {}) as Record<string, unknown>
+    const baseAi = ((baseModuleMeta as any)?.ai_spec ?? {}) as any
+    const prevOverrides = (baseAi?._manual_overrides ?? {}) as Record<string, boolean>
+    const nextOverrides: Record<string, boolean> = { ...prevOverrides }
+
+    const initial = initialFormRef.current
+    const markOverride = (formKey: keyof ModuleAIFormValues, aiKey: string) => {
+      const cur = String((values as any)[formKey] ?? '').trim()
+      const prev = String((initial as any)?.[formKey] ?? '').trim()
+      if (cur && cur !== prev) nextOverrides[aiKey] = true
+    }
+    markOverride('ai_narrative_short', 'narrative_short')
+    markOverride('ai_narrative_long', 'narrative_long')
+    markOverride('ai_intent', 'intent')
+    markOverride('ai_inputs', 'inputs')
+    markOverride('ai_outputs', 'outputs')
+    markOverride('ai_quality_points', 'quality_points')
+    markOverride('ai_constraints', 'constraints')
+    markOverride('ai_tools', 'tools')
     const nextModuleMeta: Record<string, unknown> = { ...baseModuleMeta }
     if (moduleAi) {
+      moduleAi._manual_overrides = nextOverrides
+      moduleAi._sources = { updated_at: new Date().toISOString() }
       ;(nextModuleMeta as any).ai_spec = moduleAi
     } else {
       delete (nextModuleMeta as any).ai_spec
@@ -216,6 +332,31 @@ export default function ProcessModuleAIDrawer({ open, moduleId, onClose, onSaved
       }
 
       if (stepAi) {
+        const stepMeta: any = (s.metadata_json ?? {}) as any
+        const stepBaseAi: any = stepMeta?.ai_spec ?? {}
+        const stepPrevOverrides: Record<string, boolean> = (stepBaseAi?._manual_overrides ?? {}) as any
+        const stepNextOverrides: Record<string, boolean> = { ...stepPrevOverrides }
+        const initialSteps = initialStepEditsRef.current ?? []
+        const initEdit = initialSteps.find((x) => x.step_id === s.id) ?? {}
+        const markStep = (k: keyof StepAIEdit, aiKey: string) => {
+          const cur = String((edit as any)?.[k] ?? '').trim()
+          const prev = String((initEdit as any)[k] ?? '').trim()
+          if (cur && cur !== prev) stepNextOverrides[aiKey] = true
+        }
+        markStep('ai_intent', 'intent')
+        markStep('ai_inputs', 'inputs')
+        markStep('ai_outputs', 'outputs')
+        markStep('ai_quality_points', 'quality_points')
+        markStep('ai_constraints', 'constraints')
+        markStep('ai_tools', 'tools')
+        if (
+          String(edit?.ai_parameter_schema_json ?? '').trim() &&
+          String(edit?.ai_parameter_schema_json ?? '').trim() !==
+            String((initEdit as any).ai_parameter_schema_json ?? '').trim()
+        ) {
+          stepNextOverrides['parameter_schema'] = true
+        }
+        stepAi._manual_overrides = stepNextOverrides
         ;(next as any).ai_spec = stepAi
       } else {
         delete (next as any).ai_spec
@@ -265,7 +406,41 @@ export default function ProcessModuleAIDrawer({ open, moduleId, onClose, onSaved
       }
     >
       <Card size="small" title="模块级 AI 语义" bordered={false}>
+        <Space style={{ marginBottom: 12 }} wrap>
+          <Button onClick={() => handleAggregateFromProcesses('fill_empty')}>从工序自动汇总（只填空）</Button>
+          <Button
+            onClick={() =>
+              Modal.confirm({
+                title: '确认汇总并覆盖未锁定字段？',
+                content: '将基于工序库 AI 语义汇总模块级字段；不会覆盖已手工锁定的字段。',
+                okText: '继续',
+                cancelText: '取消',
+                onOk: () => handleAggregateFromProcesses('overwrite'),
+              })
+            }
+          >
+            从工序自动汇总（覆盖）
+          </Button>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            建议：先在工序库维护好 AI 字段，再在模块里一键汇总；模块里仅维护差异化内容。
+          </Text>
+        </Space>
         <Form form={form} layout="vertical" preserve={false} initialValues={initialModuleAI}>
+          <Form.Item
+            label="AI工艺说明（短）"
+            name="ai_narrative_short"
+            tooltip="用于主页面“描述/列表”快速浏览（建议 1-2 句）。"
+          >
+            <Input.TextArea rows={2} placeholder="例如：用于地垫卷材外包装，按最短边+预留长度套袋并扎带固定，降低运输破损。" />
+          </Form.Item>
+          <Form.Item
+            label="AI工艺说明（长）"
+            name="ai_narrative_long"
+            tooltip="用于沉淀工艺知识（长文档），建议由 AI 生成后再人工微调。"
+          >
+            <Input.TextArea rows={8} placeholder="这里放刚才那种详细的工艺说明（目的/流程/关键物料/计量口径/QC/禁忌/工具等）。" />
+          </Form.Item>
+          <Divider />
           <Form.Item label="模块意图/目的" name="ai_intent">
             <Input.TextArea rows={3} placeholder="用于说明该工艺模块产出什么半成品、为什么这样做、适用场景" />
           </Form.Item>
@@ -293,6 +468,9 @@ export default function ProcessModuleAIDrawer({ open, moduleId, onClose, onSaved
       <Divider />
 
       <Card size="small" title="步骤级 AI 语义（每一步可覆盖/补充）" bordered={false}>
+        <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+          步骤级用于“该模块场景下此工序的特殊要求/差异”。默认可不填；如需带入工序库 AI 语义，点击每步右上角按钮。
+        </Text>
         <Space direction="vertical" style={{ width: '100%' }} size={12}>
           {(module?.steps ?? []).map((s, idx) => {
             const edit = stepEdits.find((x) => x.step_id === s.id) ?? { step_id: s.id }
@@ -311,7 +489,7 @@ export default function ProcessModuleAIDrawer({ open, moduleId, onClose, onSaved
                 }
                 extra={
                   <Button size="small" onClick={() => handleImportFromProcess(idx)}>
-                    从工序引用 AI
+                    引用工序AI→步骤
                   </Button>
                 }
               >

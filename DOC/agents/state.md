@@ -144,6 +144,23 @@
 
 - **本轮验收命令（必须）**：`npm -C frontend run build`（已通过）
 
+- **本轮闭环产物（Frontend / 工艺模块 AI 语义抽屉重构：自动汇总为主、步骤级补丁、手工不覆盖）**：
+  - 目标：让员工看懂“这个工艺模块怎么做”，并让模块级 AI 字段主要来自工序库 ai_spec 自动汇总，避免重复手填。
+  - 变更点：
+    - `AI 语义（工艺模块）` 抽屉新增按钮：
+      - “从工序自动汇总（只填空）”：按模块已选工序拉取工序库 `metadata_json.ai_spec`，汇总到模块级字段，仅填空。
+      - “从工序自动汇总（覆盖）”：覆盖未锁定字段（不会覆盖手工锁定字段）。
+    - 新增手工锁定：保存时把人工编辑过的字段写入 `metadata_json.ai_spec._manual_overrides`，后续汇总默认不覆盖。
+    - 步骤级区块增加解释文案，并把按钮文案改为“引用工序AI→步骤”（步骤级用于少量差异化补丁）。
+  - 关键文件：
+    - `frontend/src/components/costing/ProcessModuleAIDrawer.tsx`
+    - `frontend/src/pages/costing/ProcessModulesPage.tsx`
+  - 本轮验收命令：
+    - `npm -C frontend run build`
+    - `grep -nF "从工序自动汇总（只填空）" frontend/src/components/costing/ProcessModuleAIDrawer.tsx`
+  - 下一步（可选，不在本轮范围）：对“AI生成写入 narrative_long”加“手工锁定字段覆盖确认”提示（尊重 `_manual_overrides.narrative_long`）。
+  - 最近校对（北京时间 GMT+8）：2025-12-27 17:30
+
 - **本轮闭环产物（Frontend / 只读：发货批次列表 + 异常队列 + BOM 快照查询）**：
   - 新增页面：`/costing/shipments`（只读）
   - 页面顶部新增：上传发货单（xlsx 导入）→ 调用 `POST /api/planner/shipments/import`，导入成功后自动选中 batch 并刷新列表/异常/快照

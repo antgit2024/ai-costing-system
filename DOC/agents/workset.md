@@ -2,7 +2,7 @@
 
 > 目的：把“上下文”从聊天迁到可引用的工作集；新 Agent 只需读这些，不要全仓扫描。
 
-> 最近校对（北京时间 GMT+8）：2025-12-23
+> 最近校对（北京时间 GMT+8）：2025-12-27
 
 ### 1) 前端：产品模型（迁移编辑器的核心工作区）
 
@@ -20,6 +20,8 @@
 - `frontend/src/services/planner.ts`（前端接口单一真相）
 - `frontend/src/types/planner.ts`（前端类型单一真相）
 - `frontend/src/App.tsx`（路由：/costing/sample-models & /costing/standard-models）
+- `frontend/src/pages/costing/ProcessModulesPage.tsx`（工艺模块主页面：AI生成/模块描述/工序选择与回填）
+- `frontend/src/components/costing/ProcessModuleAIDrawer.tsx`（工艺模块AI语义抽屉：从工序汇总 + 手工锁定）
 
 ### 2) 后端：接口契约（只读校对用）
 

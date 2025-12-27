@@ -11,4 +11,5 @@ cachetools==5.3.2
 tenacity==8.2.3
 respx==0.20.2
 requests==2.32.3
+psycopg2-binary==2.9.9
 openpyxl==3.1.5

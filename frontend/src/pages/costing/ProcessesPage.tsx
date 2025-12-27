@@ -354,7 +354,7 @@ const ProcessesPage = () => {
       status: record.status,
       standard_time_minutes: safeNumber((record.metadata_json as any)?.standard_time_minutes),
       process_tags: Array.isArray((record.metadata_json as any)?.process_tags) ? (record.metadata_json as any).process_tags : [],
-      ai_intent: String(ai?.intent ?? ''),
+      ai_intent: String(ai?.intent ?? record.description ?? ''),
       ai_inputs: String(ai?.inputs ?? ''),
       ai_outputs: String(ai?.outputs ?? ''),
       ai_quality_points: String(ai?.quality_points ?? ''),
@@ -390,7 +390,7 @@ const ProcessesPage = () => {
       status: record.status,
       standard_time_minutes: safeNumber((record.metadata_json as any)?.standard_time_minutes),
       process_tags: Array.isArray((record.metadata_json as any)?.process_tags) ? (record.metadata_json as any).process_tags : [],
-      ai_intent: String(ai?.intent ?? ''),
+      ai_intent: String(ai?.intent ?? record.description ?? ''),
       ai_inputs: String(ai?.inputs ?? ''),
       ai_outputs: String(ai?.outputs ?? ''),
       ai_quality_points: String(ai?.quality_points ?? ''),
@@ -426,7 +426,7 @@ const ProcessesPage = () => {
       status: record.status,
       standard_time_minutes: safeNumber((record.metadata_json as any)?.standard_time_minutes),
       process_tags: Array.isArray((record.metadata_json as any)?.process_tags) ? (record.metadata_json as any).process_tags : [],
-      ai_intent: String(ai?.intent ?? ''),
+      ai_intent: String(ai?.intent ?? record.description ?? ''),
       ai_inputs: String(ai?.inputs ?? ''),
       ai_outputs: String(ai?.outputs ?? ''),
       ai_quality_points: String(ai?.quality_points ?? ''),
@@ -482,7 +482,9 @@ const ProcessesPage = () => {
     // AI 语义字段（可选）：写入 metadata_json.ai_spec
     const ai_spec: any = {}
     const s = (v: any) => String(v ?? '').trim()
-    if (s(values.ai_intent)) ai_spec.intent = s(values.ai_intent)
+    // 自动兜底：如果未填写 AI 意图，则用“描述”作为默认意图（用户保存后固化）
+    const intentValue = s(values.ai_intent) || s(values.description)
+    if (intentValue) ai_spec.intent = intentValue
     if (s(values.ai_inputs)) ai_spec.inputs = s(values.ai_inputs)
     if (s(values.ai_outputs)) ai_spec.outputs = s(values.ai_outputs)
     if (s(values.ai_quality_points)) ai_spec.quality_points = s(values.ai_quality_points)

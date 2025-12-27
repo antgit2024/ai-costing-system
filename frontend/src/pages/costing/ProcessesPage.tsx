@@ -186,6 +186,22 @@ const ProcessesPage = () => {
     return Array.from(base.entries()).map(([value, label]) => ({ value, label }))
   }, [listQuery.data?.items, taxonomyCategoriesQuery.data?.items])
 
+  const categoryScopesByName = useMemo(() => {
+    const map = new Map<string, string[]>()
+    for (const it of taxonomyCategoriesQuery.data?.items ?? []) {
+      const name = String((it as any)?.name ?? '').trim()
+      if (!name) continue
+      const isActive = (it as any)?.is_active !== false
+      if (!isActive) continue
+      const scopes = Array.isArray((it as any)?.scopes) ? (it as any).scopes : []
+      map.set(
+        name,
+        scopes.map((s: any) => String(s ?? '').trim()).filter(Boolean),
+      )
+    }
+    return map
+  }, [taxonomyCategoriesQuery.data?.items])
+
   const createMutation = useMutation({
     mutationFn: (payload: ProcessCreatePayload) => createProcess(payload),
     onSuccess: () => {
@@ -458,11 +474,35 @@ const ProcessesPage = () => {
     {
       title: '分类',
       dataIndex: 'category',
-      width: 120,
+      width: 220,
       ellipsis: true,
-      render: (value?: string | null) => (
-        <Text ellipsis={{ tooltip: value || '-' }}>{value || '-'}</Text>
-      ),
+      render: (value?: string | null) => {
+        const name = String(value ?? '').trim()
+        const scopes = name ? categoryScopesByName.get(name) ?? [] : []
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden' }}>
+            <Text ellipsis={{ tooltip: name || '-' }} style={{ maxWidth: 120 }}>
+              {name || '-'}
+            </Text>
+            <span style={{ display: 'flex', gap: 4, flexWrap: 'nowrap', overflow: 'hidden' }}>
+              {scopes.slice(0, 3).map((s) => (
+                <Tag
+                  key={s}
+                  color={s === '*' ? 'blue' : undefined}
+                  style={{ marginInlineEnd: 0, borderRadius: 999, padding: '0 6px', fontSize: 12, lineHeight: '18px' }}
+                >
+                  {s === '*' ? '通用' : s}
+                </Tag>
+              ))}
+              {scopes.length > 3 ? (
+                <Tag style={{ marginInlineEnd: 0, borderRadius: 999, padding: '0 6px', fontSize: 12, lineHeight: '18px' }}>
+                  +{scopes.length - 3}
+                </Tag>
+              ) : null}
+            </span>
+          </div>
+        )
+      },
     },
     {
       title: '计量类型',

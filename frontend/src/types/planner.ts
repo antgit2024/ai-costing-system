@@ -1449,3 +1449,44 @@ export interface RecognitionKeywordsValidateResponse {
   conflicts: Record<string, string>
 }
 
+// -----------------------------
+// Taxonomy (admin dictionaries)
+// -----------------------------
+
+export interface TaxonomyScopeOptionsResponse {
+  universal_scope: string
+  default_scopes: string[]
+}
+
+export interface TaxonomyItemRead {
+  id: string
+  domain: string
+  name: string
+  scopes: string[]
+  is_active: boolean
+  sort_order: number
+  source: string
+  metadata: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export interface TaxonomyItemListResponse {
+  items: TaxonomyItemRead[]
+}
+
+export interface TaxonomyMappingRead {
+  id: string
+  domain: string
+  external_system: string
+  external_value: string
+  taxonomy_item_id: string
+  taxonomy_item_name?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface TaxonomyMappingListResponse {
+  items: TaxonomyMappingRead[]
+}
+

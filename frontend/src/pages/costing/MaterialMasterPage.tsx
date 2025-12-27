@@ -37,13 +37,13 @@ import dayjs from 'dayjs'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { MATERIAL_CATEGORIES } from '@/constants/materialCategories'
 import {
   exportMaterials,
   fetchMaterialSyncJob,
   fetchMaterialSyncLogs,
   fetchMaterials,
   fetchMaterialVirtualLinks,
+  fetchTaxonomyItems,
   triggerMaterialBomDerive,
   triggerMaterialSync,
   updateMaterial,
@@ -393,6 +393,10 @@ const MaterialMasterPage = () => {
   const materials = materialsQuery.data?.items ?? []
   const totalCount = materialsQuery.data?.total ?? 0
   const backendCategories = materialsQuery.data?.categories
+  const taxonomyCategoriesQuery = useQuery({
+    queryKey: ['taxonomy-items', 'material_category'],
+    queryFn: () => fetchTaxonomyItems('material_category'),
+  })
   const categoryOptions = useMemo(() => {
     const seen = new Set<string>()
     const options: { label: string; value: string }[] = []
@@ -404,13 +408,13 @@ const MaterialMasterPage = () => {
       seen.add(value)
       options.push({ label: value, value })
     }
-    MATERIAL_CATEGORIES.forEach((value) => append(value))
+    ;(taxonomyCategoriesQuery.data?.items ?? []).forEach((it) => append(it.name))
     ;(backendCategories ?? []).forEach((value) => append(value))
     materials.forEach((item) => {
       append(getFormValue(item, 'textField_jacd537') || item.category)
     })
     return options
-  }, [backendCategories, materials])
+  }, [backendCategories, materials, taxonomyCategoriesQuery.data?.items])
 
   const syncLogsQuery = useQuery<MaterialSyncLogResponse>({
     queryKey: ['material-sync-logs', syncDrawerOpen, syncPagination],

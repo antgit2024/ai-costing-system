@@ -47,6 +47,11 @@ class Settings(BaseSettings):
         env="PLANNER_PERSIST_MATERIAL_IMAGES",
     )
 
+    # Admin key (very lightweight protection for admin-only maintenance endpoints).
+    # If set, mutating endpoints guarded by `require_admin_key` will require header:
+    #   X-PLANNER-ADMIN-KEY: <value>
+    planner_admin_key: str | None = Field(default=None, env="PLANNER_ADMIN_KEY")
+
     class Config:
         env_file = str(ENV_FILE)
         env_file_encoding = "utf-8"

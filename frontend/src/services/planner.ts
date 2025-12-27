@@ -108,6 +108,11 @@ import type {
   SkuMasterAutoBindPreviewResponse,
   SkuMasterAutoBindExecuteResponse,
   RecognitionKeywordsValidateResponse,
+  TaxonomyScopeOptionsResponse,
+  TaxonomyItemListResponse,
+  TaxonomyItemRead,
+  TaxonomyMappingListResponse,
+  TaxonomyMappingRead,
 } from '@/types/planner'
 
 const resolvePlannerApiBase = (raw?: string): string => {
@@ -132,6 +137,7 @@ const resolvePlannerApiBase = (raw?: string): string => {
 
 const API_BASE_URL = resolvePlannerApiBase(import.meta.env.VITE_PLANNER_API_BASE)
 const DEFAULT_PLANNER_USER = import.meta.env.VITE_PLANNER_USER_ID ?? 'planner_user'
+const PLANNER_ADMIN_KEY = import.meta.env.VITE_PLANNER_ADMIN_KEY as string | undefined
 
 const mapBenchmarkFavorite = (favorite: any): BenchmarkFavorite => ({
   id: favorite.id,
@@ -146,6 +152,11 @@ export const plannerClient = axios.create({
   baseURL: API_BASE_URL,
   timeout: 20000,
 })
+
+const adminHeaders = (): Record<string, string> => {
+  if (!PLANNER_ADMIN_KEY) return {}
+  return { 'X-PLANNER-ADMIN-KEY': PLANNER_ADMIN_KEY }
+}
 
 export const sanitizeParams = <T extends Record<string, unknown>>(params: T) =>
   Object.entries(params).reduce<Record<string, unknown>>((acc, [key, value]) => {
@@ -171,6 +182,79 @@ export const fetchInitiatives = async (params: InitiativeQueryParams = {}): Prom
     params: sanitizeParams(params as Record<string, unknown>),
   })
   return response.data
+}
+
+// -----------------------------
+// Taxonomy (admin dictionaries)
+// -----------------------------
+
+export const fetchTaxonomyScopeOptions = async (): Promise<TaxonomyScopeOptionsResponse> => {
+  const resp = await plannerClient.get('/taxonomy/scope-options')
+  return resp.data
+}
+
+export const fetchTaxonomyItems = async (
+  domain: string,
+  opts: { include_inactive?: boolean } = {},
+): Promise<TaxonomyItemListResponse> => {
+  const resp = await plannerClient.get('/taxonomy/items', {
+    params: sanitizeParams({ domain, include_inactive: opts.include_inactive }),
+  })
+  return resp.data
+}
+
+export const createTaxonomyItem = async (payload: {
+  domain: string
+  name: string
+  scopes: string[]
+  is_active?: boolean
+  sort_order?: number
+  source?: string
+  metadata?: Record<string, unknown>
+}): Promise<TaxonomyItemRead> => {
+  const resp = await plannerClient.post('/taxonomy/items', payload, { headers: adminHeaders() })
+  return resp.data
+}
+
+export const updateTaxonomyItem = async (
+  id: string,
+  payload: { name?: string; scopes?: string[]; is_active?: boolean; sort_order?: number; metadata?: Record<string, unknown> },
+): Promise<TaxonomyItemRead> => {
+  const resp = await plannerClient.patch(`/taxonomy/items/${id}`, payload, { headers: adminHeaders() })
+  return resp.data
+}
+
+export const archiveTaxonomyItem = async (id: string): Promise<void> => {
+  await plannerClient.delete(`/taxonomy/items/${id}`, { headers: adminHeaders() })
+}
+
+export const fetchTaxonomyMappings = async (
+  domain: string,
+  external_system = 'yida',
+): Promise<TaxonomyMappingListResponse> => {
+  const resp = await plannerClient.get('/taxonomy/mappings', {
+    params: sanitizeParams({ domain, external_system }),
+  })
+  return resp.data
+}
+
+export const createTaxonomyMapping = async (payload: {
+  domain: string
+  external_system?: string
+  external_value: string
+  taxonomy_item_id: string
+}): Promise<TaxonomyMappingRead> => {
+  const resp = await plannerClient.post('/taxonomy/mappings', payload, { headers: adminHeaders() })
+  return resp.data
+}
+
+export const updateTaxonomyMapping = async (id: string, payload: { taxonomy_item_id: string }): Promise<TaxonomyMappingRead> => {
+  const resp = await plannerClient.patch(`/taxonomy/mappings/${id}`, payload, { headers: adminHeaders() })
+  return resp.data
+}
+
+export const deleteTaxonomyMapping = async (id: string): Promise<void> => {
+  await plannerClient.delete(`/taxonomy/mappings/${id}`, { headers: adminHeaders() })
 }
 
 export const fetchInitiativeById = async (id: string): Promise<Initiative> => {

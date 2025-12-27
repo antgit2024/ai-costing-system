@@ -742,6 +742,45 @@ class ModelProcessModule(Base, TimestampMixin, SoftDeleteMixin):
     module: Mapped["ProcessModule"] = relationship("ProcessModule")
 
 
+class TaxonomyItem(Base, TimestampMixin, SoftDeleteMixin):
+    """
+    Flat taxonomy dictionary item for admin-maintained categories.
+
+    Notes:
+    - Keep it flat (no parent_id) per current project requirements.
+    - `scopes_json`: required list; use ["*"] to mean universal (all product lines).
+    """
+
+    __tablename__ = "taxonomy_items"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    domain: Mapped[str] = Column(String(64), nullable=False, index=True)
+    name: Mapped[str] = Column(String(128), nullable=False)
+    scopes_json: Mapped[List[str]] = Column("scopes", JSON, default=list, nullable=False)
+    is_active: Mapped[bool] = Column(Boolean, nullable=False, default=True)
+    sort_order: Mapped[int] = Column(Integer, nullable=False, default=0)
+    source: Mapped[str] = Column(String(32), nullable=False, default="local")
+    metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict)
+
+
+class TaxonomyMapping(Base, TimestampMixin):
+    """
+    Map external values (e.g. YiDa raw category strings) to internal taxonomy items.
+    """
+
+    __tablename__ = "taxonomy_mappings"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    domain: Mapped[str] = Column(String(64), nullable=False, index=True)
+    external_system: Mapped[str] = Column(String(32), nullable=False, default="yida", index=True)
+    external_value: Mapped[str] = Column(String(255), nullable=False)
+    taxonomy_item_id: Mapped[str] = Column(
+        String(36), ForeignKey("taxonomy_items.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    item: Mapped["TaxonomyItem"] = relationship("TaxonomyItem")
+
+
 class MaterialSyncJob(Base, TimestampMixin):
     __tablename__ = "material_sync_jobs"
 

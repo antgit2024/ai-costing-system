@@ -380,6 +380,67 @@ class PaginatedMaterialResponse(BaseModel):
     page: int
     page_size: int
     items: List[MaterialRead]
+
+
+# -----------------------------
+# Taxonomy (admin-maintained dictionaries)
+# -----------------------------
+
+
+class TaxonomyScopeOptionsResponse(BaseModel):
+    universal_scope: str
+    default_scopes: List[str]
+
+
+class TaxonomyItemRead(BaseModel):
+    id: str
+    domain: str
+    name: str
+    scopes: List[str] = Field(alias="scopes_json")
+    is_active: bool
+    sort_order: int
+    source: str
+    metadata: Dict[str, Any] = Field(alias="metadata_json")
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        orm_mode = True
+        allow_population_by_field_name = True
+
+
+class TaxonomyItemListResponse(BaseModel):
+    items: List[TaxonomyItemRead]
+
+
+class TaxonomyMappingRead(BaseModel):
+    id: str
+    domain: str
+    external_system: str
+    external_value: str
+    taxonomy_item_id: str
+    taxonomy_item_name: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    @root_validator(pre=True)
+    def _fill_item_name(cls, values):
+        if not isinstance(values, dict):
+            values = dict(values)
+        item = values.get("item")
+        if item and not values.get("taxonomy_item_name"):
+            try:
+                values["taxonomy_item_name"] = getattr(item, "name", None)
+            except Exception:
+                pass
+        return values
+
+    class Config:
+        orm_mode = True
+
+
+class TaxonomyMappingListResponse(BaseModel):
+    items: List[TaxonomyMappingRead]
     categories: List[str] = Field(default_factory=list)
 
 

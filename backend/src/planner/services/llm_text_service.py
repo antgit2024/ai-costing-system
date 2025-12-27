@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 
+import logging
 import httpx
 
 from ...config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def _fallback_description(payload: Dict[str, Any]) -> str:
@@ -125,7 +128,8 @@ def generate_process_module_description(payload: Dict[str, Any]) -> Tuple[str, s
                 if not content:
                     return _fallback_description(payload), "fallback"
                 return content, "llm"
-        except Exception:
+        except Exception as e:
+            logger.exception("dashscope llm call failed; fallback to template. err=%r", e)
             return _fallback_description(payload), "fallback"
 
     # Provider B: OpenAI-compatible
@@ -153,7 +157,8 @@ def generate_process_module_description(payload: Dict[str, Any]) -> Tuple[str, s
             if not content:
                 return _fallback_description(payload), "fallback"
             return content, "llm"
-    except Exception:
+    except Exception as e:
+        logger.exception("openai-compatible llm call failed; fallback to template. err=%r", e)
         return _fallback_description(payload), "fallback"
 
 

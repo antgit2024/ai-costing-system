@@ -1336,7 +1336,8 @@ class ProcessModuleReferenceResponse(BaseModel):
 
 
 class ProcessCreateRequest(BaseModel):
-    process_code: str = Field(..., max_length=64)
+    # allow backend allocate code on save (avoid wasting codes on "open drawer")
+    process_code: Optional[str] = Field(None, max_length=64)
     process_name: str = Field(..., max_length=255)
     description: Optional[str] = None
     category: Optional[str] = Field(None, max_length=128)

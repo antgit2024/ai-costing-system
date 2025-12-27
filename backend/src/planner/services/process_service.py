@@ -7,6 +7,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from .. import models
+from ..services import code_generator_service
 from ..utils.unit_normalizer import normalize_unit
 
 
@@ -65,7 +66,7 @@ def get_process(db: Session, process_id: str) -> Optional[models.Process]:
 def create_process(
     db: Session,
     *,
-    process_code: str,
+    process_code: str | None,
     process_name: str,
     description: Optional[str],
     category: Optional[str],
@@ -76,16 +77,32 @@ def create_process(
     status: Optional[str],
     metadata: Optional[Dict[str, any]],
 ) -> models.Process:
-    existing = (
-        db.query(models.Process)
-        .filter(models.Process.process_code == process_code, models.Process.is_archived.is_(False))
-        .one_or_none()
-    )
-    if existing:
-        raise ValueError("process_code already exists")
+    code = (process_code or "").strip()
+    if not code:
+        # allocate on save to avoid wasting codes and reduce collisions
+        for _ in range(10):
+            candidate = code_generator_service.allocate_code(db, prefix="PR", width=5)
+            exists = (
+                db.query(models.Process)
+                .filter(models.Process.process_code == candidate, models.Process.is_archived.is_(False))
+                .one_or_none()
+            )
+            if not exists:
+                code = candidate
+                break
+        if not code:
+            raise ValueError("无法生成唯一的工序编码，请稍后重试")
+    else:
+        existing = (
+            db.query(models.Process)
+            .filter(models.Process.process_code == code, models.Process.is_archived.is_(False))
+            .one_or_none()
+        )
+        if existing:
+            raise ValueError("process_code already exists")
 
     model = models.Process(
-        process_code=process_code,
+        process_code=code,
         process_name=process_name,
         description=description,
         category=category,

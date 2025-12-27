@@ -8,7 +8,6 @@ import StopOutlined from '@ant-design/icons/lib/icons/StopOutlined'
 import DeleteOutlined from '@ant-design/icons/lib/icons/DeleteOutlined'
 import EyeOutlined from '@ant-design/icons/lib/icons/EyeOutlined'
 import {
-  Alert,
   Button,
   Card,
   Form as AntForm,
@@ -139,7 +138,7 @@ const ProcessesPage = () => {
   const [drawerMode, setDrawerMode] = useState<'create' | 'edit' | 'view'>('create')
   const [selected, setSelected] = useState<ProcessSummary | null>(null)
   const [pendingFormValues, setPendingFormValues] = useState<Record<string, unknown> | null>(null)
-  const [allocatingCode, setAllocatingCode] = useState(false)
+  // 工序编码改为“保存时后端生成”，避免打开抽屉就消耗编码
   const [copyModalOpen, setCopyModalOpen] = useState(false)
   const [copySource, setCopySource] = useState<ProcessSummary | null>(null)
   const [guideOpen, setGuideOpen] = useState(false)
@@ -188,22 +187,7 @@ const ProcessesPage = () => {
   }, [listQuery.data?.items, taxonomyCategoriesQuery.data?.items])
 
   const createMutation = useMutation({
-    mutationFn: async (payload: ProcessCreatePayload) => {
-      try {
-        return await createProcess(payload)
-      } catch (error) {
-        // 兜底：编码冲突则自动重新取号并重试一次（避免并发/回填覆盖导致的冲突）
-        if (isAxiosError(error)) {
-          const detail = String(error.response?.data?.detail ?? '')
-          if (detail.includes('process_code already exists')) {
-            const next = await generateNextCode({ prefix: 'PR', width: 5 })
-            form.setFieldValue('process_code', next.code)
-            return await createProcess({ ...payload, process_code: next.code })
-          }
-        }
-        throw error
-      }
-    },
+    mutationFn: (payload: ProcessCreatePayload) => createProcess(payload),
     onSuccess: () => {
       message.success('已创建')
       setDrawerOpen(false)
@@ -309,7 +293,6 @@ const ProcessesPage = () => {
     // 必须在 Drawer 打开且 Form 挂载后再回填，否则会出现“编辑/新建掉值”。
     form.resetFields()
     setPendingFormValues({
-      // 不填 fallback，避免后续异步生成的编码被回填覆盖导致“编码冲突”
       process_code: '',
       cost_type: 'time',
       charging_mode: 'count',
@@ -574,21 +557,7 @@ const ProcessesPage = () => {
     setPendingFormValues(null)
   }, [drawerOpen, form, pendingFormValues])
 
-  const processCodeValue = Form.useWatch('process_code', form) as string | undefined
-
-  // 新建：在抽屉打开且表单已挂载后再生成编码（避免被 pendingFormValues 覆盖）
-  useEffect(() => {
-    if (!drawerOpen) return
-    if (drawerMode !== 'create') return
-    const current = String(processCodeValue ?? '').trim()
-    if (current) return
-    setAllocatingCode(true)
-    generateNextCode({ prefix: 'PR', width: 5 })
-      .then((res) => {
-        form.setFieldValue('process_code', res.code)
-      })
-      .finally(() => setAllocatingCode(false))
-  }, [drawerMode, drawerOpen, form, processCodeValue])
+  // process_code is backend-allocated on save; no need to watch
 
   return (
     <Space direction="vertical" style={{ width: '100%' }} size={24}>
@@ -716,7 +685,6 @@ const ProcessesPage = () => {
                 type="primary"
                 onClick={handleSubmit}
                 loading={createMutation.isPending || updateMutation.isPending}
-                disabled={drawerMode === 'create' && (allocatingCode || !String(processCodeValue ?? '').trim())}
               >
                 保存
               </Button>
@@ -724,27 +692,6 @@ const ProcessesPage = () => {
           )
         }
       >
-        <Alert
-          type="info"
-          showIcon
-          style={{ marginBottom: 12 }}
-          message="计价说明（便于统一表达）"
-          description={
-            <Space direction="vertical" size={4}>
-              <div>
-                <Text strong>计时：</Text>
-                <Text>成本 = (基础工时 + 单位工时×计价量) × 分钟单价</Text>
-              </div>
-              <div>
-                <Text strong>计件：</Text>
-                <Text>成本 = 计件单价 × 数量</Text>
-              </div>
-              <Text type="secondary">
-                工序类型为单选（计时/计件），但两套字段都可同时维护；最终核算以当前选择的类型为准。
-              </Text>
-            </Space>
-          }
-        />
         <Form
           form={form}
           layout="vertical"
@@ -761,11 +708,13 @@ const ProcessesPage = () => {
               name="process_code"
               style={{ flex: 1 }}
               rules={[
-                { required: true, message: '请输入工序编码' },
                 { max: 64, message: '最长 64 字符' },
               ]}
             >
-              <Input placeholder="如: PR001" disabled={drawerMode !== 'create'} />
+              <Input
+                placeholder={drawerMode === 'create' ? '保存时自动生成' : '如: PR001'}
+                disabled
+              />
             </Form.Item>
             <Form.Item
               label="状态"

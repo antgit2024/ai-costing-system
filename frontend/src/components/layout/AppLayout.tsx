@@ -16,6 +16,12 @@ import { fetchTaskCenter } from '@/services/planner'
 
 const { Header, Sider, Content } = Layout
 
+type TaskCenterResp = Awaited<ReturnType<typeof fetchTaskCenter>>
+type TaskProbe = {
+  statuses: string[]
+  runningCount: number
+}
+
 const menuItems: MenuProps['items'] = [
   {
     key: '/',
@@ -109,20 +115,38 @@ const AppLayout = ({ children }: AppLayoutProps) => {
   const location = useLocation()
   const [taskOpen, setTaskOpen] = useState(false)
 
-  const taskProbeQuery = useQuery({
+  /**
+   * 任务角标探针（性能敏感）：
+   * - 只需要“runningCount”，不需要完整 payload/result
+   * - task-center 的 payload/result 可能很大；频繁轮询会造成 Chrome 主线程卡顿（甚至“页面无响应”）
+   * - 因此：limit 降到 5 + select 压缩缓存数据 + 页面不可见时停止轮询 + 降低轮询频率
+   */
+  const taskProbeQuery = useQuery<TaskCenterResp, Error, TaskProbe>({
     queryKey: ['task-center-probe'],
-    queryFn: () => fetchTaskCenter({ limit: 30 }),
-    refetchInterval: (q) => {
-      const items = q.state.data?.items ?? []
-      const hasRunning = items.some((t) => ['pending', 'running', 'processing'].includes(String(t.status)))
-      return hasRunning ? 2000 : 8000
+    queryFn: () => fetchTaskCenter({ limit: 5 }),
+    select: (data) => {
+      const statuses = (data?.items ?? []).map((t) => String((t as any)?.status ?? ''))
+      const runningCount = statuses.filter((s) => ['pending', 'running', 'processing'].includes(s)).length
+      return { statuses, runningCount }
     },
+    refetchInterval: (q) => {
+      // 页面不可见时不轮询，避免后台占用主线程
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return false
+
+      // 注意：这里的 q.state.data 是 queryFn 的原始返回（非 select 后的数据）
+      const items = (q.state.data?.items ?? []) as any[]
+      const hasRunning = items.some((t) =>
+        ['pending', 'running', 'processing'].includes(String((t as any)?.status ?? '')),
+      )
+      // 降低频率：运行中 5s / 空闲 15s
+      return hasRunning ? 5000 : 15000
+    },
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: false,
   })
 
   const runningCount =
-    taskProbeQuery.data?.items?.filter((t) =>
-      ['pending', 'running', 'processing'].includes(String(t.status)),
-    ).length ?? 0
+    taskProbeQuery.data?.runningCount ?? 0
 
   const selectedKeys = useMemo(() => {
     if (location.pathname.startsWith('/planner/scenario-builder')) {

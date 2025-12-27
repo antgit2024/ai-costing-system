@@ -24,6 +24,7 @@
 - `frontend/src/components/costing/ProcessModuleAIDrawer.tsx`（工艺模块AI语义抽屉：从工序汇总 + 手工锁定）
 - `frontend/src/pages/costing/ProcessesPage.tsx`（工序管理：两行列表风格参考实现）
 - `frontend/src/guides/table_list_style_two_line_cells.md`（两行列表风格规范：可复用）
+- `frontend/src/components/layout/AppLayout.tsx`（全局布局：任务角标轮询与性能）
 
 ### 2) 后端：接口契约（只读校对用）
 

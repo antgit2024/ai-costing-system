@@ -159,6 +159,19 @@
     - `grep -nF \"title: '描述'\" frontend/src/pages/costing/ProcessModulesPage.tsx`
   - 最近校对（北京时间 GMT+8）：2025-12-27 18:10
 
+- **本轮闭环产物（Frontend / Chrome“页面无响应”卡死：任务角标轮询降载）**：
+  - 现象：页面内交互（悬停 Tooltip/点击）都卡住，Chrome 弹“页面无响应”。这通常是前端主线程被长任务占满。
+  - 根因假设（高概率）：`AppLayout` 顶部任务角标在后台轮询 `task-center`，返回 payload/result 可能很大；有运行中任务时频率更高，导致频繁 JSON 解析与 React 更新，拖死主线程。
+  - 修复（最小）：`frontend/src/components/layout/AppLayout.tsx`
+    - 探针请求 `limit` 从 30 降到 5
+    - `select` 将缓存数据压缩为 `{statuses, runningCount}`（不保留大 payload）
+    - 页面不可见时停止轮询（`document.visibilityState==='hidden'`）
+    - 轮询频率降低：运行中 5s / 空闲 15s；并关闭 `refetchOnWindowFocus`
+  - 本轮验收命令：
+    - `npm -C frontend run build`
+    - `grep -nF \"任务角标探针（性能敏感）\" frontend/src/components/layout/AppLayout.tsx`
+  - 最近校对（北京时间 GMT+8）：2025-12-27 18:25
+
 - **本轮闭环产物（Frontend / 工艺模块 AI 语义抽屉重构：自动汇总为主、步骤级补丁、手工不覆盖）**：
   - 目标：让员工看懂“这个工艺模块怎么做”，并让模块级 AI 字段主要来自工序库 ai_spec 自动汇总，避免重复手填。
   - 变更点：

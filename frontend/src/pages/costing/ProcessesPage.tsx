@@ -25,7 +25,6 @@ import {
   Tag,
   Tooltip,
   Divider,
-  Collapse,
   Typography,
   message,
 } from 'antd'
@@ -36,6 +35,7 @@ import { keepPreviousData, useMutation, useQuery } from '@tanstack/react-query'
 import { isAxiosError } from 'axios'
 import { normalizeUnit } from '@/utils/unit'
 import GuideDrawer from '@/components/common/GuideDrawer'
+import ProcessAIDrawer from '@/components/costing/ProcessAIDrawer'
 
 import {
   activateProcess,
@@ -139,7 +139,8 @@ const ProcessesPage = () => {
   const [copyModalOpen, setCopyModalOpen] = useState(false)
   const [copySource, setCopySource] = useState<ProcessSummary | null>(null)
   const [guideOpen, setGuideOpen] = useState(false)
-  const [aiPanelOpen, setAiPanelOpen] = useState(false)
+  const [aiDrawerOpen, setAiDrawerOpen] = useState(false)
+  const [aiProcessId, setAiProcessId] = useState<string | null>(null)
 
   const [form] = Form.useForm<
     ProcessCreatePayload & {
@@ -150,13 +151,6 @@ const ProcessesPage = () => {
       rate_per_minute?: number
       piece_rate?: number
       standard_time_minutes?: number
-      ai_intent?: string
-      ai_inputs?: string
-      ai_outputs?: string
-      ai_quality_points?: string
-      ai_constraints?: string
-      ai_tools?: string
-      ai_parameter_schema_json?: string
     }
   >()
   const [copyForm] = Form.useForm<ProcessCopyPayload>()
@@ -307,7 +301,6 @@ const ProcessesPage = () => {
   )
 
   const openCreate = () => {
-    setAiPanelOpen(false)
     setDrawerMode('create')
     setSelected(null)
     // Drawer 使用 destroyOnClose，Form 也设置了 preserve={false}：
@@ -324,12 +317,10 @@ const ProcessesPage = () => {
   }
 
   const openView = (record: ProcessSummary) => {
-    setAiPanelOpen(false)
     setDrawerMode('view')
     setSelected(record)
     form.resetFields()
     const meta = (record.metadata_json ?? {}) as any
-    const ai = (meta?.ai_spec ?? {}) as any
     const costType = getProcessCostType(record)
     setPendingFormValues({
       id: record.id,
@@ -348,24 +339,15 @@ const ProcessesPage = () => {
       status: record.status,
       standard_time_minutes: safeNumber((record.metadata_json as any)?.standard_time_minutes),
       process_tags: Array.isArray((record.metadata_json as any)?.process_tags) ? (record.metadata_json as any).process_tags : [],
-      ai_intent: String(ai?.intent ?? record.description ?? ''),
-      ai_inputs: String(ai?.inputs ?? ''),
-      ai_outputs: String(ai?.outputs ?? ''),
-      ai_quality_points: String(ai?.quality_points ?? ''),
-      ai_constraints: String(ai?.constraints ?? ''),
-      ai_tools: String(ai?.tools ?? ''),
-      ai_parameter_schema_json: ai?.parameter_schema ? JSON.stringify(ai?.parameter_schema, null, 2) : '',
     })
     setDrawerOpen(true)
   }
 
   const openEdit = (record: ProcessSummary) => {
-    setAiPanelOpen(false)
     setDrawerMode('edit')
     setSelected(record)
     form.resetFields()
     const meta = (record.metadata_json ?? {}) as any
-    const ai = (meta?.ai_spec ?? {}) as any
     const costType = getProcessCostType(record)
     setPendingFormValues({
       id: record.id,
@@ -384,51 +366,13 @@ const ProcessesPage = () => {
       status: record.status,
       standard_time_minutes: safeNumber((record.metadata_json as any)?.standard_time_minutes),
       process_tags: Array.isArray((record.metadata_json as any)?.process_tags) ? (record.metadata_json as any).process_tags : [],
-      ai_intent: String(ai?.intent ?? record.description ?? ''),
-      ai_inputs: String(ai?.inputs ?? ''),
-      ai_outputs: String(ai?.outputs ?? ''),
-      ai_quality_points: String(ai?.quality_points ?? ''),
-      ai_constraints: String(ai?.constraints ?? ''),
-      ai_tools: String(ai?.tools ?? ''),
-      ai_parameter_schema_json: ai?.parameter_schema ? JSON.stringify(ai?.parameter_schema, null, 2) : '',
     })
     setDrawerOpen(true)
   }
 
   const openAiEdit = (record: ProcessSummary) => {
-    setAiPanelOpen(true)
-    setDrawerMode('edit')
-    setSelected(record)
-    form.resetFields()
-    const meta = (record.metadata_json ?? {}) as any
-    const ai = (meta?.ai_spec ?? {}) as any
-    const costType = getProcessCostType(record)
-    setPendingFormValues({
-      id: record.id,
-      process_code: record.process_code,
-      process_name: record.process_name,
-      description: record.description ?? undefined,
-      category: record.category ?? undefined,
-      cost_type: costType,
-      base_minutes: safeNumber(meta?.base_minutes),
-      unit_minutes: safeNumber(meta?.unit_minutes),
-      rate_per_minute: safeNumber(meta?.rate_per_minute),
-      piece_rate: safeNumber(meta?.piece_rate) ?? safeNumber(record.standard_rate),
-      charging_mode: record.charging_mode,
-      standard_rate: safeNumber(record.standard_rate),
-      unit_of_measure: normalizeUnit(record.unit_of_measure) || undefined,
-      status: record.status,
-      standard_time_minutes: safeNumber((record.metadata_json as any)?.standard_time_minutes),
-      process_tags: Array.isArray((record.metadata_json as any)?.process_tags) ? (record.metadata_json as any).process_tags : [],
-      ai_intent: String(ai?.intent ?? record.description ?? ''),
-      ai_inputs: String(ai?.inputs ?? ''),
-      ai_outputs: String(ai?.outputs ?? ''),
-      ai_quality_points: String(ai?.quality_points ?? ''),
-      ai_constraints: String(ai?.constraints ?? ''),
-      ai_tools: String(ai?.tools ?? ''),
-      ai_parameter_schema_json: ai?.parameter_schema ? JSON.stringify(ai?.parameter_schema, null, 2) : '',
-    })
-    setDrawerOpen(true)
+    setAiProcessId(record.id)
+    setAiDrawerOpen(true)
   }
 
   const openCopy = (record: ProcessSummary) => {
@@ -473,31 +417,7 @@ const ProcessesPage = () => {
       delete (metadata as any).process_tags
     }
 
-    // AI 语义字段（可选）：写入 metadata_json.ai_spec
-    const ai_spec: any = {}
-    const s = (v: any) => String(v ?? '').trim()
-    // 自动兜底：如果未填写 AI 意图，则用“描述”作为默认意图（用户保存后固化）
-    const intentValue = s(values.ai_intent) || s(values.description)
-    if (intentValue) ai_spec.intent = intentValue
-    if (s(values.ai_inputs)) ai_spec.inputs = s(values.ai_inputs)
-    if (s(values.ai_outputs)) ai_spec.outputs = s(values.ai_outputs)
-    if (s(values.ai_quality_points)) ai_spec.quality_points = s(values.ai_quality_points)
-    if (s(values.ai_constraints)) ai_spec.constraints = s(values.ai_constraints)
-    if (s(values.ai_tools)) ai_spec.tools = s(values.ai_tools)
-    const rawSchema = s(values.ai_parameter_schema_json)
-    if (rawSchema) {
-      try {
-        ai_spec.parameter_schema = JSON.parse(rawSchema)
-      } catch {
-        message.error('AI参数模板必须是合法 JSON')
-        return
-      }
-    }
-    if (Object.keys(ai_spec).length) {
-      ;(metadata as any).ai_spec = ai_spec
-    } else {
-      delete (metadata as any).ai_spec
-    }
+    // AI 语义字段已拆分为独立抽屉（ProcessAIDrawer），主抽屉不再写入 ai_spec
 
     const costType = (values.cost_type ?? 'piece') as ProcessCostType
     const chargingMode = (values.charging_mode ?? 'count') as ProcessChargingMode
@@ -1025,49 +945,21 @@ const ProcessesPage = () => {
 
           <Divider />
 
-          <Collapse
-            defaultActiveKey={aiPanelOpen ? ['ai'] : []}
-            items={[
-              {
-                key: 'ai',
-                label: 'AI 语义（可选，建议逐步完善）',
-                children: (
-                  <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                    <Form.Item label="工序意图/目的" name="ai_intent">
-                      <Input.TextArea
-                        rows={3}
-                        placeholder="可直接写业务口径/规则说明（例如：用于地垫地毯，按最短边卷起+两头各留15cm扎带…）"
-                      />
-                    </Form.Item>
-                    <Form.Item label="输入" name="ai_inputs">
-                      <Input.TextArea rows={2} placeholder="输入材料/半成品/前置条件" />
-                    </Form.Item>
-                    <Form.Item label="输出" name="ai_outputs">
-                      <Input.TextArea rows={2} placeholder="输出产物/状态/交付物" />
-                    </Form.Item>
-                    <Form.Item label="质量要点/QC" name="ai_quality_points">
-                      <Input.TextArea rows={2} placeholder="验收点、常见缺陷、容差/注意事项" />
-                    </Form.Item>
-                    <Form.Item label="禁忌/边界条件" name="ai_constraints">
-                      <Input.TextArea rows={2} placeholder="什么时候不能用/风险点" />
-                    </Form.Item>
-                    <Form.Item label="设备/工具" name="ai_tools">
-                      <Input.TextArea rows={2} placeholder="设备、刀具、工装夹具等" />
-                    </Form.Item>
-                    <Form.Item
-                      label="参数模板（JSON）"
-                      name="ai_parameter_schema_json"
-                      tooltip="用于后续 AI 自动生成工艺步骤参数；留空即可。"
-                    >
-                      <Input.TextArea rows={6} placeholder='例如：{"speed": {"type":"number","unit":"mm/s","default":10}}' />
-                    </Form.Item>
-                  </Space>
-                ),
-              },
-            ]}
-          />
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            AI 语义已拆分为独立模块：请在列表“AI”按钮进入维护。
+          </Text>
         </Form>
       </Drawer>
+
+      <ProcessAIDrawer
+        open={aiDrawerOpen}
+        processId={aiProcessId}
+        onClose={() => {
+          setAiDrawerOpen(false)
+          setAiProcessId(null)
+        }}
+        onSaved={() => listQuery.refetch()}
+      />
 
       <GuideDrawer
         open={guideOpen}

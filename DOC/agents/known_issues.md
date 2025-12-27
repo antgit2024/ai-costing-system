@@ -53,5 +53,22 @@
 - **建议**：统一采用 3 种动作语义（见 `DOC/costing/reviews/erp_guardrails_addendum_20251222.md`）：
   - Retry Exceptions / Rerun Batch / Rebuild Snapshot（单行）
 
+### 9) 前端报错：Failed to load module script（MIME type: text/html）
+
+- **现象（Chrome 控制台）**：
+  - `Failed to load module script: Expected a JavaScript-or-Wasm module script but the server responded with a MIME type of "text/html".`
+  - `Failed to fetch dynamically imported module: http(s)://<host>/assets/<chunk>.js`
+- **本质**：浏览器在加载 `/assets/*.js`（hash chunk），但 Nginx 返回了 `index.html` 或 404 页面（`Content-Type: text/html`）。
+- **常见根因**：
+  - **非原子部署**：发布过程中 `index.html` 先更新，但 `/assets` 还没同步完，导致旧入口去拉新/旧 chunk 失败。
+  - **Nginx 错误回退**：对 `/assets/*` 也做了 SPA 回退（`try_files ... /index.html`），把 404 的 chunk 回退成 HTML，触发严格 MIME 校验失败。
+  - **缓存策略错误**：`index.html` 被缓存（或中间缓存/CDN 缓存），导致客户端拿到旧入口，但服务器已换了新 assets。
+- **彻底修复（必须同时满足）**：
+  - 发布侧：静态发布必须**原子切换**（先写临时目录，再一次性切换目录）。脚本：`frontend/scripts/deploy_static.sh`
+  - Nginx：
+    - `index.html`：`Cache-Control: no-cache`（永远拿最新入口）
+    - `/assets/*`：`Cache-Control: public, max-age=31536000, immutable`
+    - `/assets/*`：不要回退到 `index.html`，应 `try_files $uri =404`
+
 
 

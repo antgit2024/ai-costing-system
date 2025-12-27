@@ -172,6 +172,19 @@
     - `grep -nF \"任务角标探针（性能敏感）\" frontend/src/components/layout/AppLayout.tsx`
   - 最近校对（北京时间 GMT+8）：2025-12-27 18:25
 
+- **本轮闭环产物（Ops-ish / 彻底解决：静态资源原子发布，避免 chunk 404→HTML 回退导致白屏/卡死）**：
+  - 现象：前端报 `Failed to load module script (MIME text/html)` / `Failed to fetch dynamically imported module`，页面随即白屏或“点不了/无响应”。
+  - 根因：静态资源发布非原子 +（或）Nginx 对 `/assets/*` 发生错误回退，导致 chunk 丢失却返回 HTML。
+  - 修复：
+    - `frontend/scripts/deploy_static.sh` 改为**原子发布**：同步到临时目录 → 一次性 `mv` 切换，避免线上半发布状态。
+    - `DOC/agents/known_issues.md` 补充“Failed to load module script（MIME text/html）”的根因与 Nginx 必要配置。
+  - 本轮验收命令：
+    - `npm -C frontend run build`
+    - `bash -n frontend/scripts/deploy_static.sh`
+    - `grep -nF \"原子发布\" frontend/scripts/deploy_static.sh`
+  - 下一步（需要有权限的人做）：按 `DOC/agents/known_issues.md` 调整 Nginx 的 `/assets` try_files 与缓存头。
+  - 最近校对（北京时间 GMT+8）：2025-12-27 18:40
+
 - **本轮闭环产物（Frontend / 工艺模块 AI 语义抽屉重构：自动汇总为主、步骤级补丁、手工不覆盖）**：
   - 目标：让员工看懂“这个工艺模块怎么做”，并让模块级 AI 字段主要来自工序库 ai_spec 自动汇总，避免重复手填。
   - 变更点：

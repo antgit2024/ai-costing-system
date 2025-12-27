@@ -25,6 +25,8 @@
 - `frontend/src/pages/costing/ProcessesPage.tsx`（工序管理：两行列表风格参考实现）
 - `frontend/src/guides/table_list_style_two_line_cells.md`（两行列表风格规范：可复用）
 - `frontend/src/components/layout/AppLayout.tsx`（全局布局：任务角标轮询与性能）
+- `frontend/scripts/deploy_static.sh`（静态资源发布脚本：需要原子发布避免 chunk 404→HTML 回退）
+- `DOC/agents/known_issues.md`（已知问题：MIME=text/html 导致模块加载失败）
 
 ### 2) 后端：接口契约（只读校对用）
 

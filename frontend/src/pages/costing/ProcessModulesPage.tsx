@@ -901,7 +901,12 @@ const ProcessModulesPage = () => {
         material_code: item.material_code,
         material_name: item.material_name,
         unit_of_measure: item.unit_of_measure,
-        calculation_method: item.calculation_method ?? 'count',
+        calculation_method: (() => {
+          const unitOfMeasure = item.unit_of_measure
+          const meta = (item.metadata_json ?? {}) as any
+          const bomUnit = normalizeUnit(meta?.bom_unit ?? unitOfMeasure) || meta?.bom_unit || unitOfMeasure
+          return deriveCalcMethodByUnit(bomUnit, String(item.calculation_method ?? '').trim() || null)
+        })(),
         quantity: item.quantity ?? 0,
         loss_rate: item.loss_rate ?? 0,
         sequence_order: item.sequence_order ?? index,
@@ -923,7 +928,12 @@ const ProcessModulesPage = () => {
         unit_of_measure: item.unit_of_measure,
         description: item.description,
         notes: item.notes,
-        metadata_json: item.metadata_json ?? {},
+        metadata_json: (() => {
+          const meta = (item.metadata_json ?? {}) as any
+          const mt = String(meta?.measure_type ?? '').trim() as StepMeasureType
+          const unit = deriveUnitByMeasureType(mt || null)
+          return { ...meta, measure_unit: unit }
+        })(),
       }))
 
     return {
@@ -1162,15 +1172,8 @@ const ProcessModulesPage = () => {
             const meta = (form.getFieldValue(['materials', index, 'metadata_json']) ?? {}) as any
             const bomUnit = normalizeUnit(meta?.bom_unit ?? unitOfMeasure) || meta?.bom_unit || unitOfMeasure
             const allowed = new Set(allowedCalcMethodsByUnit(bomUnit))
-            const current = String(form.getFieldValue(['materials', index, 'calculation_method']) ?? '').trim()
-
-            // 自动纠偏：单位变化导致计量方式不合法时，回填到该单位允许的默认值
-            if (current && !allowed.has(current as any)) {
-              queueMicrotask(() => {
-                const next = deriveCalcMethodByUnit(bomUnit, null)
-                form.setFieldValue(['materials', index, 'calculation_method'], next)
-              })
-            }
+            // ⚠️ 性能/稳定性：不要在 render 内 setFieldValue（会引发渲染/微任务循环，严重时导致 Chrome RESULT_CODE_HUNG）
+            // 口径：仅在保存时做规范化；UI 允许显示 legacy 值并提示用户手动调整。
 
             const options = CALCULATION_METHOD_OPTIONS.filter((opt) => allowed.has(opt.value as any))
             return (
@@ -1364,11 +1367,6 @@ const ProcessModulesPage = () => {
           {(form) => {
             const mt = form.getFieldValue(['steps', index, 'metadata_json', 'measure_type']) as StepMeasureType | undefined
             const unit = deriveUnitByMeasureType(mt)
-            // 自动回填（保持数据一致），且不需要用户编辑
-            queueMicrotask(() => {
-              const cur = form.getFieldValue(['steps', index, 'metadata_json', 'measure_unit'])
-              if (cur !== unit) form.setFieldValue(['steps', index, 'metadata_json', 'measure_unit'], unit)
-            })
             return <Text>{unit}</Text>
           }}
         </Form.Item>
@@ -1381,24 +1379,14 @@ const ProcessModulesPage = () => {
       render: (_: unknown, _row, index) => (
         <Form.Item noStyle shouldUpdate>
           {(form) => {
-            const unit = form.getFieldValue(['steps', index, 'metadata_json', 'measure_unit'])
             const current = String(form.getFieldValue(['steps', index, 'metadata_json', 'measure_type']) ?? '').trim()
-            const allowed = new Set(allowedCalcMethodsByUnit(unit))
 
             // legacy: keep 'length' only if already selected in existing data
             const allowLegacyLength = current === 'length'
 
-            // 自动纠偏：单位变更导致 measure_type 不合法时，切回默认
-            if (current && !allowed.has(current as any) && !(allowLegacyLength && current === 'length')) {
-              queueMicrotask(() => {
-                const next = deriveCalcMethodByUnit(unit, null)
-                form.setFieldValue(['steps', index, 'metadata_json', 'measure_type'], next)
-              })
-            }
-
             const options = STEP_MEASURE_TYPE_OPTIONS.filter((opt) => {
               if (opt.value === 'length') return allowLegacyLength
-              return allowed.has(opt.value as any)
+              return true
             })
 
             return (

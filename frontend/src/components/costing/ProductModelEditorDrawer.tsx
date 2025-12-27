@@ -1772,10 +1772,35 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       return
     }
 
+    // 保存清单前规范化（避免历史/非法计量方式导致 UI 渲染循环或单位口径错乱）
+    const normalizedMaterials = (materials as any[]).map((m) => {
+      const bomUnit = getBomUnitForRow(m)
+      const allowedList = allowedCalcMethodsByBomUnit(bomUnit)
+      if (!allowedList.length) return m
+      const allowed = new Set(allowedList)
+      const cur = String(m.calculation_method ?? '').trim() as CalcMethod
+      if (!cur || allowed.has(cur)) return m
+      const v = allowedList[0] as CalcMethod
+      const baseQty = Number(m.base_quantity ?? 0)
+      const fixedQty = Number(m.fixed_quantity ?? 0)
+      const cov = Number(m.coverage_ratio ?? 1)
+      const rowMeta = ((m?.metadata_json as any) ?? {})
+      const mqSample = Math.max(0, measureQty(v, sampleSpec, rowMeta))
+      const mqStandard = Math.max(0, measureQty(v, standardSpec, rowMeta))
+      const sampleUsed = fixedQty + mqSample * baseQty * cov
+      const standardUsed = fixedQty + mqStandard * baseQty * cov
+      return {
+        ...m,
+        calculation_method: v,
+        sample_used_quantity: sampleUsed,
+        standard_used_quantity: standardUsed,
+      }
+    })
+
     await updateProductModelVersionLines(selectedVersionId, {
       sample: entryContext === 'standard' ? lockStandardSpec() : sampleSpec,
       standard: lockStandardSpec(),
-      materials,
+      materials: normalizedMaterials,
       processes,
     } as any)
     await queryClient.invalidateQueries({ queryKey: ['productModelVersionLines', selectedVersionId] })
@@ -3285,28 +3310,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                     const allowedList = allowedCalcMethodsByBomUnit(bomUnit)
                                     const allowed = new Set(allowedList)
                                     const cur = String(r.calculation_method ?? '').trim() as CalcMethod
-                                    // 若当前值不合法：自动纠偏到该单位允许的默认值（只影响前端编辑态，保存才落库）
-                                    if (cur && !allowed.has(cur) && allowedList.length) {
-                                      queueMicrotask(() => {
-                                        const next = (materials as any[]).slice()
-                                        const baseQty = Number(next[idx].base_quantity ?? 0)
-                                        const fixedQty = Number(next[idx].fixed_quantity ?? 0)
-                                        const cov = Number(next[idx].coverage_ratio ?? 1)
-                                        const v = allowedList[0]!
-                                        const rowMeta = ((next[idx]?.metadata_json as any) ?? {})
-                                        const mqSample = Math.max(0, measureQty(v, sampleSpec, rowMeta))
-                                        const mqStandard = Math.max(0, measureQty(v, standardSpec, rowMeta))
-                                        const sampleUsed = fixedQty + mqSample * baseQty * cov
-                                        const standardUsed = fixedQty + mqStandard * baseQty * cov
-                                        next[idx] = {
-                                          ...next[idx],
-                                          calculation_method: v,
-                                          sample_used_quantity: sampleUsed,
-                                          standard_used_quantity: standardUsed,
-                                        }
-                                        setMaterials(next as any)
-                                      })
-                                    }
+                                    // ⚠️ 性能/稳定性：不要在 render 内 setState（会引发渲染/微任务循环，严重时导致 Chrome RESULT_CODE_HUNG）
+                                    // 口径：允许 legacy 值回显；保存清单时会统一规范化到允许的计量方式。
                                     // 只展示允许的项；若历史数据不兼容，保留一个 legacy 选项避免回显为空
                                     const base = ALL_CALC_METHOD_OPTIONS.filter((o) => allowed.has(o.value))
                                     if (cur && !allowed.has(cur) && ALL_CALC_METHOD_OPTIONS.some((o) => o.value === cur)) {

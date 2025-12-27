@@ -185,6 +185,16 @@
   - 下一步（需要有权限的人做）：按 `DOC/agents/known_issues.md` 调整 Nginx 的 `/assets` try_files 与缓存头。
   - 最近校对（北京时间 GMT+8）：2025-12-27 18:40
 
+- **本轮闭环产物（Frontend / RESULT_CODE_HUNG：移除 render 内自动纠偏导致的渲染循环）**：
+  - 现象：Chrome 报 `RESULT_CODE_HUNG`，页面鼠标悬停/点击都卡住。
+  - 根因假设（高概率）：在表格单元格 `render` 过程中触发 `queueMicrotask()+setFieldValue/setState`，导致渲染-微任务-渲染循环，最终主线程被占满。
+  - 修复（最小）：
+    - `frontend/src/pages/costing/ProcessModulesPage.tsx`：移除 render 内 `queueMicrotask()+form.setFieldValue` 的自动纠偏；改为保存时规范化 `calculation_method/measure_unit`。
+    - `frontend/src/components/costing/ProductModelEditorDrawer.tsx`：移除 render 内 `queueMicrotask()+setMaterials` 的自动纠偏；保存清单前统一规范化非法 `calculation_method` 并重算用量。
+  - 本轮验收命令：
+    - `npm -C frontend run build`
+  - 最近校对（北京时间 GMT+8）：2025-12-27 19:05
+
 - **本轮闭环产物（Frontend / 工艺模块 AI 语义抽屉重构：自动汇总为主、步骤级补丁、手工不覆盖）**：
   - 目标：让员工看懂“这个工艺模块怎么做”，并让模块级 AI 字段主要来自工序库 ai_spec 自动汇总，避免重复手填。
   - 变更点：

@@ -52,6 +52,14 @@ class Settings(BaseSettings):
     #   X-PLANNER-ADMIN-KEY: <value>
     planner_admin_key: str | None = Field(default=None, env="PLANNER_ADMIN_KEY")
 
+    # ===== Optional LLM (e.g. 百炼/通义等) integration =====
+    # We use an OpenAI-compatible endpoint by default:
+    #   POST {base_url}/v1/chat/completions
+    llm_base_url: str | None = Field(default=None, env="PLANNER_LLM_BASE_URL")
+    llm_api_key: str | None = Field(default=None, env="PLANNER_LLM_API_KEY")
+    llm_model: str = Field(default="qwen-plus", env="PLANNER_LLM_MODEL")
+    llm_timeout_seconds: float = Field(default=20.0, env="PLANNER_LLM_TIMEOUT_SECONDS")
+
     class Config:
         env_file = str(ENV_FILE)
         env_file_encoding = "utf-8"

@@ -292,6 +292,7 @@ def _serialize_process_reference(process: Optional[models.Process]) -> Optional[
         "id": process.id,
         "process_code": process.process_code,
         "process_name": process.process_name,
+        "description": process.description,
         "charging_mode": process.charging_mode,
         "standard_rate": Decimal(str(process.standard_rate))
         if process.standard_rate is not None
@@ -464,6 +465,7 @@ def _create_step(
             "process_id": process_ref.id,
             "process_code": process_ref.process_code,
             "process_name": process_ref.process_name,
+            "description": process_ref.description,
             "charging_mode": process_ref.charging_mode,
             "standard_rate": float(process_ref.standard_rate) if process_ref.standard_rate is not None else None,
             "unit_of_measure": process_ref.unit_of_measure,

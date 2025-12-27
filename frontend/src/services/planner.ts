@@ -770,6 +770,25 @@ export const fetchProcessReferences = async (
   return response.data
 }
 
+export type GenerateProcessModuleDescriptionPayload = {
+  module_name: string
+  category?: string | null
+  materials: Array<Record<string, any>>
+  steps: Array<Record<string, any>>
+}
+
+export type GenerateProcessModuleDescriptionResponse = {
+  description: string
+  provider: string
+}
+
+export const generateProcessModuleDescription = async (
+  payload: GenerateProcessModuleDescriptionPayload,
+): Promise<GenerateProcessModuleDescriptionResponse> => {
+  const response = await plannerClient.post('/ai/process-modules/describe', payload)
+  return response.data
+}
+
 export const fetchProductModels = async (
   params: ProductModelQueryParams = {},
 ): Promise<ProductModelListResponse> => {

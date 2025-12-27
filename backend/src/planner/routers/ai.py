@@ -3,10 +3,12 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ...database import get_db
 from .. import models, schemas
+from ..services import llm_text_service
 
 
 router = APIRouter(prefix="/ai", tags=["ai"])
@@ -76,5 +78,23 @@ def export_process_corpus(
         )
 
     return schemas.AiProcessCorpusResponse(total=total, items=out)
+
+
+@router.post("/process-modules/describe", response_model=GenerateModuleDescriptionResponse)
+def generate_process_module_description(payload: GenerateModuleDescriptionRequest):
+    desc, provider = llm_text_service.generate_process_module_description(payload.dict())
+    return GenerateModuleDescriptionResponse(description=desc, provider=provider)
+
+
+class GenerateModuleDescriptionRequest(BaseModel):
+    module_name: str = Field("", max_length=255)
+    category: str | None = Field(default=None, max_length=128)
+    materials: list[dict[str, Any]] = Field(default_factory=list)
+    steps: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class GenerateModuleDescriptionResponse(BaseModel):
+    description: str
+    provider: str
 
 

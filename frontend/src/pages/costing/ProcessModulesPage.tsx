@@ -55,6 +55,7 @@ import {
   fetchTaxonomyItems,
   fetchVirtualMaterials,
   generateNextCode,
+  generateProcessModuleDescription,
   updateProcessModule,
 } from '@/services/planner'
 import type {
@@ -293,6 +294,7 @@ const ProcessModulesPage = () => {
     targetIndex?: number
   } | null>(null)
   const [referenceDrawerOpen, setReferenceDrawerOpen] = useState(false)
+  const [generatingDescription, setGeneratingDescription] = useState(false)
 
   // Guard against late detailQuery hydration overwriting user edits (common when user starts selecting before detail loads).
   const hydratedRef = useRef(false)
@@ -1109,13 +1111,13 @@ const ProcessModulesPage = () => {
       key: 'process',
       width: 260,
       render: (_: unknown, row, index) => {
-        const snapshot =
-          row.record.process ??
-          ((row.record.metadata_json as any)?.process_snapshot as ProcessReference | undefined)
+        const processSnapshot = (row.record.metadata_json as any)?.process_snapshot as any
+        const snapshot = row.record.process ?? (processSnapshot as ProcessReference | undefined)
         const canEdit = drawerMode === 'create' || drawerMode === 'edit'
         const code = snapshot?.process_code ?? '-'
         const name = snapshot?.process_name ?? '-'
-        const desc = String((snapshot as any)?.description ?? '').trim()
+        // NOTE: 后端返回的 step.process 可能不带 description；以 process_snapshot.description 兜底
+        const desc = String((snapshot as any)?.description ?? processSnapshot?.description ?? '').trim()
         return (
           <Space direction="vertical" size={4} style={{ width: '100%' }}>
             <Space size={8}>
@@ -1747,8 +1749,76 @@ const ProcessModulesPage = () => {
               </Col>
               <Col span={12}>
                 <Form.Item label="描述" name="description">
-                  <Input.TextArea rows={2} placeholder="可同步宜搭表单备注" />
+                  <Input.TextArea
+                    rows={2}
+                    placeholder="可同步宜搭表单备注"
+                  />
                 </Form.Item>
+                <div style={{ marginTop: -8, marginBottom: 8 }}>
+                  <Button
+                    size="small"
+                    loading={generatingDescription}
+                    onClick={async () => {
+                      const values = editorForm.getFieldsValue()
+                      const materials = (materialsLocal.length ? materialsLocal : (values.materials ?? [])) as any[]
+                      const steps = (stepsLocal.length ? stepsLocal : (values.steps ?? [])) as any[]
+
+                      const payload = {
+                        module_name: String(values.module_name ?? '').trim(),
+                        category: values.category ?? undefined,
+                        materials: materials
+                          .filter((m) => m?.material_ref_id)
+                          .map((m) => ({
+                            material_kind: m.material_kind,
+                            material_code: m.material_code,
+                            material_name: m.material_name,
+                            unit_of_measure: m.unit_of_measure,
+                            calculation_method: m.calculation_method,
+                            quantity: m.quantity,
+                            loss_rate: m.loss_rate,
+                            bom_unit_price: (m.metadata_json ?? {}).bom_unit_price,
+                            bom_unit: (m.metadata_json ?? {}).bom_unit,
+                          })),
+                        steps: steps
+                          .filter((s) => s?.process_id)
+                          .map((s) => {
+                            const meta = (s.metadata_json ?? {}) as any
+                            const snap = (meta.process_snapshot ?? {}) as any
+                            return {
+                              process_code: snap.process_code,
+                              process_name: snap.process_name,
+                              process_description: snap.description,
+                              team_name: s.team_name,
+                              cost_type: meta.cost_type,
+                              base_minutes: meta.base_minutes,
+                              unit_minutes: meta.unit_minutes,
+                              measure_type: meta.measure_type,
+                              measure_unit: meta.measure_unit,
+                              rate_per_minute: meta.rate_per_minute,
+                              piece_rate: meta.piece_rate,
+                              notes: s.notes,
+                            }
+                          }),
+                      }
+
+                      setGeneratingDescription(true)
+                      try {
+                        const res = await generateProcessModuleDescription(payload as any)
+                        editorForm.setFieldValue('description', res.description)
+                        message.success(res.provider === 'llm' ? '已生成描述（LLM）' : '已生成描述（模板）')
+                      } catch (e: any) {
+                        message.error(e?.response?.data?.detail ?? '生成失败')
+                      } finally {
+                        setGeneratingDescription(false)
+                      }
+                    }}
+                  >
+                    生成
+                  </Button>
+                  <Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>
+                    将当前物料组+工序组汇总生成模块描述
+                  </Text>
+                </div>
               </Col>
             </Row>
           </Card>

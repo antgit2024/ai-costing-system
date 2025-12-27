@@ -50,6 +50,7 @@ import {
   fetchProcessModuleReferences,
   fetchProcessModules,
   fetchProcessReferences,
+  fetchTaxonomyItems,
   fetchVirtualMaterials,
   generateNextCode,
   updateProcessModule,
@@ -69,7 +70,6 @@ import type {
   VirtualMaterial,
   VirtualMaterialQueryParams,
 } from '@/types/planner'
-import { MATERIAL_CATEGORIES } from '@/constants/materialCategories'
 import { CALCULATION_METHOD_OPTIONS } from '@/constants/calculationMethods'
 import type { MaterialReferenceKind } from '@/types/planner'
 import GuideDrawer from '@/components/common/GuideDrawer'
@@ -311,6 +311,11 @@ const ProcessModulesPage = () => {
     placeholderData: (previousData) => previousData,
   })
 
+  const moduleCategoryQuery = useQuery({
+    queryKey: ['taxonomy-items', 'process_module_category'],
+    queryFn: () => fetchTaxonomyItems('process_module_category', { include_inactive: true }),
+  })
+
   const detailQuery = useQuery({
     queryKey: ['process-module', selectedId],
     queryFn: () => fetchProcessModule(selectedId as string),
@@ -402,7 +407,7 @@ const ProcessModulesPage = () => {
         module_code: '',
         module_name: '',
         description: '',
-        category: MATERIAL_CATEGORIES[0] ?? '',
+        category: '',
         status: 'draft',
         tags: [],
         materials: [],
@@ -1647,7 +1652,10 @@ const ProcessModulesPage = () => {
                     allowClear
                     placeholder="请选择"
                     showSearch
-                    options={MATERIAL_CATEGORIES.map((item) => ({ label: item, value: item }))}
+                    options={(moduleCategoryQuery.data?.items ?? []).map((it: any) => ({
+                      label: it.name,
+                      value: it.name,
+                    }))}
                   />
                 </Form.Item>
               </Col>
@@ -2040,6 +2048,12 @@ const RealMaterialSelectModal = ({
   const [selectedRowKeys, setSelectedRowKeys] = useState<Key[]>([])
   const [selectedRows, setSelectedRows] = useState<Material[]>([])
 
+  const materialCategoryQuery = useQuery({
+    queryKey: ['taxonomy-items', 'material_category'],
+    queryFn: () => fetchTaxonomyItems('material_category', { include_inactive: true }),
+    enabled: open,
+  })
+
   useEffect(() => {
     if (!open) {
       setSearch('')
@@ -2103,7 +2117,10 @@ const RealMaterialSelectModal = ({
             style={{ width: 180 }}
             value={category}
             onChange={(value) => setCategory(value)}
-            options={MATERIAL_CATEGORIES.map((item) => ({ label: item, value: item }))}
+            options={(materialCategoryQuery.data?.items ?? []).map((it: any) => ({
+              label: it.name,
+              value: it.name,
+            }))}
           />
           <Select
             style={{ width: 160 }}

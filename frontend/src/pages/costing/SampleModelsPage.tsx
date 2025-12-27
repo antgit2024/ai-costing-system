@@ -106,6 +106,7 @@ export default function SampleModelsPage() {
     },
     { title: '总编码', dataIndex: 'model_code', width: 120 },
     { title: '模型名称', dataIndex: 'model_name' },
+    { title: '品类', dataIndex: 'category', width: 140, render: (v: any) => String(v ?? '').trim() || '-' },
     {
       title: '打样人',
       width: 120,

@@ -75,6 +75,7 @@ import {
   fetchVirtualMaterial,
   fetchVirtualMaterials,
   uploadProductModelVersionImage,
+  fetchTaxonomyItems,
 } from '@/services/planner'
 import type {
   Material,
@@ -523,6 +524,12 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     queryKey: ['productModelVersionLines', selectedVersionId],
     queryFn: () => fetchProductModelVersionLines(selectedVersionId as string),
     enabled: open && !!selectedVersionId,
+  })
+
+  const taxonomyModelCategoryQuery = useQuery({
+    queryKey: ['taxonomy-items', 'product_model_category'],
+    queryFn: () => fetchTaxonomyItems('product_model_category', { include_inactive: true }),
+    enabled: open,
   })
 
   // 标准模型：行级变体（Overlay）提示（仅用于 UI 标记，不影响逻辑）
@@ -2171,7 +2178,16 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                       </Form.Item>
                     ) : null}
                     <Form.Item label="品类" name="category">
-                      <Input style={{ width: 180 }} placeholder="例如：桌布/窗帘/靠垫…" allowClear />
+                      <Select
+                        style={{ width: 220 }}
+                        allowClear
+                        showSearch
+                        placeholder="请选择"
+                        options={(taxonomyModelCategoryQuery.data?.items ?? []).map((it: any) => ({
+                          label: it.name,
+                          value: it.name,
+                        }))}
+                      />
                     </Form.Item>
                   </Space>
                   <Form.Item label="描述" name="description">

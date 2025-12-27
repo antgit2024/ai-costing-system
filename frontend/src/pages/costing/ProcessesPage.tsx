@@ -38,6 +38,7 @@ import {
   createProcess,
   deactivateProcess,
   fetchProcesses,
+  fetchTaxonomyItems,
   generateNextCode,
   updateProcess,
 } from '@/services/planner'
@@ -60,11 +61,6 @@ const PROCESS_STATUS_OPTIONS = [
   { label: '草稿', value: 'draft' },
   { label: '启用', value: 'active' },
   { label: '停用', value: 'inactive' },
-]
-
-const PROCESS_CATEGORY_OPTIONS = [
-  { label: '布艺', value: '布艺' },
-  { label: '画艺', value: '画艺' },
 ]
 
 // 班组在工艺模块（工艺模板）的工序行维护；工序库不承载班组字段
@@ -187,15 +183,23 @@ const ProcessesPage = () => {
     placeholderData: keepPreviousData,
   })
 
+  const taxonomyCategoriesQuery = useQuery({
+    queryKey: ['taxonomy-items', 'process_category'],
+    queryFn: () => fetchTaxonomyItems('process_category', { include_inactive: true }),
+  })
+
   const categoryOptions = useMemo(() => {
     const base = new Map<string, string>()
-    for (const opt of PROCESS_CATEGORY_OPTIONS) base.set(opt.value, opt.label)
+    for (const it of taxonomyCategoriesQuery.data?.items ?? []) {
+      const c = String((it as any)?.name ?? '').trim()
+      if (c) base.set(c, c)
+    }
     for (const it of listQuery.data?.items ?? []) {
       const c = String(it.category ?? '').trim()
       if (c) base.set(c, c)
     }
     return Array.from(base.entries()).map(([value, label]) => ({ value, label }))
-  }, [listQuery.data?.items])
+  }, [listQuery.data?.items, taxonomyCategoriesQuery.data?.items])
 
   const createMutation = useMutation({
     mutationFn: (payload: ProcessCreatePayload) => createProcess(payload),

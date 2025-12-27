@@ -170,6 +170,7 @@ export default function StandardModelsPage() {
   const columns: ColumnsType<ProductModel> = [
     { title: '总编码', dataIndex: 'model_code', width: 120 },
     { title: '模型名称', dataIndex: 'model_name' },
+    { title: '品类', dataIndex: 'category', width: 140, render: (v: any) => String(v ?? '').trim() || '-' },
     { title: '状态', dataIndex: 'status', width: 110, render: (v: string) => <Tag>{v}</Tag> },
     { title: '标准版本数', width: 110, render: (_, r) => (r.standard_version_count ?? '-') },
     { title: '当前发布标准', width: 180, render: (_, r) => r.current_published_standard_version_label ?? '-' },

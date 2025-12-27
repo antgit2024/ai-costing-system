@@ -120,6 +120,27 @@ def update_module(
 
 
 def set_module_status(db: Session, module: models.ProcessModule, status: str) -> models.ProcessModule:
+    # 启用口径：真正的“工艺模块”必须同时具备【至少 1 条物料】+【至少 1 条工序步骤】。
+    # 草稿/停用允许不完整；但启用时必须完整，避免模型引用到空模块造成核算/生产链路异常。
+    if status == "active":
+        materials_count = (
+            db.query(models.ProcessModuleMaterial)
+            .filter(
+                models.ProcessModuleMaterial.module_id == module.id,
+                models.ProcessModuleMaterial.is_archived.is_(False),
+            )
+            .count()
+        )
+        steps_count = (
+            db.query(models.ProcessModuleStep)
+            .filter(
+                models.ProcessModuleStep.module_id == module.id,
+                models.ProcessModuleStep.is_archived.is_(False),
+            )
+            .count()
+        )
+        if materials_count <= 0 or steps_count <= 0:
+            raise ValueError("启用失败：工艺模块必须同时包含至少1条物料和至少1条工序步骤")
     module.status = status
     db.commit()
     db.refresh(module)

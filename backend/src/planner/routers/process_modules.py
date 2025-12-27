@@ -175,7 +175,10 @@ def update_process_module(
 )
 def activate_process_module(module_id: str, db: Session = Depends(get_db)):
     module = _get_module_or_404(module_id, db)
-    module = process_module_service.set_module_status(db, module, "active")
+    try:
+        module = process_module_service.set_module_status(db, module, "active")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     audit_service.log_audit_event(
         db,
         target_type="process_module",

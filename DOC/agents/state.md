@@ -208,6 +208,15 @@
     - `grep -n \"@router.delete\" backend/src/planner/routers/process_modules.py`
   - 最近校对（北京时间 GMT+8）：2025-12-27 19:25
 
+- **本轮闭环产物（Processes / 列表删除按钮可见性增强）**：
+  - 反馈：工序管理列表“删除功能看不到”。
+  - 说明：后端删除口径要求先停用（active 不允许删除）。
+  - 前端改造：`frontend/src/pages/costing/ProcessesPage.tsx`
+    - 删除按钮**始终显示**；当工序为 active 时，“删除”按钮置灰并提示“需先停用”。
+  - 验收命令：
+    - `npm -C frontend run build`
+  - 最近校对（北京时间 GMT+8）：2025-12-27 19:45
+
 - **本轮闭环产物（Frontend / 工艺模块 AI 语义抽屉重构：自动汇总为主、步骤级补丁、手工不覆盖）**：
   - 目标：让员工看懂“这个工艺模块怎么做”，并让模块级 AI 字段主要来自工序库 ai_spec 自动汇总，避免重复手填。
   - 变更点：

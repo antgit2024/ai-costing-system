@@ -610,16 +610,21 @@ const ProcessesPage = () => {
             <Button size="small" icon={<CopyOutlined />} onClick={() => openCopy(record)} />
           </Tooltip>
           {record.status === 'active' ? (
-            <Popconfirm
-              title="确认停用该工序？"
-              okText="停用"
-              cancelText="取消"
-              onConfirm={() => deactivateMutation.mutate(record.id)}
-            >
-              <Tooltip title="停用">
-                <Button size="small" danger icon={<StopOutlined />} />
+            <>
+              <Popconfirm
+                title="确认停用该工序？"
+                okText="停用"
+                cancelText="取消"
+                onConfirm={() => deactivateMutation.mutate(record.id)}
+              >
+                <Tooltip title="停用">
+                  <Button size="small" danger icon={<StopOutlined />} />
+                </Tooltip>
+              </Popconfirm>
+              <Tooltip title="删除（需先停用）">
+                <Button size="small" danger icon={<DeleteOutlined />} disabled />
               </Tooltip>
-            </Popconfirm>
+            </>
           ) : (
             <>
               <Tooltip title="启用">

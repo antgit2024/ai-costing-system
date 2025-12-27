@@ -15,7 +15,7 @@ import TaskCenterDrawer from '@/components/common/TaskCenterDrawer'
 import { fetchTaskCenter } from '@/services/planner'
 
 const { Header, Sider, Content } = Layout
-const SHOW_ADMIN = Boolean(import.meta.env.VITE_PLANNER_ADMIN_KEY)
+const HAS_ADMIN_KEY = Boolean(import.meta.env.VITE_PLANNER_ADMIN_KEY)
 
 const menuItems: MenuProps['items'] = [
   {
@@ -59,15 +59,15 @@ const menuItems: MenuProps['items'] = [
         key: '/costing/process-modules',
         label: <Link to="/costing/process-modules">工艺模块</Link>,
       },
-      ...(SHOW_ADMIN
-        ? [
-            {
-              key: '/costing/taxonomy',
-              icon: <SettingOutlined />,
-              label: <Link to="/costing/taxonomy">分类管理（管理员）</Link>,
-            } as any,
-          ]
-        : []),
+      {
+        key: '/costing/taxonomy',
+        icon: <SettingOutlined />,
+        label: (
+          <Link to="/costing/taxonomy">
+            分类管理{HAS_ADMIN_KEY ? '（管理员）' : '（只读）'}
+          </Link>
+        ),
+      },
       {
         key: '/costing/sample-models',
         label: <Link to="/costing/sample-models">打样模型</Link>,

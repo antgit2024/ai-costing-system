@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Button, Card, Form, Input, Modal, Select, Space, Switch, Table, Tabs, Tag, Typography, message } from 'antd'
+import { Alert, Button, Card, Form, Input, Modal, Select, Space, Switch, Table, Tabs, Tag, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useMutation, useQuery } from '@tanstack/react-query'
 
@@ -30,6 +30,7 @@ const DOMAIN_LABELS: Record<DomainKey, string> = {
 }
 
 const TaxonomyManagementPage = () => {
+  const hasAdminKey = Boolean(import.meta.env.VITE_PLANNER_ADMIN_KEY)
   const [activeDomain, setActiveDomain] = useState<DomainKey>('material_category')
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<TaxonomyItemRead | null>(null)
@@ -71,6 +72,10 @@ const TaxonomyManagementPage = () => {
   }
 
   const openCreate = () => {
+    if (!hasAdminKey) {
+      message.warning('未配置管理员 Key：当前页面为只读')
+      return
+    }
     setEditing(null)
     form.resetFields()
     form.setFieldsValue({ name: '', scopes: [scopeOptionsQuery.data?.universal_scope ?? '*'], is_active: true, sort_order: 0 })
@@ -78,6 +83,10 @@ const TaxonomyManagementPage = () => {
   }
 
   const openEdit = (item: TaxonomyItemRead) => {
+    if (!hasAdminKey) {
+      message.warning('未配置管理员 Key：当前页面为只读')
+      return
+    }
     setEditing(item)
     form.resetFields()
     form.setFieldsValue({
@@ -161,6 +170,7 @@ const TaxonomyManagementPage = () => {
       render: (_: any, r: TaxonomyItemRead) => (
         <Switch
           checked={r.is_active}
+          disabled={!hasAdminKey}
           onChange={(checked) => updateMutation.mutate({ id: r.id, name: r.name, scopes: r.scopes, is_active: checked, sort_order: r.sort_order })}
         />
       ),
@@ -173,12 +183,13 @@ const TaxonomyManagementPage = () => {
       width: 180,
       render: (_: any, r: TaxonomyItemRead) => (
         <Space>
-          <Button size="small" onClick={() => openEdit(r)}>
+          <Button size="small" disabled={!hasAdminKey} onClick={() => openEdit(r)}>
             编辑
           </Button>
           <Button
             size="small"
             danger
+            disabled={!hasAdminKey}
             onClick={() => {
               Modal.confirm({
                 title: '删除分类',
@@ -204,12 +215,21 @@ const TaxonomyManagementPage = () => {
         extra={
           <Space>
             <Button onClick={() => listQuery.refetch()}>刷新</Button>
-            <Button type="primary" onClick={openCreate}>
+            <Button type="primary" onClick={openCreate} disabled={!hasAdminKey}>
               新增分类
             </Button>
           </Space>
         }
       >
+        {!hasAdminKey ? (
+          <Alert
+            style={{ marginBottom: 12 }}
+            type="warning"
+            showIcon
+            message="当前为只读模式"
+            description="未配置 VITE_PLANNER_ADMIN_KEY（前端构建变量），无法新增/编辑/删除。需要管理员重新构建并发布静态页后才可写入。"
+          />
+        ) : null}
         <Tabs
           activeKey={activeDomain}
           onChange={(k) => setActiveDomain(k as DomainKey)}

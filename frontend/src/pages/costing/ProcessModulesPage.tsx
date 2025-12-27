@@ -74,6 +74,7 @@ import { CALCULATION_METHOD_OPTIONS } from '@/constants/calculationMethods'
 import type { MaterialReferenceKind } from '@/types/planner'
 import GuideDrawer from '@/components/common/GuideDrawer'
 import processModulesGuide from '@/guides/process_modules_guide.md?raw'
+import ProcessModuleAIDrawer from '@/components/costing/ProcessModuleAIDrawer'
 
 const { Title, Text } = Typography
 
@@ -258,6 +259,8 @@ const ProcessModulesPage = () => {
   const [drawerMode, setDrawerMode] = useState<DrawerMode>('view')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [guideOpen, setGuideOpen] = useState(false)
+  const [aiDrawerOpen, setAiDrawerOpen] = useState(false)
+  const [aiModuleId, setAiModuleId] = useState<string | null>(null)
   const [materialsLocal, setMaterialsLocal] = useState<EditorMaterialValue[]>([])
   const [stepsLocal, setStepsLocal] = useState<EditorStepValue[]>([])
   const [materialSelectContext, setMaterialSelectContext] = useState<{
@@ -619,6 +622,16 @@ const ProcessModulesPage = () => {
           >
             编辑
           </Button>
+          <Button
+            icon={<QuestionCircleOutlined />}
+            size="small"
+            onClick={() => {
+              setAiModuleId(record.id)
+              setAiDrawerOpen(true)
+            }}
+          >
+            AI
+          </Button>
         </Space>
       ),
     },
@@ -768,7 +781,8 @@ const ProcessModulesPage = () => {
         category: values.category,
         status: values.status,
         tags: values.tags ?? [],
-        metadata_json: {},
+        // 关键：更新时必须保留原 metadata_json（否则会把 AI/扩展字段覆盖成空对象）
+        metadata_json: (detailQuery.data?.metadata_json ?? {}) as any,
         materials: normalizeMaterials(values.materials),
         steps: normalizeSteps(values.steps),
         operator_id: DEFAULT_OPERATOR,
@@ -1862,6 +1876,19 @@ const ProcessModulesPage = () => {
           ]}
         />
       </Drawer>
+
+      <ProcessModuleAIDrawer
+        open={aiDrawerOpen}
+        moduleId={aiModuleId}
+        onClose={() => {
+          setAiDrawerOpen(false)
+          setAiModuleId(null)
+        }}
+        onSaved={() => {
+          listQuery.refetch()
+          if (selectedId) detailQuery.refetch()
+        }}
+      />
 
       <GuideDrawer
         open={guideOpen}

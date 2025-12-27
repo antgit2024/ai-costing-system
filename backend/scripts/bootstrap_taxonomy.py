@@ -122,6 +122,17 @@ def main() -> None:
         module_categories = _distinct_non_empty(
             v for (v,) in db.query(models.ProcessModule.category).filter(models.ProcessModule.is_archived.is_(False)).all()
         )
+        # Teams (班组)
+        process_teams = _distinct_non_empty(
+            v for (v,) in db.query(models.Process.team_name).filter(models.Process.is_archived.is_(False)).all()
+        )
+        module_step_teams = _distinct_non_empty(
+            v
+            for (v,) in db.query(models.ProcessModuleStep.team_name)
+            .filter(models.ProcessModuleStep.is_archived.is_(False))
+            .all()
+        )
+        teams = process_teams | module_step_teams
         # Product models
         model_categories = _distinct_non_empty(
             v for (v,) in db.query(models.ProductModel.category).filter(models.ProductModel.is_archived.is_(False)).all()
@@ -132,6 +143,7 @@ def main() -> None:
             ("virtual_material_category", virtual_categories),
             ("process_category", process_categories),
             ("process_module_category", module_categories),
+            ("team", teams),
             ("product_model_category", model_categories),
         ]
 

@@ -19,6 +19,7 @@ type DomainKey =
   | 'virtual_material_category'
   | 'process_category'
   | 'process_module_category'
+  | 'team'
   | 'product_model_category'
 
 const DOMAIN_LABELS: Record<DomainKey, string> = {
@@ -26,6 +27,7 @@ const DOMAIN_LABELS: Record<DomainKey, string> = {
   virtual_material_category: '虚拟物料分类',
   process_category: '工序分类',
   process_module_category: '工艺模块分类',
+  team: '班组管理',
   product_model_category: '模型品类',
 }
 

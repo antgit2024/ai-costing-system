@@ -149,17 +149,7 @@ const hashDigit = (s: string): number => {
 const TABLE_FONT_SIZE = 12
 const FIRST_COL_WIDTH = 280
 
-const TEAM_OPTIONS = [
-  '技术部',
-  '仓库部',
-  '采购部',
-  '生产部',
-  '品控部',
-  '财务部',
-  '行政部',
-  '销售部',
-  '运营部',
-].map((item) => ({ label: item, value: item }))
+// 班组从 taxonomy(team) 动态加载（不再硬编码）
 
 const MODULE_COLOR_PALETTE = [
   '#1677ff', // blue
@@ -529,6 +519,12 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   const taxonomyModelCategoryQuery = useQuery({
     queryKey: ['taxonomy-items', 'product_model_category'],
     queryFn: () => fetchTaxonomyItems('product_model_category', { include_inactive: true }),
+    enabled: open,
+  })
+
+  const taxonomyTeamQuery = useQuery({
+    queryKey: ['taxonomy-items', 'team'],
+    queryFn: () => fetchTaxonomyItems('team', { include_inactive: true }),
     enabled: open,
   })
 
@@ -3706,7 +3702,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                 optionFilterProp="label"
                                 style={{ width: '100%' }}
                                 value={r.team_name}
-                                options={TEAM_OPTIONS}
+                                options={(taxonomyTeamQuery.data?.items ?? []).map((it: any) => ({ label: it.name, value: it.name }))}
                                 onChange={(v) => {
                                   const next = (processes as any[]).slice()
                                   next[idx] = { ...next[idx], team_name: v ?? undefined }

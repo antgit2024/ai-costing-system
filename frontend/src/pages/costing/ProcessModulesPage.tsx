@@ -153,17 +153,7 @@ const STATUS_OPTIONS = [
   { label: '停用', value: 'inactive' },
 ]
 
-const TEAM_OPTIONS = [
-  '技术部',
-  '仓库部',
-  '采购部',
-  '生产部',
-  '品控部',
-  '财务部',
-  '行政部',
-  '销售部',
-  '运营部',
-].map((item) => ({ label: item, value: item }))
+// 班组从 taxonomy(team) 动态加载（不再硬编码）
 
 const MATERIAL_KIND_COLOR: Record<string, string> = {
   real: 'blue',
@@ -314,6 +304,11 @@ const ProcessModulesPage = () => {
   const moduleCategoryQuery = useQuery({
     queryKey: ['taxonomy-items', 'process_module_category'],
     queryFn: () => fetchTaxonomyItems('process_module_category', { include_inactive: true }),
+  })
+
+  const teamQuery = useQuery({
+    queryKey: ['taxonomy-items', 'team'],
+    queryFn: () => fetchTaxonomyItems('team', { include_inactive: true }),
   })
 
   const detailQuery = useQuery({
@@ -1113,7 +1108,7 @@ const ProcessModulesPage = () => {
             allowClear
             showSearch
             placeholder="选择班组"
-            options={TEAM_OPTIONS}
+            options={(teamQuery.data?.items ?? []).map((it: any) => ({ label: it.name, value: it.name }))}
             optionFilterProp="label"
           />
         </Form.Item>

@@ -81,7 +81,7 @@ import ProcessModuleAIDrawer from '@/components/costing/ProcessModuleAIDrawer'
 const { Title, Text } = Typography
 
 type StepCostMode = 'time' | 'piece'
-type StepMeasureType = 'area' | 'perimeter' | 'width' | 'height' | 'count' | 'length'
+type StepMeasureType = 'area' | 'perimeter' | 'width' | 'height' | 'long_side' | 'short_side' | 'count' | 'length'
 
 const STEP_MEASURE_TYPE_OPTIONS: Array<{ label: string; value: StepMeasureType; unitHint: string }> = [
   { label: '面积', value: 'area', unitHint: '㎡' },
@@ -89,6 +89,8 @@ const STEP_MEASURE_TYPE_OPTIONS: Array<{ label: string; value: StepMeasureType; 
   { label: '数量', value: 'count', unitHint: '个' },
   { label: '宽度', value: 'width', unitHint: 'm' },
   { label: '高度', value: 'height', unitHint: 'm' },
+  { label: '长边', value: 'long_side', unitHint: 'm' },
+  { label: '短边', value: 'short_side', unitHint: 'm' },
   // legacy: historical modules may have 'length' stored; keep compatible option (only shown when already selected)
   { label: '长度（legacy）', value: 'length', unitHint: 'm' },
 ]
@@ -96,23 +98,30 @@ const STEP_MEASURE_TYPE_OPTIONS: Array<{ label: string; value: StepMeasureType; 
 // 统一口径：按 BOM 单位限制计量方式候选
 const allowedCalcMethodsByUnit = (
   unit?: string | null,
-): Array<'area' | 'perimeter' | 'count' | 'width' | 'height'> => {
+): Array<'area' | 'perimeter' | 'count' | 'width' | 'height' | 'long_side' | 'short_side'> => {
   const u = normalizeUnit(unit) || unit || ''
   if (u === '平米') return ['area']
-  if (u === '米') return ['perimeter', 'width', 'height']
+  if (u === '米') return ['perimeter', 'width', 'height', 'long_side', 'short_side']
   if (u === '个' || u === '套') return ['count']
   // unknown unit: don't hard block, keep full set to avoid breaking rare units
-  return ['area', 'perimeter', 'width', 'height', 'count']
+  return ['area', 'perimeter', 'width', 'height', 'long_side', 'short_side', 'count']
 }
 
 const deriveCalcMethodByUnit = (
   unit: string | null | undefined,
   preferred?: string | null,
-): 'area' | 'perimeter' | 'count' | 'width' | 'height' => {
+): 'area' | 'perimeter' | 'count' | 'width' | 'height' | 'long_side' | 'short_side' => {
   const allowed = allowedCalcMethodsByUnit(unit)
   const pref = String(preferred ?? '').trim() as any
   if (pref && allowed.includes(pref)) return pref
   return (allowed[0] ?? 'count') as any
+}
+
+const deriveUnitByMeasureType = (measureType?: StepMeasureType | null): '平米' | '米' | '个' => {
+  const mt = String(measureType ?? '').trim()
+  if (mt === 'area') return '平米'
+  if (mt === 'count') return '个'
+  return '米'
 }
 
 const safeNum = (value: unknown, fallback = 0) => {
@@ -133,10 +142,14 @@ const calcMeasureQty = (
   const w = Math.max(0, safeNum(params.width_mm, 0))
   const h = Math.max(0, safeNum(params.height_mm, 0))
   const len = Math.max(0, safeNum(params.length_m, 0))
+  const long = Math.max(w, h)
+  const short = Math.min(w, h)
   if (measureType === 'count') return qty
   if (measureType === 'perimeter') return (2 * (w + h)) / 1000 * qty
   if (measureType === 'width') return w / 1000 * qty
   if (measureType === 'height') return h / 1000 * qty
+  if (measureType === 'long_side') return long / 1000 * qty
+  if (measureType === 'short_side') return short / 1000 * qty
   // legacy: length in meters
   if (measureType === 'length') return len * qty
   // area
@@ -1198,20 +1211,17 @@ const ProcessModulesPage = () => {
       key: 'measure_unit',
       width: 80,
       render: (_: unknown, _row, index) => (
-        <Form.Item
-          name={['steps', index, 'metadata_json', 'measure_unit']}
-          style={{ marginBottom: 0 }}
-          rules={[{ required: true, message: '必填' }]}
-        >
-          <Select
-            options={[
-              // 【单位口径-禁止随意改动】value 必须与 normalizeUnit() 返回一致，否则会出现回显为空/掉值
-              { label: '平米（㎡）', value: '平米' },
-              { label: '米（m）', value: '米' },
-              { label: '个', value: '个' },
-              { label: '套', value: '套' },
-            ]}
-          />
+        <Form.Item noStyle shouldUpdate>
+          {(form) => {
+            const mt = form.getFieldValue(['steps', index, 'metadata_json', 'measure_type']) as StepMeasureType | undefined
+            const unit = deriveUnitByMeasureType(mt)
+            // 自动回填（保持数据一致），且不需要用户编辑
+            queueMicrotask(() => {
+              const cur = form.getFieldValue(['steps', index, 'metadata_json', 'measure_unit'])
+              if (cur !== unit) form.setFieldValue(['steps', index, 'metadata_json', 'measure_unit'], unit)
+            })
+            return <Text>{unit}</Text>
+          }}
         </Form.Item>
       ),
     },
@@ -1248,7 +1258,15 @@ const ProcessModulesPage = () => {
                 style={{ marginBottom: 0 }}
                 rules={[{ required: true, message: '必填' }]}
               >
-                <Select options={options} placeholder="计价量" optionFilterProp="label" />
+                <Select
+                  options={options}
+                  placeholder="计价量"
+                  optionFilterProp="label"
+                  onChange={(v) => {
+                    const unit = deriveUnitByMeasureType(v as any)
+                    form.setFieldValue(['steps', index, 'metadata_json', 'measure_unit'], unit)
+                  }}
+                />
               </Form.Item>
             )
           }}

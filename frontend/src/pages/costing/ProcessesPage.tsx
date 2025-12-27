@@ -574,6 +574,7 @@ const ProcessesPage = () => {
           : []
         const category = (r.category ?? '').trim() || '-'
         const chargingMode = chargingModeLabel(r.charging_mode)
+        const unit = chargingModeToUnit(r.charging_mode as any)
 
         return (
           <div style={{ lineHeight: 1.25 }}>
@@ -584,8 +585,9 @@ const ProcessesPage = () => {
             </div>
             <div style={{ marginTop: 4 }}>
               <Space size={6} wrap>
-                <Text type="secondary">{category}</Text>
-                <Text type="secondary">{chargingMode}</Text>
+                <Text type="secondary">
+                  分类：{category}；计量类型：{chargingMode}；单位：{unit}
+                </Text>
                 {tags.slice(0, 3).map((t: string) => (
                   <Tag
                     key={t}
@@ -627,50 +629,20 @@ const ProcessesPage = () => {
         const meta = (r.metadata_json ?? {}) as any
         const base = safeNumber(meta?.base_minutes) ?? 0
         const unit = safeNumber(meta?.unit_minutes) ?? 0
-        const ratePerMinute = safeNumber(meta?.rate_per_minute) ?? 0
         const pieceRate = safeNumber(meta?.piece_rate) ?? safeNumber(r.standard_rate) ?? 0
 
         const primary = getProcessCostType(r) // 'time' | 'piece'
-        const hasTimeAlt = base > 0 || unit > 0 || ratePerMinute > 0
-        const hasPieceAlt = pieceRate > 0
-        const secondary =
-          primary === 'time'
-            ? hasPieceAlt
-              ? 'piece'
-              : null
-            : hasTimeAlt
-              ? 'time'
-              : null
-
         const primaryLabel = primary === 'time' ? '计时' : '计件'
-        const secondaryLabel = secondary ? (secondary === 'time' ? '计时' : '计件') : ''
-
-        const secondLinePrimary =
-          primary === 'time'
-            ? `${base}分钟+${unit}分钟`
-            : pieceRate
-              ? `${pieceRate}元/件`
-              : '-'
-
-        const secondLineSecondary =
-          secondary === 'piece'
-            ? pieceRate
-              ? `${pieceRate}元/件`
-              : ''
-            : secondary === 'time'
-              ? `${base}分钟+${unit}分钟`
-              : ''
+        const secondLine =
+          primary === 'time' ? `${base}分钟+${unit}分钟` : pieceRate ? `${pieceRate}元/件` : '-'
 
         return (
           <div style={{ lineHeight: 1.25 }}>
             <div>
-              <Text>{secondary ? `${primaryLabel}(${secondaryLabel})` : primaryLabel}</Text>
+              <Text>{primaryLabel}</Text>
             </div>
             <div style={{ marginTop: 4 }}>
-              <Text type="secondary">
-                {secondLinePrimary}
-                {secondLineSecondary ? `(${secondLineSecondary})` : ''}
-              </Text>
+              <Text type="secondary">{secondLine}</Text>
             </div>
           </div>
         )
@@ -702,13 +674,13 @@ const ProcessesPage = () => {
       render: (_, record) => (
         <Space size={4} wrap>
           <Tooltip title="查看">
-            <Button type="text" size="small" icon={<EyeOutlined />} onClick={() => openView(record)} />
+            <Button size="small" icon={<EyeOutlined />} onClick={() => openView(record)} />
           </Tooltip>
           <Tooltip title="编辑">
-            <Button type="text" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+            <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
           </Tooltip>
           <Tooltip title="AI">
-            <Button type="text" size="small" icon={<RobotOutlined />} onClick={() => openAiEdit(record)} />
+            <Button size="small" icon={<RobotOutlined />} onClick={() => openAiEdit(record)} />
           </Tooltip>
           <Tooltip title="复制">
             <Button size="small" icon={<CopyOutlined />} onClick={() => openCopy(record)} />

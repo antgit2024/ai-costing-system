@@ -128,33 +128,7 @@ const getProcessCostType = (record: ProcessSummary): ProcessCostType => {
   return 'piece'
 }
 
-const renderPricingSummary = (record: ProcessSummary) => {
-  const meta = (record.metadata_json ?? {}) as any
-  const type = getProcessCostType(record)
-  if (type === 'time') {
-    const base = safeNumber(meta?.base_minutes) ?? 0
-    const unit = safeNumber(meta?.unit_minutes) ?? 0
-    const measureUnit = normalizeUnit(meta?.measure_unit ?? record.unit_of_measure) || '-'
-    const rate = safeNumber(meta?.rate_per_minute)
-    return (
-      <Space direction="vertical" size={0}>
-        <Text>
-          基础{base}min + 单位{unit}min/{measureUnit}
-        </Text>
-        <Text type={rate === undefined ? 'danger' : undefined}>
-          分钟单价：{rate === undefined ? '未配置（无法算成本）' : `${rate} 元/分钟`}
-        </Text>
-      </Space>
-    )
-  }
-  const pieceRate = safeNumber(meta?.piece_rate) ?? safeNumber(record.standard_rate)
-  return (
-    <Space direction="vertical" size={0}>
-      <Text>计件单价：{pieceRate === undefined ? '未配置（无法算成本）' : `${pieceRate} 元/件`}</Text>
-      <Text type="secondary">成本 = 计件单价 × 订单数量</Text>
-    </Space>
-  )
-}
+// 列表里不展示“计价参数”明细（避免造成误解；工价由班组在工艺模块步骤行维护）
 
 const ProcessesPage = () => {
   const [filters, setFilters] = useState<ProcessQueryParams>({ page: 1, page_size: 20 })
@@ -496,16 +470,13 @@ const ProcessesPage = () => {
       render: (v: any) => <Text>{chargingModeLabel(v)}</Text>,
     },
     {
-      title: '工序类型 / 计价参数',
+      title: '工序类型',
       key: 'pricing',
-      width: 360,
+      width: 120,
       render: (_, record) => (
-        <Space direction="vertical" size={0}>
-          <Tag color={getProcessCostType(record) === 'time' ? 'blue' : 'purple'}>
-            {getProcessCostType(record) === 'time' ? '计时' : '计件'}
-          </Tag>
-          {renderPricingSummary(record)}
-        </Space>
+        <Tag color={getProcessCostType(record) === 'time' ? 'blue' : 'purple'}>
+          {getProcessCostType(record) === 'time' ? '计时' : '计件'}
+        </Tag>
       ),
     },
     {

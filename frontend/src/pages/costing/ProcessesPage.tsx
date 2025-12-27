@@ -6,6 +6,7 @@ import QuestionCircleOutlined from '@ant-design/icons/lib/icons/QuestionCircleOu
 import ReloadOutlined from '@ant-design/icons/lib/icons/ReloadOutlined'
 import StopOutlined from '@ant-design/icons/lib/icons/StopOutlined'
 import DeleteOutlined from '@ant-design/icons/lib/icons/DeleteOutlined'
+import EyeOutlined from '@ant-design/icons/lib/icons/EyeOutlined'
 import {
   Alert,
   Button,
@@ -22,6 +23,7 @@ import {
   Space,
   Table,
   Tag,
+  Tooltip,
   Typography,
   message,
 } from 'antd'
@@ -162,18 +164,24 @@ const ProcessesPage = () => {
 
   const taxonomyCategoriesQuery = useQuery({
     queryKey: ['taxonomy-items', 'process_category'],
-    queryFn: () => fetchTaxonomyItems('process_category', { include_inactive: true }),
+    queryFn: () => fetchTaxonomyItems('process_category', { include_inactive: false }),
   })
 
   const categoryOptions = useMemo(() => {
     const base = new Map<string, string>()
+    const active = new Set<string>()
     for (const it of taxonomyCategoriesQuery.data?.items ?? []) {
-      const c = String((it as any)?.name ?? '').trim()
-      if (c) base.set(c, c)
+      const name = String((it as any)?.name ?? '').trim()
+      if (!name) continue
+      const isActive = (it as any)?.is_active !== false
+      if (!isActive) continue
+      active.add(name)
+      base.set(name, name)
     }
+    // 仅兜底：如果历史数据里有分类，但 taxonomy 里已启用同名分类，则允许显示；停用/不存在的不显示（按用户口径）。
     for (const it of listQuery.data?.items ?? []) {
       const c = String(it.category ?? '').trim()
-      if (c) base.set(c, c)
+      if (c && active.has(c)) base.set(c, c)
     }
     return Array.from(base.entries()).map(([value, label]) => ({ value, label }))
   }, [listQuery.data?.items, taxonomyCategoriesQuery.data?.items])
@@ -497,15 +505,15 @@ const ProcessesPage = () => {
       width: 220,
       render: (_, record) => (
         <Space>
-          <Button size="small" onClick={() => openView(record)}>
-            查看
-          </Button>
-          <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>
-            编辑
-          </Button>
-          <Button size="small" icon={<CopyOutlined />} onClick={() => openCopy(record)}>
-            复制
-          </Button>
+          <Tooltip title="查看">
+            <Button size="small" icon={<EyeOutlined />} onClick={() => openView(record)} />
+          </Tooltip>
+          <Tooltip title="编辑">
+            <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+          </Tooltip>
+          <Tooltip title="复制">
+            <Button size="small" icon={<CopyOutlined />} onClick={() => openCopy(record)} />
+          </Tooltip>
           {record.status === 'active' ? (
             <Popconfirm
               title="确认停用该工序？"
@@ -513,20 +521,15 @@ const ProcessesPage = () => {
               cancelText="取消"
               onConfirm={() => deactivateMutation.mutate(record.id)}
             >
-              <Button size="small" danger icon={<StopOutlined />}>
-                停用
-              </Button>
+              <Tooltip title="停用">
+                <Button size="small" danger icon={<StopOutlined />} />
+              </Tooltip>
             </Popconfirm>
           ) : (
             <>
-              <Button
-                size="small"
-                type="primary"
-                icon={<CheckCircleOutlined />}
-                onClick={() => activateMutation.mutate(record.id)}
-              >
-                启用
-              </Button>
+              <Tooltip title="启用">
+                <Button size="small" type="primary" icon={<CheckCircleOutlined />} onClick={() => activateMutation.mutate(record.id)} />
+              </Tooltip>
               <Popconfirm
                 title="确认删除该工序？"
                 description="删除为归档删除：工序将从列表隐藏。若该工序仍被工艺模块/模型引用，会阻止删除。"
@@ -535,9 +538,9 @@ const ProcessesPage = () => {
                 cancelText="取消"
                 onConfirm={() => deleteMutation.mutate(record.id)}
               >
-                <Button size="small" danger icon={<DeleteOutlined />}>
-                  删除
-                </Button>
+                <Tooltip title="删除">
+                  <Button size="small" danger icon={<DeleteOutlined />} />
+                </Tooltip>
               </Popconfirm>
             </>
           )}

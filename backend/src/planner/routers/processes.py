@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from ...database import get_db
-from .. import schemas
+from .. import models, schemas
 from ..services import audit_service, process_service
 
 router = APIRouter(prefix="/processes", tags=["processes"])
@@ -247,4 +247,63 @@ def batch_update_status(payload: schemas.ProcessBatchStatusRequest, db: Session 
         )
     db.commit()
     return schemas.ProcessBatchStatusResponse(updated=updated)
+
+
+@router.delete(
+    "/{process_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def archive_process(process_id: str, db: Session = Depends(get_db)):
+    """
+    Archive (soft-delete) a process.
+
+    Safety rules:
+    - Must be inactive (status != active)
+    - Must not be referenced by:
+      - process_module_steps.process_id (active steps)
+      - model_processes.process_id
+      - model_version_processes.process_id
+    """
+    process = _get_process_or_404(process_id, db)
+    if process.status == "active":
+        raise HTTPException(status_code=400, detail="请先停用该工序后再删除")
+
+    step_ref_cnt = (
+        db.query(models.ProcessModuleStep)
+        .filter(
+            models.ProcessModuleStep.process_id == process.id,
+            models.ProcessModuleStep.is_archived.is_(False),
+        )
+        .count()
+    )
+    model_ref_cnt = (
+        db.query(models.ModelProcess)
+        .filter(models.ModelProcess.process_id == process.id, models.ModelProcess.is_archived.is_(False))
+        .count()
+    )
+    version_ref_cnt = (
+        db.query(models.ModelVersionProcess)
+        .filter(
+            models.ModelVersionProcess.process_id == process.id,
+            models.ModelVersionProcess.is_archived.is_(False),
+        )
+        .count()
+    )
+    if step_ref_cnt or model_ref_cnt or version_ref_cnt:
+        raise HTTPException(
+            status_code=400,
+            detail=f"该工序仍被引用，无法删除：工艺模块步骤引用={step_ref_cnt}，模型引用={model_ref_cnt}，版本引用={version_ref_cnt}",
+        )
+
+    process.is_archived = True
+    audit_service.log_audit_event(
+        db,
+        target_type="process",
+        target_id=process.id,
+        action="archive",
+        actor_id="system",
+        payload={"process_code": process.process_code},
+    )
+    db.commit()
+    return None
 

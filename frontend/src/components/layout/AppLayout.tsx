@@ -52,7 +52,7 @@ const menuItems: MenuProps['items'] = [
       },
       {
         key: '/costing/processes',
-        label: <Link to="/costing/processes">工序库</Link>,
+        label: <Link to="/costing/processes">工序管理</Link>,
       },
       {
         key: '/costing/process-modules',

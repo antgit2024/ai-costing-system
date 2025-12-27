@@ -750,6 +750,10 @@ export const deactivateProcess = async (processId: string): Promise<ProcessDetai
   return response.data
 }
 
+export const deleteProcess = async (processId: string): Promise<void> => {
+  await plannerClient.delete(`/processes/${processId}`)
+}
+
 export const batchUpdateProcessStatus = async (
   payload: ProcessBatchStatusPayload,
 ): Promise<{ updated: number }> => {

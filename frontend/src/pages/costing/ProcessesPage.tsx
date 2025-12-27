@@ -5,6 +5,7 @@ import PlusOutlined from '@ant-design/icons/lib/icons/PlusOutlined'
 import QuestionCircleOutlined from '@ant-design/icons/lib/icons/QuestionCircleOutlined'
 import ReloadOutlined from '@ant-design/icons/lib/icons/ReloadOutlined'
 import StopOutlined from '@ant-design/icons/lib/icons/StopOutlined'
+import DeleteOutlined from '@ant-design/icons/lib/icons/DeleteOutlined'
 import {
   Alert,
   Button,
@@ -36,6 +37,7 @@ import {
   activateProcess,
   copyProcess,
   createProcess,
+  deleteProcess,
   deactivateProcess,
   fetchProcesses,
   fetchTaxonomyItems,
@@ -63,7 +65,7 @@ const PROCESS_STATUS_OPTIONS = [
   { label: '停用', value: 'inactive' },
 ]
 
-// 班组在工艺模块（工艺模板）的工序行维护；工序库不承载班组字段
+// 班组在工艺模块（工艺模板）的工序行维护；工序管理不承载班组字段
 
 const CHARGING_MODE_OPTIONS: Array<{ label: string; value: ProcessChargingMode }> = [
   { label: '固定', value: 'fixed' },
@@ -250,6 +252,21 @@ const ProcessesPage = () => {
       listQuery.refetch()
     },
     onError: () => message.error('停用失败'),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => deleteProcess(id),
+    onSuccess: () => {
+      message.success('已删除（归档）')
+      listQuery.refetch()
+    },
+    onError: (error) => {
+      if (isAxiosError(error)) {
+        message.error(error.response?.data?.detail ?? error.message)
+        return
+      }
+      message.error('删除失败')
+    },
   })
 
   const copyMutation = useMutation({
@@ -530,14 +547,28 @@ const ProcessesPage = () => {
               </Button>
             </Popconfirm>
           ) : (
-            <Button
-              size="small"
-              type="primary"
-              icon={<CheckCircleOutlined />}
-              onClick={() => activateMutation.mutate(record.id)}
-            >
-              启用
-            </Button>
+            <>
+              <Button
+                size="small"
+                type="primary"
+                icon={<CheckCircleOutlined />}
+                onClick={() => activateMutation.mutate(record.id)}
+              >
+                启用
+              </Button>
+              <Popconfirm
+                title="确认删除该工序？"
+                description="删除为归档删除：工序将从列表隐藏。若该工序仍被工艺模块/模型引用，会阻止删除。"
+                okText="删除"
+                okButtonProps={{ danger: true }}
+                cancelText="取消"
+                onConfirm={() => deleteMutation.mutate(record.id)}
+              >
+                <Button size="small" danger icon={<DeleteOutlined />}>
+                  删除
+                </Button>
+              </Popconfirm>
+            </>
           )}
         </Space>
       ),
@@ -573,7 +604,7 @@ const ProcessesPage = () => {
     <Space direction="vertical" style={{ width: '100%' }} size={24}>
       <div>
         <Title level={3} style={{ marginBottom: 0 }}>
-          工序库
+          工序管理
         </Title>
         <Text type="secondary">维护工序主数据（计时/计件），供工艺模块引用与订单维度预览计算。</Text>
       </div>
@@ -776,7 +807,7 @@ const ProcessesPage = () => {
           </Form.Item>
 
           <Text type="secondary" style={{ display: 'block', marginTop: -8, marginBottom: 12 }}>
-            班组/工价/工时/计量等调参请在工艺模块（工艺模板）步骤行维护；工序库仅维护通用工序字典。
+            班组/工价/工时/计量等调参请在工艺模块（工艺模板）步骤行维护；工序管理仅维护通用工序字典。
           </Text>
 
           {costTypeValue === 'time' ? (

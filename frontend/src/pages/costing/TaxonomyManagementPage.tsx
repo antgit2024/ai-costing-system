@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
-import { Button, Card, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tabs, Tag, Typography, message } from 'antd'
+import { useState } from 'react'
+import { Button, Card, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tabs, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useMutation, useQuery } from '@tanstack/react-query'
 
@@ -7,7 +7,6 @@ import {
   archiveTaxonomyItem,
   createTaxonomyItem,
   fetchTaxonomyItems,
-  fetchTaxonomyScopeOptions,
   updateTaxonomyItem,
 } from '@/services/planner'
 import type { TaxonomyItemRead } from '@/types/planner'
@@ -37,48 +36,23 @@ const TaxonomyManagementPage = () => {
   const [editing, setEditing] = useState<TaxonomyItemRead | null>(null)
   const [form] = Form.useForm<{
     name: string
-    scopes: string[]
     is_active: boolean
     sort_order: number
     rate_per_minute?: number
   }>()
-
-  const scopeOptionsQuery = useQuery({
-    queryKey: ['taxonomy-scope-options'],
-    queryFn: () => fetchTaxonomyScopeOptions(),
-  })
 
   const listQuery = useQuery({
     queryKey: ['taxonomy-items', activeDomain, 'admin'],
     queryFn: () => fetchTaxonomyItems(activeDomain, { include_inactive: true }),
   })
 
-  const scopeSelectOptions = useMemo(() => {
-    const defaultScopes = scopeOptionsQuery.data?.default_scopes ?? ['布艺', '画艺']
-    const universal = scopeOptionsQuery.data?.universal_scope ?? '*'
-    return [
-      { label: `通用（${universal}）`, value: universal },
-      ...defaultScopes.map((s) => ({ label: s, value: s })),
-    ]
-  }, [scopeOptionsQuery.data?.default_scopes, scopeOptionsQuery.data?.universal_scope])
-
-  const normalizeScopes = (raw: string[]) => {
-    const universal = scopeOptionsQuery.data?.universal_scope ?? '*'
-    const cleaned = Array.from(
-      new Set((raw ?? []).map((s) => String(s ?? '').trim()).filter(Boolean)),
-    )
-    if (cleaned.includes(universal)) {
-      return [universal]
-    }
-    return cleaned
-  }
+  const DEFAULT_SCOPES = ['*']
 
   const openCreate = () => {
     setEditing(null)
     form.resetFields()
     form.setFieldsValue({
       name: '',
-      scopes: [scopeOptionsQuery.data?.universal_scope ?? '*'],
       is_active: true,
       sort_order: 0,
       rate_per_minute: undefined,
@@ -91,7 +65,6 @@ const TaxonomyManagementPage = () => {
     form.resetFields()
     form.setFieldsValue({
       name: item.name,
-      scopes: item.scopes,
       is_active: item.is_active,
       sort_order: item.sort_order ?? 0,
       rate_per_minute: Number((item as any)?.metadata?.rate_per_minute ?? (item as any)?.metadata_json?.rate_per_minute),
@@ -100,11 +73,11 @@ const TaxonomyManagementPage = () => {
   }
 
   const createMutation = useMutation({
-    mutationFn: (payload: { domain: string; name: string; scopes: string[]; is_active: boolean; sort_order: number }) =>
+    mutationFn: (payload: { domain: string; name: string; is_active: boolean; sort_order: number }) =>
       createTaxonomyItem({
         domain: payload.domain,
         name: payload.name,
-        scopes: payload.scopes,
+        scopes: DEFAULT_SCOPES,
         is_active: payload.is_active,
         sort_order: payload.sort_order,
         source: 'local',
@@ -120,12 +93,12 @@ const TaxonomyManagementPage = () => {
   })
 
   const updateMutation = useMutation({
-    mutationFn: (payload: { id: string; name: string; scopes: string[]; is_active: boolean; sort_order: number }) =>
+    mutationFn: (payload: { id: string; name: string; is_active: boolean; sort_order: number; metadata?: any }) =>
       updateTaxonomyItem(payload.id, {
         name: payload.name,
-        scopes: payload.scopes,
         is_active: payload.is_active,
         sort_order: payload.sort_order,
+        ...(payload.metadata ? { metadata: payload.metadata } : {}),
       }),
     onSuccess: async () => {
       message.success('已保存')
@@ -166,25 +139,12 @@ const TaxonomyManagementPage = () => {
         ] as ColumnsType<TaxonomyItemRead>)
       : []),
     {
-      title: '适用范围',
-      width: 220,
-      render: (_: any, r: TaxonomyItemRead) => (
-        <Space wrap size={[4, 4]}>
-          {(r.scopes ?? []).map((s) => (
-            <Tag key={s} color={s === '*' ? 'blue' : undefined}>
-              {s === '*' ? '通用' : s}
-            </Tag>
-          ))}
-        </Space>
-      ),
-    },
-    {
       title: '启用',
       width: 90,
       render: (_: any, r: TaxonomyItemRead) => (
         <Switch
           checked={r.is_active}
-          onChange={(checked) => updateMutation.mutate({ id: r.id, name: r.name, scopes: r.scopes, is_active: checked, sort_order: r.sort_order })}
+          onChange={(checked) => updateMutation.mutate({ id: r.id, name: r.name, is_active: checked, sort_order: r.sort_order })}
         />
       ),
     },
@@ -251,11 +211,6 @@ const TaxonomyManagementPage = () => {
             ),
           }))}
         />
-        <div style={{ marginTop: 8 }}>
-          <Text type="secondary">
-            说明：适用范围必选。推荐用“通用(*)”覆盖全部品类；布艺/画艺只是默认快捷标签（可继续扩展新标签，不需要改库）。
-          </Text>
-        </div>
       </Card>
 
       <Modal
@@ -265,11 +220,6 @@ const TaxonomyManagementPage = () => {
         okText="保存"
         onOk={async () => {
           const values = await form.validateFields()
-          const scopes = normalizeScopes(values.scopes)
-          if (!scopes.length) {
-            message.error('适用范围为必选')
-            return
-          }
           const metadata =
             activeDomain === 'team'
               ? {
@@ -283,7 +233,6 @@ const TaxonomyManagementPage = () => {
             updateMutation.mutate({
               id: editing.id,
               name: values.name,
-              scopes,
               is_active: values.is_active,
               sort_order: values.sort_order,
               ...(metadata ? { metadata } : {}),
@@ -293,10 +242,8 @@ const TaxonomyManagementPage = () => {
           createMutation.mutate({
             domain: activeDomain,
             name: values.name,
-            scopes,
             is_active: values.is_active,
             sort_order: values.sort_order,
-            ...(metadata ? { metadata } : {}),
           })
         }}
         confirmLoading={createMutation.isPending || updateMutation.isPending}
@@ -305,29 +252,6 @@ const TaxonomyManagementPage = () => {
         <Form form={form} layout="vertical" preserve={false}>
           <Form.Item label="名称" name="name" rules={[{ required: true, message: '请输入名称' }]}>
             <Input placeholder="例如：包装材料 / 画框线条 / 装裱..." />
-          </Form.Item>
-          <Form.Item
-            label="适用范围（必选）"
-            name="scopes"
-            rules={[
-              { required: true, message: '请选择适用范围' },
-              {
-                validator: async (_, v) => {
-                  const arr = Array.isArray(v) ? v : []
-                  if (normalizeScopes(arr).length < 1) {
-                    throw new Error('适用范围为必选')
-                  }
-                },
-              },
-            ]}
-          >
-            <Select
-              mode="tags"
-              style={{ width: '100%' }}
-              placeholder="必选：通用(*) 或 布艺/画艺..."
-              options={scopeSelectOptions}
-              onChange={(v) => form.setFieldValue('scopes', normalizeScopes(v as any))}
-            />
           </Form.Item>
           <Space>
             <Form.Item label="启用" name="is_active" valuePropName="checked" initialValue>
@@ -349,11 +273,6 @@ const TaxonomyManagementPage = () => {
               <InputNumber min={0} precision={2} style={{ width: 220 }} placeholder="例如：0.80" />
             </Form.Item>
           ) : null}
-          <div style={{ marginTop: 8 }}>
-            <Text type="secondary">
-              快捷标签：布艺 / 画艺（可点击选择）。若选“通用(*)”，将自动覆盖所有品类并清空其它标签。
-            </Text>
-          </div>
         </Form>
       </Modal>
     </Space>

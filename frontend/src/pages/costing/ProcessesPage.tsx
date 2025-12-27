@@ -186,21 +186,20 @@ const ProcessesPage = () => {
     return Array.from(base.entries()).map(([value, label]) => ({ value, label }))
   }, [listQuery.data?.items, taxonomyCategoriesQuery.data?.items])
 
-  const categoryScopesByName = useMemo(() => {
-    const map = new Map<string, string[]>()
-    for (const it of taxonomyCategoriesQuery.data?.items ?? []) {
-      const name = String((it as any)?.name ?? '').trim()
-      if (!name) continue
-      const isActive = (it as any)?.is_active !== false
-      if (!isActive) continue
-      const scopes = Array.isArray((it as any)?.scopes) ? (it as any).scopes : []
-      map.set(
-        name,
-        scopes.map((s: any) => String(s ?? '').trim()).filter(Boolean),
-      )
+  const processTagOptions = useMemo(() => {
+    const base = new Map<string, string>()
+    // 默认快捷：画艺/布艺（仍可扩展）
+    for (const s of ['画艺', '布艺']) base.set(s, s)
+    for (const it of listQuery.data?.items ?? []) {
+      const tags = ((it.metadata_json as any)?.process_tags ?? []) as any
+      if (!Array.isArray(tags)) continue
+      for (const t of tags) {
+        const name = String(t ?? '').trim()
+        if (name) base.set(name, name)
+      }
     }
-    return map
-  }, [taxonomyCategoriesQuery.data?.items])
+    return Array.from(base.entries()).map(([value, label]) => ({ value, label }))
+  }, [listQuery.data?.items])
 
   const createMutation = useMutation({
     mutationFn: (payload: ProcessCreatePayload) => createProcess(payload),
@@ -340,6 +339,7 @@ const ProcessesPage = () => {
       unit_of_measure: normalizeUnit(record.unit_of_measure) || undefined,
       status: record.status,
       standard_time_minutes: safeNumber((record.metadata_json as any)?.standard_time_minutes),
+      process_tags: Array.isArray((record.metadata_json as any)?.process_tags) ? (record.metadata_json as any).process_tags : [],
     })
     setDrawerOpen(true)
   }
@@ -366,6 +366,7 @@ const ProcessesPage = () => {
       unit_of_measure: normalizeUnit(record.unit_of_measure) || undefined,
       status: record.status,
       standard_time_minutes: safeNumber((record.metadata_json as any)?.standard_time_minutes),
+      process_tags: Array.isArray((record.metadata_json as any)?.process_tags) ? (record.metadata_json as any).process_tags : [],
     })
     setDrawerOpen(true)
   }
@@ -399,6 +400,17 @@ const ProcessesPage = () => {
       delete metadata.standard_time_minutes
     } else {
       metadata.standard_time_minutes = values.standard_time_minutes
+    }
+
+    // 工序标签（非必填）：写入 metadata_json.process_tags
+    const rawTags = (values as any).process_tags
+    const tags = Array.isArray(rawTags)
+      ? Array.from(new Set(rawTags.map((x: any) => String(x ?? '').trim()).filter(Boolean)))
+      : []
+    if (tags.length) {
+      ;(metadata as any).process_tags = tags
+    } else {
+      delete (metadata as any).process_tags
     }
 
     const costType = (values.cost_type ?? 'piece') as ProcessCostType
@@ -474,33 +486,31 @@ const ProcessesPage = () => {
     {
       title: '分类',
       dataIndex: 'category',
-      width: 220,
+      width: 160,
       ellipsis: true,
-      render: (value?: string | null) => {
-        const name = String(value ?? '').trim()
-        const scopes = name ? categoryScopesByName.get(name) ?? [] : []
+      render: (value?: string | null) => <Text ellipsis={{ tooltip: value || '-' }}>{value || '-'}</Text>,
+    },
+    {
+      title: '标签',
+      key: 'process_tags',
+      width: 160,
+      render: (_: any, r: ProcessSummary) => {
+        const tags = ((r.metadata_json as any)?.process_tags ?? []) as any
+        const arr = Array.isArray(tags) ? tags.map((x: any) => String(x ?? '').trim()).filter(Boolean) : []
+        if (!arr.length) return <Text type="secondary">-</Text>
         return (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden' }}>
-            <Text ellipsis={{ tooltip: name || '-' }} style={{ maxWidth: 120 }}>
-              {name || '-'}
-            </Text>
-            <span style={{ display: 'flex', gap: 4, flexWrap: 'nowrap', overflow: 'hidden' }}>
-              {scopes.slice(0, 3).map((s) => (
-                <Tag
-                  key={s}
-                  color={s === '*' ? 'blue' : undefined}
-                  style={{ marginInlineEnd: 0, borderRadius: 999, padding: '0 6px', fontSize: 12, lineHeight: '18px' }}
-                >
-                  {s === '*' ? '通用' : s}
-                </Tag>
-              ))}
-              {scopes.length > 3 ? (
-                <Tag style={{ marginInlineEnd: 0, borderRadius: 999, padding: '0 6px', fontSize: 12, lineHeight: '18px' }}>
-                  +{scopes.length - 3}
-                </Tag>
-              ) : null}
-            </span>
-          </div>
+          <Space wrap size={[4, 4]}>
+            {arr.slice(0, 4).map((t: string) => (
+              <Tag key={t} style={{ marginInlineEnd: 0, borderRadius: 999, padding: '0 6px', fontSize: 12, lineHeight: '18px' }}>
+                {t}
+              </Tag>
+            ))}
+            {arr.length > 4 ? (
+              <Tag style={{ marginInlineEnd: 0, borderRadius: 999, padding: '0 6px', fontSize: 12, lineHeight: '18px' }}>
+                +{arr.length - 4}
+              </Tag>
+            ) : null}
+          </Space>
         )
       },
     },
@@ -796,6 +806,14 @@ const ProcessesPage = () => {
             rules={[{ required: true, message: '请选择分类' }]}
           >
             <Select placeholder="请选择" options={categoryOptions} showSearch optionFilterProp="label" />
+          </Form.Item>
+
+          <Form.Item label="标签（非必填）" name="process_tags" tooltip="回车可新增标签；也可选择已存在标签。">
+            <Select
+              mode="tags"
+              placeholder="例如：画艺 / 布艺 / 通用..."
+              options={processTagOptions}
+            />
           </Form.Item>
 
           <Space style={{ width: '100%' }} size={16} align="start">

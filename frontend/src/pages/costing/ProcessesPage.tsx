@@ -474,19 +474,19 @@ const ProcessesPage = () => {
     {
       title: '编码',
       dataIndex: 'process_code',
-      width: 160,
+      width: 90,
       render: (value: string) => <Text code>{value}</Text>,
     },
     {
       title: '名称',
       dataIndex: 'process_name',
-      width: 220,
+      width: 150,
       ellipsis: true,
     },
     {
       title: '分类',
       dataIndex: 'category',
-      width: 160,
+      width: 90,
       ellipsis: true,
       render: (value?: string | null) => <Text ellipsis={{ tooltip: value || '-' }}>{value || '-'}</Text>,
     },
@@ -515,15 +515,33 @@ const ProcessesPage = () => {
       },
     },
     {
+      title: '基础工时(分)',
+      key: 'base_minutes',
+      width: 110,
+      render: (_: any, r: ProcessSummary) => {
+        const v = safeNumber((r.metadata_json as any)?.base_minutes)
+        return <Text>{v === undefined ? '-' : String(v)}</Text>
+      },
+    },
+    {
+      title: '单位工时(分)',
+      key: 'unit_minutes',
+      width: 110,
+      render: (_: any, r: ProcessSummary) => {
+        const v = safeNumber((r.metadata_json as any)?.unit_minutes)
+        return <Text>{v === undefined ? '-' : String(v)}</Text>
+      },
+    },
+    {
       title: '计量类型',
       dataIndex: 'charging_mode',
-      width: 100,
+      width: 60,
       render: (v: any) => <Text>{chargingModeLabel(v)}</Text>,
     },
     {
       title: '工序类型',
       key: 'pricing',
-      width: 120,
+      width: 60,
       render: (_, record) => (
         <Tag color={getProcessCostType(record) === 'time' ? 'blue' : 'purple'}>
           {getProcessCostType(record) === 'time' ? '计时' : '计件'}
@@ -533,8 +551,17 @@ const ProcessesPage = () => {
     {
       title: '状态',
       dataIndex: 'status',
-      width: 100,
+      width: 60,
       render: (value: string) => getStatusTag(value),
+    },
+    {
+      title: '描述',
+      dataIndex: 'description',
+      width: 260,
+      ellipsis: true,
+      render: (value?: string | null) => (
+        <Text ellipsis={{ tooltip: value || '-' }}>{value || '-'}</Text>
+      ),
     },
     {
       title: '更新时间',

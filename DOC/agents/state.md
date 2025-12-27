@@ -144,6 +144,21 @@
 
 - **本轮验收命令（必须）**：`npm -C frontend run build`（已通过）
 
+- **本轮闭环产物（Frontend / 工艺模块列表页：对齐“工序管理”两行风格 + 操作图标化）**：
+  - 目标：让“工艺模块”列表可扫读（两行信息密度）并与“工序管理”视觉一致。
+  - 变更点：
+    - 列表列改造（`ProcessModulesPage`）：
+      - “工艺模块”列：第一行名称（加粗）；第二行显示 `分类/版本/引用次数` + 胶囊标签（最多 3 个，超出显示 +N）
+      - “描述”列：两行省略（ellipsis rows=2 + tooltip）
+      - “操作”列：图标按钮（带边框 + Tooltip）→ 查看/编辑/AI/复制/启用/停用
+  - 关键文件：
+    - `frontend/src/pages/costing/ProcessModulesPage.tsx`
+    - `frontend/src/guides/table_list_style_two_line_cells.md`
+  - 本轮验收命令：
+    - `npm -C frontend run build`
+    - `grep -nF \"title: '描述'\" frontend/src/pages/costing/ProcessModulesPage.tsx`
+  - 最近校对（北京时间 GMT+8）：2025-12-27 18:10
+
 - **本轮闭环产物（Frontend / 工艺模块 AI 语义抽屉重构：自动汇总为主、步骤级补丁、手工不覆盖）**：
   - 目标：让员工看懂“这个工艺模块怎么做”，并让模块级 AI 字段主要来自工序库 ai_spec 自动汇总，避免重复手填。
   - 变更点：

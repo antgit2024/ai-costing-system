@@ -10,6 +10,7 @@ import {
   InputNumber,
   message,
   Modal,
+  Popconfirm,
   Radio,
   Row,
   Select,
@@ -24,6 +25,7 @@ import type { ColumnsType } from 'antd/es/table'
 import {
   ArrowDownOutlined,
   ArrowUpOutlined,
+  CheckCircleOutlined,
   CopyOutlined,
   DeleteOutlined,
   EditOutlined,
@@ -33,6 +35,8 @@ import {
   PlusOutlined,
   QuestionCircleOutlined,
   ReloadOutlined,
+  RobotOutlined,
+  StopOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -624,94 +628,176 @@ const ProcessModulesPage = () => {
       title: '编码',
       dataIndex: 'module_code',
       key: 'module_code',
-      width: 160,
-      render: (value, record) => (
-        <Button type="link" size="small" onClick={() => openViewDrawer(record)}>
-          {value}
-        </Button>
+      width: 90,
+      render: (value: string) => <Text code>{value}</Text>,
+    },
+    {
+      title: '工艺模块',
+      key: 'module_info',
+      width: 320,
+      render: (_: any, r: ProcessModuleSummary) => {
+        const category = String(r.category ?? '').trim() || '-'
+        const version = r.version ?? '-'
+        const refCount = (r.metadata_json as any)?.reference_count ?? '-'
+        const status = String(r.status ?? '').trim()
+        const statusLabel = status === 'active' ? '启用' : status === 'inactive' ? '停用' : '草稿'
+        const statusColor = status === 'active' ? 'green' : status === 'inactive' ? 'red' : 'gold'
+        const tagsRaw = (r.tags ?? []) as any
+        const tags = Array.isArray(tagsRaw)
+          ? tagsRaw.map((x: any) => String(x ?? '').trim()).filter(Boolean)
+          : []
+
+        return (
+          <div style={{ lineHeight: 1.25 }}>
+            <div>
+              <Space size={8} wrap>
+                <Text strong ellipsis={{ tooltip: r.module_name }}>
+                  {r.module_name}
+                </Text>
+                <Tag color={statusColor} style={{ marginInlineEnd: 0 }}>
+                  {statusLabel}
+                </Tag>
+              </Space>
+            </div>
+            <div style={{ marginTop: 4 }}>
+              <Space size={6} wrap>
+                <Text type="secondary">
+                  分类：{category}；版本：{version}；引用：{refCount}
+                </Text>
+                {tags.slice(0, 3).map((t: string) => (
+                  <Tag
+                    key={t}
+                    style={{
+                      marginInlineEnd: 0,
+                      borderRadius: 999,
+                      padding: '0 6px',
+                      fontSize: 12,
+                      lineHeight: '18px',
+                    }}
+                  >
+                    {t}
+                  </Tag>
+                ))}
+                {tags.length > 3 ? (
+                  <Tag
+                    style={{
+                      marginInlineEnd: 0,
+                      borderRadius: 999,
+                      padding: '0 6px',
+                      fontSize: 12,
+                      lineHeight: '18px',
+                    }}
+                  >
+                    +{tags.length - 3}
+                  </Tag>
+                ) : null}
+              </Space>
+            </div>
+          </div>
+        )
+      },
+    },
+    {
+      title: '描述',
+      dataIndex: 'description',
+      key: 'description',
+      width: 420,
+      render: (value?: string | null) => (
+        <Typography.Paragraph
+          style={{ marginBottom: 0, lineHeight: 1.25 }}
+          ellipsis={{ rows: 2, tooltip: value || '-' }}
+        >
+          {value || '-'}
+        </Typography.Paragraph>
       ),
-    },
-    {
-      title: '名称',
-      dataIndex: 'module_name',
-      key: 'module_name',
-      render: (value: string) => (
-        <Space direction="vertical" size={0}>
-          <Text strong>{value}</Text>
-        </Space>
-      ),
-    },
-    {
-      title: '类别',
-      dataIndex: 'category',
-      key: 'category',
-      width: 140,
-      render: (value?: string) => value || '-',
-    },
-    {
-      title: '状态',
-      dataIndex: 'status',
-      key: 'status',
-      width: 110,
-      render: (value: string) => (
-        <Tag color={value === 'active' ? 'green' : value === 'inactive' ? 'red' : 'gold'}>
-          {value === 'active' ? '启用' : value === 'inactive' ? '停用' : '草稿'}
-        </Tag>
-      ),
-    },
-    {
-      title: '版本',
-      dataIndex: 'version',
-      key: 'version',
-      width: 80,
-    },
-    {
-      title: '引用次数',
-      dataIndex: 'metadata_json',
-      key: 'references',
-      width: 120,
-      render: (metadata?: Record<string, any>) => metadata?.reference_count ?? '-',
     },
     {
       title: '更新时间',
       dataIndex: 'updated_at',
       key: 'updated_at',
-      width: 200,
+      width: 150,
       render: (value: string) => dayjs(value).format('YYYY-MM-DD HH:mm'),
     },
     {
       title: '操作',
       key: 'actions',
-      width: 220,
+      width: 180,
       fixed: 'right',
-      render: (_, record) => (
-        <Space size={8}>
-          <Button icon={<EyeOutlined />} size="small" onClick={() => openViewDrawer(record)}>
-            查看
-          </Button>
-          <Button
-            icon={<EditOutlined />}
-            size="small"
-            onClick={() => {
-              setSelectedId(record.id)
-              setDrawerMode('edit')
-              setDrawerOpen(true)
-            }}
-          >
-            编辑
-          </Button>
-          <Button
-            icon={<QuestionCircleOutlined />}
-            size="small"
-            onClick={() => {
-              setAiModuleId(record.id)
-              setAiDrawerOpen(true)
-            }}
-          >
-            AI
-          </Button>
-        </Space>
-      ),
+      render: (_, record) => {
+        const status = String(record.status ?? '').trim()
+        return (
+          <Space size={4} wrap>
+            <Tooltip title="查看">
+              <Button size="small" icon={<EyeOutlined />} onClick={() => openViewDrawer(record)} />
+            </Tooltip>
+            <Tooltip title="编辑">
+              <Button
+                size="small"
+                icon={<EditOutlined />}
+                onClick={() => {
+                  setSelectedId(record.id)
+                  setDrawerMode('edit')
+                  setDrawerOpen(true)
+                }}
+              />
+            </Tooltip>
+            <Tooltip title="AI">
+              <Button
+                size="small"
+                icon={<RobotOutlined />}
+                onClick={() => {
+                  setAiModuleId(record.id)
+                  setAiDrawerOpen(true)
+                }}
+              />
+            </Tooltip>
+            <Tooltip title="复制">
+              <Button
+                size="small"
+                icon={<CopyOutlined />}
+                onClick={async () => {
+                  let newCode = fallbackModuleCode()
+                  try {
+                    newCode = (await generateNextCode({ prefix: 'MOD', width: 4 })).code
+                  } catch {
+                    // keep fallback
+                  }
+                  const payload: ProcessModuleCopyPayload = {
+                    module_code: newCode,
+                    module_name: `${record.module_name}（复制）`,
+                    status: 'draft',
+                    operator_id: DEFAULT_OPERATOR,
+                  }
+                  copyMutation.mutate({ id: record.id, payload })
+                }}
+              />
+            </Tooltip>
+            {status === 'active' ? (
+              <Popconfirm
+                title="确认停用该工艺模块？"
+                okText="停用"
+                cancelText="取消"
+                onConfirm={() => deactivateMutation.mutate(record.id)}
+              >
+                <Tooltip title="停用">
+                  <Button size="small" danger icon={<StopOutlined />} />
+                </Tooltip>
+              </Popconfirm>
+            ) : (
+              <Popconfirm
+                title="确认启用该工艺模块？"
+                okText="启用"
+                cancelText="取消"
+                onConfirm={() => activateMutation.mutate(record.id)}
+              >
+                <Tooltip title="启用">
+                  <Button size="small" icon={<CheckCircleOutlined style={{ color: '#52c41a' }} />} />
+                </Tooltip>
+              </Popconfirm>
+            )}
+          </Space>
+        )
+      },
     },
   ]
 

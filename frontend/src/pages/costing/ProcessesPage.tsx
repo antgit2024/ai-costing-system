@@ -112,12 +112,6 @@ const fallbackProcessCode = () => {
   return `PR${suffix}`
 }
 
-const getStatusTag = (status: string) => {
-  if (status === 'active') return <Tag color="green">启用</Tag>
-  if (status === 'inactive') return <Tag color="red">停用</Tag>
-  return <Tag color="gold">草稿</Tag>
-}
-
 const safeNumber = (value: unknown): number | undefined => {
   const num = Number(value)
   return Number.isFinite(num) ? num : undefined
@@ -566,115 +560,155 @@ const ProcessesPage = () => {
     {
       title: '编码',
       dataIndex: 'process_code',
-      width: 90,
+      width: 80,
       render: (value: string) => <Text code>{value}</Text>,
     },
     {
-      title: '名称',
-      dataIndex: 'process_name',
-      width: 150,
-      ellipsis: true,
-    },
-    {
-      title: '分类',
-      dataIndex: 'category',
-      width: 90,
-      ellipsis: true,
-      render: (value?: string | null) => <Text ellipsis={{ tooltip: value || '-' }}>{value || '-'}</Text>,
-    },
-    {
-      title: '标签',
-      key: 'process_tags',
-      width: 160,
+      title: '工序',
+      key: 'process_info',
+      width: 260,
       render: (_: any, r: ProcessSummary) => {
-        const tags = ((r.metadata_json as any)?.process_tags ?? []) as any
-        const arr = Array.isArray(tags) ? tags.map((x: any) => String(x ?? '').trim()).filter(Boolean) : []
-        if (!arr.length) return <Text type="secondary">-</Text>
+        const tagsRaw = ((r.metadata_json as any)?.process_tags ?? []) as any
+        const tags = Array.isArray(tagsRaw)
+          ? tagsRaw.map((x: any) => String(x ?? '').trim()).filter(Boolean)
+          : []
+        const category = (r.category ?? '').trim() || '-'
+        const chargingMode = chargingModeLabel(r.charging_mode)
+
         return (
-          <Space wrap size={[4, 4]}>
-            {arr.slice(0, 4).map((t: string) => (
-              <Tag key={t} style={{ marginInlineEnd: 0, borderRadius: 999, padding: '0 6px', fontSize: 12, lineHeight: '18px' }}>
-                {t}
-              </Tag>
-            ))}
-            {arr.length > 4 ? (
-              <Tag style={{ marginInlineEnd: 0, borderRadius: 999, padding: '0 6px', fontSize: 12, lineHeight: '18px' }}>
-                +{arr.length - 4}
-              </Tag>
-            ) : null}
-          </Space>
+          <div style={{ lineHeight: 1.25 }}>
+            <div>
+              <Text strong ellipsis={{ tooltip: r.process_name }}>
+                {r.process_name}
+              </Text>
+            </div>
+            <div style={{ marginTop: 4 }}>
+              <Space size={6} wrap>
+                <Text type="secondary">{category}</Text>
+                <Text type="secondary">{chargingMode}</Text>
+                {tags.slice(0, 3).map((t: string) => (
+                  <Tag
+                    key={t}
+                    style={{
+                      marginInlineEnd: 0,
+                      borderRadius: 999,
+                      padding: '0 6px',
+                      fontSize: 12,
+                      lineHeight: '18px',
+                    }}
+                  >
+                    {t}
+                  </Tag>
+                ))}
+                {tags.length > 3 ? (
+                  <Tag
+                    style={{
+                      marginInlineEnd: 0,
+                      borderRadius: 999,
+                      padding: '0 6px',
+                      fontSize: 12,
+                      lineHeight: '18px',
+                    }}
+                  >
+                    +{tags.length - 3}
+                  </Tag>
+                ) : null}
+              </Space>
+            </div>
+          </div>
         )
       },
     },
     {
-      title: '基础工时(分)',
-      key: 'base_minutes',
-      width: 110,
+      title: '类型/工时',
+      key: 'costing_and_hours',
+      width: 170,
       render: (_: any, r: ProcessSummary) => {
-        const v = safeNumber((r.metadata_json as any)?.base_minutes)
-        return <Text>{v === undefined ? '-' : String(v)}</Text>
+        const meta = (r.metadata_json ?? {}) as any
+        const base = safeNumber(meta?.base_minutes) ?? 0
+        const unit = safeNumber(meta?.unit_minutes) ?? 0
+        const ratePerMinute = safeNumber(meta?.rate_per_minute) ?? 0
+        const pieceRate = safeNumber(meta?.piece_rate) ?? safeNumber(r.standard_rate) ?? 0
+
+        const primary = getProcessCostType(r) // 'time' | 'piece'
+        const hasTimeAlt = base > 0 || unit > 0 || ratePerMinute > 0
+        const hasPieceAlt = pieceRate > 0
+        const secondary =
+          primary === 'time'
+            ? hasPieceAlt
+              ? 'piece'
+              : null
+            : hasTimeAlt
+              ? 'time'
+              : null
+
+        const primaryLabel = primary === 'time' ? '计时' : '计件'
+        const secondaryLabel = secondary ? (secondary === 'time' ? '计时' : '计件') : ''
+
+        const secondLinePrimary =
+          primary === 'time'
+            ? `${base}分钟+${unit}分钟`
+            : pieceRate
+              ? `${pieceRate}元/件`
+              : '-'
+
+        const secondLineSecondary =
+          secondary === 'piece'
+            ? pieceRate
+              ? `${pieceRate}元/件`
+              : ''
+            : secondary === 'time'
+              ? `${base}分钟+${unit}分钟`
+              : ''
+
+        return (
+          <div style={{ lineHeight: 1.25 }}>
+            <div>
+              <Text>{secondary ? `${primaryLabel}(${secondaryLabel})` : primaryLabel}</Text>
+            </div>
+            <div style={{ marginTop: 4 }}>
+              <Text type="secondary">
+                {secondLinePrimary}
+                {secondLineSecondary ? `(${secondLineSecondary})` : ''}
+              </Text>
+            </div>
+          </div>
+        )
       },
-    },
-    {
-      title: '单位工时(分)',
-      key: 'unit_minutes',
-      width: 110,
-      render: (_: any, r: ProcessSummary) => {
-        const v = safeNumber((r.metadata_json as any)?.unit_minutes)
-        return <Text>{v === undefined ? '-' : String(v)}</Text>
-      },
-    },
-    {
-      title: '计量类型',
-      dataIndex: 'charging_mode',
-      width: 60,
-      render: (v: any) => <Text>{chargingModeLabel(v)}</Text>,
-    },
-    {
-      title: '工序类型',
-      key: 'pricing',
-      width: 60,
-      render: (_, record) => (
-        <Tag color={getProcessCostType(record) === 'time' ? 'blue' : 'purple'}>
-          {getProcessCostType(record) === 'time' ? '计时' : '计件'}
-        </Tag>
-      ),
-    },
-    {
-      title: '状态',
-      dataIndex: 'status',
-      width: 60,
-      render: (value: string) => getStatusTag(value),
     },
     {
       title: '描述',
       dataIndex: 'description',
-      width: 260,
-      ellipsis: true,
+      width: 390,
       render: (value?: string | null) => (
-        <Text ellipsis={{ tooltip: value || '-' }}>{value || '-'}</Text>
+        <Typography.Paragraph
+          style={{ marginBottom: 0, lineHeight: 1.25 }}
+          ellipsis={{ rows: 2, tooltip: value || '-' }}
+        >
+          {value || '-'}
+        </Typography.Paragraph>
       ),
     },
     {
       title: '更新时间',
       dataIndex: 'updated_at',
-      width: 160,
+      width: 150,
       render: (value: string) => dayjs(value).format('YYYY-MM-DD HH:mm'),
     },
     {
       title: '操作',
       key: 'actions',
-      width: 220,
+      width: 160,
       render: (_, record) => (
-        <Space>
+        <Space size={4} wrap>
           <Tooltip title="查看">
-            <Button size="small" icon={<EyeOutlined />} onClick={() => openView(record)} />
+            <Button type="text" size="small" icon={<EyeOutlined />} onClick={() => openView(record)} />
           </Tooltip>
           <Tooltip title="编辑">
-            <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+            <Button type="text" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
           </Tooltip>
           <Tooltip title="AI">
-            <Button size="small" icon={<RobotOutlined />} onClick={() => openAiEdit(record)} />
+            <Button type="text" size="small" icon={<RobotOutlined />} onClick={() => openAiEdit(record)} />
           </Tooltip>
           <Tooltip title="复制">
             <Button size="small" icon={<CopyOutlined />} onClick={() => openCopy(record)} />

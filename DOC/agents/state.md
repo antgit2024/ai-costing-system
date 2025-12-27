@@ -195,6 +195,19 @@
     - `npm -C frontend run build`
   - 最近校对（北京时间 GMT+8）：2025-12-27 19:05
 
+- **本轮闭环产物（Process Modules / 列表删除（归档））**：
+  - 需求：工艺模块列表增加“删除”功能（归档删除），与工序管理一致。
+  - 后端：
+    - 新增：`DELETE /api/planner/process-modules/{module_id}`（204）
+    - 口径：启用中不可删；若仍被模型引用（`model_process_modules`）则阻止删除并提示引用数。
+  - 前端：
+    - `ProcessModulesPage` 操作列新增“删除”图标按钮（仅非 active 显示，带二次确认）
+    - `frontend/src/services/planner.ts` 新增 `deleteProcessModule()`
+  - 验收命令：
+    - `npm -C frontend run build`
+    - `grep -n \"@router.delete\" backend/src/planner/routers/process_modules.py`
+  - 最近校对（北京时间 GMT+8）：2025-12-27 19:25
+
 - **本轮闭环产物（Frontend / 工艺模块 AI 语义抽屉重构：自动汇总为主、步骤级补丁、手工不覆盖）**：
   - 目标：让员工看懂“这个工艺模块怎么做”，并让模块级 AI 字段主要来自工序库 ai_spec 自动汇总，避免重复手填。
   - 变更点：

@@ -48,6 +48,7 @@ import {
   copyProcessModule,
   createProcessModule,
   deactivateProcessModule,
+  deleteProcessModule,
   fetchMaterial,
   fetchMaterials,
   fetchProcess,
@@ -465,6 +466,18 @@ const ProcessModulesPage = () => {
     },
   })
 
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => deleteProcessModule(id),
+    onSuccess: () => {
+      message.success('已删除（归档）')
+      queryClient.invalidateQueries({ queryKey: ['process-modules'] })
+      if (selectedId) detailQuery.refetch()
+    },
+    onError: (err: any) => {
+      message.error(err?.response?.data?.detail ?? '删除失败')
+    },
+  })
+
   const copyMutation = useMutation({
     mutationFn: ({ id, payload }: { id: string; payload: ProcessModuleCopyPayload }) =>
       copyProcessModule(id, payload),
@@ -784,16 +797,30 @@ const ProcessModulesPage = () => {
                 </Tooltip>
               </Popconfirm>
             ) : (
-              <Popconfirm
-                title="确认启用该工艺模块？"
-                okText="启用"
-                cancelText="取消"
-                onConfirm={() => activateMutation.mutate(record.id)}
-              >
-                <Tooltip title="启用">
-                  <Button size="small" icon={<CheckCircleOutlined style={{ color: '#52c41a' }} />} />
-                </Tooltip>
-              </Popconfirm>
+              <>
+                <Popconfirm
+                  title="确认启用该工艺模块？"
+                  okText="启用"
+                  cancelText="取消"
+                  onConfirm={() => activateMutation.mutate(record.id)}
+                >
+                  <Tooltip title="启用">
+                    <Button size="small" icon={<CheckCircleOutlined style={{ color: '#52c41a' }} />} />
+                  </Tooltip>
+                </Popconfirm>
+                <Popconfirm
+                  title="确认删除该工艺模块？"
+                  description="删除为归档删除：模块将从列表隐藏。若仍被模型引用，会阻止删除。"
+                  okText="删除"
+                  okButtonProps={{ danger: true }}
+                  cancelText="取消"
+                  onConfirm={() => deleteMutation.mutate(record.id)}
+                >
+                  <Tooltip title="删除">
+                    <Button size="small" danger icon={<DeleteOutlined />} loading={deleteMutation.isPending} />
+                  </Tooltip>
+                </Popconfirm>
+              </>
             )}
           </Space>
         )

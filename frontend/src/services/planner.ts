@@ -696,6 +696,10 @@ export const copyProcessModule = async (
   return response.data
 }
 
+export const deleteProcessModule = async (moduleId: string): Promise<void> => {
+  await plannerClient.delete(`/process-modules/${moduleId}`)
+}
+
 export const fetchProcessModuleReferences = async (
   params: ProcessModuleReferenceQuery = {},
 ): Promise<ProcessModuleReferenceResponse> => {

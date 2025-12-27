@@ -30,6 +30,9 @@
 
 ### 2) 后端：接口契约（只读校对用）
 
+- `backend/src/planner/models.py`（数据模型：确认 process_module 字段/状态）
+- `backend/src/planner/routers/process_modules.py`（工艺模块路由：列表/详情/创建/更新/启用停用/复制/删除）
+- `backend/src/planner/services/process_module_service.py`（工艺模块服务：删除/归档口径）
 - `backend/src/planner/routers/product_models.py`
 - `backend/src/planner/routers/product_model_versions.py`
 - `backend/src/planner/routers/specs.py`（spec/parse：规格解析 tokens）

@@ -229,6 +229,42 @@ def list_reference_modules(
     return query.order_by(asc(models.ProcessModule.module_name)).all()
 
 
+def archive_module(db: Session, module: models.ProcessModule) -> None:
+    """
+    Archive (soft-delete) a process module.
+
+    Safety rules:
+    - Must be inactive (status != active)
+    - Must not be referenced by:
+      - model_process_modules.module_id (active bindings)
+    """
+    if module.status == "active":
+        raise ValueError("请先停用该工艺模块后再删除")
+
+    ref_cnt = (
+        db.query(models.ModelProcessModule)
+        .filter(
+            models.ModelProcessModule.module_id == module.id,
+            models.ModelProcessModule.is_archived.is_(False),
+        )
+        .count()
+    )
+    if ref_cnt:
+        raise ValueError(f"该工艺模块仍被模型引用，无法删除：引用={ref_cnt}")
+
+    module.is_archived = True
+
+    # best-effort: archive child rows too (even though module is already hidden)
+    db.query(models.ProcessModuleMaterial).filter(
+        models.ProcessModuleMaterial.module_id == module.id,
+        models.ProcessModuleMaterial.is_archived.is_(False),
+    ).update({"is_archived": True})
+    db.query(models.ProcessModuleStep).filter(
+        models.ProcessModuleStep.module_id == module.id,
+        models.ProcessModuleStep.is_archived.is_(False),
+    ).update({"is_archived": True})
+
+
 def serialize_module_payload(
     db: Session,
     module: models.ProcessModule,

@@ -242,3 +242,34 @@ def copy_process_module(
     db.commit()
     return _serialize_module(db, new_module)
 
+
+@router.delete(
+    "/{module_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def archive_process_module(module_id: str, db: Session = Depends(get_db)):
+    """
+    Archive (soft-delete) a process module.
+
+    Safety rules:
+    - Must be inactive (status != active)
+    - Must not be referenced by:
+      - model_process_modules.module_id (active bindings)
+    """
+    module = _get_module_or_404(module_id, db)
+    try:
+        process_module_service.archive_module(db, module)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    audit_service.log_audit_event(
+        db,
+        target_type="process_module",
+        target_id=module.id,
+        action="archive",
+        actor_id="system",
+        payload={"module_code": module.module_code},
+    )
+    db.commit()
+    return None
+

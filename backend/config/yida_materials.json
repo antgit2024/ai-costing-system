@@ -10,7 +10,7 @@
     "material_code": { "label": "货品编号（唯一键）", "id": "textField_t8mr6sp" },
     "material_name": { "label": "货品名称", "id": "textField_n5t5vhf" },
     "material_type": { "label": "物料类型（主料/辅料）", "id": "radioField_lxmp8bgd" },
-    "category": { "label": "分类", "id": "<textField_jacd537>" },
+    "category": { "label": "分类", "id": "textField_jacd537" },
     "model_category": { "label": "模型类目", "id": "radioField_loo2c67p" },
     "unit": { "label": "BOM单位（不从宜搭同步；本地通过换算规则管理）", "id": "" },
     "unit_price": { "label": "入库单价 / 固定成本价（原字段，落库到 unit_price）", "id": "numberField_lxmosz1s" },

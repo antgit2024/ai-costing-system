@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Iterable, Optional, Sequence, Tuple
 
-from sqlalchemy import func, or_
+from sqlalchemy import String, func, or_
 from sqlalchemy.orm import Query, Session
 
 from .. import models
@@ -46,7 +46,35 @@ def apply_material_filters(query: Query, filters: MaterialFilters) -> Query:
     if filters.status:
         query = query.filter(models.Material.status == filters.status)
     if filters.is_bom_material is not None:
-        query = query.filter(models.Material.is_bom_material == filters.is_bom_material)
+        # IMPORTANT:
+        # Frontend historically inferred "BOM 物料" from YiDa raw form field (`radioField_lxo4jeon`)
+        # even when DB column `is_bom_material` wasn't explicitly maintained.
+        # To make filters reliable (especially for the material picker), treat either source as BOM.
+        if filters.is_bom_material is True:
+            tokens = ("1", "true", "yes", "y", "启用", "激活", "active", "是")
+            dialect = ""
+            try:
+                if query.session is not None and query.session.get_bind() is not None:
+                    dialect = str(query.session.get_bind().dialect.name or "")
+            except Exception:  # noqa: BLE001
+                dialect = ""
+
+            inferred_expr = None
+            if dialect.startswith("sqlite"):
+                # json_extract returns scalar types; cast to string and compare normalized tokens.
+                raw = func.coalesce(
+                    func.json_extract(models.Material.metadata_json, "$.raw_form_data.radioField_lxo4jeon"),
+                    func.json_extract(models.Material.metadata_json, "$.bom_material_flag"),
+                )
+                inferred_expr = func.lower(func.trim(func.cast(raw, String))).in_(tokens)
+
+            # Fallback: if dialect unsupported, only rely on the explicit column.
+            if inferred_expr is not None:
+                query = query.filter(or_(models.Material.is_bom_material.is_(True), inferred_expr))
+            else:
+                query = query.filter(models.Material.is_bom_material.is_(True))
+        else:
+            query = query.filter(models.Material.is_bom_material == filters.is_bom_material)
     if filters.is_active is not None:
         query = query.filter(models.Material.is_active == filters.is_active)
     return query

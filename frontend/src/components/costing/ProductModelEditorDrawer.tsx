@@ -88,7 +88,6 @@ import type {
   ProcessModuleQueryParams,
   ProcessModuleSummary,
   ProductModelLinesResponse as ProductModelLinesResponseModel,
-  VirtualMaterial,
   ModelVersionImageRead,
 } from '@/types/planner'
 

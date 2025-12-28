@@ -48,6 +48,7 @@ import { normalizeUnit } from '@/utils/unit'
 import GuideDrawer from '@/components/common/GuideDrawer'
 import derivePerSqmGuide from '@/guides/derive_standard_per_sqm_tablecloth_example.md?raw'
 import LineVariantDrawer from '@/components/costing/LineVariantDrawer'
+import MaterialPickerDrawer, { type MaterialPickerResult, type MaterialPickerTab } from '@/components/costing/MaterialPickerDrawer'
 
 import {
   bindSkuModelVersion,
@@ -56,7 +57,6 @@ import {
   deleteProductModelVersion,
   deriveStandardFromSampleVersion,
   fetchMaterial,
-  fetchMaterials,
   fetchProductModel,
   fetchProductModelVersionLines,
   fetchProductModelVersions,
@@ -73,13 +73,11 @@ import {
   updateProductModelVersionLines,
   validateProductModelRecognitionKeywords,
   fetchVirtualMaterial,
-  fetchVirtualMaterials,
   uploadProductModelVersionImage,
   fetchTaxonomyItems,
 } from '@/services/planner'
 import type {
   Material,
-  MaterialQueryParams,
   ProductModel,
   ProductModelLinesResponse,
   ProductModelMaterialLineInput,
@@ -91,7 +89,6 @@ import type {
   ProcessModuleSummary,
   ProductModelLinesResponse as ProductModelLinesResponseModel,
   VirtualMaterial,
-  VirtualMaterialQueryParams,
   ModelVersionImageRead,
 } from '@/types/planner'
 
@@ -358,9 +355,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   const [processPickerOpen, setProcessPickerOpen] = useState(false)
   const [pickerRowIndex, setPickerRowIndex] = useState<number | null>(null)
   const [pickerMode, setPickerMode] = useState<'replace' | 'add'>('replace')
-  const [pickerMaterialKind, setPickerMaterialKind] = useState<MaterialKind>('bom')
-  const [pickerKeyword, setPickerKeyword] = useState<string>('')
-  const [pickerMaterialCategory, setPickerMaterialCategory] = useState<string | undefined>(undefined)
+  const [materialPickerInitialTab, setMaterialPickerInitialTab] = useState<MaterialPickerTab>('real')
   const [pickerProcessKeyword, setPickerProcessKeyword] = useState<string>('')
   const [pickerProcessCategory, setPickerProcessCategory] = useState<string | undefined>(undefined)
 
@@ -697,41 +692,6 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     enabled: open && modulePickerOpen,
   })
 
-  const modelLineMaterialPickerParams: MaterialQueryParams = useMemo(
-    () => ({
-      search: pickerKeyword || undefined,
-      category: pickerMaterialCategory || undefined,
-      status: 'active',
-      is_active: true,
-      page: 1,
-      page_size: 50,
-      is_bom_material: pickerMaterialKind === 'bom' ? true : undefined,
-    }),
-    [pickerKeyword, pickerMaterialCategory, pickerMaterialKind],
-  )
-
-  const modelLineMaterialPickerQuery = useQuery({
-    queryKey: ['materialsForModelLinePicker', modelLineMaterialPickerParams],
-    queryFn: () => fetchMaterials(modelLineMaterialPickerParams),
-    enabled: open && materialPickerOpen && (pickerMaterialKind === 'real' || pickerMaterialKind === 'bom'),
-  })
-
-  const modelLineVirtualPickerParams: VirtualMaterialQueryParams = useMemo(
-    () => ({
-      search: pickerKeyword || undefined,
-      status: 'active',
-      page: 1,
-      page_size: 50,
-    }),
-    [pickerKeyword],
-  )
-
-  const modelLineVirtualPickerQuery = useQuery({
-    queryKey: ['virtualMaterialsForModelLinePicker', modelLineVirtualPickerParams],
-    queryFn: () => fetchVirtualMaterials(modelLineVirtualPickerParams),
-    enabled: open && materialPickerOpen && pickerMaterialKind === 'virtual',
-  })
-
   const modelLineProcessPickerQuery = useQuery({
     queryKey: ['processesForModelLinePicker', pickerProcessKeyword, pickerProcessCategory],
     queryFn: () =>
@@ -744,13 +704,6 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       }),
     enabled: open && processPickerOpen,
   })
-
-  const materialCategoryOptions = useMemo(() => {
-    const cats = ((modelLineMaterialPickerQuery.data as any)?.categories ?? []) as any[]
-    return (cats ?? [])
-      .filter((x) => typeof x === 'string' && x.trim())
-      .map((c) => ({ label: c, value: c }))
-  }, [modelLineMaterialPickerQuery.data])
 
   const processCategoryOptions = useMemo(() => {
     const items = (((modelLineProcessPickerQuery.data as any)?.items ?? []) as any[]).slice()
@@ -1146,19 +1099,159 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   const openMaterialPickerForRow = (rowIndex: number) => {
     setPickerMode('replace')
     setPickerRowIndex(rowIndex)
-    setPickerKeyword('')
-    setPickerMaterialCategory(undefined)
-    setPickerMaterialKind('bom')
+    const row = (materials as any[])[rowIndex] ?? {}
+    const kind = String(row?.material_kind ?? '').trim()
+    setMaterialPickerInitialTab(kind === 'virtual' ? 'virtual' : 'real')
     setMaterialPickerOpen(true)
   }
 
   const openMaterialPickerForAdd = () => {
     setPickerMode('add')
     setPickerRowIndex(null)
-    setPickerKeyword('')
-    setPickerMaterialCategory(undefined)
-    setPickerMaterialKind('bom')
+    setMaterialPickerInitialTab('real')
     setMaterialPickerOpen(true)
+  }
+
+  const handleModelLineMaterialPickerConfirm = async (result: MaterialPickerResult) => {
+    const pickedAny = (result as any)?.materials
+    const list: any[] = Array.isArray(pickedAny) ? pickedAny : []
+    if (list.length === 0) {
+      message.warning('请选择至少一个物料')
+      return
+    }
+
+    const itemsToApply = pickerMode === 'replace' ? list.slice(0, 1) : list
+    if (pickerMode === 'replace' && list.length > 1) {
+      message.info('替换物料仅支持单选：已自动取第 1 个')
+    }
+
+    const deriveBomUnitPriceFromMaterial = (r: any): number | null => {
+      const meta = ((r as any).metadata_json ?? {}) as any
+      const raw = meta?.bom_unit_price
+      if (raw != null && raw !== '') {
+        const n = Number(raw)
+        return Number.isFinite(n) ? n : null
+      }
+      const unitPrice = Number((r as any).unit_price)
+      const conv = Number((r as any).conversion_purchase_to_bom)
+      if (Number.isFinite(unitPrice) && Number.isFinite(conv) && conv > 0) {
+        return unitPrice / conv
+      }
+      return null
+    }
+
+    const deriveDefaultsFromMaterial = (r: any): { fixed_quantity?: number; coverage_ratio?: number; loss_rate?: number } => {
+      const meta = (r?.metadata_json ?? {}) as Record<string, any>
+      const d = (meta.costing_defaults ?? {}) as Record<string, any>
+      return {
+        fixed_quantity: d.fixed_quantity_alpha != null ? Number(d.fixed_quantity_alpha) : undefined,
+        coverage_ratio: d.coverage_ratio != null ? Number(d.coverage_ratio) : undefined,
+        loss_rate: d.loss_rate != null ? Number(d.loss_rate) : undefined,
+      }
+    }
+
+    const hide = message.loading(pickerMode === 'add' ? '正在新增物料...' : '正在替换物料...', 0)
+    try {
+      for (const it of itemsToApply) {
+        if (result.kind === 'virtual') {
+          const hide2 = message.loading('正在读取虚拟物料详情并回填 BOM 单价...', 0)
+          try {
+            const vm = await fetchVirtualMaterial(String(it.id))
+
+            const unitOfMeasure =
+              (vm as any).virtual_kind === 'recipe' || (vm as any).virtual_kind === 'placeholder'
+                ? (vm as any).unit || ''
+                : '套'
+
+            const computeVirtualBomUnitPrice = async (): Promise<number | null> => {
+              const direct = Number((vm as any)?.bom_unit_price)
+              if (Number.isFinite(direct)) return direct
+              if ((vm as any).virtual_kind === 'placeholder') return 0
+
+              const bindings = (((vm as any).bindings ?? []) as any[]).slice()
+              if (!bindings.length) return null
+
+              const ids = Array.from(
+                new Set(
+                  bindings
+                    .map((b) => String(b.material_id ?? '').trim())
+                    .filter(Boolean),
+                ),
+              )
+              if (!ids.length) return null
+
+              const mats = await Promise.all(ids.map((id) => fetchMaterial(id)))
+              const matMap = new Map(mats.map((m) => [m.id, m]))
+
+              let total = 0
+              let hitAny = false
+              for (const b of bindings) {
+                const mid = String(b.material_id ?? '').trim()
+                if (!mid) continue
+                const mat = matMap.get(mid)
+                if (!mat) continue
+                const price = deriveBomUnitPriceFromMaterial(mat)
+                if (price == null) continue
+
+                let qty = Number(b.quantity_ratio ?? 0)
+                if (!Number.isFinite(qty)) qty = 0
+                if ((vm as any).virtual_kind === 'recipe' && qty > 1.5) {
+                  // safety: 老数据可能存的是 0-100（百分比）
+                  qty = qty / 100
+                }
+
+                // backend loss_rate is 0-100 (%)
+                const lossRatePct = Number(b.loss_rate ?? 0)
+                const lossFactor = 1 + Math.max(0, lossRatePct) / 100
+                total += Math.max(0, Number(price)) * Math.max(0, qty) * lossFactor
+                hitAny = true
+              }
+              return hitAny ? total : null
+            }
+
+            const bomUnitPrice = await computeVirtualBomUnitPrice()
+
+            applyPickedMaterialToRow(
+              {
+                kind: 'virtual',
+                id: vm.id,
+                code: (vm as any).virtual_code,
+                name: (vm as any).name,
+                unit: unitOfMeasure,
+                category: (vm as any).category ?? null,
+                calculation_method: null,
+                bom_unit_price: bomUnitPrice,
+              },
+              { close: false },
+            )
+          } finally {
+            hide2()
+          }
+        } else {
+          const m = it as Material
+          const kind: MaterialKind = result.kind === 'bom' ? 'bom' : 'real'
+          applyPickedMaterialToRow(
+            {
+              kind,
+              id: m.id,
+              code: (m as any).material_code,
+              name: (m as any).material_name,
+              unit: (m as any).unit,
+              category: (m as any).category ?? null,
+              calculation_method: (m as any).calculation_method ?? null,
+              bom_unit_price: deriveBomUnitPriceFromMaterial(m),
+              defaults: deriveDefaultsFromMaterial(m),
+            },
+            { close: false },
+          )
+        }
+      }
+      setMaterialPickerOpen(false)
+    } catch (err: any) {
+      message.error(err?.response?.data?.detail ?? err?.message ?? '选择物料失败')
+    } finally {
+      hide()
+    }
   }
 
   const openTuningPanelForMaterial = (rowIndex: number) => {
@@ -1368,7 +1461,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     setTuningOpen(false)
   }
 
-  const applyPickedMaterialToRow = (payload: {
+  const applyPickedMaterialToRow = (
+    payload: {
     kind: MaterialKind
     id: string
     code?: string | null
@@ -1378,7 +1472,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     calculation_method?: string | null
     bom_unit_price?: number | null
     defaults?: { fixed_quantity?: number; coverage_ratio?: number; loss_rate?: number }
-  }) => {
+    },
+    opts?: { close?: boolean },
+  ) => {
+    const shouldClose = opts?.close ?? true
     const unitNorm = normalizeUnit(payload.unit) || payload.unit || undefined
     /**
      * 【计量方式/单位口径（重要，禁止随意改坏）】
@@ -1436,7 +1533,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
         },
       }
       setMaterials([...(materials as any[]), appended] as any)
-      setMaterialPickerOpen(false)
+      if (shouldClose) setMaterialPickerOpen(false)
       return
     }
 
@@ -1488,7 +1585,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       },
     }
     setMaterials(next as any)
-    setMaterialPickerOpen(false)
+    if (shouldClose) setMaterialPickerOpen(false)
   }
 
   const applyPickedProcessToRow = (proc: ProcessDetail) => {
@@ -3879,235 +3976,15 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
         ]}
       />
 
-      {/* Model line material picker */}
-      <Modal
-        title={pickerMode === 'add' ? '新增物料' : '替换物料'}
+      {/* Model line material picker (统一复用：与工艺模块一致) */}
+      <MaterialPickerDrawer
         open={materialPickerOpen}
-        onCancel={() => setMaterialPickerOpen(false)}
-        footer={null}
-        width={900}
-        destroyOnClose
-      >
-        <Space wrap style={{ marginBottom: 12 }}>
-          <Select
-            value={pickerMaterialKind}
-            style={{ width: 140 }}
-            options={[
-              { label: 'BOM物料', value: 'bom' },
-              { label: '真实物料', value: 'real' },
-              { label: '虚拟物料', value: 'virtual' },
-            ]}
-            onChange={(v) => {
-              setPickerMaterialKind(v as any)
-              // 最小可用：切换类型时重置分类筛选，避免“无结果”的困惑
-              if (v === 'virtual') setPickerMaterialCategory(undefined)
-            }}
-          />
-          {(pickerMaterialKind === 'real' || pickerMaterialKind === 'bom') && (
-            <Select
-              allowClear
-              showSearch
-              optionFilterProp="label"
-              placeholder="分类"
-              style={{ width: 180 }}
-              value={pickerMaterialCategory}
-              options={materialCategoryOptions}
-              onChange={(v) => setPickerMaterialCategory(v ?? undefined)}
-              disabled={modelLineMaterialPickerQuery.isLoading}
-            />
-          )}
-          <Input.Search
-            allowClear
-            placeholder="搜索编码/名称"
-            style={{ width: 320 }}
-            value={pickerKeyword}
-            onChange={(e) => setPickerKeyword(e.target.value)}
-          />
-        </Space>
-
-        {(pickerMaterialKind === 'real' || pickerMaterialKind === 'bom') && (
-          <Table
-            rowKey="id"
-            loading={modelLineMaterialPickerQuery.isLoading}
-            dataSource={(modelLineMaterialPickerQuery.data as any)?.items ?? []}
-            pagination={false}
-            size="small"
-            columns={[
-              { title: '编码', dataIndex: 'material_code', width: 140 },
-              { title: '名称', dataIndex: 'material_name' },
-              { title: '分类', dataIndex: 'category', width: 120 },
-              { title: '单位', dataIndex: 'unit', width: 80 },
-              {
-                title: '操作',
-                width: 100,
-                render: (_: any, r: Material) => (
-                  <Button
-                    type="primary"
-                    size="small"
-                    onClick={() =>
-                      applyPickedMaterialToRow({
-                        kind: pickerMaterialKind,
-                        id: r.id,
-                        code: r.material_code,
-                        name: r.material_name,
-                        unit: r.unit,
-                        category: r.category,
-                        calculation_method: (r as any).calculation_method ?? null,
-                        bom_unit_price: (() => {
-                          const meta = ((r as any).metadata_json ?? {}) as any
-                          const raw = meta?.bom_unit_price
-                          if (raw != null && raw !== '') {
-                            const n = Number(raw)
-                            return Number.isFinite(n) ? n : null
-                          }
-                          const unitPrice = Number((r as any).unit_price)
-                          const conv = Number((r as any).conversion_purchase_to_bom)
-                          if (Number.isFinite(unitPrice) && Number.isFinite(conv) && conv > 0) {
-                            return unitPrice / conv
-                          }
-                          return null
-                        })(),
-                        defaults: (() => {
-                          const meta = (r.metadata_json ?? {}) as Record<string, any>
-                          const d = (meta.costing_defaults ?? {}) as Record<string, any>
-                          return {
-                            fixed_quantity: d.fixed_quantity_alpha != null ? Number(d.fixed_quantity_alpha) : undefined,
-                            coverage_ratio: d.coverage_ratio != null ? Number(d.coverage_ratio) : undefined,
-                            loss_rate: d.loss_rate != null ? Number(d.loss_rate) : undefined,
-                          }
-                        })(),
-                      })
-                    }
-                  >
-                    选择
-                  </Button>
-                ),
-              },
-            ]}
-          />
-        )}
-
-        {pickerMaterialKind === 'virtual' && (
-          <Table
-            rowKey="id"
-            loading={modelLineVirtualPickerQuery.isLoading}
-            dataSource={(modelLineVirtualPickerQuery.data as any)?.items ?? []}
-            pagination={false}
-            size="small"
-            columns={[
-              { title: '编码', dataIndex: 'virtual_code', width: 140 },
-              { title: '名称', dataIndex: 'name' },
-              { title: '类型', dataIndex: 'virtual_kind', width: 100 },
-              { title: '单位', dataIndex: 'unit', width: 80 },
-              {
-                title: '操作',
-                width: 100,
-                render: (_: any, r: VirtualMaterial) => (
-                  <Button
-                    type="primary"
-                    size="small"
-                    onClick={() => {
-                      ;(async () => {
-                        const hide = message.loading('正在读取虚拟物料详情并回填 BOM 单价...', 0)
-                        try {
-                          // list API 可能不含 bindings/bom_unit_price；用详情接口确保快照完整
-                          const vm = await fetchVirtualMaterial(r.id)
-
-                          const unitOfMeasure =
-                            vm.virtual_kind === 'recipe' || vm.virtual_kind === 'placeholder'
-                              ? vm.unit || ''
-                              : '套'
-
-                          const computeVirtualBomUnitPrice = async (): Promise<number | null> => {
-                            const direct = Number((vm as any)?.bom_unit_price)
-                            if (Number.isFinite(direct)) return direct
-                            if (vm.virtual_kind === 'placeholder') return 0
-
-                            const bindings = ((vm as any).bindings ?? []) as any[]
-                            if (!bindings.length) return null
-
-                            const ids = Array.from(
-                              new Set(
-                                bindings
-                                  .map((b) => String(b.material_id ?? '').trim())
-                                  .filter(Boolean),
-                              ),
-                            )
-                            if (!ids.length) return null
-
-                            const mats = await Promise.all(ids.map((id) => fetchMaterial(id)))
-                            const matMap = new Map(mats.map((m) => [m.id, m]))
-
-                            const derive = (m: any): number | null => {
-                              const meta = ((m as any).metadata_json ?? {}) as any
-                              const raw = meta?.bom_unit_price
-                              if (raw != null && raw !== '') {
-                                const n = Number(raw)
-                                return Number.isFinite(n) ? n : null
-                              }
-                              const unitPrice = Number((m as any).unit_price)
-                              const conv = Number((m as any).conversion_purchase_to_bom)
-                              if (Number.isFinite(unitPrice) && Number.isFinite(conv) && conv > 0) {
-                                return unitPrice / conv
-                              }
-                              return null
-                            }
-
-                            let total = 0
-                            let hitAny = false
-                            for (const b of bindings) {
-                              const mid = String(b.material_id ?? '').trim()
-                              if (!mid) continue
-                              const mat = matMap.get(mid)
-                              if (!mat) continue
-                              const price = derive(mat)
-                              if (price == null) continue
-
-                              let qty = Number(b.quantity_ratio ?? 0)
-                              if (!Number.isFinite(qty)) qty = 0
-                              if (vm.virtual_kind === 'recipe' && qty > 1.5) {
-                                // safety: 老数据可能存的是 0-100（百分比）
-                                qty = qty / 100
-                              }
-
-                              // backend loss_rate is 0-100 (%)
-                              const lossRatePct = Number(b.loss_rate ?? 0)
-                              const lossFactor = 1 + Math.max(0, lossRatePct) / 100
-                              total += Math.max(0, price) * Math.max(0, qty) * lossFactor
-                              hitAny = true
-                            }
-                            return hitAny ? total : null
-                          }
-
-                          const bomUnitPrice = await computeVirtualBomUnitPrice()
-
-                      applyPickedMaterialToRow({
-                        kind: 'virtual',
-                            id: vm.id,
-                            code: vm.virtual_code,
-                            name: vm.name,
-                            unit: unitOfMeasure,
-                            category: vm.category ?? null,
-                            // 虚拟物料的计量方式仍由单位口径决定（area/perimeter/count），这里不强塞
-                            calculation_method: null,
-                            bom_unit_price: bomUnitPrice,
-                      })
-                        } catch (err: any) {
-                          message.error(err?.response?.data?.detail ?? '读取虚拟物料详情失败')
-                        } finally {
-                          hide()
-                        }
-                      })()
-                    }}
-                  >
-                    选择
-                  </Button>
-                ),
-              },
-            ]}
-          />
-        )}
-      </Modal>
+        onClose={() => setMaterialPickerOpen(false)}
+        title={pickerMode === 'add' ? '新增物料' : '替换物料'}
+        initialTab={materialPickerInitialTab}
+        defaultOnlyBom
+        onConfirm={handleModelLineMaterialPickerConfirm}
+      />
 
       {/* Model line process picker */}
       <Modal

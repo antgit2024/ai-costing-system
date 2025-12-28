@@ -186,12 +186,18 @@ export default function MaterialPickerDrawer({
             />
             <Select
               allowClear
+              showSearch
+              optionFilterProp="label"
               placeholder="分类"
               style={{ width: 220 }}
               value={realCategory}
               onChange={(v) => {
                 setRealCategory(v)
                 setRealPagination((p) => ({ ...p, current: 1 }))
+              }}
+              filterOption={(input, opt) => {
+                const label = String((opt as any)?.label ?? '')
+                return label.toLowerCase().includes(String(input ?? '').toLowerCase())
               }}
               options={(realCategoryQuery.data?.items ?? []).map((it: any) => ({
                 label: it.name,
@@ -254,12 +260,18 @@ export default function MaterialPickerDrawer({
             />
             <Select
               allowClear
+              showSearch
+              optionFilterProp="label"
               placeholder="分类"
               style={{ width: 220 }}
               value={virtualCategory}
               onChange={(v) => {
                 setVirtualCategory(v)
                 setVirtualPagination((p) => ({ ...p, current: 1 }))
+              }}
+              filterOption={(input, opt) => {
+                const label = String((opt as any)?.label ?? '')
+                return label.toLowerCase().includes(String(input ?? '').toLowerCase())
               }}
               options={(virtualCategoryQuery.data?.items ?? []).map((it: any) => ({
                 label: it.name,

@@ -11,7 +11,6 @@ import {
   message,
   Modal,
   Popconfirm,
-  Radio,
   Row,
   Select,
   Space,
@@ -50,7 +49,6 @@ import {
   deactivateProcessModule,
   deleteProcessModule,
   fetchMaterial,
-  fetchMaterials,
   fetchProcess,
   fetchVirtualMaterial,
   fetchProcessModule,
@@ -58,14 +56,12 @@ import {
   fetchProcessModules,
   fetchProcessReferences,
   fetchTaxonomyItems,
-  fetchVirtualMaterials,
   generateNextCode,
   generateProcessModuleDescription,
   updateProcessModule,
 } from '@/services/planner'
 import type {
   Material,
-  MaterialQueryParams,
   ProcessReference,
   ProcessModuleCopyPayload,
   ProcessModuleCreatePayload,
@@ -76,13 +72,14 @@ import type {
   ProcessModuleSummary,
   ProcessModuleUpdatePayload,
   VirtualMaterial,
-  VirtualMaterialQueryParams,
 } from '@/types/planner'
 import { CALCULATION_METHOD_OPTIONS } from '@/constants/calculationMethods'
 import type { MaterialReferenceKind } from '@/types/planner'
 import GuideDrawer from '@/components/common/GuideDrawer'
 import processModulesGuide from '@/guides/process_modules_guide.md?raw'
 import ProcessModuleAIDrawer from '@/components/costing/ProcessModuleAIDrawer'
+import MaterialPickerDrawer from '@/components/costing/MaterialPickerDrawer'
+import type { MaterialPickerResult, MaterialPickerTab } from '@/components/costing/MaterialPickerDrawer'
 
 const { Title, Text } = Typography
 
@@ -345,17 +342,10 @@ const ProcessModulesPage = () => {
   const [aiModuleId, setAiModuleId] = useState<string | null>(null)
   const [materialsLocal, setMaterialsLocal] = useState<EditorMaterialValue[]>([])
   const [stepsLocal, setStepsLocal] = useState<EditorStepValue[]>([])
-  const [materialSelectContext, setMaterialSelectContext] = useState<{
-    kind: MaterialReferenceKind
+  const [materialPickerContext, setMaterialPickerContext] = useState<{
     targetIndex?: number
+    initialTab?: MaterialPickerTab
   } | null>(null)
-  const [virtualSelectContext, setVirtualSelectContext] = useState<{
-    targetIndex?: number
-  } | null>(null)
-  const [materialKindChooser, setMaterialKindChooser] = useState<{
-    targetIndex?: number
-  } | null>(null)
-  const [materialKindDraft, setMaterialKindDraft] = useState<MaterialReferenceKind>('real')
   const [processSelectContext, setProcessSelectContext] = useState<{
     targetIndex?: number
   } | null>(null)
@@ -1091,22 +1081,8 @@ const ProcessModulesPage = () => {
         ? ((editorForm.getFieldValue(['materials', targetIndex, 'material_kind']) as MaterialReferenceKind) ??
           'real')
         : 'real'
-    setMaterialKindDraft(currentKind)
-    setMaterialKindChooser({ targetIndex })
-  }
-
-  const confirmMaterialKind = () => {
-    const ctx = materialKindChooser
-    setMaterialKindChooser(null)
-    const targetIndex = ctx?.targetIndex
-    if (targetIndex !== undefined) {
-      editorForm.setFieldValue(['materials', targetIndex, 'material_kind'], materialKindDraft)
-    }
-    if (materialKindDraft === 'virtual') {
-      setVirtualSelectContext(targetIndex !== undefined ? { targetIndex } : {})
-    } else {
-      setMaterialSelectContext({ kind: materialKindDraft, targetIndex })
-    }
+    const initialTab: MaterialPickerTab = currentKind === 'virtual' ? 'virtual' : 'real'
+    setMaterialPickerContext({ targetIndex, initialTab })
   }
 
   const materialsColumns: ColumnsType<{ index: number; record: EditorMaterialValue }> = [
@@ -1487,21 +1463,19 @@ const ProcessModulesPage = () => {
 
   const isEditing = drawerMode === 'create' || drawerMode === 'edit'
 
-  const handleRealMaterialConfirm = (records: Material[], kind: MaterialReferenceKind) => {
+  const handleRealMaterialConfirm = (records: Material[], kind: MaterialReferenceKind, targetIndex?: number) => {
     if (!records.length) {
       message.warning('请选择物料')
       return
     }
-    const ctx = materialSelectContext
-    setMaterialSelectContext(null)
     updateMaterials((prev) => {
-      if (ctx?.targetIndex !== undefined) {
+      if (targetIndex !== undefined) {
         const next = [...prev]
         const bomUnitPrice = deriveBomUnitPrice(records[0])
         const bomUnit = normalizeUnit(records[0].unit || records[0].purchase_unit) || ''
         const calcMethod = deriveCalcMethodByUnit(bomUnit, (records[0].calculation_method as any) ?? null)
-        next[ctx.targetIndex] = {
-          ...(next[ctx.targetIndex] ?? createEmptyMaterial()),
+        next[targetIndex] = {
+          ...(next[targetIndex] ?? createEmptyMaterial()),
           material_kind: kind as MaterialReferenceKind,
           material_ref_id: records[0].id,
           material_code: records[0].material_code,
@@ -1509,11 +1483,11 @@ const ProcessModulesPage = () => {
           unit_of_measure: bomUnit,
           // 替换物料：以新物料主数据为准（否则会出现“计量方式与单位不配套/不更新”的回归问题）
           calculation_method: calcMethod,
-          quantity: safeNum((next[ctx.targetIndex] as any)?.quantity, 1) || 1,
-          loss_rate: safeNum((next[ctx.targetIndex] as any)?.loss_rate, 0) || 0,
+          quantity: safeNum((next[targetIndex] as any)?.quantity, 1) || 1,
+          loss_rate: safeNum((next[targetIndex] as any)?.loss_rate, 0) || 0,
           material_category: records[0].category || undefined,
           metadata_json: {
-            ...(((next[ctx.targetIndex] ?? {}) as any).metadata_json ?? {}),
+            ...(((next[targetIndex] ?? {}) as any).metadata_json ?? {}),
             bom_unit_price: bomUnitPrice,
             bom_unit: bomUnit,
             currency: records[0].currency,
@@ -1543,7 +1517,7 @@ const ProcessModulesPage = () => {
     })
   }
 
-  const handleVirtualMaterialConfirm = (records: VirtualMaterial[]) => {
+  const handleVirtualMaterialConfirm = (records: VirtualMaterial[], targetIndex?: number) => {
     if (!records.length) {
       message.warning('请选择虚拟物料')
       return
@@ -1565,8 +1539,6 @@ const ProcessModulesPage = () => {
         const materialDetails = await Promise.all(materialIds.map((id) => fetchMaterial(id)))
         const materialMap = new Map(materialDetails.map((m) => [m.id, m]))
 
-        const ctx = virtualSelectContext
-        setVirtualSelectContext(null)
         updateMaterials((prev) => {
           const toRow = (vm: VirtualMaterial, baseRow?: any) => {
             const unitOfMeasure =
@@ -1620,9 +1592,9 @@ const ProcessModulesPage = () => {
             }
           }
 
-          if (ctx?.targetIndex !== undefined) {
+          if (targetIndex !== undefined) {
             const next = [...prev]
-            next[ctx.targetIndex] = toRow(details[0], next[ctx.targetIndex])
+            next[targetIndex] = toRow(details[0], next[targetIndex])
             return next
           }
           return [...prev, ...details.map((vm) => toRow(vm))]
@@ -2206,59 +2178,30 @@ const ProcessModulesPage = () => {
         loading={referencesQuery.isLoading}
       />
 
-      <RealMaterialSelectModal
-        open={!!materialSelectContext}
-        onClose={() => setMaterialSelectContext(null)}
-        onConfirm={(records, kind) => handleRealMaterialConfirm(records, kind)}
-        presetKind={materialSelectContext?.kind ?? 'real'}
-      />
-
-      <VirtualMaterialSelectModal
-        open={!!virtualSelectContext}
-        onClose={() => setVirtualSelectContext(null)}
-        onConfirm={handleVirtualMaterialConfirm}
-      />
-
       <ProcessSelectModal
         open={!!processSelectContext}
         onClose={() => setProcessSelectContext(null)}
         onConfirm={handleProcessConfirm}
       />
 
-      <Modal
-        title="选择物料分类"
-        open={!!materialKindChooser}
-        onCancel={() => setMaterialKindChooser(null)}
-        onOk={confirmMaterialKind}
-        okText="下一步：选择物料"
-        destroyOnClose
-      >
-        <Space direction="vertical" style={{ width: '100%' }} size={12}>
-          <Radio.Group
-            value={materialKindDraft}
-            optionType="button"
-            buttonStyle="solid"
-            onChange={(e) => setMaterialKindDraft(e.target.value as MaterialReferenceKind)}
-            options={[
-              { label: '真实物料', value: 'real' },
-              { label: 'BOM 物料', value: 'bom' },
-              { label: '虚拟物料', value: 'virtual' },
-            ]}
-          />
-          <Text type="secondary">
-            提示：BOM/虚拟/真实会在物料组中用不同颜色标识（编号左侧 Tag）。
-          </Text>
-        </Space>
-      </Modal>
+      <MaterialPickerDrawer
+        open={!!materialPickerContext}
+        onClose={() => setMaterialPickerContext(null)}
+        title="选择物料"
+        initialTab={materialPickerContext?.initialTab ?? 'real'}
+        defaultOnlyBom
+        onConfirm={(result: MaterialPickerResult) => {
+          const targetIndex = materialPickerContext?.targetIndex
+          setMaterialPickerContext(null)
+          if (result.kind === 'virtual') {
+            handleVirtualMaterialConfirm(result.materials, targetIndex)
+            return
+          }
+          handleRealMaterialConfirm(result.materials, result.kind as any, targetIndex)
+        }}
+      />
     </Space>
   )
-}
-
-interface RealMaterialSelectModalProps {
-  open: boolean
-  onClose: () => void
-  onConfirm: (materials: Material[], kind: MaterialReferenceKind) => void
-  presetKind: MaterialReferenceKind
 }
 
 interface ProcessSelectModalProps {
@@ -2270,24 +2213,33 @@ interface ProcessSelectModalProps {
 const ProcessSelectModal = ({ open, onClose, onConfirm }: ProcessSelectModalProps) => {
   const [search, setSearch] = useState('')
   const [chargingMode, setChargingMode] = useState<string | undefined>(undefined)
+  const [category, setCategory] = useState<string | undefined>(undefined)
   const [selectedRowKeys, setSelectedRowKeys] = useState<Key[]>([])
   const [selectedRows, setSelectedRows] = useState<ProcessReference[]>([])
+
+  const taxonomyCategoriesQuery = useQuery({
+    queryKey: ['taxonomy-items', 'process_category', 'process-picker'],
+    queryFn: () => fetchTaxonomyItems('process_category', { include_inactive: false }),
+    enabled: open,
+  })
 
   useEffect(() => {
     if (!open) {
       setSearch('')
       setChargingMode(undefined)
+      setCategory(undefined)
       setSelectedRowKeys([])
       setSelectedRows([])
     }
   }, [open])
 
   const query = useQuery<ProcessReference[]>({
-    queryKey: ['process-picker', search, chargingMode],
+    queryKey: ['process-picker', search, chargingMode, category],
     queryFn: () =>
       fetchProcessReferences({
         search: search || undefined,
         charging_mode: chargingMode || undefined,
+        category: category || undefined,
         status: 'active',
         limit: 200,
       } as any),
@@ -2328,6 +2280,17 @@ const ProcessSelectModal = ({ open, onClose, onConfirm }: ProcessSelectModalProp
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
+            <Select
+              allowClear
+              placeholder="分类"
+              style={{ width: 220 }}
+              value={category}
+              onChange={(value) => setCategory(value)}
+              options={(taxonomyCategoriesQuery.data?.items ?? []).map((it: any) => ({
+                label: it.name,
+                value: it.name,
+              }))}
+            />
           <Select
             allowClear
             placeholder="计价方式"
@@ -2378,273 +2341,6 @@ const ProcessSelectModal = ({ open, onClose, onConfirm }: ProcessSelectModalProp
                 if (value === null || value === undefined) return '-'
                 return `${value} / ${normalizeUnit(record.unit_of_measure) || '-'}`
               },
-            },
-          ]}
-        />
-      </Space>
-    </Drawer>
-  )
-}
-
-const RealMaterialSelectModal = ({
-  open,
-  onClose,
-  onConfirm,
-  presetKind,
-}: RealMaterialSelectModalProps) => {
-  const [search, setSearch] = useState('')
-  const [category, setCategory] = useState<string | undefined>(undefined)
-  const [onlyBom, setOnlyBom] = useState(presetKind === 'bom')
-  const [selectedRowKeys, setSelectedRowKeys] = useState<Key[]>([])
-  const [selectedRows, setSelectedRows] = useState<Material[]>([])
-
-  const materialCategoryQuery = useQuery({
-    queryKey: ['taxonomy-items', 'material_category'],
-    queryFn: () => fetchTaxonomyItems('material_category', { include_inactive: true }),
-    enabled: open,
-  })
-
-  useEffect(() => {
-    if (!open) {
-      setSearch('')
-      setCategory(undefined)
-      setOnlyBom(presetKind === 'bom')
-      setSelectedRowKeys([])
-      setSelectedRows([])
-    }
-  }, [open, presetKind])
-
-  const query = useQuery({
-    queryKey: ['process-material-picker', search, category, onlyBom],
-    queryFn: () =>
-      fetchMaterials({
-        search: search || undefined,
-        category: category || undefined,
-        is_active: true,
-        is_bom_material: onlyBom || undefined,
-        page_size: 20,
-      } as MaterialQueryParams),
-    enabled: open,
-  })
-
-  const handleConfirm = () => {
-    if (!selectedRows.length) {
-      message.warning('请选择至少一个物料')
-      return
-    }
-    onConfirm(selectedRows, onlyBom ? 'bom' : 'real')
-    onClose()
-  }
-
-  return (
-    <Drawer
-      title="选择真实物料"
-      open={open}
-      onClose={onClose}
-      width={720}
-      destroyOnClose
-      extra={
-        <Space>
-          <Button onClick={onClose}>取消</Button>
-          <Button type="primary" onClick={handleConfirm}>
-            添加
-          </Button>
-        </Space>
-      }
-    >
-      <Space direction="vertical" style={{ width: '100%' }}>
-        <Space align="start">
-          <Input.Search
-            placeholder="搜索编码/名称"
-            allowClear
-            style={{ width: 240 }}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-          <Select
-            allowClear
-            placeholder="分类"
-            style={{ width: 180 }}
-            value={category}
-            onChange={(value) => setCategory(value)}
-            options={(materialCategoryQuery.data?.items ?? []).map((it: any) => ({
-              label: it.name,
-              value: it.name,
-            }))}
-          />
-          <Select
-            style={{ width: 160 }}
-            value={onlyBom ? 'bom' : 'real'}
-            onChange={(value) => setOnlyBom(value === 'bom')}
-            options={[
-              { label: '真实物料', value: 'real' },
-              { label: 'BOM 物料', value: 'bom' },
-            ]}
-          />
-        </Space>
-
-        <Table<Material>
-          rowKey="id"
-          loading={query.isLoading}
-          dataSource={query.data?.items ?? []}
-          pagination={{ pageSize: 10 }}
-          rowSelection={{
-            selectedRowKeys,
-            onChange: (_keys, rows) => {
-              setSelectedRowKeys(_keys)
-              setSelectedRows(rows)
-            },
-          }}
-          columns={[
-            {
-              title: '物料编码',
-              dataIndex: 'material_code',
-              width: 160,
-              render: (code: string) => <Text code>{code}</Text>,
-            },
-            {
-              title: '名称',
-              dataIndex: 'material_name',
-            },
-            {
-              title: '分类',
-              dataIndex: 'category',
-              width: 160,
-              render: (value?: string) => value || '-',
-            },
-            {
-              title: '单位',
-              dataIndex: 'unit',
-              width: 100,
-            },
-          ]}
-        />
-      </Space>
-    </Drawer>
-  )
-}
-
-interface VirtualMaterialSelectModalProps {
-  open: boolean
-  onClose: () => void
-  onConfirm: (materials: VirtualMaterial[]) => void
-}
-
-const VirtualMaterialSelectModal = ({
-  open,
-  onClose,
-  onConfirm,
-}: VirtualMaterialSelectModalProps) => {
-  const [search, setSearch] = useState('')
-  const [status, setStatus] = useState<string | undefined>('active')
-  const [selectedRowKeys, setSelectedRowKeys] = useState<Key[]>([])
-  const [selectedRows, setSelectedRows] = useState<VirtualMaterial[]>([])
-
-  useEffect(() => {
-    if (!open) {
-      setSearch('')
-      setStatus('active')
-      setSelectedRowKeys([])
-      setSelectedRows([])
-    }
-  }, [open])
-
-  const query = useQuery({
-    queryKey: ['process-virtual-picker', search, status],
-    queryFn: () =>
-      fetchVirtualMaterials({
-        search: search || undefined,
-        status: status || undefined,
-        page_size: 20,
-      } as VirtualMaterialQueryParams),
-    enabled: open,
-  })
-
-  const handleConfirm = () => {
-    if (!selectedRows.length) {
-      message.warning('请选择至少一个虚拟物料')
-      return
-    }
-    onConfirm(selectedRows)
-    onClose()
-  }
-
-  return (
-    <Drawer
-      title="选择虚拟物料"
-      open={open}
-      onClose={onClose}
-      width={720}
-      destroyOnClose
-      extra={
-        <Space>
-          <Button onClick={onClose}>取消</Button>
-          <Button type="primary" onClick={handleConfirm}>
-            添加
-          </Button>
-        </Space>
-      }
-    >
-      <Space direction="vertical" style={{ width: '100%' }}>
-        <Space align="start">
-          <Input.Search
-            placeholder="搜索编码/名称"
-            allowClear
-            style={{ width: 240 }}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-          <Select
-            allowClear
-            placeholder="状态"
-            style={{ width: 160 }}
-            value={status}
-            onChange={(value) => setStatus(value)}
-            options={[
-              { label: '草稿', value: 'draft' },
-              { label: '启用', value: 'active' },
-              { label: '停用', value: 'inactive' },
-            ]}
-          />
-        </Space>
-        <Table<VirtualMaterial>
-          rowKey="id"
-          loading={query.isLoading}
-          dataSource={query.data?.items ?? []}
-          pagination={{ pageSize: 10 }}
-          rowSelection={{
-            selectedRowKeys,
-            onChange: (_keys, rows) => {
-              setSelectedRowKeys(_keys)
-              setSelectedRows(rows)
-            },
-          }}
-          columns={[
-            {
-              title: '虚拟编码',
-              dataIndex: 'virtual_code',
-              width: 160,
-              render: (code: string) => <Text code>{code}</Text>,
-            },
-            {
-              title: '名称',
-              dataIndex: 'name',
-            },
-            {
-              title: '分类',
-              dataIndex: 'category',
-              width: 160,
-              render: (value?: string) => value || '-',
-            },
-            {
-              title: '状态',
-              dataIndex: 'status',
-              width: 120,
-              render: (value: string) => (
-                <Tag color={value === 'active' ? 'green' : value === 'inactive' ? 'red' : 'gold'}>
-                  {value === 'active' ? '启用' : value === 'inactive' ? '停用' : '草稿'}
-                </Tag>
-              ),
             },
           ]}
         />

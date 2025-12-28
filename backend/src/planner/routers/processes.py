@@ -90,6 +90,7 @@ def list_process_references(
     search: Optional[str] = Query(None, max_length=128),
     status_filter: Optional[str] = Query("active", alias="status"),
     charging_mode: Optional[str] = Query(None, max_length=32),
+    category: Optional[str] = Query(None, max_length=128),
     limit: int = Query(100, ge=1, le=500),
     db: Session = Depends(get_db),
 ):
@@ -97,6 +98,7 @@ def list_process_references(
         search=search,
         status=status_filter,
         charging_mode=charging_mode,
+        category=category,
     )
     total, items = process_service.list_processes(db, filters=filters, page=1, page_size=limit)
     references = [

@@ -24,6 +24,9 @@
 - `frontend/src/components/costing/ProcessModuleAIDrawer.tsx`（工艺模块AI语义抽屉：从工序汇总 + 手工锁定）
 - `frontend/src/pages/costing/ProcessesPage.tsx`（工序管理：两行列表风格参考实现）
 - `frontend/src/pages/costing/VirtualMaterialsPage.tsx`（虚拟物料：列表/抽屉/绑定/盘点折算；本轮改动集中在此）
+- `frontend/src/components/costing/MaterialSelectModal.tsx`（物料选择器：用于“添加物料/替换物料”等弹窗复用）
+- `frontend/src/components/costing/MaterialPickerDrawer.tsx`（统一物料选择器：真实/虚拟双Tab + 筛选区 + 列表）
+- `frontend/src/components/costing/ProcessSelectModal.tsx`（工序选择器：用于“添加工序/引用工序”等弹窗复用）
 - `frontend/src/guides/table_list_style_two_line_cells.md`（两行列表风格规范：可复用）
 - `frontend/src/components/layout/AppLayout.tsx`（全局布局：任务角标轮询与性能）
 - `frontend/scripts/deploy_static.sh`（静态资源发布脚本：需要原子发布避免 chunk 404→HTML 回退）
@@ -33,6 +36,7 @@
 
 - `backend/src/planner/models.py`（数据模型：确认 process_module 字段/状态）
 - `backend/src/planner/routers/process_modules.py`（工艺模块路由：列表/详情/创建/更新/启用停用/复制/删除）
+- `backend/src/planner/routers/processes.py`（工序路由：/processes 与 /processes/references）
 - `backend/src/planner/services/process_module_service.py`（工艺模块服务：删除/归档口径）
 - `backend/src/planner/routers/product_models.py`
 - `backend/src/planner/routers/product_model_versions.py`

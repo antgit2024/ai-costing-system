@@ -166,6 +166,25 @@
     - `python -m compileall backend/src/planner/routers/base_config.py`
   - 最近校对（北京时间 GMT+8）：2025-12-28
 
+---
+
+- **本轮闭环产物（Pickers / 统一“添加物料/添加工序”弹窗体验）**：
+  - 目标：统一虚拟物料/工艺模块的“添加物料/选择工序”弹窗交互，减少各页各造一套导致的不一致与学习成本。
+  - 前端：
+    - `frontend/src/components/costing/MaterialPickerDrawer.tsx`：统一物料选择器 Drawer
+      - 顶部 Tabs：真实物料 / 虚拟物料
+      - 真实物料筛选区：关键词 + 分类（taxonomy `material_category`）+ **默认勾选“仅 BOM 物料”**
+      - 虚拟物料筛选区：关键词 + 分类（taxonomy `virtual_material_category`）
+    - `frontend/src/pages/costing/ProcessModulesPage.tsx`：
+      - 物料选择入口不再走“二级选择（真实/BOM/虚拟）”，统一打开 `MaterialPickerDrawer`
+      - 选择工序弹窗新增“分类”筛选（taxonomy `process_category`）
+  - 后端：
+    - `GET /api/planner/processes/references` 支持 `category` 过滤（与主列表一致），用于前端工序选择器。
+  - 本轮验收命令：
+    - `npm -C frontend run build`
+    - `python -m compileall backend/src/planner/routers/processes.py`
+  - 最近校对（北京时间 GMT+8）：2025-12-28
+
 - **本轮闭环产物（Frontend / 工艺模块列表页：对齐“工序管理”两行风格 + 操作图标化）**：
   - 目标：让“工艺模块”列表可扫读（两行信息密度）并与“工序管理”视觉一致。
   - 变更点：

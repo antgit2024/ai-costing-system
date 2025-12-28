@@ -474,6 +474,8 @@ export interface VirtualMaterialQueryParams extends Record<string, string | numb
   search?: string
   status?: string
   category?: string
+  virtual_kind?: 'recipe' | 'kit' | 'placeholder' | string
+  binding_search?: string
   page?: number
   page_size?: number
 }

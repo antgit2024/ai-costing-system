@@ -23,6 +23,7 @@
 - `frontend/src/pages/costing/ProcessModulesPage.tsx`（工艺模块主页面：AI生成/模块描述/工序选择与回填）
 - `frontend/src/components/costing/ProcessModuleAIDrawer.tsx`（工艺模块AI语义抽屉：从工序汇总 + 手工锁定）
 - `frontend/src/pages/costing/ProcessesPage.tsx`（工序管理：两行列表风格参考实现）
+- `frontend/src/pages/costing/VirtualMaterialsPage.tsx`（虚拟物料：列表/抽屉/绑定/盘点折算；本轮改动集中在此）
 - `frontend/src/guides/table_list_style_two_line_cells.md`（两行列表风格规范：可复用）
 - `frontend/src/components/layout/AppLayout.tsx`（全局布局：任务角标轮询与性能）
 - `frontend/scripts/deploy_static.sh`（静态资源发布脚本：需要原子发布避免 chunk 404→HTML 回退）
@@ -39,6 +40,8 @@
 - `backend/src/planner/routers/bom.py`（bom/generate：动态 BOM 预演）
 - `backend/src/planner/routers/line_variants.py`（version-scoped 行级变体 CRUD）
 - `backend/src/planner/routers/shipments.py`（发货导入/批次/异常队列/BOM快照：/api/planner/shipments/*）
+- `backend/src/planner/routers/base_config.py`（基础配置：真实物料/虚拟物料/分类等；本轮新增虚拟物料筛选参数）
+- `backend/src/planner/routers/taxonomy.py`（分类管理：taxonomy items/mappings）
 - `backend/src/planner/schemas.py`（如需核对字段名/response 结构）
 - `backend/src/planner/services/bom_generation_service.py`（动态 BOM 生成：overlay 套用与 replace_bundle 语义）
 - `backend/src/planner/services/line_variant_service.py`（行级变体：bundle 选择范围与 CRUD 细节）

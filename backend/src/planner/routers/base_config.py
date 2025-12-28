@@ -575,6 +575,8 @@ def list_virtual_materials(
     search: Optional[str] = Query(None, max_length=128),
     status: Optional[str] = Query(None, max_length=32),
     category: Optional[str] = Query(None, max_length=128),
+    virtual_kind: Optional[str] = Query(None, max_length=32),
+    binding_search: Optional[str] = Query(None, max_length=128),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -589,13 +591,50 @@ def list_virtual_materials(
         query = query.filter(models.VirtualMaterial.status == status)
     if category:
         query = query.filter(models.VirtualMaterial.category == category)
-    total = query.count()
-    items = (
-        query.order_by(models.VirtualMaterial.updated_at.desc())
+
+    # virtual_kind is stored in metadata_json.virtual_kind (not a physical column)
+    if virtual_kind:
+        kind = virtual_kind.strip()
+        if kind:
+            query = query.filter(models.VirtualMaterial.metadata_json["virtual_kind"].as_string() == kind)
+
+    # binding_search filters by child real materials (code/name) in virtual_material_bindings
+    if binding_search:
+        like = f"%{binding_search.strip()}%"
+        query = (
+            query.join(
+                models.VirtualMaterialBinding,
+                models.VirtualMaterialBinding.virtual_material_id == models.VirtualMaterial.id,
+            )
+            .join(models.Material, models.Material.id == models.VirtualMaterialBinding.material_id)
+            .filter(models.Material.is_archived.is_(False))
+            .filter(
+                (models.Material.material_code.ilike(like)) | (models.Material.material_name.ilike(like))
+            )
+        )
+
+    # De-dup for joins (binding_search). Use a two-phase query to keep paging stable.
+    id_query = query.with_entities(models.VirtualMaterial.id).distinct()
+    total = id_query.count()
+    rows = (
+        query.with_entities(models.VirtualMaterial.id, models.VirtualMaterial.updated_at)
+        .distinct()
+        .order_by(models.VirtualMaterial.updated_at.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
         .all()
     )
+    ids = [row[0] for row in rows]
+    if not ids:
+        return schemas.PaginatedVirtualMaterialResponse(
+            total=total,
+            page=page,
+            page_size=page_size,
+            items=[],
+        )
+    fetched = db.query(models.VirtualMaterial).filter(models.VirtualMaterial.id.in_(ids)).all()
+    by_id = {vm.id: vm for vm in fetched}
+    items = [by_id[i] for i in ids if i in by_id]
     return schemas.PaginatedVirtualMaterialResponse(
         total=total,
         page=page,

@@ -144,6 +144,28 @@
 
 - **本轮验收命令（必须）**：`npm -C frontend run build`（已通过）
 
+---
+
+- **本轮闭环产物（Virtual Materials / 虚拟物料列表&抽屉体验 + 分类治理）**：
+  - 前端：`/costing/virtual-materials`
+    - 列表默认展示“子物料逐行明细”（编码/名称/配比或每套数量/损耗率）
+    - 操作列对齐工序管理：图标化按钮（启用/停用/删除归档等，带安全约束与二次确认）
+    - 筛选增强：类型（占位/配方/套件）+ 绑定物料搜索（按子物料编码/名称）
+    - 分类来源：虚拟物料分类使用 taxonomy `virtual_material_category`
+    - “同步数据”增强：同步后提示哪些子物料 BOM 单价缺失/为 0，避免误判“没更新”
+  - 后端：
+    - `GET /api/planner/base-config/virtual-materials` 新增筛选参数：
+      - `virtual_kind`（占位/配方/套件）
+      - `binding_search`（按绑定子物料编码/名称过滤）
+  - 关键文件：
+    - `frontend/src/pages/costing/VirtualMaterialsPage.tsx`
+    - `frontend/src/types/planner.ts`
+    - `backend/src/planner/routers/base_config.py`
+  - 本轮验收命令：
+    - `npm -C frontend run build`
+    - `python -m compileall backend/src/planner/routers/base_config.py`
+  - 最近校对（北京时间 GMT+8）：2025-12-28
+
 - **本轮闭环产物（Frontend / 工艺模块列表页：对齐“工序管理”两行风格 + 操作图标化）**：
   - 目标：让“工艺模块”列表可扫读（两行信息密度）并与“工序管理”视觉一致。
   - 变更点：

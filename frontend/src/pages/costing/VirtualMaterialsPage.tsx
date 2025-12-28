@@ -149,6 +149,7 @@ import {
   Switch,
   Table,
   Tag,
+  Tooltip,
   Typography,
   message,
 } from 'antd'
@@ -160,6 +161,10 @@ import {
   QuestionCircleOutlined,
   ReloadOutlined,
   SettingOutlined,
+  CheckCircleOutlined,
+  StopOutlined,
+  EyeOutlined,
+  EditOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -184,12 +189,12 @@ import {
   generateNextCode,
   fetchMaterial,
   fetchMaterials,
+  fetchTaxonomyItems,
   fetchVirtualMaterial,
   fetchVirtualMaterials,
   saveVirtualMaterialBindings,
   updateVirtualMaterial,
 } from '@/services/planner'
-import { MATERIAL_CATEGORIES } from '@/constants/materialCategories'
 import { CALCULATION_METHOD_OPTIONS, getCalculationMethodLabel } from '@/constants/calculationMethods'
 import MaterialDrawer from '@/components/costing/MaterialDrawer'
 
@@ -198,7 +203,7 @@ const { Title, Text } = Typography
 type BindingMode = 'ratio' | 'quantity'
 type VirtualKind = 'recipe' | 'kit' | 'placeholder'
 const DEFAULT_VIRTUAL_UNIT = '套'
-const DEFAULT_VIRTUAL_CATEGORY = MATERIAL_CATEGORIES[0] || '未分类'
+const DEFAULT_VIRTUAL_CATEGORY = '未分类'
 
 const PLACEHOLDER_UNIT_OPTIONS = [
   { label: '平米', value: '平米' },
@@ -282,7 +287,13 @@ const VirtualMaterialsPage = () => {
   const [bindingForm] = Form.useForm()
   const [inventoryForm] = Form.useForm()
 
-  const [filters, setFilters] = useState<{ search?: string; status?: string; category?: string }>({})
+  const [filters, setFilters] = useState<{
+    search?: string
+    status?: string
+    category?: string
+    virtual_kind?: string
+    binding_search?: string
+  }>({})
   const [pagination, setPagination] = useState({ current: 1, pageSize: 10 })
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [drawerMode, setDrawerMode] = useState<'create' | 'view'>('view')
@@ -294,8 +305,14 @@ const VirtualMaterialsPage = () => {
     null,
   )
   const [manualRatioEdited, setManualRatioEdited] = useState(false)
+  const [showBindingsInList, setShowBindingsInList] = useState(true)
   const bindingUpdateRef = useRef(false)
   const materialCacheRef = useRef<Record<string, Material>>({})
+
+  const taxonomyVirtualCategoryQuery = useQuery({
+    queryKey: ['taxonomy-items', 'virtual_material_category'],
+    queryFn: () => fetchTaxonomyItems('virtual_material_category', { include_inactive: false }),
+  })
 
   const listQuery = useQuery({
     queryKey: ['virtual-materials', filters, pagination],
@@ -555,6 +572,8 @@ const VirtualMaterialsPage = () => {
       search: values.search?.trim() || undefined,
       status: values.status || undefined,
       category: values.category || undefined,
+      virtual_kind: values.virtual_kind || undefined,
+      binding_search: values.binding_search?.trim() || undefined,
     })
     setPagination((prev) => ({ ...prev, current: 1 }))
   }
@@ -603,16 +622,21 @@ const VirtualMaterialsPage = () => {
 
   const listData = listQuery.data?.items ?? []
   const mergedCategoryOptions = useMemo(() => {
-    const extras = listData
-      .map((item) => item.category)
-      .filter((value): value is string => Boolean(value && value.trim()))
-    const detailCategory = detailQuery.data?.category
-    if (detailCategory) {
-      extras.push(detailCategory)
+    const seen = new Set<string>()
+    const options: Array<{ label: string; value: string }> = []
+    const append = (raw?: string | null) => {
+      const value = String(raw ?? '').trim()
+      if (!value || seen.has(value)) return
+      seen.add(value)
+      options.push({ label: value, value })
     }
-    const merged = Array.from(new Set([DEFAULT_VIRTUAL_CATEGORY, ...MATERIAL_CATEGORIES, ...extras]))
-    return merged.map((value) => ({ label: value, value }))
-  }, [listData, detailQuery.data?.category])
+    append(DEFAULT_VIRTUAL_CATEGORY)
+    ;(taxonomyVirtualCategoryQuery.data?.items ?? []).forEach((it: any) => append(it?.name))
+    // 兜底：历史数据里可能存在 taxonomy 外的分类，允许展示但不强制
+    listData.forEach((item) => append(item.category))
+    append(detailQuery.data?.category ?? undefined)
+    return options
+  }, [detailQuery.data?.category, listData, taxonomyVirtualCategoryQuery.data?.items])
   const totalCount = listQuery.data?.total ?? 0
 
   const createMutation = useMutation({
@@ -702,12 +726,24 @@ const VirtualMaterialsPage = () => {
   const deactivateMutation = useMutation({
     mutationFn: deactivateVirtualMaterial,
     onSuccess: () => {
-      message.success('虚拟物料已停用')
+      message.success('已删除（归档）')
       queryClient.invalidateQueries({ queryKey: ['virtual-materials'] })
       if (selectedId) {
         queryClient.invalidateQueries({ queryKey: ['virtual-material', selectedId] })
       }
     },
+  })
+
+  const statusMutation = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: string }) =>
+      updateVirtualMaterial(id, { status }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['virtual-materials'] })
+      if (selectedId) {
+        queryClient.invalidateQueries({ queryKey: ['virtual-material', selectedId] })
+      }
+    },
+    onError: (error) => message.error(getErrorMessage(error)),
   })
 
   const inventoryMutation = useMutation({
@@ -748,10 +784,6 @@ const VirtualMaterialsPage = () => {
           ? String(values.unit || '').trim()
           : (bindingSummary.baseUnit ?? undefined)
     if (kind === 'placeholder') {
-      if (!constraintCategory) {
-        message.error('占位型必须选择“约束分类”')
-        return
-      }
       if (!unit) {
         message.error('占位型必须选择单位')
         return
@@ -767,7 +799,11 @@ const VirtualMaterialsPage = () => {
       nextMetadata.virtual_kind = 'placeholder'
       nextMetadata.placeholder_name = name
       nextMetadata.placeholder_symbol = normalizePlaceholderSymbol(name)
-      nextMetadata.constraint_category = constraintCategory
+      if (constraintCategory) {
+        nextMetadata.constraint_category = constraintCategory
+      } else {
+        delete (nextMetadata as any).constraint_category
+      }
     }
     if (drawerMode === 'create') {
       // VM 编码只在“实际创建/保存”时申请，避免打开抽屉就消耗递增号
@@ -823,9 +859,8 @@ const VirtualMaterialsPage = () => {
       const meta = (basicForm.getFieldValue('metadata_json') ?? {}) as Record<string, unknown>
       const placeholderName = String(meta.placeholder_name || '').trim()
       const placeholderSymbol = String(meta.placeholder_symbol || '').trim()
-      const constraintCategory = String(meta.constraint_category || '').trim()
-      if (!placeholderName || !placeholderSymbol || !constraintCategory || !unit) {
-        message.error('占位型需要填写：占位名称/占位符号/约束分类/单位')
+      if (!placeholderName || !placeholderSymbol || !unit) {
+        message.error('占位型需要填写：占位名称/占位符号/单位')
         return
       }
       bindingsMutation.mutate({ id: selectedId, bindings: [] })
@@ -882,11 +917,20 @@ const VirtualMaterialsPage = () => {
       const results = await Promise.allSettled(ids.map((id) => fetchMaterial(id)))
       const byId = new Map<string, Material>()
       const failed: string[] = []
+      const missingBomPrice: string[] = []
+      const zeroBomPrice: string[] = []
       results.forEach((r, idx) => {
         const id = ids[idx]!
         if (r.status === 'fulfilled') {
           byId.set(id, r.value)
           materialCacheRef.current[id] = r.value
+          const code = String(r.value.material_code || id).trim()
+          const bomPrice = deriveBomUnitPrice(r.value)
+          if (bomPrice === undefined) {
+            missingBomPrice.push(code)
+          } else if (Number(bomPrice) === 0) {
+            zeroBomPrice.push(code)
+          }
         } else {
           failed.push(id)
         }
@@ -914,10 +958,21 @@ const VirtualMaterialsPage = () => {
         }),
       })
       bindingUpdateRef.current = false
+      const baseMsg = `已同步 ${byId.size} 条：BOM单价/单位已刷新（虚拟BOM单价会自动重算）`
       if (failed.length) {
-        message.warning(`已同步 ${byId.size} 条；${failed.length} 条失败（可重试）`)
+        message.warning(`${baseMsg}；${failed.length} 条失败（可重试）`)
       } else {
-        message.success(`已同步 ${byId.size} 条：BOM单价/单位已刷新`)
+        message.success(baseMsg)
+      }
+      // 重要提示：若物料主数据未维护单价/换算，BOM 单价可能为 undefined/0，虚拟单价会偏低或显示缺失。
+      const uniq = (list: string[]) => Array.from(new Set(list)).slice(0, 12)
+      const missing = uniq(missingBomPrice)
+      const zeros = uniq(zeroBomPrice)
+      if (missing.length) {
+        message.warning(`以下物料缺少BOM单价（请检查物料主数据单价/换算）：${missing.join('、')}${missingBomPrice.length > missing.length ? '…' : ''}`)
+      }
+      if (zeros.length) {
+        message.warning(`以下物料BOM单价=0（通常表示未维护或单价为0）：${zeros.join('、')}${zeroBomPrice.length > zeros.length ? '…' : ''}`)
       }
     } catch (error) {
       message.error(getErrorMessage(error))
@@ -1044,6 +1099,69 @@ const VirtualMaterialsPage = () => {
         )
       },
     },
+    ...(showBindingsInList
+      ? [
+          {
+            title: '绑定物料',
+            key: 'bindings',
+            width: 520,
+            render: (_: unknown, record: VirtualMaterial) => {
+              const kind = inferVirtualKind(record)
+              const binds = Array.isArray(record.bindings) ? record.bindings : []
+              if (!binds.length) return <Text type="secondary">-</Text>
+              return (
+                <div style={{ fontSize: 12, lineHeight: 1.35, maxHeight: 180, overflowY: 'auto' }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      gap: 8,
+                      fontWeight: 600,
+                      color: '#555',
+                      paddingBottom: 6,
+                      borderBottom: '1px solid #f0f0f0',
+                      marginBottom: 6,
+                    }}
+                  >
+                    <div style={{ width: 90 }}>编码</div>
+                    <div style={{ flex: 1 }}>名称</div>
+                    <div style={{ width: 140, textAlign: 'right' }}>
+                      {kind === 'recipe' ? '配比（%）' : '每套数量'}
+                    </div>
+                    <div style={{ width: 110, textAlign: 'right' }}>损耗率（%）</div>
+                  </div>
+                  {binds.map((b: any, idx: number) => {
+                    const code = String(b.material_code || '').trim() || '-'
+                    const name = String(b.material_name || '').trim() || '-'
+                    const ratio = Number(b.quantity_ratio || 0)
+                    const loss = Number(b.loss_rate || 0)
+                    const ratioLabel =
+                      kind === 'recipe' ? Number((ratio * 100).toFixed(2)) : Number(ratio.toFixed(4))
+                    return (
+                      <div
+                        key={`${String(b.material_id || idx)}`}
+                        style={{ display: 'flex', gap: 8, padding: '2px 0' }}
+                      >
+                        <div style={{ width: 90 }}>
+                          <Text code>{code}</Text>
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <Text ellipsis={{ tooltip: name }}>{name}</Text>
+                        </div>
+                        <div style={{ width: 140, textAlign: 'right' }}>
+                          <Text>{Number.isFinite(ratioLabel) ? ratioLabel : '-'}</Text>
+                        </div>
+                        <div style={{ width: 110, textAlign: 'right' }}>
+                          <Text>{Number.isFinite(loss) ? loss : '-'}</Text>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )
+            },
+          } as any,
+        ]
+      : []),
     {
       title: '分类',
       dataIndex: 'category',
@@ -1072,22 +1190,54 @@ const VirtualMaterialsPage = () => {
     {
       title: '操作',
       key: 'actions',
-      width: 200,
+      width: 180,
       render: (_: unknown, record: VirtualMaterial) => (
-        <Space size={8}>
-          <Button type="link" size="small" onClick={() => openDetailDrawer(record)}>
-            查看
-          </Button>
-          {record.status !== 'inactive' && (
+        <Space size={4} wrap>
+          <Tooltip title="查看/编辑">
+            <Button size="small" icon={<EyeOutlined />} onClick={() => openDetailDrawer(record)} />
+          </Tooltip>
+          <Tooltip title="配置（打开抽屉）">
+            <Button size="small" icon={<EditOutlined />} onClick={() => openDetailDrawer(record)} />
+          </Tooltip>
+          {record.status === 'active' ? (
             <Popconfirm
               title="确认停用该虚拟物料？"
-              onConfirm={() => deactivateMutation.mutate(record.id)}
+              description="仅修改状态为“停用”，不会删除（归档）。"
               okText="停用"
               cancelText="取消"
+              onConfirm={() => statusMutation.mutate({ id: record.id, status: 'inactive' })}
             >
-              <Button type="link" size="small" danger>
-                停用
-              </Button>
+              <Tooltip title="停用">
+                <Button size="small" danger icon={<StopOutlined />} loading={statusMutation.isPending} />
+              </Tooltip>
+            </Popconfirm>
+          ) : (
+            <Tooltip title="启用">
+              <Button
+                size="small"
+                type="primary"
+                icon={<CheckCircleOutlined />}
+                onClick={() => statusMutation.mutate({ id: record.id, status: 'active' })}
+                loading={statusMutation.isPending}
+              />
+            </Tooltip>
+          )}
+          {record.status === 'active' ? (
+            <Tooltip title="删除（需先停用）">
+              <Button size="small" danger icon={<DeleteOutlined />} disabled />
+            </Tooltip>
+          ) : (
+            <Popconfirm
+              title="确认删除该虚拟物料？"
+              description="删除为归档删除：该虚拟物料将从列表隐藏。"
+              okText="删除"
+              okButtonProps={{ danger: true }}
+              cancelText="取消"
+              onConfirm={() => deactivateMutation.mutate(record.id)}
+            >
+              <Tooltip title="删除（归档）">
+                <Button size="small" danger icon={<DeleteOutlined />} loading={deactivateMutation.isPending} />
+              </Tooltip>
             </Popconfirm>
           )}
         </Space>
@@ -1121,6 +1271,10 @@ const VirtualMaterialsPage = () => {
             <Button icon={<ReloadOutlined />} onClick={() => listQuery.refetch()}>
               刷新
             </Button>
+            <Space>
+              <span>显示子物料</span>
+              <Switch checked={showBindingsInList} onChange={setShowBindingsInList} />
+            </Space>
             <Button type="primary" icon={<PlusOutlined />} onClick={openCreateDrawer}>
               新建虚拟物料
             </Button>
@@ -1134,6 +1288,26 @@ const VirtualMaterialsPage = () => {
               allowClear
               onSearch={handleFilterSubmit}
               style={{ width: 220 }}
+            />
+          </Form.Item>
+          <Form.Item name="virtual_kind" label="类型">
+            <Select
+              allowClear
+              placeholder="全部"
+              options={[
+                { label: '配方型', value: 'recipe' },
+                { label: '套件型', value: 'kit' },
+                { label: '占位型', value: 'placeholder' },
+              ]}
+              style={{ width: 160 }}
+            />
+          </Form.Item>
+          <Form.Item name="binding_search" label="绑定物料">
+            <Input
+              placeholder="子物料编码/名称"
+              allowClear
+              style={{ width: 220 }}
+              onPressEnter={handleFilterSubmit}
             />
           </Form.Item>
           <Form.Item name="status" label="状态">
@@ -1304,11 +1478,10 @@ const VirtualMaterialsPage = () => {
                             <Form.Item
                               label="约束分类"
                               name={['metadata_json', 'constraint_category']}
-                              rules={[{ required: true, message: '请选择约束分类' }]}
                             >
                               <Select
                                 placeholder="用于产品模型映射过滤"
-                                options={MATERIAL_CATEGORIES.map((item) => ({ label: item, value: item }))}
+                                options={mergedCategoryOptions}
                                 showSearch
                                 optionFilterProp="label"
                               />
@@ -1841,6 +2014,12 @@ const MaterialSelectModal = ({ open, onClose, onConfirm }: MaterialSelectModalPr
   const [selectedRowKeys, setSelectedRowKeys] = useState<Key[]>([])
   const [selectedRows, setSelectedRows] = useState<Material[]>([])
 
+  const taxonomyCategoryQuery = useQuery({
+    queryKey: ['taxonomy-items', 'material_category', 'picker'],
+    queryFn: () => fetchTaxonomyItems('material_category', { include_inactive: false }),
+    enabled: open,
+  })
+
   useEffect(() => {
     if (!open) {
       setSearch('')
@@ -1903,7 +2082,10 @@ const MaterialSelectModal = ({ open, onClose, onConfirm }: MaterialSelectModalPr
             setCategory(value)
             setPagination((prev) => ({ ...prev, current: 1 }))
           }}
-          options={MATERIAL_CATEGORIES.map((item) => ({ label: item, value: item }))}
+          options={(taxonomyCategoryQuery.data?.items ?? []).map((it: any) => ({
+            label: it.name,
+            value: it.name,
+          }))}
         />
         <Input.Search
           placeholder="按编码 / 名称搜索"

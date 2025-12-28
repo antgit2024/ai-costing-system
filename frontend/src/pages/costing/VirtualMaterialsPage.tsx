@@ -2076,11 +2076,17 @@ const MaterialSelectModal = ({ open, onClose, onConfirm }: MaterialSelectModalPr
         <Select
           allowClear
           placeholder="分类"
+          showSearch
+          optionFilterProp="label"
           style={{ width: 180 }}
           value={category}
           onChange={(value) => {
             setCategory(value)
             setPagination((prev) => ({ ...prev, current: 1 }))
+          }}
+          filterOption={(input, opt) => {
+            const label = String((opt as any)?.label ?? '')
+            return label.toLowerCase().includes(String(input ?? '').toLowerCase())
           }}
           options={(taxonomyCategoryQuery.data?.items ?? []).map((it: any) => ({
             label: it.name,

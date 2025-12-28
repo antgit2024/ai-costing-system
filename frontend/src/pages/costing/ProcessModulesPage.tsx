@@ -598,6 +598,7 @@ const ProcessModulesPage = () => {
     setFilters({
       search: values.search?.trim() || undefined,
       status: values.status || undefined,
+      category: values.category || undefined,
     })
     setPagination((prev) => ({ ...prev, current: 1 }))
   }
@@ -1730,6 +1731,19 @@ const ProcessModulesPage = () => {
               allowClear
               onSearch={handleFilterSubmit}
               style={{ width: 240 }}
+            />
+          </Form.Item>
+          <Form.Item name="category" label="分类">
+            <Select
+              allowClear
+              placeholder="全部"
+              showSearch
+              optionFilterProp="label"
+              style={{ width: 200 }}
+              options={(moduleCategoryQuery.data?.items ?? []).map((it: any) => ({
+                label: it.name,
+                value: it.name,
+              }))}
             />
           </Form.Item>
           <Form.Item name="status" label="状态">

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import dayjs from 'dayjs'
-import { Button, Card, Col, Input, Modal, Row, Space, Table, Tag, Tooltip, Typography, message } from 'antd'
+import { Button, Card, Col, Input, Modal, Row, Select, Space, Table, Tag, Tooltip, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useQuery } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
@@ -11,6 +11,7 @@ import {
   fetchProductModelVersions,
   fetchProductModels,
   previewProductModel,
+  fetchTaxonomyItems,
 } from '@/services/planner'
 import type { ProductModel } from '@/types/planner'
 import ProductModelEditorDrawer from '@/components/costing/ProductModelEditorDrawer'
@@ -21,6 +22,7 @@ export default function StandardModelsPage() {
   const location = useLocation() as any
   const navigate = useNavigate()
   const [search, setSearch] = useState('')
+  const [category, setCategory] = useState<string | undefined>(undefined)
   const [page] = useState(1)
   const [pageSize] = useState(50)
 
@@ -61,15 +63,21 @@ export default function StandardModelsPage() {
   const params = useMemo(
     () => ({
       search: search || undefined,
+      category: category || undefined,
       page,
       page_size: pageSize,
     }),
-    [page, pageSize, search],
+    [category, page, pageSize, search],
   )
 
   const listQuery = useQuery({
     queryKey: ['standardModels', params],
     queryFn: () => fetchProductModels(params as any),
+  })
+
+  const taxonomyCategoryQuery = useQuery({
+    queryKey: ['taxonomy-items', 'product_model_category', 'standard-models'],
+    queryFn: () => fetchTaxonomyItems('product_model_category', { include_inactive: true }),
   })
 
   const listItems = useMemo(() => {
@@ -333,6 +341,16 @@ export default function StandardModelsPage() {
                 onSearch={() => listQuery.refetch()}
                 placeholder="搜索三位编码 / 模型名 / 版本号"
                 style={{ width: 420 }}
+              />
+              <Select
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                placeholder="品类"
+                style={{ width: 200 }}
+                value={category}
+                onChange={(v) => setCategory(v ?? undefined)}
+                options={(taxonomyCategoryQuery.data?.items ?? []).map((it: any) => ({ label: it.name, value: it.name }))}
               />
             </Space>
           </Card>

@@ -5,7 +5,7 @@ from decimal import Decimal
 import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from sqlalchemy import asc, or_
+from sqlalchemy import asc, func, or_
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -30,9 +30,16 @@ def _json_safe(value: Any) -> Any:
 
 
 class ProductModelFilters:
-    def __init__(self, *, search: Optional[str] = None, status: Optional[str] = None):
+    def __init__(
+        self,
+        *,
+        search: Optional[str] = None,
+        status: Optional[str] = None,
+        category: Optional[str] = None,
+    ):
         self.search = search
         self.status = status
+        self.category = category
 
 
 def list_models(
@@ -49,6 +56,8 @@ def list_models(
         )
     if filters.status:
         query = query.filter(models.ProductModel.status == filters.status)
+    if filters.category:
+        query = query.filter(func.trim(models.ProductModel.category) == filters.category.strip())
     total = query.count()
     items = (
         query.order_by(models.ProductModel.updated_at.desc())

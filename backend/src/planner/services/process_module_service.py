@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from sqlalchemy import asc, or_
+from sqlalchemy import asc, func, or_
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -11,9 +11,16 @@ from ..utils.unit_normalizer import normalize_unit
 
 
 class ProcessModuleFilters:
-    def __init__(self, *, search: Optional[str] = None, status: Optional[str] = None):
+    def __init__(
+        self,
+        *,
+        search: Optional[str] = None,
+        status: Optional[str] = None,
+        category: Optional[str] = None,
+    ):
         self.search = search
         self.status = status
+        self.category = category
 
 
 def list_modules(
@@ -34,6 +41,8 @@ def list_modules(
         )
     if filters.status:
         query = query.filter(models.ProcessModule.status == filters.status)
+    if filters.category:
+        query = query.filter(func.trim(models.ProcessModule.category) == filters.category.strip())
     total = query.count()
     items = (
         query.order_by(models.ProcessModule.updated_at.desc())

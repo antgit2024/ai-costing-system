@@ -609,6 +609,7 @@ export interface ProcessModuleDetail extends ProcessModuleSummary {
 
 export interface ProcessModuleQueryParams extends Record<string, string | number | undefined> {
   search?: string
+  category?: string
   status?: string
   page?: number
   page_size?: number

@@ -42,12 +42,13 @@ def _get_module_or_404(module_id: str, db: Session):
 )
 def list_process_modules(
     search: Optional[str] = Query(None, max_length=128),
+    category: Optional[str] = Query(None, max_length=128),
     status_filter: Optional[str] = Query(None, alias="status", max_length=32),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     db: Session = Depends(get_db),
 ):
-    filters = process_module_service.ProcessModuleFilters(search=search, status=status_filter)
+    filters = process_module_service.ProcessModuleFilters(search=search, status=status_filter, category=category)
     total, items = process_module_service.list_modules(
         db,
         filters=filters,

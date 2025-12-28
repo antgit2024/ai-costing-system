@@ -92,7 +92,7 @@ export default function MaterialPickerDrawer({
   const realParams: MaterialQueryParams = useMemo(
     () => ({
       search: realSearch.trim() || undefined,
-      category: realCategory || undefined,
+      category: realCategory?.trim() || undefined,
       status: 'active',
       is_active: true,
       is_bom_material: onlyBom ? true : undefined,

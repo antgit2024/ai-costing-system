@@ -479,8 +479,8 @@ class MaterialSyncService:
 
             material.material_name = data.material_name
             material.material_type = data.material_type or material.material_type
-            material.category = data.category
-            material.model_category = data.model_category
+            material.category = (data.category or "").strip() or None
+            material.model_category = (data.model_category or "").strip() or None
             material.unit = data.unit
             material.unit_price = data.unit_price
             material.currency = data.currency or material.currency

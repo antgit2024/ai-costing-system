@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Iterable, Optional, Sequence, Tuple
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Query, Session
 
 from .. import models
@@ -40,7 +40,9 @@ def apply_material_filters(query: Query, filters: MaterialFilters) -> Query:
     if filters.material_type:
         query = query.filter(models.Material.material_type == filters.material_type)
     if filters.category:
-        query = query.filter(models.Material.category == filters.category)
+        # Category values come from external sync and may contain leading/trailing spaces.
+        # Use TRIM on DB side + strip on input so UI taxonomy values match reliably.
+        query = query.filter(func.trim(models.Material.category) == filters.category.strip())
     if filters.status:
         query = query.filter(models.Material.status == filters.status)
     if filters.is_bom_material is not None:

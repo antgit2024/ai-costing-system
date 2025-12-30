@@ -8,7 +8,7 @@
 - **行级变体是 Overlay，不改基准清单**：变体在独立 Drawer 中维护，动态生成最终 BOM；基准清单（version lines）是兜底。
 - **运营/实施口径以规范文档为准**：token 字典化、尺寸边界离散化、上线前预演留痕、扣库以最终 BOM 快照为准（见 `DOC/costing/manuals/standard_model_variants_ops_rules.md`）。
 
-- 最近校对（北京时间 GMT+8）：2025-12-21
+- 最近校对（北京时间 GMT+8）：2025-12-30（本轮 Frontend Agent 接力：已按恢复包规范做验收与落地）
 - 分支：`backup/20251214-1535`
 
 ### 1) P0 目标（产品模型编辑器 + 两入口）

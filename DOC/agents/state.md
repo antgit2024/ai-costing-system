@@ -1,6 +1,7 @@
 ## 当前状态（崩了也能继续）
 
 - **最近校对（北京时间 GMT+8）**：2025-12-30 19:20（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_backend.md`）
+- **最近校对（北京时间 GMT+8）**：2025-12-30 19:32（Frontend Agent 接力：完成前端/文档/后端 smoke 验收 + 更新恢复包并提交）
 
 - **最近校对（北京时间 GMT+8）**：2025-12-25 04:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-25 06:08（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
@@ -10,6 +11,16 @@
 - **最近校对（北京时间 GMT+8）**：2025-12-26 10:20（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-30 12:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_backend.md`）
 - **分支**：`backup/20251214-1535`
+
+- **本轮闭环产物（Frontend / 接力恢复包 + 强制验收）**：
+  - 更新接力包：`DOC/agents/handoff_frontend.md` 刷新“最近校对”时间戳（用于新 Frontend 接力入口）
+  - 硬验收（全部 0 退出码）：
+    - `cd frontend && npm ci`
+    - `npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的 4 条 `grep -nF ...` 校验文档存在性
+    - Backend smoke：`curl -sS "http://127.0.0.1:8800/api/planner/product-model-versions?version_kind=standard&page=1&page_size=20" | python -m json.tool`
+  - 下一步（Frontend 建议闭环）：
+    - 按 `DOC/agents/state.md` 既有规划，在“停用/删除/改单位/改换算/改单价”等高风险操作前调用 `GET /api/planner/base-config/materials/{material_id}/references` 做影响范围提示与确认/拦截
 
 - **本轮闭环产物（Backend / BaseConfig - MaterialReferences（真实物料引用关系查询 MVP））**：
   - 新增接口：`GET /api/planner/base-config/materials/{material_id}/references`

@@ -171,6 +171,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Key } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { isAxiosError } from 'axios'
+import { useLocation, useNavigate } from 'react-router-dom'
 
 import GuideDrawer from '@/components/common/GuideDrawer'
 import type {
@@ -282,6 +283,8 @@ const statusOptions = [
 
 const VirtualMaterialsPage = () => {
   const queryClient = useQueryClient()
+  const location = useLocation() as any
+  const navigate = useNavigate()
   const [filtersForm] = Form.useForm()
   const [basicForm] = Form.useForm()
   const [bindingForm] = Form.useForm()
@@ -308,6 +311,18 @@ const VirtualMaterialsPage = () => {
   const [showBindingsInList, setShowBindingsInList] = useState(true)
   const bindingUpdateRef = useRef(false)
   const materialCacheRef = useRef<Record<string, Material>>({})
+
+  // 支持从其它页面（例如“关联引用”区块）跳转并直接打开当前虚拟物料抽屉
+  useEffect(() => {
+    const st = (location as any)?.state ?? {}
+    const openId = String(st?.openVirtualMaterialId ?? '').trim()
+    if (!openId) return
+    setDrawerMode('view')
+    setSelectedId(openId)
+    setDrawerOpen(true)
+    // 清掉 state，避免刷新/返回时重复弹抽屉
+    navigate(location.pathname, { replace: true, state: null })
+  }, [location, navigate])
 
   const taxonomyVirtualCategoryQuery = useQuery({
     queryKey: ['taxonomy-items', 'virtual_material_category'],

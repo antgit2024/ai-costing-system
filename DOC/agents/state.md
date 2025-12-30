@@ -1,7 +1,7 @@
 ## 当前状态（崩了也能继续）
 
 - **最近校对（北京时间 GMT+8）**：2025-12-30 19:20（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_backend.md`）
-- **最近校对（北京时间 GMT+8）**：2025-12-30 20:17（Frontend+Backend：打样模型列表缩略图去 N+1（B方案））
+- **最近校对（北京时间 GMT+8）**：2025-12-30 20:27（Frontend：关联引用直达编辑 + 列宽收口）
 
 - **最近校对（北京时间 GMT+8）**：2025-12-25 04:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-25 06:08（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
@@ -52,6 +52,17 @@
   - 文档：补回 `DOC/costing/reviews/erp_guardrails_addendum_20251222.md` 的 **§9 主数据不同频治理策略**，使 `DOC/agents/commands.md` 的 grep 验收命令可执行
   - 本轮验收命令（必须）：`npm -C frontend run build`（已通过）
   - 后端 smoke（示例）：`curl -sS "http://127.0.0.1:8800/api/planner/product-models?page=1&page_size=3" | python -m json.tool`
+
+- **本轮闭环产物（Frontend / Materials - 关联引用：直达编辑 + 列宽收口）**：
+  - 关联引用跳转：
+    - 虚拟物料：点击“打开”→ 进入 `/costing/virtual-materials` 并直接打开对应虚拟物料抽屉
+    - 工艺模块：点击“打开”→ 进入 `/costing/process-modules` 并直接打开对应工艺模块抽屉
+    - 模型版本：点击“打开”→ 进入 `/costing/standard-models` 并直接打开对应标准模型版本抽屉
+  - 表格列宽/展示收口：
+    - 工艺模块引用：ID 列加宽、名称列变窄且字号更小
+    - 模型版本清单引用：版本列加宽；模型/状态列变窄
+    - 物料主列表：物料编码列加宽约 1/3
+  - 本轮验收命令（必须）：`npm -C frontend run build`（已通过）
 
 - **本轮闭环产物（Backend / BaseConfig - MaterialReferences（真实物料引用关系查询 MVP））**：
   - 新增接口：`GET /api/planner/base-config/materials/{material_id}/references`

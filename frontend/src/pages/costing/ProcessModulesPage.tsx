@@ -41,6 +41,7 @@ import dayjs from 'dayjs'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Key } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { normalizeUnit } from '@/utils/unit'
 import {
   activateProcessModule,
@@ -330,6 +331,8 @@ const createEmptyStep = (order = 1): ProcessModuleStepInput => ({
 
 const ProcessModulesPage = () => {
   const queryClient = useQueryClient()
+  const location = useLocation() as any
+  const navigate = useNavigate()
   const [filtersForm] = Form.useForm()
   const [editorForm] = Form.useForm()
   const [filters, setFilters] = useState<ProcessModuleQueryParams>({})
@@ -357,6 +360,18 @@ const ProcessModulesPage = () => {
   const lastHydratedIdRef = useRef<string | null>(null)
   const userTouchedRef = useRef(false)
   const suppressTouchRef = useRef(false)
+
+  // 支持从其它页面（例如“关联引用”区块）跳转并直接打开当前工艺模块编辑抽屉
+  useEffect(() => {
+    const st = (location as any)?.state ?? {}
+    const openId = String(st?.openProcessModuleId ?? '').trim()
+    if (!openId) return
+    setDrawerMode('view')
+    setSelectedId(openId)
+    setDrawerOpen(true)
+    // 清掉 state，避免刷新/返回时重复弹抽屉
+    navigate(location.pathname, { replace: true, state: null })
+  }, [location, navigate])
 
   useEffect(() => {
     if (!drawerOpen) return

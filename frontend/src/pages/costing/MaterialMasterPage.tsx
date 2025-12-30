@@ -894,7 +894,8 @@ const MaterialMasterPage = () => {
       title: '物料编码',
       dataIndex: 'material_code',
       key: 'material_code',
-      width: 80,
+      // 视觉收口：编码更易扫读（宽度略增）
+      width: 110,
       render: (code: string) => (
         <Space>
           <Text code>{code}</Text>
@@ -1517,8 +1518,16 @@ const MaterialMasterPage = () => {
                           title: '跳转',
                           key: 'jump',
                           width: 90,
-                          render: () => (
-                            <Button type="link" size="small" onClick={() => navigate('/costing/virtual-materials')}>
+                          render: (_: any, row: any) => (
+                            <Button
+                              type="link"
+                              size="small"
+                              onClick={() =>
+                                navigate('/costing/virtual-materials', {
+                                  state: { openVirtualMaterialId: String(row?.id ?? '') },
+                                })
+                              }
+                            >
                               打开
                             </Button>
                           ),
@@ -1553,14 +1562,23 @@ const MaterialMasterPage = () => {
                       rowKey="id"
                       dataSource={materialReferencesQuery.data?.process_modules?.items ?? []}
                       columns={[
-                        { title: 'ID', dataIndex: 'id', key: 'id', width: 160, render: (v) => <Text code>{v}</Text> },
-                        { title: '名称', dataIndex: 'name', key: 'name' },
+                        // 你这边经常需要复制/核对 ID：ID 列加宽；名称列收口并缩小字号（不抢主信息）
+                        { title: 'ID', dataIndex: 'id', key: 'id', width: 480, render: (v) => <Text code>{v}</Text> },
+                        { title: '名称', dataIndex: 'name', key: 'name', width: 140, render: (v) => <Text style={{ fontSize: 12 }} ellipsis={{ tooltip: String(v ?? '') }}>{String(v ?? '')}</Text> },
                         {
                           title: '跳转',
                           key: 'jump',
                           width: 90,
-                          render: () => (
-                            <Button type="link" size="small" onClick={() => navigate('/costing/process-modules')}>
+                          render: (_: any, row: any) => (
+                            <Button
+                              type="link"
+                              size="small"
+                              onClick={() =>
+                                navigate('/costing/process-modules', {
+                                  state: { openProcessModuleId: String(row?.id ?? '') },
+                                })
+                              }
+                            >
                               打开
                             </Button>
                           ),
@@ -1595,16 +1613,27 @@ const MaterialMasterPage = () => {
                       rowKey="version_id"
                       dataSource={materialReferencesQuery.data?.product_model_versions?.items ?? []}
                       columns={[
-                        { title: '模型', key: 'model', render: (_, r) => <Text>{r.model_name}</Text> },
-                        { title: '版本', dataIndex: 'version_label', key: 'version_label', width: 200, render: (v) => (v ? <Text code>{v}</Text> : <Text type="secondary">-</Text>) },
+                        { title: '模型', key: 'model', width: 140, render: (_: any, r: any) => <Text style={{ fontSize: 12 }} ellipsis={{ tooltip: String(r?.model_name ?? '') }}>{String(r?.model_name ?? '')}</Text> },
+                        { title: '版本', dataIndex: 'version_label', key: 'version_label', width: 300, render: (v) => (v ? <Text code>{v}</Text> : <Text type="secondary">-</Text>) },
                         { title: '类型', dataIndex: 'version_kind', key: 'version_kind', width: 90, render: (v) => <Tag>{v}</Tag> },
-                        { title: '状态', dataIndex: 'version_status', key: 'version_status', width: 100, render: (v) => <Tag>{v}</Tag> },
+                        { title: '状态', dataIndex: 'version_status', key: 'version_status', width: 70, render: (v) => <Tag style={{ fontSize: 12, lineHeight: '18px' }}>{v}</Tag> },
                         {
                           title: '跳转',
                           key: 'jump',
                           width: 90,
-                          render: () => (
-                            <Button type="link" size="small" onClick={() => navigate('/costing/standard-models')}>
+                          render: (_: any, row: any) => (
+                            <Button
+                              type="link"
+                              size="small"
+                              onClick={() =>
+                                navigate('/costing/standard-models', {
+                                  state: {
+                                    openModelId: String(row?.model_id ?? ''),
+                                    openVersionId: String(row?.version_id ?? ''),
+                                  },
+                                })
+                              }
+                            >
                               打开
                             </Button>
                           ),

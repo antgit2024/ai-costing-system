@@ -2,6 +2,7 @@
 
 | 日期 | 模块 | 角色 | 任务/问题 | 结论 | 待办 |
 | --- | --- | --- | --- | --- | --- |
+| 2025-12-30 | Materials（关联引用：直达编辑+列宽收口） | Frontend Agent | “关联引用”里跳转希望直达当前项编辑抽屉；并调整若干列宽（减少扫读成本）。 | ✅ 虚拟物料/工艺模块/标准模型版本的“打开”改为携带 state 跳转并在目标页自动打开对应抽屉；工艺模块引用表：ID列加宽、名称列变窄并缩小字号；模型版本引用表：版本列加宽、模型与状态列变窄；物料主列表“物料编码”列加宽约 1/3。`npm -C frontend run build` 通过。 | 若后续需要“跳转后高亮定位到列表行/自动搜索”，再单开一轮（会涉及 URL 参数与列表筛选联动）。 |
 | 2025-12-30 | SampleModels（缩略图性能/B方案） | Frontend+Backend Agent | 打样模型列表强刷后卡顿：每行取版本列表拿缩略图导致 N+1（50行≈50请求），影响菜单切换与响应。 | ✅ 后端 `GET /api/planner/product-models` 增加 `latest_sample_version_id`（优先选有 `metadata_json.version_images` 的最新 sample 版本）；前端 `SampleModelsPage` 使用该字段渲染缩略图（`<img loading="lazy" decoding="async">`）并移除每行 `fetchProductModelVersions` N+1；文档补回 Guardrails §9 以恢复 `commands.md` 验收命令。`npm -C frontend run build` 通过，curl smoke 可见新字段。 | 下一步：如仍慢，考虑拆分 `/product-models` 为轻量 list schema（不返回 modules/materials/processes）或增加 `lite=true`。 |
 | 2025-12-30 | Materials（物料列表缩略图卡顿） | Frontend Agent | `/costing/materials` 强刷后页面卡住，切换菜单不响应，需等缩略图加载完才恢复。 | ✅ 列表缩略图从 AntD `Image`（含 preview）改为原生 `<img loading="lazy" decoding="async">` 懒加载+异步解码；预览保留在抽屉“图片附件”Tab。`npm -C frontend run build` 通过。 | 观察线上：若仍卡顿，下一步考虑缩略图走后端专用小图/限制并发/虚拟列表。 |
 | 2025-12-30 | Materials（物料详情抽屉 Tab 调整） | Frontend Agent | 物料详情抽屉“引用”Tab 会干扰日常改价；要求改名并后置，同时避免打开抽屉就查引用导致不必要 DB 压力。 | ✅ 将 Tab “引用”改名为“关联引用”，并移动到“图片附件”之后；引用关系接口改为 **仅在用户切到该 Tab 时才触发请求**（默认改价不查库）。`npm -C frontend run build` 通过。 | 下一步：排查“物料列表缩略图加载导致切换菜单卡死/很慢”的性能问题，优先从缩略图请求并发与渲染开销入手。 |

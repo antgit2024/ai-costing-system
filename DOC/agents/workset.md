@@ -34,9 +34,13 @@
 
 ### 2) 后端：接口契约（只读校对用）
 
+- `backend/src/config.py`（数据库连接配置：补齐 Postgres SSL/sslmode=require）
+- `backend/src/database.py`（SQLAlchemy engine 初始化：修复 no encryption 导致的全站 500）
 - `backend/src/planner/models.py`（数据模型：确认 process_module 字段/状态）
+- `backend/src/planner/router.py`（总路由聚合：定位 task-center/recent 的真实挂载位置）
 - `backend/src/planner/routers/process_modules.py`（工艺模块路由：列表/详情/创建/更新/启用停用/复制/删除）
 - `backend/src/planner/routers/processes.py`（工序路由：/processes 与 /processes/references）
+- `backend/src/planner/routers/jobs.py`（任务/作业相关路由：排查 task-center/recent 500）
 - `backend/src/planner/services/process_module_service.py`（工艺模块服务：删除/归档口径）
 - `backend/src/planner/routers/product_models.py`
 - `backend/src/planner/routers/product_model_versions.py`

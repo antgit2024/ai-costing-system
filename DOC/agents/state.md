@@ -6,7 +6,17 @@
 - **最近校对（北京时间 GMT+8）**：2025-12-25 16:40（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-25 17:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-26 10:20（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
+- **最近校对（北京时间 GMT+8）**：2025-12-30 12:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_backend.md`）
 - **分支**：`backup/20251214-1535`
+
+- **本轮闭环产物（Backend / 修复 Task Center 500：Postgres SSL）**：
+  - 现象：前端 `GET /api/planner/task-center/recent?limit=5` 轮询报 500
+  - 根因：Postgres 要求加密连接（日志：`pg_hba.conf rejects ... no encryption`），但连接 URL 未强制 sslmode
+  - 修复：
+    - `backend/src/database.py`：Postgres URL 默认补齐 `sslmode=require`；若设置 `PLANNER_PG_SSLMODE` 则强制覆盖 URL 内 sslmode
+    - `backend/src/planner/routers/jobs.py`：task-center 查询失败时 fail-open（避免角标轮询拖垮页面）
+  - 验收命令：
+    - `curl -sS -D - "http://127.0.0.1:8800/api/planner/task-center/recent?limit=5" -o /tmp/task_center_recent.json && cat /tmp/task_center_recent.json`
 
 - **本轮闭环产物（Planner-Optimization / 方案评审稿）**：
   - `DOC/costing/reviews/shipment_time_parse_review_phase0_phase1_20251222.md`（回答：SKU_NOT_BOUND 根因与治理、spec_hash+解析版本化、幂等与重试/重跑语义、UI按Excel展示）

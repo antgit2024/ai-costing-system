@@ -70,5 +70,15 @@
     - `/assets/*`：`Cache-Control: public, max-age=31536000, immutable`
     - `/assets/*`：不要回退到 `index.html`，应 `try_files $uri =404`
 
+### 10) 后端 500：Postgres 要求加密连接（no encryption）
+
+- **现象**：
+  - 前端轮询任务角标：`GET /api/planner/task-center/recent` 报 500
+  - 后端日志出现：`pg_hba.conf rejects connection ... no encryption`
+- **根因**：数据库实例强制 SSL，但客户端连接未开启 sslmode（或被配置为 allow/disable）。
+- **修复**：
+  - 代码已在 `backend/src/database.py` 默认补齐 `sslmode=require`
+  - 如需覆盖（例如本地/代理不支持 SSL），设置环境变量：`PLANNER_PG_SSLMODE=disable`（或 `prefer/verify-full` 等）
+
 
 

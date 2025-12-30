@@ -41,7 +41,9 @@ def _ensure_postgres_sslmode(database_url: str) -> str:
         return database_url
 
     query["sslmode"] = (os.getenv("PLANNER_PG_SSLMODE") or "prefer").strip() or "prefer"
-    return str(url.set(query=query))
+    url2 = url.set(query=query)
+    # IMPORTANT: str(URL) hides password by default (renders "***").
+    return url2.render_as_string(hide_password=False)
 
 
 def _get_database_url() -> str:

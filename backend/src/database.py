@@ -37,14 +37,18 @@ def _ensure_postgres_sslmode(database_url: str) -> str:
     # If env is set, force override even when URL already has sslmode.
     if forced:
         query["sslmode"] = forced
-        return str(url.set(query=query))
+        url2 = url.set(query=query)
+        # IMPORTANT: str(URL) hides password by default (renders "***").
+        return url2.render_as_string(hide_password=False)
 
     if "sslmode" in query:
         return database_url
 
     # Be explicit (even though libpq default is "prefer") to make behavior predictable.
     query["sslmode"] = "prefer"
-    return str(url.set(query=query))
+    url2 = url.set(query=query)
+    # IMPORTANT: str(URL) hides password by default (renders "***").
+    return url2.render_as_string(hide_password=False)
 
 
 def _build_engine(database_url: str):

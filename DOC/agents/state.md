@@ -1,7 +1,7 @@
 ## 当前状态（崩了也能继续）
 
 - **最近校对（北京时间 GMT+8）**：2025-12-30 19:20（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_backend.md`）
-- **最近校对（北京时间 GMT+8）**：2025-12-30 19:47（Frontend Agent：真实物料详情“引用关系区块”MVP 已接入并验收）
+- **最近校对（北京时间 GMT+8）**：2025-12-30 19:56（Frontend Agent：物料详情“关联引用”延迟加载 + Tab 顺序调整，避免改价时不必要查库）
 
 - **最近校对（北京时间 GMT+8）**：2025-12-25 04:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-25 06:08（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
@@ -23,11 +23,14 @@
     - 按 `DOC/agents/state.md` 既有规划，在“停用/删除/改单位/改换算/改单价”等高风险操作前调用 `GET /api/planner/base-config/materials/{material_id}/references` 做影响范围提示与确认/拦截
 
 - **本轮闭环产物（Frontend / Materials - MaterialReferencesPanel（真实物料详情：引用关系区块 MVP））**：
-  - UI：`/costing/materials` 物料详情抽屉新增 Tab：**“引用”**，展示三类引用（均为 `count + 最近10条`）并提供跳转入口：
+  - UI：`/costing/materials` 物料详情抽屉新增 Tab：**“关联引用”**，展示三类引用（均为 `count + 最近10条`）并提供跳转入口：
     - 虚拟物料绑定引用 → `/costing/virtual-materials`
     - 工艺模块引用 → `/costing/process-modules`
     - 模型版本清单引用 → `/costing/standard-models`
-  - 性能收口：仅在“抽屉打开且 material_id 已知”时请求一次（不在列表页做 N+1 预取）
+  - 性能收口：
+    - 仅在用户切到“关联引用”Tab 时才触发请求（默认不会读库，避免每次进抽屉改价格都查一次）
+    - 不在列表页做 N+1 预取
+  - 交互收口：Tab 顺序调整为 **基础信息 / 成本参数 / 图片附件 / 关联引用**
   - Fail-open：请求失败或 `errors[]` 非空时，仅在引用区块提示“部分数据不可用”，不阻塞其它功能
   - 关键改动文件：
     - `frontend/src/services/planner.ts`（新增 `fetchMaterialReferences`）

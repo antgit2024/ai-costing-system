@@ -11,10 +11,11 @@
 
 - **本轮闭环产物（Backend / 修复 Task Center 500：Postgres SSL）**：
   - 现象：前端 `GET /api/planner/task-center/recent?limit=5` 轮询报 500
-  - 根因：Postgres 要求加密连接（日志：`pg_hba.conf rejects ... no encryption`），但连接 URL 未强制 sslmode
+  - 根因：环境链路对 Postgres SSL 协商支持不一致（可能出现 `no encryption` 或 `server does not support SSL`），需要用 `sslmode` 明确策略
   - 修复：
-    - `backend/src/database.py`：Postgres URL 默认补齐 `sslmode=require`；若设置 `PLANNER_PG_SSLMODE` 则强制覆盖 URL 内 sslmode
+    - `backend/src/database.py`：Postgres URL 默认补齐 `sslmode=prefer`；若设置 `PLANNER_PG_SSLMODE` 则强制覆盖 URL 内 sslmode
     - `backend/src/planner/routers/jobs.py`：task-center 查询失败时 fail-open（避免角标轮询拖垮页面）
+  - 当前阻塞（重要）：若 **Postgres 未续费/不可用**（或链路被替换成不支持 SSL 的实例），则依赖 DB 的页面接口仍会 500（例如 `/api/planner/processes`、`/api/planner/taxonomy/items`）；task-center 之所以能 200 是因为做了 fail-open。
   - 验收命令：
     - `curl -sS -D - "http://127.0.0.1:8800/api/planner/task-center/recent?limit=5" -o /tmp/task_center_recent.json && cat /tmp/task_center_recent.json`
 

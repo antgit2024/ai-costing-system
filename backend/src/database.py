@@ -20,7 +20,7 @@ def _ensure_postgres_sslmode(database_url: str) -> str:
     Production guardrail:
     Some environments require SSL ("no encryption"), while some proxies/endpoints do not
     support SSL ("server does not support SSL").
-    If caller didn't specify sslmode in URL, default to sslmode=require for postgres URLs.
+    If caller didn't specify sslmode in URL, default to sslmode=prefer for postgres URLs.
     You can override via env: PLANNER_PG_SSLMODE (e.g. require/verify-full/disable).
     """
     try:
@@ -42,7 +42,8 @@ def _ensure_postgres_sslmode(database_url: str) -> str:
     if "sslmode" in query:
         return database_url
 
-    query["sslmode"] = "require"
+    # Be explicit (even though libpq default is "prefer") to make behavior predictable.
+    query["sslmode"] = "prefer"
     return str(url.set(query=query))
 
 

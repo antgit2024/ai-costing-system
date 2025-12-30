@@ -75,10 +75,12 @@
 - **现象**：
   - 前端轮询任务角标：`GET /api/planner/task-center/recent` 报 500
   - 后端日志出现：`pg_hba.conf rejects connection ... no encryption`
-- **根因**：数据库实例强制 SSL，但客户端连接未开启 sslmode（或被配置为 allow/disable）。
+- **根因**：数据库实例/链路对 SSL 的要求不一致，需要用 `sslmode` 明确策略。
+- **额外说明**：如果 Postgres **未续费/不可达**，也会表现为全站 DB 接口 500（processes/taxonomy 等），此时需要先恢复数据库服务本身。
 - **修复**：
-  - 代码已在 `backend/src/database.py` 默认补齐 `sslmode=require`
-  - 如需覆盖（例如本地/代理不支持 SSL），设置环境变量：`PLANNER_PG_SSLMODE=disable`（或 `prefer/verify-full` 等）
+  - 代码在 `backend/src/database.py` 默认设置 `sslmode=prefer`（尽量兼容：能 SSL 就 SSL，不能就退回明文）
+  - 如遇 `pg_hba.conf rejects ... no encryption`（服务端强制加密）：设置环境变量 **`PLANNER_PG_SSLMODE=require`**
+  - 如遇 `server does not support SSL, but SSL was required`（链路/代理不支持 SSL 协商）：设置环境变量 **`PLANNER_PG_SSLMODE=disable`**
 
 
 

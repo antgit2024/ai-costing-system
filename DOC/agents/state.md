@@ -2,6 +2,7 @@
 
 - **最近校对（北京时间 GMT+8）**：2025-12-30 19:20（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_backend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-30 20:27（Frontend：关联引用直达编辑 + 列宽收口）
+- **最近校对（北京时间 GMT+8）**：2025-12-30 21:03（Backend：关联引用过滤已归档/删除记录）
 
 - **最近校对（北京时间 GMT+8）**：2025-12-25 04:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-25 06:08（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
@@ -77,6 +78,16 @@
     - `curl -sS "http://127.0.0.1:8800/api/planner/base-config/materials/<material_id>/references" | python -m json.tool`
   - 下一步（前端）：
     - 在“停用/删除/改单位/改换算/改单价”等高风险操作前调用该接口，展示影响范围并做确认/拦截
+
+- **本轮闭环产物（Backend / BaseConfig - MaterialReferences：过滤已归档/删除记录）**：
+  - 背景：用户反馈“关联引用”列表会出现已删除（归档）的虚拟物料/工艺模块/模型版本清单项（例如 `version_status=archived` 的版本仍被展示）。
+  - 修复：`GET /api/planner/base-config/materials/{material_id}/references` 在三类引用查询中额外过滤：
+    - 虚拟物料：`virtual_materials.status != archived`
+    - 工艺模块：`process_modules.status != archived`
+    - 模型版本：`product_model_versions.version_status != archived`，并同时过滤已归档模型（`product_models.is_archived=false`）
+  - 口径：`count` 与 `items` 使用同一过滤口径（避免“计数包含归档，但列表不包含/或相反”）。
+  - 本轮验收命令（必须）：`npm -C frontend run build`（已通过）
+  - 后端 smoke（可选）：按 `DOC/agents/commands.md` 执行 curl 示例（已通过）
 
 - **本轮闭环产物（Backend / 修复 Task Center 500：Postgres SSL）**：
   - 现象：前端 `GET /api/planner/task-center/recent?limit=5` 轮询报 500

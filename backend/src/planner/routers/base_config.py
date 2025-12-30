@@ -859,6 +859,8 @@ def get_material_references(
             )
             .filter(models.VirtualMaterialBinding.material_id == material_id)
             .filter(models.VirtualMaterial.is_archived.is_(False))
+            # 约定：删除/归档不一定会设置 is_archived=True（部分历史数据仅置 status=archived）
+            .filter(models.VirtualMaterial.status != "archived")
             .group_by(models.VirtualMaterialBinding.virtual_material_id)
             .subquery()
         )
@@ -900,6 +902,8 @@ def get_material_references(
             )
             .join(models.ProcessModule, models.ProcessModule.id == models.ProcessModuleMaterial.module_id)
             .filter(models.ProcessModule.is_archived.is_(False))
+            # 约定：删除/归档不一定会设置 is_archived=True（部分历史数据仅置 status=archived）
+            .filter(models.ProcessModule.status != "archived")
             .filter(models.ProcessModuleMaterial.is_archived.is_(False))
             .filter(or_(*pm_conds))
             .group_by(models.ProcessModuleMaterial.module_id)
@@ -967,12 +971,25 @@ def get_material_references(
             .subquery()
         )
 
-        ver_count = db.query(func.count()).select_from(ver_stats).scalar() or 0
+        # count 必须与 items 口径一致：过滤掉已归档版本/已归档模型
+        ver_count = (
+            db.query(func.count())
+            .select_from(ver_stats)
+            .join(models.ProductModelVersion, models.ProductModelVersion.id == ver_stats.c.version_id)
+            .join(models.ProductModel, models.ProductModel.id == models.ProductModelVersion.model_id)
+            .filter(models.ProductModelVersion.is_archived.is_(False))
+            .filter(models.ProductModelVersion.version_status != "archived")
+            .filter(models.ProductModel.is_archived.is_(False))
+            .scalar()
+            or 0
+        )
         ver_rows = (
             db.query(models.ProductModelVersion, models.ProductModel, ver_stats.c.last_ref)
             .join(ver_stats, models.ProductModelVersion.id == ver_stats.c.version_id)
             .join(models.ProductModel, models.ProductModel.id == models.ProductModelVersion.model_id)
             .filter(models.ProductModelVersion.is_archived.is_(False))
+            .filter(models.ProductModelVersion.version_status != "archived")
+            .filter(models.ProductModel.is_archived.is_(False))
             .order_by(ver_stats.c.last_ref.desc())
             .limit(RECENT_N)
             .all()

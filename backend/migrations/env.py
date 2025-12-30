@@ -22,8 +22,10 @@ if config.config_file_name is not None:
 def _ensure_postgres_sslmode(database_url: str) -> str:
     """
     Align alembic migrations with runtime DB behavior.
-    Some managed Postgres rejects non-SSL connections ("no encryption").
-    If sslmode isn't specified, default to sslmode=require for postgres URLs.
+    Some environments require SSL ("no encryption"), while some proxies/endpoints do not
+    support SSL ("server does not support SSL").
+    If sslmode isn't specified, default to sslmode=prefer for postgres URLs.
+    You can override via env: PLANNER_PG_SSLMODE (e.g. require/verify-full/disable).
     """
     try:
         url = make_url(database_url)
@@ -38,7 +40,7 @@ def _ensure_postgres_sslmode(database_url: str) -> str:
     if "sslmode" in query:
         return database_url
 
-    query["sslmode"] = "require"
+    query["sslmode"] = (os.getenv("PLANNER_PG_SSLMODE") or "prefer").strip() or "prefer"
     return str(url.set(query=query))
 
 

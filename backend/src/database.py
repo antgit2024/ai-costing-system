@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Generator, Optional
 
 from sqlalchemy import create_engine
+import os
+
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import declarative_base, sessionmaker
 
@@ -16,8 +18,10 @@ SessionLocal = None
 def _ensure_postgres_sslmode(database_url: str) -> str:
     """
     Production guardrail:
-    Some managed Postgres (e.g. Aliyun RDS) rejects non-SSL connections ("no encryption").
-    If caller didn't specify sslmode in URL, default to sslmode=require for postgres URLs.
+    Some environments require SSL ("no encryption"), while some proxies/endpoints do not
+    support SSL ("server does not support SSL").
+    If caller didn't specify sslmode in URL, default to sslmode=prefer for postgres URLs.
+    You can override via env: PLANNER_PG_SSLMODE (e.g. require/verify-full/disable).
     """
     try:
         url = make_url(database_url)
@@ -32,7 +36,7 @@ def _ensure_postgres_sslmode(database_url: str) -> str:
     if "sslmode" in query:
         return database_url
 
-    query["sslmode"] = "require"
+    query["sslmode"] = (os.getenv("PLANNER_PG_SSLMODE") or "prefer").strip() or "prefer"
     return str(url.set(query=query))
 
 

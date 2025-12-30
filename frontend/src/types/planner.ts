@@ -547,6 +547,53 @@ export interface VirtualMaterialInventoryResponse {
   items: VirtualMaterialInventoryItem[]
 }
 
+// -----------------------------
+// BaseConfig / Material References
+// -----------------------------
+
+export interface MaterialReferencesVirtualMaterialItem {
+  id: string
+  virtual_code: string
+  name: string
+  virtual_kind?: 'recipe' | 'kit' | 'placeholder' | string
+  status?: string | null
+}
+
+export interface MaterialReferencesProcessModuleItem {
+  id: string
+  name: string
+}
+
+export interface MaterialReferencesProductModelVersionItem {
+  version_id: string
+  model_id: string
+  model_name: string
+  version_label?: string | null
+  version_kind: string
+  version_status: string
+}
+
+export interface MaterialReferencesBlock<TItem> {
+  count: number
+  items: TItem[]
+}
+
+export type MaterialReferencesError =
+  | string
+  | {
+      source?: string
+      message: string
+      detail?: unknown
+    }
+
+export interface MaterialReferencesResponse {
+  material_id: string
+  virtual_materials: MaterialReferencesBlock<MaterialReferencesVirtualMaterialItem>
+  process_modules: MaterialReferencesBlock<MaterialReferencesProcessModuleItem>
+  product_model_versions: MaterialReferencesBlock<MaterialReferencesProductModelVersionItem>
+  errors: MaterialReferencesError[]
+}
+
 export type MaterialReferenceKind = 'real' | 'bom' | 'virtual'
 
 export type LaborPricingMethod = 'fixed' | 'count' | 'area' | 'perimeter' | 'width' | 'height'

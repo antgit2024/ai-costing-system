@@ -20,6 +20,7 @@ import type {
   MaterialQueryParams,
   MaterialStatusUpdatePayload,
   MaterialSyncLogResponse,
+  MaterialReferencesResponse,
   PaginatedAuditLogResponse,
   PaginatedResponse,
   PackageNode,
@@ -635,6 +636,11 @@ export const fetchMaterialVirtualLinks = async (
   materialId: string,
 ): Promise<VirtualMaterialReference[]> => {
   const response = await plannerClient.get(`/base-config/materials/${materialId}/virtual-links`)
+  return response.data
+}
+
+export const fetchMaterialReferences = async (materialId: string): Promise<MaterialReferencesResponse> => {
+  const response = await plannerClient.get(`/base-config/materials/${materialId}/references`)
   return response.data
 }
 

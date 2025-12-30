@@ -17,6 +17,7 @@
 - `frontend/src/pages/costing/StandardModelsPage.tsx`（标准模型入口：entryContext="standard" + initialVersionId）
 - `frontend/src/pages/costing/ShipmentMonitorPage.tsx`（发货批次/异常队列/BOM快照只读页：/costing/shipments）
 - `frontend/src/pages/costing/SkuMasterWorkspacePage.tsx`（SKU 主档工作台：/costing/sku-master）
+- `frontend/src/pages/costing/MaterialMasterPage.tsx`（真实物料主档：列表+详情抽屉；本轮接入“引用关系”区块）
 - `frontend/src/services/planner.ts`（前端接口单一真相）
 - `frontend/src/types/planner.ts`（前端类型单一真相）
 - `frontend/src/App.tsx`（路由：/costing/sample-models & /costing/standard-models）

@@ -36,13 +36,14 @@ import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
 
 import {
   exportMaterials,
   fetchMaterialSyncJob,
   fetchMaterialSyncLogs,
+  fetchMaterialReferences,
   fetchMaterials,
-  fetchMaterialVirtualLinks,
   fetchTaxonomyItems,
   triggerMaterialBomDerive,
   triggerMaterialSync,
@@ -52,10 +53,10 @@ import type {
   CalculationMethod,
   Material,
   MaterialListResponse,
+  MaterialReferencesResponse,
   MaterialStatusUpdatePayload,
   MaterialSyncLog,
   MaterialSyncLogResponse,
-  VirtualMaterialReference,
 } from '@/types/planner'
 import { MATERIAL_STATUS_OPTIONS } from '@/constants/planner'
 import {
@@ -322,6 +323,7 @@ const positiveNumberRule = (message: string) => ({
 
 const MaterialMasterPage = () => {
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
   const [filtersForm] = Form.useForm()
   const [costForm] = Form.useForm()
   const lastSubmittedCostValuesRef = useRef<CostFormValues | null>(null)
@@ -384,10 +386,14 @@ const MaterialMasterPage = () => {
     placeholderData: keepPreviousData,
   })
 
-  const materialVirtualLinksQuery = useQuery<VirtualMaterialReference[]>({
-    queryKey: ['material-virtual-links', editingMaterial?.id],
-    queryFn: () => fetchMaterialVirtualLinks(editingMaterial!.id),
+  const materialReferencesQuery = useQuery<MaterialReferencesResponse>({
+    queryKey: ['material-references', editingMaterial?.id],
+    queryFn: () => fetchMaterialReferences(editingMaterial!.id),
     enabled: detailDrawerOpen && !!editingMaterial?.id,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    retry: 0,
+    staleTime: 5 * 60 * 1000,
   })
 
   const materials = materialsQuery.data?.items ?? []
@@ -1132,7 +1138,6 @@ const MaterialMasterPage = () => {
     if (!editingMaterial) {
       return null
     }
-    const virtualLinks = materialVirtualLinksQuery.data ?? []
     const imageUrls = getImageUrls(editingMaterial)
     const purchaseUnitLabel = editingMaterial.purchase_unit || '-'
     const normalizedBomUnitValue =
@@ -1247,26 +1252,157 @@ const MaterialMasterPage = () => {
                 <Descriptions.Item label="最近同步">
                   {dayjs(editingMaterial.updated_at).format('YYYY-MM-DD HH:mm')}
                 </Descriptions.Item>
-                <Descriptions.Item label="虚拟物料引用">
-                  {materialVirtualLinksQuery.isLoading ? (
-                    <Spin size="small" />
-                  ) : virtualLinks.length ? (
-                    <Space direction="vertical" size={4}>
-                      {virtualLinks.map((link) => (
-                        <Tag key={link.virtual_material_id}>
-                          {link.virtual_code} · {link.virtual_name}{' '}
-                          <Text type="secondary">
-                            （配比 {formatDecimalDisplay(link.quantity_ratio)}，损耗{' '}
-                            {formatDecimalDisplay(link.loss_rate)}%）
-                          </Text>
-                        </Tag>
-                      ))}
-                    </Space>
-                  ) : (
-                    <Text type="secondary">暂无引用</Text>
-                  )}
-                </Descriptions.Item>
               </Descriptions>
+            ),
+          },
+          {
+            key: 'references',
+            label: '引用',
+            children: (
+              <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                {materialReferencesQuery.isError || (materialReferencesQuery.data?.errors?.length ?? 0) > 0 ? (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    message="部分数据不可用"
+                    description={
+                      materialReferencesQuery.isError
+                        ? getErrorMessage(materialReferencesQuery.error)
+                        : '引用关系接口返回了 errors[]；已按 fail-open 继续展示可用数据。'
+                    }
+                  />
+                ) : null}
+
+                <Card
+                  size="small"
+                  title={
+                    <Space>
+                      <Text strong>虚拟物料绑定引用</Text>
+                      <Tag color="blue">{materialReferencesQuery.data?.virtual_materials?.count ?? 0}</Tag>
+                    </Space>
+                  }
+                  extra={
+                    <Button type="link" size="small" onClick={() => navigate('/costing/virtual-materials')}>
+                      前往虚拟物料
+                    </Button>
+                  }
+                >
+                  {materialReferencesQuery.isLoading ? (
+                    <Spin />
+                  ) : (materialReferencesQuery.data?.virtual_materials?.items?.length ?? 0) > 0 ? (
+                    <Table
+                      size="small"
+                      pagination={false}
+                      rowKey="id"
+                      dataSource={materialReferencesQuery.data?.virtual_materials?.items ?? []}
+                      columns={[
+                        { title: '编码', dataIndex: 'virtual_code', key: 'virtual_code', width: 120, render: (v) => <Text code>{v}</Text> },
+                        { title: '名称', dataIndex: 'name', key: 'name' },
+                        { title: '类型', dataIndex: 'virtual_kind', key: 'virtual_kind', width: 100, render: (v) => (v ? <Tag>{v}</Tag> : <Text type="secondary">-</Text>) },
+                        { title: '状态', dataIndex: 'status', key: 'status', width: 100, render: (v) => (v ? <Tag>{v}</Tag> : <Text type="secondary">-</Text>) },
+                        {
+                          title: '跳转',
+                          key: 'jump',
+                          width: 90,
+                          render: () => (
+                            <Button type="link" size="small" onClick={() => navigate('/costing/virtual-materials')}>
+                              打开
+                            </Button>
+                          ),
+                        },
+                      ]}
+                    />
+                  ) : (
+                    <Empty description="暂无引用" />
+                  )}
+                </Card>
+
+                <Card
+                  size="small"
+                  title={
+                    <Space>
+                      <Text strong>工艺模块引用</Text>
+                      <Tag color="blue">{materialReferencesQuery.data?.process_modules?.count ?? 0}</Tag>
+                    </Space>
+                  }
+                  extra={
+                    <Button type="link" size="small" onClick={() => navigate('/costing/process-modules')}>
+                      前往工艺模块
+                    </Button>
+                  }
+                >
+                  {materialReferencesQuery.isLoading ? (
+                    <Spin />
+                  ) : (materialReferencesQuery.data?.process_modules?.items?.length ?? 0) > 0 ? (
+                    <Table
+                      size="small"
+                      pagination={false}
+                      rowKey="id"
+                      dataSource={materialReferencesQuery.data?.process_modules?.items ?? []}
+                      columns={[
+                        { title: 'ID', dataIndex: 'id', key: 'id', width: 160, render: (v) => <Text code>{v}</Text> },
+                        { title: '名称', dataIndex: 'name', key: 'name' },
+                        {
+                          title: '跳转',
+                          key: 'jump',
+                          width: 90,
+                          render: () => (
+                            <Button type="link" size="small" onClick={() => navigate('/costing/process-modules')}>
+                              打开
+                            </Button>
+                          ),
+                        },
+                      ]}
+                    />
+                  ) : (
+                    <Empty description="暂无引用" />
+                  )}
+                </Card>
+
+                <Card
+                  size="small"
+                  title={
+                    <Space>
+                      <Text strong>模型版本清单引用</Text>
+                      <Tag color="blue">{materialReferencesQuery.data?.product_model_versions?.count ?? 0}</Tag>
+                    </Space>
+                  }
+                  extra={
+                    <Button type="link" size="small" onClick={() => navigate('/costing/standard-models')}>
+                      前往标准模型
+                    </Button>
+                  }
+                >
+                  {materialReferencesQuery.isLoading ? (
+                    <Spin />
+                  ) : (materialReferencesQuery.data?.product_model_versions?.items?.length ?? 0) > 0 ? (
+                    <Table
+                      size="small"
+                      pagination={false}
+                      rowKey="version_id"
+                      dataSource={materialReferencesQuery.data?.product_model_versions?.items ?? []}
+                      columns={[
+                        { title: '模型', key: 'model', render: (_, r) => <Text>{r.model_name}</Text> },
+                        { title: '版本', dataIndex: 'version_label', key: 'version_label', width: 200, render: (v) => (v ? <Text code>{v}</Text> : <Text type="secondary">-</Text>) },
+                        { title: '类型', dataIndex: 'version_kind', key: 'version_kind', width: 90, render: (v) => <Tag>{v}</Tag> },
+                        { title: '状态', dataIndex: 'version_status', key: 'version_status', width: 100, render: (v) => <Tag>{v}</Tag> },
+                        {
+                          title: '跳转',
+                          key: 'jump',
+                          width: 90,
+                          render: () => (
+                            <Button type="link" size="small" onClick={() => navigate('/costing/standard-models')}>
+                              打开
+                            </Button>
+                          ),
+                        },
+                      ]}
+                    />
+                  ) : (
+                    <Empty description="暂无引用" />
+                  )}
+                </Card>
+              </Space>
             ),
           },
           {

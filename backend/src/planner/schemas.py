@@ -584,6 +584,53 @@ class VirtualMaterialReferenceRead(BaseModel):
         json_encoders = {Decimal: _decimal_to_str}
 
 
+class MaterialReferenceVirtualMaterialItem(BaseModel):
+    id: str
+    virtual_code: str
+    name: str
+    virtual_kind: Optional[str] = None
+    status: Optional[str] = None
+
+
+class MaterialReferenceProcessModuleItem(BaseModel):
+    id: str
+    name: str
+
+
+class MaterialReferenceProductModelVersionItem(BaseModel):
+    version_id: str
+    model_id: str
+    model_name: Optional[str] = None
+    version_label: Optional[str] = None
+    version_kind: Optional[str] = None
+    version_status: Optional[str] = None
+
+
+class MaterialReferenceVirtualMaterialsBlock(BaseModel):
+    count: int = 0
+    items: List[MaterialReferenceVirtualMaterialItem] = Field(default_factory=list)
+
+
+class MaterialReferenceProcessModulesBlock(BaseModel):
+    count: int = 0
+    items: List[MaterialReferenceProcessModuleItem] = Field(default_factory=list)
+
+
+class MaterialReferenceProductModelVersionsBlock(BaseModel):
+    count: int = 0
+    items: List[MaterialReferenceProductModelVersionItem] = Field(default_factory=list)
+
+
+class MaterialReferencesResponse(BaseModel):
+    material_id: str
+    virtual_materials: MaterialReferenceVirtualMaterialsBlock = Field(default_factory=MaterialReferenceVirtualMaterialsBlock)
+    process_modules: MaterialReferenceProcessModulesBlock = Field(default_factory=MaterialReferenceProcessModulesBlock)
+    product_model_versions: MaterialReferenceProductModelVersionsBlock = Field(
+        default_factory=MaterialReferenceProductModelVersionsBlock
+    )
+    errors: List[str] = Field(default_factory=list)
+
+
 class VirtualMaterialInventoryRequest(BaseModel):
     quantity: Decimal = Field(..., gt=0)
     calculation_method: Optional[CalculationMethod] = Field(

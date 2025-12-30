@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Literal, Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import func, or_, union_all
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -818,6 +819,187 @@ def list_material_virtual_links(
             )
         )
     return out
+
+
+@router.get(
+    "/materials/{material_id}/references",
+    response_model=schemas.MaterialReferencesResponse,
+)
+def get_material_references(
+    material_id: str,
+    db: Session = Depends(get_db),
+) -> schemas.MaterialReferencesResponse:
+    """
+    MVP: impact analysis before high-risk edits (deactivate/delete/unit/price changes).
+    Performance guardrail: return only counts + latest N items (fixed N=10).
+
+    Failure isolation: any block query failure should not fail the whole endpoint.
+    """
+
+    RECENT_N = 10
+    errors: List[str] = []
+
+    material = db.get(models.Material, material_id)
+    if not material or material.is_archived:
+        raise HTTPException(status_code=404, detail="Material not found")
+
+    # -------------------------
+    # virtual_materials
+    # -------------------------
+    virtual_block = schemas.MaterialReferenceVirtualMaterialsBlock()
+    try:
+        vm_stats = (
+            db.query(
+                models.VirtualMaterialBinding.virtual_material_id.label("vm_id"),
+                func.max(models.VirtualMaterialBinding.updated_at).label("last_ref"),
+            )
+            .join(
+                models.VirtualMaterial,
+                models.VirtualMaterial.id == models.VirtualMaterialBinding.virtual_material_id,
+            )
+            .filter(models.VirtualMaterialBinding.material_id == material_id)
+            .filter(models.VirtualMaterial.is_archived.is_(False))
+            .group_by(models.VirtualMaterialBinding.virtual_material_id)
+            .subquery()
+        )
+        vm_count = db.query(func.count()).select_from(vm_stats).scalar() or 0
+        vm_rows = (
+            db.query(models.VirtualMaterial, vm_stats.c.last_ref)
+            .join(vm_stats, models.VirtualMaterial.id == vm_stats.c.vm_id)
+            .order_by(vm_stats.c.last_ref.desc())
+            .limit(RECENT_N)
+            .all()
+        )
+        virtual_block.count = int(vm_count)
+        virtual_block.items = [
+            schemas.MaterialReferenceVirtualMaterialItem(
+                id=vm.id,
+                virtual_code=vm.virtual_code,
+                name=vm.name,
+                virtual_kind=_virtual_kind_of(vm),
+                status=vm.status,
+            )
+            for (vm, _) in vm_rows
+        ]
+    except Exception as e:
+        errors.append(f"virtual_materials: {e.__class__.__name__}: {e}")
+
+    # -------------------------
+    # process_modules
+    # -------------------------
+    process_module_block = schemas.MaterialReferenceProcessModulesBlock()
+    try:
+        pm_conds = [models.ProcessModuleMaterial.material_ref_id == material_id]
+        if material.material_code:
+            pm_conds.append(models.ProcessModuleMaterial.material_code == material.material_code)
+
+        pm_stats = (
+            db.query(
+                models.ProcessModuleMaterial.module_id.label("module_id"),
+                func.max(models.ProcessModuleMaterial.updated_at).label("last_ref"),
+            )
+            .join(models.ProcessModule, models.ProcessModule.id == models.ProcessModuleMaterial.module_id)
+            .filter(models.ProcessModule.is_archived.is_(False))
+            .filter(models.ProcessModuleMaterial.is_archived.is_(False))
+            .filter(or_(*pm_conds))
+            .group_by(models.ProcessModuleMaterial.module_id)
+            .subquery()
+        )
+        pm_count = db.query(func.count()).select_from(pm_stats).scalar() or 0
+        pm_rows = (
+            db.query(models.ProcessModule.id, models.ProcessModule.module_name, pm_stats.c.last_ref)
+            .join(pm_stats, models.ProcessModule.id == pm_stats.c.module_id)
+            .order_by(pm_stats.c.last_ref.desc())
+            .limit(RECENT_N)
+            .all()
+        )
+        process_module_block.count = int(pm_count)
+        process_module_block.items = [
+            schemas.MaterialReferenceProcessModuleItem(id=row[0], name=row[1]) for row in pm_rows
+        ]
+    except Exception as e:
+        errors.append(f"process_modules: {e.__class__.__name__}: {e}")
+
+    # -------------------------
+    # product_model_versions
+    # -------------------------
+    version_block = schemas.MaterialReferenceProductModelVersionsBlock()
+    try:
+        mv_conds = [models.ModelVersionMaterial.material_ref_id == material_id]
+        if material.material_code:
+            mv_conds.append(models.ModelVersionMaterial.material_code == material.material_code)
+        vi_conds = [models.ProductModelLineVariantItem.material_ref_id == material_id]
+        if material.material_code:
+            vi_conds.append(models.ProductModelLineVariantItem.material_code == material.material_code)
+
+        q1 = (
+            db.query(
+                models.ModelVersionMaterial.version_id.label("version_id"),
+                func.max(models.ModelVersionMaterial.updated_at).label("last_ref"),
+            )
+            .filter(models.ModelVersionMaterial.is_archived.is_(False))
+            .filter(or_(*mv_conds))
+            .group_by(models.ModelVersionMaterial.version_id)
+        )
+
+        q2 = (
+            db.query(
+                models.ProductModelLineVariant.version_id.label("version_id"),
+                func.max(models.ProductModelLineVariantItem.updated_at).label("last_ref"),
+            )
+            .join(
+                models.ProductModelLineVariantItem,
+                models.ProductModelLineVariantItem.variant_id == models.ProductModelLineVariant.id,
+            )
+            .filter(models.ProductModelLineVariant.is_archived.is_(False))
+            .filter(models.ProductModelLineVariantItem.is_archived.is_(False))
+            .filter(or_(*vi_conds))
+            .group_by(models.ProductModelLineVariant.version_id)
+        )
+
+        unioned = union_all(q1.statement, q2.statement).subquery()
+        ver_stats = (
+            db.query(
+                unioned.c.version_id.label("version_id"),
+                func.max(unioned.c.last_ref).label("last_ref"),
+            )
+            .group_by(unioned.c.version_id)
+            .subquery()
+        )
+
+        ver_count = db.query(func.count()).select_from(ver_stats).scalar() or 0
+        ver_rows = (
+            db.query(models.ProductModelVersion, models.ProductModel, ver_stats.c.last_ref)
+            .join(ver_stats, models.ProductModelVersion.id == ver_stats.c.version_id)
+            .join(models.ProductModel, models.ProductModel.id == models.ProductModelVersion.model_id)
+            .filter(models.ProductModelVersion.is_archived.is_(False))
+            .order_by(ver_stats.c.last_ref.desc())
+            .limit(RECENT_N)
+            .all()
+        )
+
+        version_block.count = int(ver_count)
+        version_block.items = [
+            schemas.MaterialReferenceProductModelVersionItem(
+                version_id=v.id,
+                model_id=v.model_id,
+                model_name=m.model_name if m else None,
+                version_label=v.version_label,
+                version_kind=v.version_kind,
+                version_status=v.version_status,
+            )
+            for (v, m, _) in ver_rows
+        ]
+    except Exception as e:
+        errors.append(f"product_model_versions: {e.__class__.__name__}: {e}")
+
+    return schemas.MaterialReferencesResponse(
+        material_id=material_id,
+        virtual_materials=virtual_block,
+        process_modules=process_module_block,
+        product_model_versions=version_block,
+        errors=errors,
+    )
 
 
 @router.post(

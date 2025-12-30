@@ -1,5 +1,7 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2025-12-30 19:20（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_backend.md`）
+
 - **最近校对（北京时间 GMT+8）**：2025-12-25 04:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-25 06:08（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-25 14:40（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
@@ -8,6 +10,20 @@
 - **最近校对（北京时间 GMT+8）**：2025-12-26 10:20（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-30 12:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_backend.md`）
 - **分支**：`backup/20251214-1535`
+
+- **本轮闭环产物（Backend / BaseConfig - MaterialReferences（真实物料引用关系查询 MVP））**：
+  - 新增接口：`GET /api/planner/base-config/materials/{material_id}/references`
+  - 返回结构要点：
+    - `material_id`
+    - `virtual_materials.count/items`（最近 10 条，含 `id/virtual_code/name/virtual_kind/status`）
+    - `process_modules.count/items`（最近 10 条，含 `id/name`）
+    - `product_model_versions.count/items`（最近 10 条，含 `version_id/model_id/model_name/version_label/version_kind/version_status`）
+    - `errors[]`：任一引用源查询失败时，接口仍返回 200，但该块返回空并记录错误（用于前端高风险操作前的影响评估）
+  - 性能收口：仅返回“计数 + 最近 N 条”（N=10），不返回大 payload
+  - 验收命令：
+    - `curl -sS "http://127.0.0.1:8800/api/planner/base-config/materials/<material_id>/references" | python -m json.tool`
+  - 下一步（前端）：
+    - 在“停用/删除/改单位/改换算/改单价”等高风险操作前调用该接口，展示影响范围并做确认/拦截
 
 - **本轮闭环产物（Backend / 修复 Task Center 500：Postgres SSL）**：
   - 现象：前端 `GET /api/planner/task-center/recent?limit=5` 轮询报 500
@@ -25,6 +41,8 @@
   - 路线决策：先跑通“发货导入→SKU绑定→解析→BOM快照/异常→可重试/可重跑”，再扩展“模型套模型+自动编码”解决 30% 复杂产品
   - ERP口径补强清单：`DOC/costing/reviews/erp_guardrails_addendum_20251222.md`（版本为最小核算单元、重跑语义、编码定位、解析版本化、异常工作台、成本口径）
   - 验收命令：`grep -nF "ERP 口径补强清单（Guardrails Addendum）— 发货时再解析主链优先" DOC/costing/reviews/erp_guardrails_addendum_20251222.md`
+  - VM策略：已在 ERP Guardrails 增补页 §8 固化（推荐混合模式：VM用于表达/复用，发货/扣库必须展开到真实物料并落快照；绑定变更不回写历史快照）
+  - 主数据不同频策略：已在 ERP Guardrails 增补页 §9 固化（宜搭同步物料↔本地模型引用：唯一键/选择器防错/发布校验/健康检查/去重归并）
 
 - **本轮闭环产物（Frontend / 行级变体收口：ERP 最稳第一步）**：
   - 标准入口（`entryContext="standard"`）“清单编辑”Tab：物料行新增 **“变体（Overlay）”** 按钮

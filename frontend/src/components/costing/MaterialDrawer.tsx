@@ -89,6 +89,10 @@ const MaterialDrawer = ({ materialId, open, onClose, onUpdated }: MaterialDrawer
     return basePrice / conversion
   }, [purchaseUnitPrice, conversionPurchaseValue])
   const bomUnitDisplay = bomUnitValue || materialData?.unit || materialData?.purchase_unit || '-'
+  const sourceFormInstanceId =
+    (materialMetadata?.source_form_instance_id as string | undefined) ||
+    (materialMetadata?.form_instance_id as string | undefined) ||
+    ''
 
   useEffect(() => {
     if (materialQuery.data) {
@@ -207,6 +211,25 @@ const MaterialDrawer = ({ materialId, open, onClose, onUpdated }: MaterialDrawer
               style={{ marginBottom: 16 }}
               message={
                 <Space direction="vertical" size={0}>
+                  <Text>
+                    来源表单实例ID：
+                    {sourceFormInstanceId ? (
+                      <Text
+                        code
+                        copyable={{
+                          text: sourceFormInstanceId,
+                          tooltips: ['复制', '已复制'],
+                        }}
+                        style={{ marginLeft: 6 }}
+                      >
+                        {sourceFormInstanceId}
+                      </Text>
+                    ) : (
+                      <Text type="secondary" style={{ marginLeft: 6 }}>
+                        -
+                      </Text>
+                    )}
+                  </Text>
                   <Text>
                     入库单价/单位：
                     <Text strong>

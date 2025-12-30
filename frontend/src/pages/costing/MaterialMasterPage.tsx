@@ -1151,14 +1151,19 @@ const MaterialMasterPage = () => {
         : deriveBomUnitPrice(editingMaterial)
     const purchaseSpec = getFormValue(editingMaterial, 'textField_lxo1y6ab')
     const costFormula = getFormValue(editingMaterial, 'textField_m3pgyx4d')
+    const metadata = (editingMaterial.metadata_json ?? {}) as Record<string, any>
+    const sourceFormInstanceId =
+      (metadata?.source_form_instance_id as string | undefined) ||
+      (metadata?.form_instance_id as string | undefined) ||
+      ''
     const yidaPurchaseUnit =
-      ((editingMaterial.metadata_json ?? {}) as any)?.yida_purchase_unit ||
+      (metadata as any)?.yida_purchase_unit ||
       getFormValue(editingMaterial, 'selectField_mjjgsdlp')
     const yidaPurchaseUnitPrice =
-      toFiniteNumber(((editingMaterial.metadata_json ?? {}) as any)?.yida_purchase_unit_price) ??
+      toFiniteNumber((metadata as any)?.yida_purchase_unit_price) ??
       parseDecimal(getFormValue(editingMaterial, 'numberField_mjjgsdlr'))
     const purchaseToInboundFormula =
-      ((editingMaterial.metadata_json ?? {}) as any)?.purchase_to_inbound_formula ||
+      (metadata as any)?.purchase_to_inbound_formula ||
       getFormValue(editingMaterial, 'numberField_mjjgsdlq')
 
     return (
@@ -1174,6 +1179,21 @@ const MaterialMasterPage = () => {
                   <Text code>{editingMaterial.material_code}</Text>
                 </Descriptions.Item>
                 <Descriptions.Item label="物料名称">{editingMaterial.material_name}</Descriptions.Item>
+                <Descriptions.Item label="来源表单实例ID">
+                  {sourceFormInstanceId ? (
+                    <Text
+                      code
+                      copyable={{
+                        text: sourceFormInstanceId,
+                        tooltips: ['复制', '已复制'],
+                      }}
+                    >
+                      {sourceFormInstanceId}
+                    </Text>
+                  ) : (
+                    <Text type="secondary">-</Text>
+                  )}
+                </Descriptions.Item>
                 <Descriptions.Item label="物料类型">
                   {getMaterialTypeLabel(editingMaterial)}
                 </Descriptions.Item>
@@ -1222,7 +1242,7 @@ const MaterialMasterPage = () => {
                   <Descriptions.Item label="备注（宜搭）">{editingMaterial.bom_notes}</Descriptions.Item>
                 ) : null}
                 <Descriptions.Item label="本地描述">
-                  {((editingMaterial.metadata_json ?? {}) as any)?.local_description || '-'}
+                  {(metadata as any)?.local_description || '-'}
                 </Descriptions.Item>
                 <Descriptions.Item label="最近同步">
                   {dayjs(editingMaterial.updated_at).format('YYYY-MM-DD HH:mm')}

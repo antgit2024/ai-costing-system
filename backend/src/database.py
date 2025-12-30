@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Generator, Optional
 
 from sqlalchemy import create_engine
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from .config import settings
@@ -12,10 +13,34 @@ engine = None
 SessionLocal = None
 
 
+def _ensure_postgres_sslmode(database_url: str) -> str:
+    """
+    Production guardrail:
+    Some managed Postgres (e.g. Aliyun RDS) rejects non-SSL connections ("no encryption").
+    If caller didn't specify sslmode in URL, default to sslmode=require for postgres URLs.
+    """
+    try:
+        url = make_url(database_url)
+    except Exception:
+        return database_url
+
+    drivername = (url.drivername or "").lower()
+    if not (drivername.startswith("postgresql") or drivername.startswith("postgres")):
+        return database_url
+
+    query = dict(url.query or {})
+    if "sslmode" in query:
+        return database_url
+
+    query["sslmode"] = "require"
+    return str(url.set(query=query))
+
+
 def _build_engine(database_url: str):
     connect_args = {}
     if database_url.startswith("sqlite"):
         connect_args["check_same_thread"] = False
+    database_url = _ensure_postgres_sslmode(database_url)
     return create_engine(
         database_url,
         echo=False,

@@ -103,6 +103,23 @@ def _serialize_model(db: Session, model: models.ProductModel) -> schemas.Product
     if published_std:
         result.current_published_standard_version_id = published_std.id
         result.current_published_standard_version_label = published_std.version_label
+
+    # Latest sample version (for list thumbnails) - prefer versions with images to reduce 404s
+    # Note: image URLs are served by `/api/planner/product-model-versions/{version_id}/images/{idx}`.
+    sample_versions = (
+        q.filter(
+            models.ProductModelVersion.version_kind == "sample",
+            models.ProductModelVersion.version_status != "archived",
+        )
+        .order_by(models.ProductModelVersion.updated_at.desc(), models.ProductModelVersion.created_at.desc())
+        .all()
+    )
+    for v in sample_versions:
+        meta = v.metadata_json or {}
+        imgs = meta.get("version_images")
+        if isinstance(imgs, list) and len(imgs) > 0:
+            result.latest_sample_version_id = v.id
+            break
     return result
 
 

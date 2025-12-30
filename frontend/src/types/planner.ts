@@ -734,6 +734,8 @@ export interface ProductModel {
   standard_version_count?: number
   current_published_standard_version_id?: string | null
   current_published_standard_version_label?: string | null
+  // list perf: avoid N+1 version fetch just to render thumbnail
+  latest_sample_version_id?: string | null
 }
 
 export interface ProductModelQueryParams extends Record<string, string | number | undefined> {

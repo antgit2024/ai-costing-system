@@ -1,7 +1,7 @@
 ## 当前状态（崩了也能继续）
 
 - **最近校对（北京时间 GMT+8）**：2025-12-30 19:20（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_backend.md`）
-- **最近校对（北京时间 GMT+8）**：2025-12-30 20:08（Frontend Agent：物料列表缩略图懒加载/异步解码，避免强刷后页面卡死）
+- **最近校对（北京时间 GMT+8）**：2025-12-30 20:17（Frontend+Backend：打样模型列表缩略图去 N+1（B方案））
 
 - **最近校对（北京时间 GMT+8）**：2025-12-25 04:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-25 06:08（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
@@ -44,6 +44,14 @@
   - Fail-open：缩略图加载失败不影响页面交互
   - 关键文件：`frontend/src/pages/costing/MaterialMasterPage.tsx`
   - 本轮验收命令（必须）：`npm -C frontend run build`（已通过）
+
+- **本轮闭环产物（Frontend+Backend / SampleModels 缩略图性能：B 方案（后端聚合字段，前端去 N+1））**：
+  - 背景：`/costing/sample-models` 列表原实现为每行 `fetchProductModelVersions(modelId)` 获取缩略图 → 50 行即 50 个请求（N+1），强刷后易卡顿/切换不灵
+  - 后端：`GET /api/planner/product-models` 响应新增 `latest_sample_version_id`（优先选择有 `metadata_json.version_images` 的最新 sample 版本），供列表直接渲染缩略图
+  - 前端：`SampleModelsPage` 移除每行版本请求；缩略图直接用 `latest_sample_version_id` 拼接 `/api/planner/product-model-versions/{id}/images/0`，并使用 `<img loading="lazy" decoding="async">` 降载
+  - 文档：补回 `DOC/costing/reviews/erp_guardrails_addendum_20251222.md` 的 **§9 主数据不同频治理策略**，使 `DOC/agents/commands.md` 的 grep 验收命令可执行
+  - 本轮验收命令（必须）：`npm -C frontend run build`（已通过）
+  - 后端 smoke（示例）：`curl -sS "http://127.0.0.1:8800/api/planner/product-models?page=1&page_size=3" | python -m json.tool`
 
 - **本轮闭环产物（Backend / BaseConfig - MaterialReferences（真实物料引用关系查询 MVP））**：
   - 新增接口：`GET /api/planner/base-config/materials/{material_id}/references`

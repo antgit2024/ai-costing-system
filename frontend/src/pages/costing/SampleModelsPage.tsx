@@ -1,10 +1,10 @@
 import { useMemo, useState } from 'react'
 import dayjs from 'dayjs'
-import { Button, Card, Col, Image, Input, Modal, Row, Select, Space, Table, Tag, Tooltip, Typography, message } from 'antd'
+import { Button, Card, Col, Input, Modal, Row, Select, Space, Table, Tag, Tooltip, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useQuery } from '@tanstack/react-query'
 
-import { archiveSampleVersionsOnly, createProductModel, fetchProductModels, fetchProductModelVersions, fetchTaxonomyItems } from '@/services/planner'
+import { archiveSampleVersionsOnly, createProductModel, fetchProductModels, fetchTaxonomyItems } from '@/services/planner'
 import type { ProductModel } from '@/types/planner'
 import ProductModelEditorDrawer from '@/components/costing/ProductModelEditorDrawer'
 
@@ -51,41 +51,6 @@ export default function SampleModelsPage() {
     })
   }, [listQuery.data])
 
-  const ModelThumb = ({ modelId }: { modelId: string }) => {
-    const versionsQuery = useQuery({
-      queryKey: ['productModelVersionsForThumb', modelId],
-      queryFn: () => fetchProductModelVersions(modelId),
-      staleTime: 5 * 60 * 1000,
-    })
-    const versions = (versionsQuery.data ?? []) as any[]
-    const candidates = versions
-      .filter((v) => String(v?.version_kind) === 'sample' && String(v?.version_status) !== 'archived')
-      .sort((a, b) => String(b?.updated_at ?? '').localeCompare(String(a?.updated_at ?? '')))
-    const v0 = candidates[0]
-    const vid = String(v0?.id ?? '').trim()
-    const meta: any = v0?.metadata_json ?? {}
-    const imgs = meta?.version_images
-    const has = !!vid && Array.isArray(imgs) && imgs.length > 0
-    const url = has ? `/api/planner/product-model-versions/${vid}/images/0` : ''
-    return (
-      <div
-        style={{
-          width: 48,
-          height: 48,
-          borderRadius: 8,
-          background: '#f5f5f5',
-          border: '1px solid #f0f0f0',
-          overflow: 'hidden',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        {has ? <Image src={url} width={48} height={48} style={{ objectFit: 'cover' }} preview={false} /> : <span>-</span>}
-      </div>
-    )
-  }
-
   const handleDeleteModel = async (model: ProductModel) => {
     Modal.confirm({
       title: '删除打样',
@@ -109,7 +74,43 @@ export default function SampleModelsPage() {
     {
       title: '缩略图',
       width: 72,
-      render: (_: any, r: any) => <ModelThumb modelId={String(r.id)} />,
+      render: (_: any, r: any) => {
+        const vid = String((r as any)?.latest_sample_version_id ?? '').trim()
+        const has = !!vid
+        const url = has ? `/api/planner/product-model-versions/${vid}/images/0` : ''
+        return (
+          <div
+            style={{
+              width: 48,
+              height: 48,
+              borderRadius: 8,
+              background: '#f5f5f5',
+              border: '1px solid #f0f0f0',
+              overflow: 'hidden',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            {has ? (
+              <img
+                src={url}
+                alt={String(r.model_name || r.model_code || 'sample-model')}
+                width={48}
+                height={48}
+                loading="lazy"
+                decoding="async"
+                style={{ objectFit: 'cover', display: 'block' }}
+                onError={(e) => {
+                  ;(e.currentTarget as HTMLImageElement).style.visibility = 'hidden'
+                }}
+              />
+            ) : (
+              <span>-</span>
+            )}
+          </div>
+        )
+      },
     },
     { title: '总编码', dataIndex: 'model_code', width: 120 },
     { title: '模型名称', dataIndex: 'model_name' },

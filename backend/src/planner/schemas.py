@@ -838,6 +838,8 @@ class ProductModelRead(BaseModel):
     standard_version_count: int = 0
     current_published_standard_version_id: Optional[str] = None
     current_published_standard_version_label: Optional[str] = None
+    # New: list performance - provide latest sample version id (for list thumbnails) to avoid frontend N+1
+    latest_sample_version_id: Optional[str] = None
 
     class Config:
         orm_mode = True

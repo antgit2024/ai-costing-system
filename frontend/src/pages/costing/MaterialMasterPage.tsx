@@ -871,13 +871,21 @@ const MaterialMasterPage = () => {
           return <Text type="secondary">-</Text>
         }
         const first = toFullUrl(imageUrls[0])
+        // 性能敏感：列表页缩略图仅用于扫读，不应绑定 Image 预览（会引入较重的事件/解码开销，导致页面切换卡顿）
+        // 大图预览统一放在抽屉 Tab “图片附件”内（PreviewGroup）。
         return (
-          <Image
+          <img
+            src={first}
+            alt={record.material_name || record.material_code || 'material'}
             width={64}
             height={64}
-            src={first}
-            style={{ objectFit: 'cover', borderRadius: 6 }}
-            preview={{ mask: '预览' }}
+            loading="lazy"
+            decoding="async"
+            style={{ objectFit: 'cover', borderRadius: 6, display: 'block' }}
+            onError={(e) => {
+              // fail-open：缩略图加载失败不影响页面交互
+              ;(e.currentTarget as HTMLImageElement).style.visibility = 'hidden'
+            }}
           />
         )
       },

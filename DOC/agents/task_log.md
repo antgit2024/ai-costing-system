@@ -2,6 +2,7 @@
 
 | 日期 | 模块 | 角色 | 任务/问题 | 结论 | 待办 |
 | --- | --- | --- | --- | --- | --- |
+| 2025-12-30 | Materials（物料列表缩略图卡顿） | Frontend Agent | `/costing/materials` 强刷后页面卡住，切换菜单不响应，需等缩略图加载完才恢复。 | ✅ 列表缩略图从 AntD `Image`（含 preview）改为原生 `<img loading="lazy" decoding="async">` 懒加载+异步解码；预览保留在抽屉“图片附件”Tab。`npm -C frontend run build` 通过。 | 观察线上：若仍卡顿，下一步考虑缩略图走后端专用小图/限制并发/虚拟列表。 |
 | 2025-12-30 | Materials（物料详情抽屉 Tab 调整） | Frontend Agent | 物料详情抽屉“引用”Tab 会干扰日常改价；要求改名并后置，同时避免打开抽屉就查引用导致不必要 DB 压力。 | ✅ 将 Tab “引用”改名为“关联引用”，并移动到“图片附件”之后；引用关系接口改为 **仅在用户切到该 Tab 时才触发请求**（默认改价不查库）。`npm -C frontend run build` 通过。 | 下一步：排查“物料列表缩略图加载导致切换菜单卡死/很慢”的性能问题，优先从缩略图请求并发与渲染开销入手。 |
 | 2025-12-30 | Materials（真实物料引用关系区块） | Frontend Agent | 在真实物料详情抽屉新增“引用关系区块”MVP：展示 VM/工艺模块/模型版本三类引用，按 count+最近10条收口，fail-open 不阻塞页面。 | ✅ 新增 `fetchMaterialReferences`（`planner.ts`）与 `MaterialReferencesResponse`（`types/planner.ts`），并在 `MaterialMasterPage` 抽屉新增“引用”Tab：三类引用列表 + 跳转入口；errors[]/请求失败时仅提示“部分数据不可用”。`npm -C frontend run build` 通过。 | 下一步：在“停用/删除/改单位/改换算/改单价”等高风险操作前，把引用信息用于二次确认/拦截（必要时强制确认）。 |
 | 2025-12-30 | Agent 接力（Frontend） | Frontend Agent | 前一个 Frontend 崩溃后接力：补齐接力包与强制验收，确保“正确版本不只在工作区”。 | ✅ 更新 `DOC/agents/handoff_frontend.md` 最近校对时间戳；并完成强制验收：`cd frontend && npm ci`、`npm -C frontend run build`、Docs grep（commands.md 四条）、Backend smoke（`/product-model-versions` 返回 JSON）。 | 下一步：按 `GET /api/planner/base-config/materials/{material_id}/references` 在高风险操作前做影响评估弹窗与拦截。 |

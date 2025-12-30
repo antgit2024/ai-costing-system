@@ -1,7 +1,7 @@
 ## 当前状态（崩了也能继续）
 
 - **最近校对（北京时间 GMT+8）**：2025-12-30 19:20（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_backend.md`）
-- **最近校对（北京时间 GMT+8）**：2025-12-30 19:56（Frontend Agent：物料详情“关联引用”延迟加载 + Tab 顺序调整，避免改价时不必要查库）
+- **最近校对（北京时间 GMT+8）**：2025-12-30 20:08（Frontend Agent：物料列表缩略图懒加载/异步解码，避免强刷后页面卡死）
 
 - **最近校对（北京时间 GMT+8）**：2025-12-25 04:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-25 06:08（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
@@ -36,6 +36,13 @@
     - `frontend/src/services/planner.ts`（新增 `fetchMaterialReferences`）
     - `frontend/src/types/planner.ts`（新增 `MaterialReferencesResponse` 等类型）
     - `frontend/src/pages/costing/MaterialMasterPage.tsx`（新增“引用”Tab）
+  - 本轮验收命令（必须）：`npm -C frontend run build`（已通过）
+
+- **本轮闭环产物（Frontend / Materials - 列表缩略图卡顿修复（最小））**：
+  - 现象：强刷后进入 `/costing/materials` 列表加载很慢，期间点击其它栏目不响应（需等缩略图渲染完）
+  - 修复：列表缩略图从 AntD `Image`（带 preview）改为原生 `<img loading="lazy" decoding="async">`，仅用于扫读；大图预览仍在抽屉“图片附件”Tab（`PreviewGroup`）
+  - Fail-open：缩略图加载失败不影响页面交互
+  - 关键文件：`frontend/src/pages/costing/MaterialMasterPage.tsx`
   - 本轮验收命令（必须）：`npm -C frontend run build`（已通过）
 
 - **本轮闭环产物（Backend / BaseConfig - MaterialReferences（真实物料引用关系查询 MVP））**：

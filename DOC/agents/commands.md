@@ -44,5 +44,10 @@
 - 标准版本分页（给标准模型列表用）：
   - `curl -sS "http://127.0.0.1:8800/api/planner/product-model-versions?version_kind=standard&page=1&page_size=20" | python -m json.tool`
 
+### 3.1) 后端测试（推荐写法：避免 pytest 命令缺失）
+
+- 统一用：
+  - `python -m pytest <test_file> -q`
+
 
 

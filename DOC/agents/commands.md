@@ -11,6 +11,15 @@
 - 构建（验收门槛）：
   - `npm -C frontend run build`
 
+### 1.1) 环境变量文件（强约束：真实 .env 不进 Git）
+
+> 口径：仓库只保留模板文件（例如 `.env.sample`、`frontend/env.production.example`），真实环境文件由部署/个人机器自行提供。
+
+- 后端（根目录）：
+  - 首次本地启动前：`cp .env.sample .env`
+- 前端（生产构建用）：
+  - 首次在服务器/构建机上构建前：`cp frontend/env.production.example frontend/.env.production`
+
 ### 4) 文档验收（可选）
 
 - 行级变体运营规范文档存在性：

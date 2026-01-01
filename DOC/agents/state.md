@@ -11,7 +11,16 @@
 - **最近校对（北京时间 GMT+8）**：2025-12-25 17:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-26 10:20（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-30 12:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_backend.md`）
+- **最近校对（北京时间 GMT+8）**：2026-01-01 17:05（Planner：环境文件治理（真实 .env 不进 Git））
 - **分支**：`backup/20251214-1535`
+
+- **本轮闭环产物（Planner / 环境文件治理：真实 .env 不进 Git）**：
+  - 目的：避免“切分支/拉代码后文件看不见/误提交密钥”，同时保留可复现性
+  - 规则：
+    - 仓库只保留模板：`.env.sample`、`frontend/env.production.example`
+    - 真实环境文件由机器自行提供：`.env`、`frontend/.env.production`（加入 `.gitignore`，从 Git 追踪移除但保留在磁盘）
+  - 验收命令：
+    - `git status --porcelain`（应无 .env/.env.production 被追踪的变更）
 
 - **本轮闭环产物（Frontend / 接力恢复包 + 强制验收）**：
   - 更新接力包：`DOC/agents/handoff_frontend.md` 刷新“最近校对”时间戳（用于新 Frontend 接力入口）

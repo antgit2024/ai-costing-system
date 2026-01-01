@@ -65,6 +65,14 @@
 - `DOC/index/extracted/variants_discussion_extracted_20251221T200250+0800.md`（变体讨论提炼件：禁止直读导出全文）
 - `DOC/agents/task_log.md`（最新变更/决策记录）
 
+### 6) 环境文件治理（安全/可恢复）
+
+- `.gitignore`（环境文件是否应被追踪/忽略的唯一入口）
+- `.env.sample`（根目录环境变量模板）
+- `frontend/env.production.example`（前端生产环境变量模板）
+- `frontend/.env.production`（前端生产环境变量：通常不应进 Git，仅本机/服务器保留）
+- `.env`（根目录真实环境变量：通常不应进 Git，仅本机/服务器保留）
+
 ### 3.1) 业务输入（基础表单/场景说明，仅限本轮变体方案）
 
 - `DOC/基础表单/BOM动态生成引擎业务需求说明.md`（标准模型变体/动态 BOM 业务逻辑与场景说明）

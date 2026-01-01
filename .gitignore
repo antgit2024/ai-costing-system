@@ -24,6 +24,10 @@ backend/media/
 # Local logs / previews (never commit)
 backend/logs/
 
+# Environment files (keep templates in Git: `.env.sample`, `*.example`)
+.env
+frontend/.env.production
+
 
 
 

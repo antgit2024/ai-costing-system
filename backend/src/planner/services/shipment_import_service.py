@@ -814,3 +814,232 @@ def recompute_bom_snapshot(db: Session, *, snapshot_id: str, operator_id: Option
     db.refresh(snap)
     return snap
 
+
+def retry_exceptions_by_batch(
+    db: Session,
+    *,
+    batch_id: str,
+    only_unresolved: bool = True,
+    limit: Optional[int] = None,
+    operator_id: str,
+    reason: str,
+) -> Dict[str, Any]:
+    """
+    MVP: Retry unresolved shipment exceptions for a given batch_id by rerunning:
+    binding -> spec parse -> bom generation -> create NEW bom_snapshot (no overwrite).
+    On success: mark the existing exception resolved (resolved_at + payload trace).
+    On failure: keep unresolved and record retry trace in payload/message.
+    """
+    bid = (batch_id or "").strip()
+    if not bid:
+        raise ValueError("batch_id 不能为空")
+    if only_unresolved is not True:
+        raise ValueError("MVP: only_unresolved 必须为 true")
+    op = (operator_id or "").strip()
+    if not op:
+        raise ValueError("operator_id 不能为空")
+    why = (reason or "").strip()
+    if not why:
+        raise ValueError("reason 不能为空")
+
+    batch = db.get(models.ShipmentImportBatch, bid)
+    if not batch:
+        raise ValueError("Batch not found")
+
+    q = db.query(models.ShipmentExceptionQueue).filter(models.ShipmentExceptionQueue.batch_id == bid)
+    if only_unresolved:
+        q = q.filter(models.ShipmentExceptionQueue.resolved_at.is_(None))
+    q = q.order_by(models.ShipmentExceptionQueue.created_at.asc())
+    if limit is not None:
+        lim = max(min(int(limit or 0), 1000), 1)
+        q = q.limit(lim)
+    excs = q.all()
+
+    now = _utcnow()
+
+    def _bump_retry_payload(payload: Dict[str, Any], *, error: Optional[str]) -> Dict[str, Any]:
+        p = dict(payload or {})
+        retry = dict(p.get("retry") or {})
+        retry["count"] = int(retry.get("count") or 0) + 1
+        retry["last_at"] = now.isoformat()
+        retry["last_by"] = op
+        retry["last_reason"] = why
+        if error:
+            retry["last_error"] = str(error)
+        p["retry"] = retry
+        return _json_safe(p)
+
+    def _mark_resolved_payload(payload: Dict[str, Any], *, bom_snapshot_id: str) -> Dict[str, Any]:
+        p = dict(payload or {})
+        p["resolution"] = {
+            "action": "retry",
+            "resolved_at": now.isoformat(),
+            "resolved_by": op,
+            "retry_reason": why,
+            "resolved_bom_snapshot_id": bom_snapshot_id,
+        }
+        return _json_safe(p)
+
+    items: List[Dict[str, Any]] = []
+    processed = 0
+    resolved = 0
+    unresolved = 0
+
+    for exc in excs:
+        processed += 1
+        line_id = getattr(exc, "shipment_line_id", None)
+        line = db.get(models.ShipmentLine, line_id) if line_id else None
+        if not line or getattr(line, "is_archived", False):
+            msg = "关联的发货行不存在或已归档"
+            exc.message = msg
+            exc.payload_json = _bump_retry_payload(getattr(exc, "payload_json", {}) or {}, error=msg)
+            db.add(exc)
+            unresolved += 1
+            items.append(
+                {
+                    "exception_id": exc.id,
+                    "shipment_line_id": line_id,
+                    "status": "unresolved",
+                    "new_bom_snapshot_id": None,
+                    "error": msg,
+                }
+            )
+            continue
+
+        sku = (getattr(line, "sku_code", None) or "").strip()
+        if not sku:
+            msg = "发货行 sku_code 为空"
+            exc.message = msg
+            exc.payload_json = _bump_retry_payload(getattr(exc, "payload_json", {}) or {}, error=msg)
+            db.add(exc)
+            unresolved += 1
+            items.append(
+                {
+                    "exception_id": exc.id,
+                    "shipment_line_id": line.id,
+                    "status": "unresolved",
+                    "new_bom_snapshot_id": None,
+                    "error": msg,
+                }
+            )
+            continue
+
+        spec_text = (getattr(line, "spec_text", None) or "").strip()
+        if not spec_text:
+            msg = "发货行 spec_text 为空"
+            exc.message = msg
+            exc.payload_json = _bump_retry_payload(getattr(exc, "payload_json", {}) or {}, error=msg)
+            db.add(exc)
+            unresolved += 1
+            items.append(
+                {
+                    "exception_id": exc.id,
+                    "shipment_line_id": line.id,
+                    "status": "unresolved",
+                    "new_bom_snapshot_id": None,
+                    "error": msg,
+                }
+            )
+            continue
+
+        binding = product_model_service.get_active_sku_binding(db, sku)
+        if not binding:
+            msg = "SKU 未绑定已发布标准版本"
+            exc.message = msg
+            payload0 = dict(getattr(exc, "payload_json", {}) or {})
+            payload0.update({"sku_code": sku})
+            exc.payload_json = _bump_retry_payload(payload0, error=msg)
+            db.add(exc)
+            unresolved += 1
+            items.append(
+                {
+                    "exception_id": exc.id,
+                    "shipment_line_id": line.id,
+                    "status": "unresolved",
+                    "new_bom_snapshot_id": None,
+                    "error": msg,
+                }
+            )
+            continue
+
+        try:
+            spec_snap = _upsert_spec_snapshot(db, spec_text=spec_text)
+            qty = line.qty if line.qty is not None else Decimal("1")
+            bom = bom_generation_service.generate_bom(
+                db,
+                spec_text=spec_text,
+                model_version_id=None,
+                sku_code=sku,
+                quantity=Decimal(str(qty)),
+            )
+            trace = dict(bom.get("trace") or {})
+            trace.update(
+                {
+                    "bound_version_id": binding.model_version_id,
+                    "spec_hash": spec_snap.spec_hash,
+                    "shipment_line_id": line.id,
+                    "batch_id": bid,
+                    "retry_exception_id": exc.id,
+                    "retried_at": now.isoformat(),
+                    "retried_by": op,
+                    "retry_reason": why,
+                }
+            )
+            snap = models.BomSnapshot(
+                batch_id=bid,
+                shipment_line_id=line.id,
+                shipment_no=line.shipment_no,
+                sku_code=sku,
+                model_version_id=trace.get("model_version_id") or binding.model_version_id,
+                spec_hash=spec_snap.spec_hash,
+                qty=Decimal(str(qty)),
+                final_lines_json=_json_safe(list(bom.get("final_material_lines") or [])),
+                trace_json=_json_safe(trace),
+                generated_at=now,
+            )
+            db.add(snap)
+            db.flush()
+
+            exc.resolved_at = now
+            exc.message = "resolved_by_retry"
+            exc.payload_json = _mark_resolved_payload(getattr(exc, "payload_json", {}) or {}, bom_snapshot_id=snap.id)
+            db.add(exc)
+            resolved += 1
+            items.append(
+                {
+                    "exception_id": exc.id,
+                    "shipment_line_id": line.id,
+                    "status": "resolved",
+                    "new_bom_snapshot_id": snap.id,
+                    "error": None,
+                }
+            )
+        except Exception as e:  # noqa: BLE001
+            msg = str(e)
+            exc.message = msg
+            payload0 = dict(getattr(exc, "payload_json", {}) or {})
+            payload0.update({"sku_code": sku, "spec_hash": getattr(line, "spec_hash", None)})
+            exc.payload_json = _bump_retry_payload(payload0, error=msg)
+            db.add(exc)
+            unresolved += 1
+            items.append(
+                {
+                    "exception_id": exc.id,
+                    "shipment_line_id": line.id,
+                    "status": "unresolved",
+                    "new_bom_snapshot_id": None,
+                    "error": msg,
+                }
+            )
+
+    db.commit()
+    return {
+        "batch_id": bid,
+        "only_unresolved": only_unresolved,
+        "limit": limit,
+        "processed": processed,
+        "resolved": resolved,
+        "unresolved": unresolved,
+        "items": items,
+    }
+

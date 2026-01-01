@@ -2035,6 +2035,32 @@ class ShipmentExceptionRead(BaseModel):
         allow_population_by_field_name = True
 
 
+class ShipmentExceptionRetryRequest(BaseModel):
+    batch_id: str = Field(..., min_length=1, max_length=64)
+    only_unresolved: bool = True
+    limit: Optional[int] = None
+    operator_id: str = Field(..., min_length=1, max_length=64)
+    reason: str = Field(..., min_length=1, max_length=128)
+
+
+class ShipmentExceptionRetryResultItem(BaseModel):
+    exception_id: str
+    shipment_line_id: Optional[str] = None
+    status: Literal["resolved", "unresolved"]
+    new_bom_snapshot_id: Optional[str] = None
+    error: Optional[str] = None
+
+
+class ShipmentExceptionRetryResponse(BaseModel):
+    batch_id: str
+    only_unresolved: bool
+    limit: Optional[int] = None
+    processed: int
+    resolved: int
+    unresolved: int
+    items: List[ShipmentExceptionRetryResultItem] = Field(default_factory=list)
+
+
 class BomSnapshotRead(BaseModel):
     id: str
     batch_id: str

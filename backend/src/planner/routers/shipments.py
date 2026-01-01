@@ -11,6 +11,8 @@ from ..schemas import (
   ShipmentImportPreviewResponse,
   ShipmentImportExecuteRequest,
     ShipmentExceptionRead,
+    ShipmentExceptionRetryRequest,
+    ShipmentExceptionRetryResponse,
     ShipmentImportBatchRead,
 )
 from ..services import shipment_import_service
@@ -101,6 +103,24 @@ def list_exceptions(
     db: Session = Depends(get_db_session),
 ):
     return shipment_import_service.list_exceptions(db, batch_id=batch_id, resolved=resolved, limit=limit)
+
+
+@router.post("/exceptions/retry", response_model=ShipmentExceptionRetryResponse)
+def retry_exceptions_by_batch(
+    payload: ShipmentExceptionRetryRequest,
+    db: Session = Depends(get_db_session),
+):
+    try:
+        return shipment_import_service.retry_exceptions_by_batch(
+            db,
+            batch_id=payload.batch_id,
+            only_unresolved=payload.only_unresolved,
+            limit=payload.limit,
+            operator_id=payload.operator_id,
+            reason=payload.reason,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.get("/bom-snapshots", response_model=list[BomSnapshotRead])

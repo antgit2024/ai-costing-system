@@ -3,6 +3,7 @@
 - **最近校对（北京时间 GMT+8）**：2025-12-30 19:20（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_backend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-30 20:27（Frontend：关联引用直达编辑 + 列宽收口）
 - **最近校对（北京时间 GMT+8）**：2025-12-30 21:03（Backend：关联引用过滤已归档/删除记录）
+- **最近校对（北京时间 GMT+8）**：2026-01-01（Backend：发货异常队列“按批次重试未解决异常（Retry Exceptions）”MVP）
 
 - **最近校对（北京时间 GMT+8）**：2025-12-25 04:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-25 06:08（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
@@ -488,6 +489,18 @@
     - 行级：`external_line_key_hash=sha1(shipment_no|sku_code|spec_text|qty|revenue_amount)`（跨批次重复不重复生成 shipment_line/bom_snapshot）
   - 关键输出：`bom_snapshots.trace` 中回填 `bound_version_id + spec_hash + batch_id + shipment_line_id`
   - 本轮验收命令（必须）：`pytest backend/tests/planner/test_shipment_import_bom_snapshots_mvp.py -q`
+
+- **本轮闭环产物（Backend / 发货异常队列：按批次重试未解决异常（Retry Exceptions）MVP）**：
+  - 新增接口：`POST /api/planner/shipments/exceptions/retry`
+  - 请求字段（JSON）：`batch_id`、`only_unresolved=true`、`limit?`、`operator_id`、`reason`
+  - 行为（写死口径，MVP）：
+    - 仅选择 `shipment_exception_queue.batch_id==batch_id` 且 `resolved_at is null` 的异常（`only_unresolved` 必须为 true）
+    - 对每条异常关联 `shipment_line` 重新执行：SKU 绑定校验 → 规格解析（复用 `spec_hash` 缓存）→ 生成 **新** `bom_snapshots` 记录（不覆盖历史快照）
+    - 成功：将原异常标记 resolved（写 `resolved_at`），并在 `payload_json.resolution` 中记录 `action=retry/resolved_by/resolved_bom_snapshot_id/retry_reason`
+    - 失败：保持 unresolved，并在 `payload_json.retry` 记录 `count/last_at/last_by/last_reason/last_error`，同时更新 `message`
+  - 最小单测：`backend/tests/planner/test_shipment_exception_retry_mvp.py`
+  - 本轮验收命令（必须）：`pytest backend/tests/planner/test_shipment_exception_retry_mvp.py -q`
+  - 下一步（不在本轮范围）：区分“重跑整批（Rerun Batch）”与父子批次链路；补审计日志落 `audit_logs`（如需要）
 
 - **本轮闭环产物（Backend / SKU 主档导入 + 发货导入自动回写 MVP）**：
   - 新增落库表：`sku_master`（以 `erp_sku_barcode=货品条码（系统）` 为唯一键）

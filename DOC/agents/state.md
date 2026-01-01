@@ -502,6 +502,16 @@
   - 本轮验收命令（必须）：`pytest backend/tests/planner/test_shipment_exception_retry_mvp.py -q`
   - 下一步（不在本轮范围）：区分“重跑整批（Rerun Batch）”与父子批次链路；补审计日志落 `audit_logs`（如需要）
 
+- **本轮运维闭环（Backend Ops / 上线 Retry Exceptions 到 47.99.89.206）**：
+  - 当前状态：**阻塞**（本地执行环境无法 SSH 登录目标机，缺少可用凭据；`Permission denied (publickey,...)`）
+  - 需要目标机追加的公钥（添加到 `admin` 的 `~/.ssh/authorized_keys`）：
+    - `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIN12F5YtJERWnZld9tLSw3aiEpt/bvDELVh6r+geCQaC server-20251214`
+  - 目标机执行口径（拿到权限后按 briefing 走）：
+    - 参考：`DOC/agents/briefings/ops_deploy_shipment_import_bom_snapshots_to_4799.md`
+  - 验收命令（必须，贴回输出）：
+    - OpenAPI：`curl -sS http://127.0.0.1:8800/openapi.json | python -c 'import json,sys; s=json.load(sys.stdin)[\"paths\"]; print(\"/api/planner/shipments/exceptions/retry\" in s)'`（期望 `True`）
+    - pytest：`cd /home/admin/ai-costing-system/backend && . venv/bin/activate && python -m pytest tests/planner/test_shipment_exception_retry_mvp.py -q`
+
 - **本轮闭环产物（Backend / SKU 主档导入 + 发货导入自动回写 MVP）**：
   - 新增落库表：`sku_master`（以 `erp_sku_barcode=货品条码（系统）` 为唯一键）
   - 新增接口：

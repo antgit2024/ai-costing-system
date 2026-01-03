@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 def _fallback_description(payload: Dict[str, Any]) -> str:
     module_name = str(payload.get("module_name") or "").strip()
     category = str(payload.get("category") or "").strip()
+    structure = payload.get("structure") or None
     materials = payload.get("materials") or []
     steps = payload.get("steps") or []
 
@@ -28,40 +29,34 @@ def _fallback_description(payload: Dict[str, Any]) -> str:
             pname = str(s.get("process_name") or s.get("process_code") or "").strip() or "未命名工序"
             team = str(s.get("team_name") or "").strip()
             mt = str(s.get("measure_type") or "").strip()
-            base = s.get("base_minutes")
-            unit = s.get("unit_minutes")
-            rate = s.get("rate_per_minute")
             extra = []
             if team:
                 extra.append(f"班组:{team}")
             if mt:
                 extra.append(f"计量:{mt}")
-            if base is not None or unit is not None:
-                extra.append(f"工时:{base or 0}+{unit or 0}")
-            if rate:
-                extra.append(f"单价:{rate}元/分")
             suffix = f"（{'，'.join(extra)}）" if extra else ""
             lines.append(f"- {i}. {pname}{suffix}")
+
+    if isinstance(structure, dict) and structure:
+        mode = str(structure.get("mode") or "").strip()
+        code = str(structure.get("standard_code") or "").strip()
+        slots = structure.get("slots") or []
+        slots_s = "、".join([str(x) for x in slots]) if isinstance(slots, list) and slots else ""
+        if mode:
+            if mode == "global":
+                lines.append("适用范围：通用（GLOBAL）")
+            elif code:
+                lines.append(f"适用范围：{code}{(' / ' + slots_s) if slots_s else ''}（{mode}）")
 
     if materials:
         lines.append("物料：")
         for i, m in enumerate(materials[:12], start=1):
             name = str(m.get("material_name") or m.get("material_code") or "").strip() or "未命名物料"
-            qty = m.get("quantity")
             unit = str(m.get("unit_of_measure") or "").strip()
-            loss = m.get("loss_rate")
             calc = str(m.get("calculation_method") or "").strip()
-            price = m.get("bom_unit_price")
-            bom_unit = str(m.get("bom_unit") or "").strip()
             parts = []
-            if qty is not None:
-                parts.append(f"数量:{qty}{unit or ''}")
-            if loss is not None:
-                parts.append(f"损耗:{loss}%")
             if calc:
                 parts.append(f"计量:{calc}")
-            if price is not None:
-                parts.append(f"BOM:{price}/{bom_unit or '-'}")
             suffix = f"（{'，'.join(parts)}）" if parts else ""
             lines.append(f"- {i}. {name}{suffix}")
 

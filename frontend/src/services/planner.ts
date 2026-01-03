@@ -912,6 +912,7 @@ export const fetchProcessReferences = async (
 export type GenerateProcessModuleDescriptionPayload = {
   module_name: string
   category?: string | null
+  structure?: Record<string, any> | null
   materials: Array<Record<string, any>>
   steps: Array<Record<string, any>>
 }

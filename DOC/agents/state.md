@@ -17,6 +17,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-03 16:40（Frontend：选工艺模块候选标注 GLOBAL 通用模块）
 - **最近校对（北京时间 GMT+8）**：2026-01-03 16:52（Frontend：工艺模块结构适用范围保存强校验防呆）
 - **最近校对（北京时间 GMT+8）**：2026-01-03 17:05（Frontend：global 隐藏结构标准下拉 + 自动清空）
+- **最近校对（北京时间 GMT+8）**：2026-01-03 17:30（Frontend：工艺模块删除高难度确认 + AI生成去数值污染；Backend：AI describe 支持结构字段）
 - **最近校对（北京时间 GMT+8）**：2026-01-01（Backend：发货异常队列“按批次重试未解决异常（Retry Exceptions）”MVP）
 
 - **最近校对（北京时间 GMT+8）**：2025-12-25 04:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）

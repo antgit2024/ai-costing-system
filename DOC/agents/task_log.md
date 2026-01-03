@@ -2,6 +2,7 @@
 
 | 日期 | 模块 | 角色 | 任务/问题 | 结论 | 待办 |
 | --- | --- | --- | --- | --- | --- |
+| 2026-01-03 | ProcessModules（删除确认+AI生成去数值污染） | Hub Agent（Planner） | 用户反馈：工艺模块列表“删除难度”入口不明显；AI 生成可能失效且担心把默认数值写进 AI 语义造成知识库脏数据。 | ✅ 删除：改为“高难度删除”（必须停用+输入模块编码确认）并保持列表按钮可见；AI生成：payload 加入结构信息；移除数量/损耗/单价/工时/费率等易污染字段；后端 describe 接口允许 `structure` 字段，fallback 描述不拼接默认数值；前端失败时本地模板降级生成简述。 | 无 |
 | 2026-01-03 | 工艺模块（结构适用范围：global 隐藏结构标准） | Hub Agent（Planner） | 用户反馈：global 场景下如果仍显示“结构标准”下拉，用户会误选导致理解混乱；建议交换位置并在 global 时隐藏结构标准。 | ✅ 工艺模块抽屉将“适用类型”置前；选择 `global` 时隐藏“结构标准”下拉，并自动清空 `structure_standard_code/structure_slots` 防止脏值。 | 无 |
 | 2026-01-03 | 工艺模块（结构适用范围：强校验防呆） | Hub Agent（Planner） | 用户持续使用“适用类型 + slots”录入后，担心误填（global 仍选 slot / assembly 只选 1 个 slot）。 | ✅ 在保存时增加强校验：global 必须 0 slot；slot_internal 必须且只能 1 slot；assembly 至少 2 slots；非 global 必须选择结构标准。 | 无 |
 | 2026-01-03 | 标准模型（选工艺模块：标注 GLOBAL 通用模块） | Hub Agent（Planner） | 用户采用“通用工艺模块 global + 结构过滤自动包含 GLOBAL”的专业方案后，希望前端候选列表能清晰区分“通用工艺”与“结构相关”。 | ✅ `ProductModelEditorDrawer` 的“选择工艺模块”弹窗新增提示，并在候选表增加“适用范围”列：通用（GLOBAL）/结构相关。 | 无 |

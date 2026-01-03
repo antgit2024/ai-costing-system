@@ -509,17 +509,45 @@ const ProcessModulesPage = () => {
     },
   })
 
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) => deleteProcessModule(id),
-    onSuccess: () => {
-      message.success('已删除（归档）')
-      queryClient.invalidateQueries({ queryKey: ['process-modules'] })
-      if (selectedId) detailQuery.refetch()
-    },
-    onError: (err: any) => {
-      message.error(err?.response?.data?.detail ?? '删除失败')
-    },
-  })
+  const confirmDeleteModule = (record: ProcessModuleSummary) => {
+    const status = String(record.status ?? '').trim()
+    if (status === 'active') {
+      message.info('请先停用该工艺模块，再执行删除（归档）')
+      return
+    }
+    let typed = ''
+    Modal.confirm({
+      title: '删除工艺模块（归档）',
+      okText: '删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      content: (
+        <Space direction="vertical" style={{ width: '100%' }}>
+          <Text>
+            将删除（归档）：<Text code>{record.module_code}</Text> {record.module_name}
+          </Text>
+          <Text type="secondary">为避免误删，请输入模块编码确认删除：</Text>
+          <Input placeholder={record.module_code} onChange={(e) => (typed = String(e.target.value ?? ''))} />
+          <Text type="secondary">提示：若该模块仍被模型引用，后端会阻止删除。</Text>
+        </Space>
+      ),
+      onOk: async () => {
+        if (typed.trim() !== String(record.module_code ?? '').trim()) {
+          message.error('输入不匹配，未执行删除')
+          return Promise.reject(new Error('confirm_mismatch'))
+        }
+        try {
+          await deleteProcessModule(record.id)
+          message.success('已删除（归档）')
+          queryClient.invalidateQueries({ queryKey: ['process-modules'] })
+          if (selectedId) detailQuery.refetch()
+        } catch (err: any) {
+          message.error(err?.response?.data?.detail ?? err?.message ?? '删除失败')
+          return Promise.reject(err)
+        }
+      },
+    })
+  }
 
   const copyMutation = useMutation({
     mutationFn: ({ id, payload }: { id: string; payload: ProcessModuleCopyPayload }) =>
@@ -959,20 +987,17 @@ const ProcessModulesPage = () => {
                     <Button size="small" icon={<CheckCircleOutlined style={{ color: '#52c41a' }} />} />
                   </Tooltip>
                 </Popconfirm>
-                <Popconfirm
-                  title="确认删除该工艺模块？"
-                  description="删除为归档删除：模块将从列表隐藏。若仍被模型引用，会阻止删除。"
-                  okText="删除"
-                  okButtonProps={{ danger: true }}
-                  cancelText="取消"
-                  onConfirm={() => deleteMutation.mutate(record.id)}
-                >
-                  <Tooltip title="删除">
-                    <Button size="small" danger icon={<DeleteOutlined />} loading={deleteMutation.isPending} />
-                  </Tooltip>
-                </Popconfirm>
               </>
             )}
+            <Tooltip title={status === 'active' ? '请先停用，再删除（归档）' : '删除（归档）'}>
+              <Button
+                size="small"
+                danger
+                icon={<DeleteOutlined />}
+                disabled={status === 'active'}
+                onClick={() => confirmDeleteModule(record)}
+              />
+            </Tooltip>
           </Space>
         )
       },
@@ -2140,6 +2165,11 @@ const ProcessModulesPage = () => {
                       const payload = {
                         module_name: String(values.module_name ?? '').trim(),
                         category: values.category ?? undefined,
+                        structure: {
+                          mode: String(values.structure_applicability_mode ?? 'slot_internal'),
+                          standard_code: String(values.structure_standard_code ?? '').trim() || null,
+                          slots: normalizeStringArray(values.structure_slots ?? []),
+                        },
                         materials: materials
                           .filter((m) => m?.material_ref_id)
                           .map((m) => ({
@@ -2148,10 +2178,6 @@ const ProcessModulesPage = () => {
                             material_name: m.material_name,
                             unit_of_measure: m.unit_of_measure,
                             calculation_method: m.calculation_method,
-                            quantity: m.quantity,
-                            loss_rate: m.loss_rate,
-                            bom_unit_price: (m.metadata_json ?? {}).bom_unit_price,
-                            bom_unit: (m.metadata_json ?? {}).bom_unit,
                           })),
                         steps: steps
                           .filter((s) => s?.process_id)
@@ -2164,13 +2190,7 @@ const ProcessModulesPage = () => {
                               process_description: truncateText(snap.description, 800),
                               process_ai_spec: pickProcessAiSpec(snap.ai_spec),
                               team_name: s.team_name,
-                              cost_type: meta.cost_type,
-                              base_minutes: meta.base_minutes,
-                              unit_minutes: meta.unit_minutes,
                               measure_type: meta.measure_type,
-                              measure_unit: meta.measure_unit,
-                              rate_per_minute: meta.rate_per_minute,
-                              piece_rate: meta.piece_rate,
                               notes: truncateText(s.notes, 300),
                             }
                           }),
@@ -2209,7 +2229,29 @@ const ProcessModulesPage = () => {
 
                         message.success(res.provider === 'llm' ? 'AI生成完成（已写入AI语义长文）' : '生成完成（模板，已写入AI语义长文）')
                       } catch (e: any) {
-                        message.error(e?.response?.data?.detail ?? '生成失败')
+                        // fallback: generate a short template locally (avoid blocking when AI service is unavailable)
+                        const moduleName = String(values.module_name ?? '').trim() || '工艺模块'
+                        const stepsText = ((payload as any)?.steps ?? [])
+                          .map((s: any) => String(s?.process_name ?? s?.process_code ?? '').trim())
+                          .filter(Boolean)
+                        const matsText = ((payload as any)?.materials ?? [])
+                          .map((m: any) => String(m?.material_name ?? m?.material_code ?? '').trim())
+                          .filter(Boolean)
+                        const mode = String(values.structure_applicability_mode ?? 'slot_internal')
+                        const code = String(values.structure_standard_code ?? '').trim()
+                        const slots = normalizeStringArray(values.structure_slots ?? [])
+                        const scope =
+                          mode === 'global' ? '通用（GLOBAL）' : code ? `${code}${slots.length ? ` / ${slots.join('、')}` : ''}（${mode}）` : ''
+                        const local = [
+                          `${moduleName}${values.category ? `（${values.category}）` : ''}`,
+                          scope ? `适用范围：${scope}` : '',
+                          stepsText.length ? `工序：${stepsText.join(' → ')}` : '',
+                          matsText.length ? `物料：${matsText.slice(0, 8).join('、')}` : '',
+                        ]
+                          .filter(Boolean)
+                          .join('\n')
+                        editorForm.setFieldValue('description', buildShortDescription(local, 90) || local)
+                        message.warning(e?.response?.data?.detail ?? 'AI生成失败，已用本地模板生成简述（可手工再润色）')
                       } finally {
                         setGeneratingDescription(false)
                       }

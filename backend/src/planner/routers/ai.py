@@ -83,6 +83,7 @@ def export_process_corpus(
 class GenerateModuleDescriptionRequest(BaseModel):
     module_name: str = Field("", max_length=255)
     category: str | None = Field(default=None, max_length=128)
+    structure: dict[str, Any] | None = Field(default=None)
     materials: list[dict[str, Any]] = Field(default_factory=list)
     steps: list[dict[str, Any]] = Field(default_factory=list)
 

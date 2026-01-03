@@ -47,6 +47,11 @@
   - 目标：将“结构标准 code/slot(s)”从自由输入收口为下拉选择（来源结构标准字典），避免填错与 code 漂移
   - 验收命令（文档存在性）：`grep -nF "结构标准/slot 下拉收口（防呆）MVP" DOC/agents/briefings/frontend_structure_selection_dropdowns_guardrails_mvp.md`
 
+- **本轮闭环产物（Planner / 下一轮：slot 双语展示派单（拼音短码+中文名））**：
+  - 新增派单：`DOC/agents/briefings/frontend_structure_slots_bilingual_display_mvp.md`
+  - 目标：slot 存“拼音短码”做稳定键（如 `lalian`），UI 显示中文名（如“拉链位”），结构标签不要求人工读懂
+  - 验收命令（文档存在性）：`grep -nF "slot “拼音短码 + 中文名”双语展示（MVP）" DOC/agents/briefings/frontend_structure_slots_bilingual_display_mvp.md`
+
 - **本轮闭环产物（Backend / 模型结构化落点（结构标准/工艺模块标签）+ 列表筛选 MVP）**：
   - 产品模型版本结构标准（写入/读取）：
     - 位置：`product_model_versions.metadata_json.structure_standard_code`

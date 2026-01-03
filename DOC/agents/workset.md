@@ -101,6 +101,7 @@
 - `DOC/agents/briefings/frontend_structure_standards_management_mvp.md`（前端闭环：结构标准管理（字典页）MVP）
 - `DOC/agents/briefings/frontend_process_modules_applicability_mode_and_auto_tags_mvp.md`（前端闭环：工艺模块适用类型（内用/组合/global）+ 结构标签自动生成（MVP））
 - `DOC/agents/briefings/frontend_structure_selection_dropdowns_guardrails_mvp.md`（前端闭环：结构标准/slot 下拉收口（防呆）MVP）
+- `DOC/agents/briefings/frontend_structure_slots_bilingual_display_mvp.md`（前端闭环：结构 slot “拼音短码+中文名”双语展示（MVP））
 - `DOC/agents/briefings/ops_deploy_line_variants_to_4799.md`（运维闭环：部署行级变体到 47.99.89.206 + curl 验收）
 - `DOC/agents/briefings/ops_deploy_shipment_import_bom_snapshots_to_4799.md`（运维闭环：部署发货单导入→BOM快照到 47.99.89.206 + curl/pytest 验收）
 - `DOC/agents/briefings/ops_deploy_frontend_shipments_upload_to_4799.md`（运维闭环：部署前端发货单上传入口到 47.99.89.206）

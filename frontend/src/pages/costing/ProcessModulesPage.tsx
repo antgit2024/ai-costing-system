@@ -2157,6 +2157,8 @@ const ProcessModulesPage = () => {
                   <Button
                     size="small"
                     loading={generatingDescription}
+                    // Form has disabled={!isEditing}; explicitly override to allow using AI in view mode.
+                    disabled={false}
                     onClick={async () => {
                       const values = editorForm.getFieldsValue()
                       const materials = (materialsLocal.length ? materialsLocal : (values.materials ?? [])) as any[]

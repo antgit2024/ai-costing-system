@@ -29,6 +29,11 @@
   - 目标：标准版本保存 `metadata_json.structure_standard_code`；模型侧选工艺模块候选默认带 `structure_code=<该值>` 过滤
   - 验收命令（文档存在性）：`grep -nF "标准模型版本结构标准选择 + 按结构过滤模块候选（MVP）" DOC/agents/briefings/frontend_standard_version_structure_code_and_module_filter_mvp.md`
 
+- **本轮闭环产物（Planner / 下一轮：结构标准字典页派单）**：
+  - 新增派单：`DOC/agents/briefings/frontend_structure_standards_management_mvp.md`
+  - 目标：结构标准作为主数据（像分类字典）：维护 `code/name/slots/status`，供模型/工艺模块引用，避免手填 code 漂移
+  - 验收命令（文档存在性）：`grep -nF "结构标准管理（字典页）MVP" DOC/agents/briefings/frontend_structure_standards_management_mvp.md`
+
 - **本轮闭环产物（Backend / 模型结构化落点（结构标准/工艺模块标签）+ 列表筛选 MVP）**：
   - 产品模型版本结构标准（写入/读取）：
     - 位置：`product_model_versions.metadata_json.structure_standard_code`

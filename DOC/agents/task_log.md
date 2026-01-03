@@ -2,6 +2,7 @@
 
 | 日期 | 模块 | 角色 | 任务/问题 | 结论 | 待办 |
 | --- | --- | --- | --- | --- | --- |
+| 2026-01-03 | 结构标准（字典页：删除能力） | Hub Agent（Planner） | 用户要求结构标准列表增加“删除”功能，减少脏数据与误建结构。 | ✅ 前端结构标准字典页新增“删除（归档）”按钮（要求先停用再删除，带二次确认）；底层复用 taxonomy `DELETE /taxonomy/items/{id}`。 | 下一步：如需“删除前引用检查/阻断”，再派后端补 references 校验或前端调用现有引用接口做提示。 |
 | 2026-01-03 | 模型结构化（slot 双语：拼音短码+中文名） | Planner（Hub Agent） | 用户选择 slot 使用“拼音短码（lalian）”，担心同事英文不好导致结构标签难以人工识别；要求专业做法（存键、显中文）。 | ✅ 新增前端闭环任务单：`DOC/agents/briefings/frontend_structure_slots_bilingual_display_mvp.md`（structure_standard taxonomy metadata 增加 `slot_display_names` 映射；UI 下拉与标签展示中文，tooltip 显示 raw tag）。 | 下一步：@Frontend Agent 落地字典页 slots 双字段编辑与工艺模块标签中文渲染；完成后再评估是否需要后端提供独立 `structure-standards` 实体表。 |
 | 2026-01-03 | 模型结构化（防呆：结构标准/slot 下拉收口） | Planner（Hub Agent） | 用户反馈当前结构标准/slot 为自由输入，极易填错（把 slot 当结构、code 漂移），建议用下拉选对。 | ✅ 新增前端闭环任务单：`DOC/agents/briefings/frontend_structure_selection_dropdowns_guardrails_mvp.md`（工艺模块抽屉与标准版本结构标准改为下拉，slot/slots 依赖结构标准 slots[] 下拉，未选结构标准则禁用）。 | 下一步：@Frontend Agent 按任务单落地 UI，完成后再评估是否需要“global 默认包含于结构筛选”的后端口径补丁。 |
 | 2026-01-03 | 模型结构化（工艺模块：内用/组合/global 语义收口） | Planner（Hub Agent） | 用户仍对“结构如何应用到工艺模块”感到困惑：工艺模块既可能属于某个 slot，也可能是跨 slot 装配，或结构无关（global）。需要把语义落到 UI 并自动生成结构标签，避免人工乱填。 | ✅ 新增前端闭环任务单：`DOC/agents/briefings/frontend_process_modules_applicability_mode_and_auto_tags_mvp.md`（在工艺模块抽屉新增适用类型三选一 + slot 选择，并自动生成 `structure_tags`）。 | 下一步：@Frontend Agent 落地 UI；再按验证结果决定是否需要后端把 global 纳入 `structure_code` 筛选口径。 |

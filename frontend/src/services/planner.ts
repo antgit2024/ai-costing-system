@@ -380,6 +380,12 @@ export const deactivateStructureStandard = async (id: string): Promise<Structure
   return normalizeStructureStandard(updated)
 }
 
+export const deleteStructureStandard = async (id: string): Promise<void> => {
+  // Taxonomy deletion is implemented as DELETE /taxonomy/items/{id}.
+  // Treat as "archive/delete" for structure standards (dictionary entries).
+  await archiveTaxonomyItem(id)
+}
+
 export const fetchInitiativeById = async (id: string): Promise<Initiative> => {
   const response = await plannerClient.get(`/initiatives/${id}`)
   return response.data

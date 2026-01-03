@@ -1,4 +1,4 @@
-import { Alert, Button, Card, Drawer, Form, Input, Select, Space, Switch, Table, Tag, Typography, message } from 'antd'
+import { Alert, Button, Card, Drawer, Form, Input, Modal, Select, Space, Switch, Table, Tag, Tooltip, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useMemo, useState } from 'react'
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -7,6 +7,7 @@ import {
   activateStructureStandard,
   createStructureStandard,
   deactivateStructureStandard,
+  deleteStructureStandard,
   fetchStructureStandards,
   updateStructureStandard,
 } from '@/services/planner'
@@ -202,6 +203,43 @@ export default function StructureStandardsPage() {
                   启用
                 </Button>
               )}
+
+              <Tooltip title={isActive ? '请先停用，再删除（归档）' : '删除（归档）后不可恢复'}>
+                <Button
+                  size="small"
+                  danger
+                  disabled={isActive}
+                  onClick={() => {
+                    Modal.confirm({
+                      title: '删除结构标准（归档）',
+                      content: (
+                        <div>
+                          <div>
+                            确认删除（归档）：<Text code>{record.code}</Text> {record.name}？
+                          </div>
+                          <div style={{ marginTop: 8 }}>
+                            <Text type="secondary">建议：如已被模型版本/工艺模块引用，请先确认不会影响后续筛选与推荐。</Text>
+                          </div>
+                        </div>
+                      ),
+                      okText: '删除',
+                      okButtonProps: { danger: true },
+                      cancelText: '取消',
+                      onOk: async () => {
+                        try {
+                          await deleteStructureStandard(record.id)
+                          message.success('已删除（归档）')
+                          queryClient.invalidateQueries({ queryKey: ['structure-standards'] })
+                        } catch (err: any) {
+                          message.error(err?.response?.data?.detail ?? err?.message ?? '删除失败（可能需要管理员密钥）')
+                        }
+                      },
+                    })
+                  }}
+                >
+                  删除
+                </Button>
+              </Tooltip>
             </Space>
           )
         },

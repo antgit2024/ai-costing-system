@@ -10,6 +10,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-03 14:02（Frontend：结构标准字典页 MVP）
 - **最近校对（北京时间 GMT+8）**：2026-01-03 14:35（Frontend：工艺模块“适用类型 + 自动结构标签” MVP）
 - **最近校对（北京时间 GMT+8）**：2026-01-03 14:56（Frontend：结构标准/slot 下拉防呆收口 MVP）
+- **最近校对（北京时间 GMT+8）**：2026-01-03 15:18（Frontend：结构标准字典页支持删除（归档））
 - **最近校对（北京时间 GMT+8）**：2026-01-01（Backend：发货异常队列“按批次重试未解决异常（Retry Exceptions）”MVP）
 
 - **最近校对（北京时间 GMT+8）**：2025-12-25 04:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
@@ -51,6 +52,12 @@
   - 新增派单：`DOC/agents/briefings/frontend_structure_slots_bilingual_display_mvp.md`
   - 目标：slot 存“拼音短码”做稳定键（如 `lalian`），UI 显示中文名（如“拉链位”），结构标签不要求人工读懂
   - 验收命令（文档存在性）：`grep -nF "slot “拼音短码 + 中文名”双语展示（MVP）" DOC/agents/briefings/frontend_structure_slots_bilingual_display_mvp.md`
+
+- **本轮闭环产物（Frontend / 结构标准字典页：删除（归档））**：
+  - 位置：`/costing/structure-standards` 列表“操作”列新增“删除（归档）”
+  - 防呆：必须先停用再删除；删除前二次确认
+  - 底层：复用 taxonomy `DELETE /taxonomy/items/{id}`（需要管理员密钥）
+  - 本轮验收命令（必须）：`npm -C frontend run build`
 
 - **本轮闭环产物（Backend / 模型结构化落点（结构标准/工艺模块标签）+ 列表筛选 MVP）**：
   - 产品模型版本结构标准（写入/读取）：

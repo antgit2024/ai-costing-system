@@ -17,6 +17,7 @@ const ShipmentMonitorPage = lazy(() => import('./pages/costing/ShipmentMonitorPa
 const SkuMasterWorkspacePage = lazy(() => import('./pages/costing/SkuMasterWorkspacePage'))
 const SkuSpecMatchingPage = lazy(() => import('./pages/costing/SkuSpecMatchingPage'))
 const TaxonomyManagementPage = lazy(() => import('./pages/costing/TaxonomyManagementPage'))
+const StructureStandardsPage = lazy(() => import('./pages/costing/StructureStandardsPage'))
 
 const App = () => {
   return (
@@ -41,6 +42,7 @@ const App = () => {
           <Route path="/costing/process-modules" element={<ProcessModulesPage />} />
           <Route path="/costing/processes" element={<ProcessesPage />} />
           <Route path="/costing/taxonomy" element={<TaxonomyManagementPage />} />
+          <Route path="/costing/structure-standards" element={<StructureStandardsPage />} />
           <Route path="/costing/pricing-tools" element={<PricingToolsPage />} />
           <Route path="/costing/shipments" element={<ShipmentMonitorPage />} />
           <Route path="/costing/sku-master" element={<SkuMasterWorkspacePage />} />

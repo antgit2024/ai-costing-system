@@ -1588,3 +1588,27 @@ export interface TaxonomyMappingListResponse {
   items: TaxonomyMappingRead[]
 }
 
+// -----------------------------
+// Structure Standards (dictionary; backed by taxonomy domain=structure_standard)
+// -----------------------------
+
+export type StructureStandardStatus = 'active' | 'inactive'
+
+export interface StructureStandardRead {
+  id: string
+  code: string
+  name: string
+  slots: string[]
+  status: StructureStandardStatus
+  updated_at?: string
+}
+
+export interface StructureStandardQueryParams extends Record<string, string | number | undefined> {
+  search?: string
+  status?: StructureStandardStatus | 'all'
+  page?: number
+  page_size?: number
+}
+
+export interface PaginatedStructureStandardResponse extends PaginatedResponse<StructureStandardRead> {}
+

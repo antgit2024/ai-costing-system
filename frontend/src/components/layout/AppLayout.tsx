@@ -65,6 +65,10 @@ const menuItems: MenuProps['items'] = [
         label: <Link to="/costing/process-modules">工艺模块</Link>,
       },
       {
+        key: '/costing/structure-standards',
+        label: <Link to="/costing/structure-standards">结构标准</Link>,
+      },
+      {
         key: '/costing/taxonomy',
         icon: <SettingOutlined />,
         label: (

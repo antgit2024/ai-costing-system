@@ -117,6 +117,9 @@ import type {
   TaxonomyItemRead,
   TaxonomyMappingListResponse,
   TaxonomyMappingRead,
+  PaginatedStructureStandardResponse,
+  StructureStandardQueryParams,
+  StructureStandardRead,
 } from '@/types/planner'
 
 const resolvePlannerApiBase = (raw?: string): string => {
@@ -275,6 +278,106 @@ export const updateTaxonomyMapping = async (id: string, payload: { taxonomy_item
 
 export const deleteTaxonomyMapping = async (id: string): Promise<void> => {
   await plannerClient.delete(`/taxonomy/mappings/${id}`, { headers: adminHeaders() })
+}
+
+// -----------------------------
+// Structure Standards (dictionary; backed by taxonomy domain=structure_standard)
+// -----------------------------
+
+const STRUCTURE_STANDARD_DOMAIN = 'structure_standard'
+
+const normalizeStructureStandard = (item: any): StructureStandardRead => {
+  const code = String(item?.name ?? '').trim()
+  const meta = (item?.metadata ?? item?.metadata_json ?? {}) as any
+  const displayName = String(meta?.display_name ?? meta?.name ?? '').trim()
+  const slotsRaw = meta?.slots
+  const slots = Array.isArray(slotsRaw) ? slotsRaw.map((x: any) => String(x ?? '').trim()).filter(Boolean) : []
+  return {
+    id: String(item?.id ?? ''),
+    code,
+    name: displayName || code,
+    slots,
+    status: item?.is_active ? 'active' : 'inactive',
+    updated_at: item?.updated_at,
+  }
+}
+
+export const fetchStructureStandards = async (
+  params: StructureStandardQueryParams = {},
+): Promise<PaginatedStructureStandardResponse> => {
+  const page = Number(params.page ?? 1) || 1
+  const pageSize = Number(params.page_size ?? 20) || 20
+  const search = String(params.search ?? '').trim().toLowerCase()
+  const status = String(params.status ?? 'all').trim()
+
+  // Taxonomy list doesn't support search/pagination; do client-side filter (MVP)
+  const resp = await fetchTaxonomyItems(STRUCTURE_STANDARD_DOMAIN, { include_inactive: true })
+  let items = (resp.items ?? []).map(normalizeStructureStandard)
+
+  if (status === 'active' || status === 'inactive') {
+    items = items.filter((x) => x.status === status)
+  }
+  if (search) {
+    items = items.filter((x) => x.code.toLowerCase().includes(search) || x.name.toLowerCase().includes(search))
+  }
+
+  // stable sort by code asc
+  items = items.slice().sort((a, b) => a.code.localeCompare(b.code))
+
+  const total = items.length
+  const start = (page - 1) * pageSize
+  const paged = items.slice(start, start + pageSize)
+  return { total, page, page_size: pageSize, items: paged }
+}
+
+export const createStructureStandard = async (payload: {
+  code: string
+  name: string
+  slots: string[]
+  status?: 'active' | 'inactive'
+}): Promise<StructureStandardRead> => {
+  const code = String(payload.code ?? '').trim()
+  const name = String(payload.name ?? '').trim()
+  const slots = Array.isArray(payload.slots) ? payload.slots.map((x) => String(x ?? '').trim()).filter(Boolean) : []
+  const isActive = (payload.status ?? 'active') === 'active'
+
+  const created = await createTaxonomyItem({
+    domain: STRUCTURE_STANDARD_DOMAIN,
+    name: code,
+    scopes: ['*'],
+    is_active: isActive,
+    source: 'local',
+    metadata: { display_name: name, slots },
+  })
+  return normalizeStructureStandard(created)
+}
+
+export const updateStructureStandard = async (
+  id: string,
+  payload: { name?: string; slots?: string[]; status?: 'active' | 'inactive' },
+): Promise<StructureStandardRead> => {
+  const next: any = {}
+  if (payload.status) next.is_active = payload.status === 'active'
+  if (payload.name !== undefined || payload.slots !== undefined) {
+    const name = payload.name !== undefined ? String(payload.name ?? '').trim() : undefined
+    const slots = payload.slots !== undefined ? payload.slots.map((x) => String(x ?? '').trim()).filter(Boolean) : undefined
+    next.metadata = {
+      ...(name !== undefined ? { display_name: name } : {}),
+      ...(slots !== undefined ? { slots } : {}),
+    }
+  }
+  const updated = await updateTaxonomyItem(id, next)
+  return normalizeStructureStandard(updated)
+}
+
+export const activateStructureStandard = async (id: string): Promise<StructureStandardRead> => {
+  const updated = await updateTaxonomyItem(id, { is_active: true })
+  return normalizeStructureStandard(updated)
+}
+
+export const deactivateStructureStandard = async (id: string): Promise<StructureStandardRead> => {
+  const updated = await updateTaxonomyItem(id, { is_active: false })
+  return normalizeStructureStandard(updated)
 }
 
 export const fetchInitiativeById = async (id: string): Promise<Initiative> => {

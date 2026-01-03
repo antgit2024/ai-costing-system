@@ -7,6 +7,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-03 11:57（Frontend：Shipments 静态资源原子发布到 47.99.89.206）
 - **最近校对（北京时间 GMT+8）**：2026-01-03 12:39（Frontend：工艺模块结构筛选 + 结构标签维护 MVP）
 - **最近校对（北京时间 GMT+8）**：2026-01-03 13:10（Frontend：标准版本结构标准 code + 模块候选按结构过滤 MVP）
+- **最近校对（北京时间 GMT+8）**：2026-01-03 14:02（Frontend：结构标准字典页 MVP）
 - **最近校对（北京时间 GMT+8）**：2026-01-01（Backend：发货异常队列“按批次重试未解决异常（Retry Exceptions）”MVP）
 
 - **最近校对（北京时间 GMT+8）**：2025-12-25 04:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
@@ -190,6 +191,23 @@
     - `frontend/src/types/planner.ts`
     - `backend/src/planner/routers/product_model_versions.py`
     - `backend/src/planner/schemas.py`
+  - 本轮验收命令（必须）：`npm -C frontend run build`（已通过）
+
+- **本轮闭环产物（Frontend / StructureStandards - management MVP）**：
+  - 新增页面：`/costing/structure-standards`（结构标准：列表 + 抽屉）
+  - 新增菜单：成本核算 → 结构标准
+  - 列表能力：search(code/name)、状态筛选（全部/启用/停用）、slots 前 3 个 + `…+N`、编辑/启用停用
+  - 抽屉能力：新增/编辑（编辑时锁定 code），slots 用 Tags 输入；最小校验（code 3~64，slots 去重）
+  - 后端落点（专业折中）：当前后端未提供 `/structure-standards` 接口，MVP 复用 taxonomy：
+    - domain=`structure_standard`
+    - taxonomy.name 作为 code（唯一键）
+    - taxonomy.metadata.display_name 作为 name，metadata.slots 作为 slots[]
+  - 关键改动文件：
+    - `frontend/src/pages/costing/StructureStandardsPage.tsx`
+    - `frontend/src/App.tsx`
+    - `frontend/src/components/layout/AppLayout.tsx`
+    - `frontend/src/services/planner.ts`
+    - `frontend/src/types/planner.ts`
   - 本轮验收命令（必须）：`npm -C frontend run build`（已通过）
 
 - **本轮闭环产物（Backend / 修复 Task Center 500：Postgres SSL）**：

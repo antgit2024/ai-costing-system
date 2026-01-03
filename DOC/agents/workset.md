@@ -97,6 +97,7 @@
 - `DOC/agents/briefings/frontend_line_variants_material_picker_mvp.md`（前端闭环：变体替换物料选择器，替代手输ID）
 - `DOC/agents/briefings/frontend_sku_master_workspace_mvp.md`（前端闭环：SKU主档工作台（导入/查询/命中率））
 - `DOC/agents/briefings/frontend_shipments_retry_exceptions_and_bind_cta_mvp.md`（前端闭环：发货监控页“重试异常”按钮 + SKU_NOT_BOUND 去绑定 CTA）
+- `DOC/agents/briefings/frontend_standard_version_structure_code_and_module_filter_mvp.md`（前端闭环：标准模型版本选择结构标准 + 按结构过滤模块候选（MVP））
 - `DOC/agents/briefings/ops_deploy_line_variants_to_4799.md`（运维闭环：部署行级变体到 47.99.89.206 + curl 验收）
 - `DOC/agents/briefings/ops_deploy_shipment_import_bom_snapshots_to_4799.md`（运维闭环：部署发货单导入→BOM快照到 47.99.89.206 + curl/pytest 验收）
 - `DOC/agents/briefings/ops_deploy_frontend_shipments_upload_to_4799.md`（运维闭环：部署前端发货单上传入口到 47.99.89.206）

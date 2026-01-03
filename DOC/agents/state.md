@@ -23,6 +23,11 @@
   - 目标：用 `metadata_json` 落 `structure_standard_code`（版本）与 `structure_tags[]`（工艺模块），并给列表接口加筛选参数，支持“按结构找模块/按结构找版本”
   - 验收命令（文档存在性）：`grep -nF "模型结构化落点（结构标准/工艺模块标签）+ 列表筛选 MVP" DOC/agents/briefings/backend_structure_tagging_and_filtering_mvp.md`
 
+- **本轮闭环产物（Planner / 下一轮：标准版本结构标准选择 + 模块候选过滤派单）**：
+  - 新增派单：`DOC/agents/briefings/frontend_standard_version_structure_code_and_module_filter_mvp.md`
+  - 目标：标准版本保存 `metadata_json.structure_standard_code`；模型侧选工艺模块候选默认带 `structure_code=<该值>` 过滤
+  - 验收命令（文档存在性）：`grep -nF "标准模型版本结构标准选择 + 按结构过滤模块候选（MVP）" DOC/agents/briefings/frontend_standard_version_structure_code_and_module_filter_mvp.md`
+
 - **本轮闭环产物（Backend / 模型结构化落点（结构标准/工艺模块标签）+ 列表筛选 MVP）**：
   - 产品模型版本结构标准（写入/读取）：
     - 位置：`product_model_versions.metadata_json.structure_standard_code`

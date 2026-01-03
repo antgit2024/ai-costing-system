@@ -2248,7 +2248,10 @@ const ProcessModulesPage = () => {
                         allowClear
                         disabled={!selectedStructureStandard}
                         placeholder={selectedStructureStandard ? '选择 slots（来自结构标准 slots[]）' : '请先选择结构标准'}
-                        options={(selectedStructureStandard?.slots ?? []).map((s) => ({ value: s, label: s }))}
+                        options={(selectedStructureStandard?.slots ?? []).map((s) => {
+                          const cn = selectedStructureStandard?.slot_display_names?.[s]
+                          return { value: s, label: cn ? `${cn}（${s}）` : s }
+                        })}
                         value={structureSlotsValue ?? []}
                         onChange={(vals) => {
                           suppressTouchRef.current = true
@@ -2271,7 +2274,10 @@ const ProcessModulesPage = () => {
                         allowClear
                         disabled={!selectedStructureStandard}
                         placeholder={selectedStructureStandard ? '选择 slot（来自结构标准 slots[]）' : '请先选择结构标准'}
-                        options={(selectedStructureStandard?.slots ?? []).map((s) => ({ value: s, label: s }))}
+                        options={(selectedStructureStandard?.slots ?? []).map((s) => {
+                          const cn = selectedStructureStandard?.slot_display_names?.[s]
+                          return { value: s, label: cn ? `${cn}（${s}）` : s }
+                        })}
                         value={String((structureSlotsValue ?? [])[0] ?? '') || undefined}
                         onChange={(v) => {
                           suppressTouchRef.current = true

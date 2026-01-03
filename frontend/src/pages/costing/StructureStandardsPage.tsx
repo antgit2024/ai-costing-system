@@ -12,6 +12,7 @@ import {
   updateStructureStandard,
 } from '@/services/planner'
 import type { StructureStandardRead, StructureStandardStatus } from '@/types/planner'
+import { toPinyinCode } from '@/utils/pinyin'
 
 const { Title, Text } = Typography
 
@@ -26,6 +27,8 @@ const normalizeSlots = (raw: any): string[] => {
   const seen = new Set<string>()
   return out.filter((x) => (seen.has(x) ? false : (seen.add(x), true)))
 }
+
+type SlotRow = { cn?: string; code?: string }
 
 export default function StructureStandardsPage() {
   const queryClient = useQueryClient()
@@ -75,7 +78,7 @@ export default function StructureStandardsPage() {
     editorForm.setFieldsValue({
       code: '',
       name: '',
-      slots: [],
+      slot_rows: [],
       is_active: true,
     })
     setDrawerOpen(true)
@@ -84,10 +87,14 @@ export default function StructureStandardsPage() {
   const openEdit = (record: StructureStandardRead) => {
     setDrawerMode('edit')
     setActiveRecord(record)
+    const rows: SlotRow[] = (record.slots ?? []).map((code) => ({
+      code,
+      cn: record.slot_display_names?.[code] ?? '',
+    }))
     editorForm.setFieldsValue({
       code: record.code,
       name: record.name,
-      slots: record.slots ?? [],
+      slot_rows: rows,
       is_active: record.status === 'active',
     })
     setDrawerOpen(true)
@@ -129,7 +136,13 @@ export default function StructureStandardsPage() {
                     lineHeight: '18px',
                   }}
                 >
-                  {s}
+                  {r.slot_display_names?.[s] ? (
+                    <Tooltip title={s}>
+                      <span>{r.slot_display_names?.[s]}</span>
+                    </Tooltip>
+                  ) : (
+                    s
+                  )}
                 </Tag>
               ))}
               {rest > 0 ? (
@@ -253,7 +266,18 @@ export default function StructureStandardsPage() {
     const values = editorForm.getFieldsValue()
     const code = String(values.code ?? '').trim()
     const name = String(values.name ?? '').trim()
-    const slots = normalizeSlots(values.slots)
+    const rows: SlotRow[] = Array.isArray(values.slot_rows) ? values.slot_rows : []
+    const slot_display_names: Record<string, string> = {}
+    const slotCodes: string[] = []
+    for (const row of rows) {
+      const cn = String(row?.cn ?? '').trim()
+      const rawCode = String(row?.code ?? '').trim()
+      const c = rawCode ? toPinyinCode(rawCode) : toPinyinCode(cn)
+      if (!c) continue
+      if (!slotCodes.includes(c)) slotCodes.push(c)
+      if (cn) slot_display_names[c] = cn
+    }
+    const slots = normalizeSlots(slotCodes)
     const status: StructureStandardStatus = values.is_active ? 'active' : 'inactive'
 
     if (drawerMode === 'create') {
@@ -270,11 +294,11 @@ export default function StructureStandardsPage() {
     setSaving(true)
     try {
       if (drawerMode === 'create') {
-        await createStructureStandard({ code, name, slots, status })
+        await createStructureStandard({ code, name, slots, slot_display_names, status })
         message.success('结构标准已创建')
       } else if (activeRecord) {
         // MVP: 编辑时锁定 code（避免变更唯一键造成引用漂移）
-        await updateStructureStandard(activeRecord.id, { name, slots, status })
+        await updateStructureStandard(activeRecord.id, { name, slots, slot_display_names, status })
         message.success('结构标准已更新')
       }
       setDrawerOpen(false)
@@ -397,8 +421,54 @@ export default function StructureStandardsPage() {
           <Form.Item label="name" name="name" rules={[{ required: true, message: '请输入名称' }]}>
             <Input placeholder="例如 枕套（v1）" />
           </Form.Item>
-          <Form.Item label="slots" name="slots">
-            <Select mode="tags" placeholder="回车新增，可删除（例如 zipper / edging）" />
+          <Form.Item
+            label="slots（中文名 + 自动拼音短码）"
+            extra={<Text type="secondary">左侧填中文名；右侧会自动生成拼音短码（可手改）。保存时以“拼音短码”为系统键。</Text>}
+          >
+            <Form.List name="slot_rows">
+              {(fields, { add, remove }) => (
+                <Space direction="vertical" style={{ width: '100%' }} size={8}>
+                  {fields.map((field) => (
+                    <Space key={field.key} style={{ display: 'flex' }} align="baseline">
+                      <Form.Item
+                        {...field}
+                        name={[field.name, 'cn']}
+                        style={{ marginBottom: 0, width: 260 }}
+                        rules={[{ required: true, message: '请输入中文名' }]}
+                      >
+                        <Input
+                          placeholder="中文名，例如：拉链位"
+                          onChange={(e) => {
+                            const cn = String(e.target.value ?? '')
+                            const currentRows: SlotRow[] = editorForm.getFieldValue('slot_rows') ?? []
+                            const idx = Number(field.name)
+                            const curCode = String(currentRows?.[idx]?.code ?? '').trim()
+                            // only auto-fill when code is empty
+                            if (!curCode) {
+                              const next = toPinyinCode(cn)
+                              editorForm.setFieldValue(['slot_rows', idx, 'code'], next)
+                            }
+                          }}
+                        />
+                      </Form.Item>
+                      <Form.Item {...field} name={[field.name, 'code']} style={{ marginBottom: 0, width: 260 }}>
+                        <Input placeholder="拼音短码（自动生成，可手改），例如：lalianwei / lalian" />
+                      </Form.Item>
+                      <Button danger onClick={() => remove(field.name)}>
+                        删除
+                      </Button>
+                    </Space>
+                  ))}
+                  <Button
+                    type="dashed"
+                    onClick={() => add({ cn: '', code: '' })}
+                    style={{ width: 540 }}
+                  >
+                    新增 slot
+                  </Button>
+                </Space>
+              )}
+            </Form.List>
           </Form.Item>
           <Form.Item label="状态" name="is_active" valuePropName="checked">
             <Switch checkedChildren="启用" unCheckedChildren="停用" />

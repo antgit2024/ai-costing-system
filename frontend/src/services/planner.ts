@@ -292,11 +292,20 @@ const normalizeStructureStandard = (item: any): StructureStandardRead => {
   const displayName = String(meta?.display_name ?? meta?.name ?? '').trim()
   const slotsRaw = meta?.slots
   const slots = Array.isArray(slotsRaw) ? slotsRaw.map((x: any) => String(x ?? '').trim()).filter(Boolean) : []
+  const slotDisplayNamesRaw = meta?.slot_display_names
+  const slot_display_names =
+    slotDisplayNamesRaw && typeof slotDisplayNamesRaw === 'object' ? (slotDisplayNamesRaw as Record<string, any>) : undefined
   return {
     id: String(item?.id ?? ''),
     code,
     name: displayName || code,
     slots,
+    slot_display_names:
+      slot_display_names && Object.keys(slot_display_names).length
+        ? Object.fromEntries(
+            Object.entries(slot_display_names).map(([k, v]) => [String(k ?? '').trim(), String(v ?? '').trim()]).filter(([k]) => k),
+          )
+        : undefined,
     status: item?.is_active ? 'active' : 'inactive',
     updated_at: item?.updated_at,
   }
@@ -334,11 +343,14 @@ export const createStructureStandard = async (payload: {
   code: string
   name: string
   slots: string[]
+  slot_display_names?: Record<string, string>
   status?: 'active' | 'inactive'
 }): Promise<StructureStandardRead> => {
   const code = String(payload.code ?? '').trim()
   const name = String(payload.name ?? '').trim()
   const slots = Array.isArray(payload.slots) ? payload.slots.map((x) => String(x ?? '').trim()).filter(Boolean) : []
+  const slotDisplayNames =
+    payload.slot_display_names && typeof payload.slot_display_names === 'object' ? payload.slot_display_names : undefined
   const isActive = (payload.status ?? 'active') === 'active'
 
   const created = await createTaxonomyItem({
@@ -347,23 +359,28 @@ export const createStructureStandard = async (payload: {
     scopes: ['*'],
     is_active: isActive,
     source: 'local',
-    metadata: { display_name: name, slots },
+    metadata: { display_name: name, slots, ...(slotDisplayNames ? { slot_display_names: slotDisplayNames } : {}) },
   })
   return normalizeStructureStandard(created)
 }
 
 export const updateStructureStandard = async (
   id: string,
-  payload: { name?: string; slots?: string[]; status?: 'active' | 'inactive' },
+  payload: { name?: string; slots?: string[]; slot_display_names?: Record<string, string>; status?: 'active' | 'inactive' },
 ): Promise<StructureStandardRead> => {
   const next: any = {}
   if (payload.status) next.is_active = payload.status === 'active'
-  if (payload.name !== undefined || payload.slots !== undefined) {
+  if (payload.name !== undefined || payload.slots !== undefined || payload.slot_display_names !== undefined) {
     const name = payload.name !== undefined ? String(payload.name ?? '').trim() : undefined
     const slots = payload.slots !== undefined ? payload.slots.map((x) => String(x ?? '').trim()).filter(Boolean) : undefined
+    const slotDisplayNames =
+      payload.slot_display_names !== undefined && payload.slot_display_names
+        ? (payload.slot_display_names as Record<string, string>)
+        : undefined
     next.metadata = {
       ...(name !== undefined ? { display_name: name } : {}),
       ...(slots !== undefined ? { slots } : {}),
+      ...(slotDisplayNames !== undefined ? { slot_display_names: slotDisplayNames } : {}),
     }
   }
   const updated = await updateTaxonomyItem(id, next)

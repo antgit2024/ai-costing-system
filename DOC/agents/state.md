@@ -11,6 +11,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-03 14:35（Frontend：工艺模块“适用类型 + 自动结构标签” MVP）
 - **最近校对（北京时间 GMT+8）**：2026-01-03 14:56（Frontend：结构标准/slot 下拉防呆收口 MVP）
 - **最近校对（北京时间 GMT+8）**：2026-01-03 15:18（Frontend：结构标准字典页支持删除（归档））
+- **最近校对（北京时间 GMT+8）**：2026-01-03 15:55（Frontend：结构标准 slots 列表式编辑（中文+自动拼音短码）+ 工艺 slot 下拉中文显示）
 - **最近校对（北京时间 GMT+8）**：2026-01-01（Backend：发货异常队列“按批次重试未解决异常（Retry Exceptions）”MVP）
 
 - **最近校对（北京时间 GMT+8）**：2025-12-25 04:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
@@ -57,6 +58,12 @@
   - 位置：`/costing/structure-standards` 列表“操作”列新增“删除（归档）”
   - 防呆：必须先停用再删除；删除前二次确认
   - 底层：复用 taxonomy `DELETE /taxonomy/items/{id}`（需要管理员密钥）
+  - 本轮验收命令（必须）：`npm -C frontend run build`
+
+- **本轮闭环产物（Frontend / 结构标准 slots：列表式（中文+拼音短码） + 工艺 slot 下拉中文展示）**：
+  - 结构标准编辑抽屉：slots 从 tags 输入改为“中文名 + 自动拼音短码”逐行编辑
+  - 落库：`metadata.slots` 存短码数组（如 `["lalian"]`），`metadata.slot_display_names` 存短码→中文名（如 `{ "lalian": "拉链位" }`）
+  - 工艺模块“结构适用范围”：slot/slots 下拉优先显示中文名（格式：`中文（短码）`），但结构标签预览/落库仍为短码 tag（如 `PILLOW_V1:lalian`）
   - 本轮验收命令（必须）：`npm -C frontend run build`
 
 - **本轮闭环产物（Backend / 模型结构化落点（结构标准/工艺模块标签）+ 列表筛选 MVP）**：

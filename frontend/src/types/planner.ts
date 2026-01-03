@@ -1599,6 +1599,7 @@ export interface StructureStandardRead {
   code: string
   name: string
   slots: string[]
+  slot_display_names?: Record<string, string>
   status: StructureStandardStatus
   updated_at?: string
 }

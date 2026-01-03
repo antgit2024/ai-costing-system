@@ -17,6 +17,11 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-01 17:05（Planner：环境文件治理（真实 .env 不进 Git））
 - **分支**：`backup/20251214-1535`
 
+- **本轮闭环产物（Planner / 下一轮：模型结构化落点派单）**：
+  - 新增派单：`DOC/agents/briefings/backend_structure_tagging_and_filtering_mvp.md`
+  - 目标：用 `metadata_json` 落 `structure_standard_code`（版本）与 `structure_tags[]`（工艺模块），并给列表接口加筛选参数，支持“按结构找模块/按结构找版本”
+  - 验收命令（文档存在性）：`grep -nF "模型结构化落点（结构标准/工艺模块标签）+ 列表筛选 MVP" DOC/agents/briefings/backend_structure_tagging_and_filtering_mvp.md`
+
 - **本轮闭环产物（Planner / 环境文件治理：真实 .env 不进 Git）**：
   - 目的：避免“切分支/拉代码后文件看不见/误提交密钥”，同时保留可复现性
   - 规则：

@@ -96,9 +96,13 @@
 - `DOC/agents/briefings/frontend_line_variants_panel_mvp.md`（前端闭环：物料行变体按钮 + overlay Drawer + 预演对接）
 - `DOC/agents/briefings/frontend_line_variants_material_picker_mvp.md`（前端闭环：变体替换物料选择器，替代手输ID）
 - `DOC/agents/briefings/frontend_sku_master_workspace_mvp.md`（前端闭环：SKU主档工作台（导入/查询/命中率））
+- `DOC/agents/briefings/frontend_shipments_retry_exceptions_and_bind_cta_mvp.md`（前端闭环：发货监控页“重试异常”按钮 + SKU_NOT_BOUND 去绑定 CTA）
 - `DOC/agents/briefings/ops_deploy_line_variants_to_4799.md`（运维闭环：部署行级变体到 47.99.89.206 + curl 验收）
 - `DOC/agents/briefings/ops_deploy_shipment_import_bom_snapshots_to_4799.md`（运维闭环：部署发货单导入→BOM快照到 47.99.89.206 + curl/pytest 验收）
 - `DOC/agents/briefings/ops_deploy_frontend_shipments_upload_to_4799.md`（运维闭环：部署前端发货单上传入口到 47.99.89.206）
+- `DOC/agents/briefings/ops_deploy_retry_exceptions_to_4799.md`（运维闭环：部署“异常队列重试（Retry Exceptions）”到 47.99.89.206）
+- `DOC/agents/briefings/backend_retry_shipment_exceptions_mvp.md`（后端闭环：按批次重试未解决异常（Retry Exceptions）MVP）
+- `DOC/agents/briefings/backend_structure_tagging_and_filtering_mvp.md`（后端闭环：模型结构化落点（结构标准/工艺模块标签）+ 列表筛选 MVP）
 
 ### 4) 质量门槛（可运行/可验收）
 

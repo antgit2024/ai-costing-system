@@ -2,6 +2,7 @@
 
 | 日期 | 模块 | 角色 | 任务/问题 | 结论 | 待办 |
 | --- | --- | --- | --- | --- | --- |
+| 2026-01-03 | 工艺模块（结构适用范围：强校验防呆） | Hub Agent（Planner） | 用户持续使用“适用类型 + slots”录入后，担心误填（global 仍选 slot / assembly 只选 1 个 slot）。 | ✅ 在保存时增加强校验：global 必须 0 slot；slot_internal 必须且只能 1 slot；assembly 至少 2 slots；非 global 必须选择结构标准。 | 无 |
 | 2026-01-03 | 标准模型（选工艺模块：标注 GLOBAL 通用模块） | Hub Agent（Planner） | 用户采用“通用工艺模块 global + 结构过滤自动包含 GLOBAL”的专业方案后，希望前端候选列表能清晰区分“通用工艺”与“结构相关”。 | ✅ `ProductModelEditorDrawer` 的“选择工艺模块”弹窗新增提示，并在候选表增加“适用范围”列：通用（GLOBAL）/结构相关。 | 无 |
 | 2026-01-03 | ProcessModules（结构过滤包含 GLOBAL） | Hub Agent（Planner） | 用户确认专业做法：通用工艺模块（如卷材UV打印）只建 1 个并标记 global，但在“按结构过滤候选模块”时不能被漏掉。 | ✅ 后端 `structure_code` 过滤口径更新：命中 `<code>`/`<code>:*` 的同时，**当仅传 structure_code 时额外包含 `GLOBAL`**（通用模块）。补单测 `test_structure_tag_filters_mvp.py` 覆盖。 | 下一步：如要更显式，可在前端候选对话框里把 `GLOBAL` 模块分组展示为“通用工艺”。 |
 | 2026-01-03 | 工艺模块（结构适用范围：规则说明文案） | Hub Agent（Planner） | 用户希望在工艺模块抽屉中增加一段“如何选 global/slot_internal/assembly”的简单规则说明，降低填错成本。 | ✅ 在工艺模块抽屉“结构适用范围”说明区追加规则：通用不依赖部位→global；单部位→slot_internal+1个slot；跨部位装配→assembly+多个slots。 | 无 |

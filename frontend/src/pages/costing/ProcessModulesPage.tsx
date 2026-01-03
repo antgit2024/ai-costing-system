@@ -1177,6 +1177,36 @@ const ProcessModulesPage = () => {
     await editorForm.validateFields()
     // prevent saving with placeholder rows (user sees "empty records")
     const values = editorForm.getFieldsValue()
+
+    // structure applicability validation (strong guardrail)
+    {
+      const mode = String(values.structure_applicability_mode ?? 'slot_internal') as any
+      const code = String(values.structure_standard_code ?? '').trim()
+      const slots = normalizeStringArray(values.structure_slots ?? [])
+      if (mode === 'global') {
+        if (slots.length) {
+          message.error('适用类型为 global 时无需选择 slots，请先清空 slots')
+          return
+        }
+      } else {
+        if (!code) {
+          message.error('请选择结构标准（非 global 时必填）')
+          return
+        }
+        if (mode === 'slot_internal') {
+          if (slots.length !== 1) {
+            message.error('内用（slot）必须且只能选择 1 个 slot')
+            return
+          }
+        } else if (mode === 'assembly') {
+          if (slots.length < 2) {
+            message.error('组合/装配（assembly）至少选择 2 个 slots')
+            return
+          }
+        }
+      }
+    }
+
     const rawMaterials = (values.materials ?? []) as EditorMaterialValue[]
     const rawSteps = (values.steps ?? []) as EditorStepValue[]
     const invalidMaterialRows = rawMaterials

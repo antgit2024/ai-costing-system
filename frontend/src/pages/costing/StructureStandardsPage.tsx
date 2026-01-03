@@ -423,7 +423,17 @@ export default function StructureStandardsPage() {
           </Form.Item>
           <Form.Item
             label="slots（中文名 + 自动拼音短码）"
-            extra={<Text type="secondary">左侧填中文名；右侧会自动生成拼音短码（可手改）。保存时以“拼音短码”为系统键。</Text>}
+            extra={
+              <Space direction="vertical" size={4}>
+                <Text type="secondary">左侧填中文名；右侧会自动生成拼音短码（可手改）。保存时以“拼音短码”为系统键。</Text>
+                <Text type="secondary">
+                  规则：这里建立的 slots 表达的是<strong>结构位置/部位</strong>（结构），用于标记“某个位置上适用哪些工艺模块”；
+                  <strong>工艺</strong>指生产时的工序/方法，通常做成工艺模块并按 <Text code>global</Text> /{' '}
+                  <Text code>slot_internal</Text> / <Text code>assembly</Text> 来表示适用范围。通用工艺（如印染/打印/包装）可用{' '}
+                  <Text code>GLOBAL</Text> 模块表达，<strong>不一定需要</strong>在结构里额外建“通用位”。
+                </Text>
+              </Space>
+            }
           >
             <Form.List name="slot_rows">
               {(fields, { add, remove }) => (

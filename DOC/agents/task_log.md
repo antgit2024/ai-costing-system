@@ -191,6 +191,7 @@
 | 2025-12-25 | 物料列表：显示采购单价/单位 | Frontend | 用户要求在物料管理列表中同时展示“采购单价/单位”（与入库单价/单位同样的两行展示）。 | ✅ `/costing/materials` 列表新增“采购单价/单位”列，读取宜搭字段 `numberField_mjjgsdlr`（采购单价）+ `selectField_mjjgsdlp`（采购单位），样式与“入库单价/单位”一致。已 build+部署。 | 若后续需要显示“采购→入库换算”，可新增第三行或 Tooltip 展示 `numberField_mjjgsdlq`。 |
 | 2025-12-25 | 物料列表：采购/入库列顺序调整 | Frontend | 用户要求将“采购单价/单位”和“入库单价/单位”两列交换位置。 | ✅ `/costing/materials` 已将“采购单价/单位”列移动到“入库单价/单位”列之前（其余列不变）。已 build+部署。 | - |
 | 2025-12-25 | 物料详情保存：计量方式与 BOM 单位一致性校验 | Frontend+Backend | 用户要求保存物料时校验“计算方式”和单位是否一致（面积=平米；周长/宽/高=米；数量=个/套），避免后续算价/扣库口径错误。 | ✅ 前端保存前拦截并提示错误；后端 `PATCH /base-config/materials/{id}` 增加兜底校验（normalize 后判断，不做自动补齐）。 | 单位主数据的专业做法是 UoM 表+换算；当前系统先用规范值“平米/米/个/套”，其它“张/块/件”建议先用规格/描述承载，后续再扩展单位字典。 |
+| 2026-01-03 | 工艺模块：适用类型 + 结构标签自动生成（MVP） | Frontend | 用户困惑模块属于哪个 slot/是否跨 slot/是否结构无关，且手填结构标签易漂移；需要在编辑抽屉给出语义并自动维护 tags。 | ✅ `ProcessModulesPage.tsx` 编辑抽屉新增“结构适用范围”：结构标准 code + 适用类型（slot_internal/assembly/global）+ slots 选择，并按规则自动生成/维护 `metadata_json.structure_tags[]`（slot_internal→`CODE:slot`；assembly→`CODE`+`CODE:slot...`；global→`GLOBAL`）；同时可选落 `metadata_json.structure_standard_code/structure_applicability_mode/structure_slots`。`npm -C frontend run build` 通过。 | 后续：如需让 global 也能被 `structure_code` 过滤覆盖，需要后端统一筛选口径或约定 `CODE` 必打。 |
 
 ## 调试模板
 

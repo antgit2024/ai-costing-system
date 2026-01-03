@@ -11,6 +11,7 @@ import {
   message,
   Modal,
   Popconfirm,
+  Radio,
   Row,
   Select,
   Space,
@@ -86,6 +87,34 @@ const { Title, Text } = Typography
 
 type StepCostMode = 'time' | 'piece'
 type StepMeasureType = 'area' | 'perimeter' | 'width' | 'height' | 'long_side' | 'short_side' | 'count' | 'length'
+
+type StructureApplicabilityMode = 'slot_internal' | 'assembly' | 'global'
+
+const normalizeStringArray = (raw: any): string[] => {
+  const arr = Array.isArray(raw) ? raw : raw ? [raw] : []
+  const cleaned = arr.map((x: any) => String(x ?? '').trim()).filter(Boolean)
+  const seen = new Set<string>()
+  return cleaned.filter((x) => (seen.has(x) ? false : (seen.add(x), true)))
+}
+
+const computeStructureTags = (args: {
+  structureStandardCode?: string
+  mode?: StructureApplicabilityMode
+  slots?: string[]
+}): string[] => {
+  const code = String(args.structureStandardCode ?? '').trim()
+  const mode = (args.mode ?? 'slot_internal') as StructureApplicabilityMode
+  const slots = normalizeStringArray(args.slots ?? [])
+  if (mode === 'global') return ['GLOBAL']
+  if (!code) return []
+  if (mode === 'slot_internal') {
+    const slot = String(slots[0] ?? '').trim()
+    if (!slot) return []
+    return [`${code}:${slot}`]
+  }
+  // assembly: include CODE + CODE:slot...
+  return normalizeStringArray([code, ...slots.map((s) => `${code}:${s}`)])
+}
 
 const STEP_MEASURE_TYPE_OPTIONS: Array<{ label: string; value: StepMeasureType; unitHint: string }> = [
   { label: '面积', value: 'area', unitHint: '㎡' },
@@ -519,6 +548,9 @@ const ProcessModulesPage = () => {
         category: '',
         status: 'draft',
         tags: [],
+        structure_standard_code: '',
+        structure_applicability_mode: 'slot_internal',
+        structure_slots: [],
         structure_tags: [],
         materials: [],
         steps: [],
@@ -534,6 +566,15 @@ const ProcessModulesPage = () => {
         (!hydratedRef.current || (module.id && lastHydratedIdRef.current !== module.id))
       ) {
         suppressTouchRef.current = true
+        const meta = ((module.metadata_json ?? {}) as any) || {}
+        const stdCode = String(meta?.structure_standard_code ?? '').trim()
+        const modeRaw = String(meta?.structure_applicability_mode ?? '').trim()
+        const mode: StructureApplicabilityMode =
+          modeRaw === 'assembly' || modeRaw === 'global' || modeRaw === 'slot_internal'
+            ? (modeRaw as any)
+            : 'slot_internal'
+        const slots = normalizeStringArray(meta?.structure_slots ?? [])
+        const tags = normalizeStringArray(meta?.structure_tags ?? [])
         const nextMaterials = module.materials.length ? (module.materials as any) : []
         const nextSteps = module.steps.length ? (module.steps as any) : []
         editorForm.setFieldsValue({
@@ -543,6 +584,10 @@ const ProcessModulesPage = () => {
           category: module.category,
           status: module.status,
           tags: module.tags ?? [],
+          structure_standard_code: stdCode,
+          structure_applicability_mode: mode,
+          structure_slots: slots,
+          structure_tags: tags,
           materials: nextMaterials,
           steps: nextSteps,
         })
@@ -558,6 +603,33 @@ const ProcessModulesPage = () => {
 
   const materialsValue = Form.useWatch('materials', editorForm) as EditorMaterialValue[] | undefined
   const stepsValue = Form.useWatch('steps', editorForm) as EditorStepValue[] | undefined
+
+  const structureStandardCodeValue = Form.useWatch('structure_standard_code', editorForm) as string | undefined
+  const structureModeValue = Form.useWatch(
+    'structure_applicability_mode',
+    editorForm,
+  ) as StructureApplicabilityMode | undefined
+  const structureSlotsValue = Form.useWatch('structure_slots', editorForm) as string[] | undefined
+
+  const computedStructureTags = useMemo(() => {
+    return computeStructureTags({
+      structureStandardCode: structureStandardCodeValue,
+      mode: (structureModeValue ?? 'slot_internal') as any,
+      slots: structureSlotsValue ?? [],
+    })
+  }, [structureStandardCodeValue, structureModeValue, structureSlotsValue])
+
+  // Auto-maintain structure_tags based on structure standard + mode + slots
+  useEffect(() => {
+    if (!drawerOpen) return
+    if (drawerMode !== 'edit' && drawerMode !== 'create') return
+    suppressTouchRef.current = true
+    try {
+      editorForm.setFieldValue('structure_tags', computedStructureTags)
+    } finally {
+      suppressTouchRef.current = false
+    }
+  }, [drawerOpen, drawerMode, editorForm, computedStructureTags])
 
   const [previewInput, setPreviewInput] = useState({
     width_mm: 0,
@@ -974,11 +1046,14 @@ const ProcessModulesPage = () => {
     update: ProcessModuleUpdatePayload
   } => {
     const values = editorForm.getFieldsValue()
-    const normalizeStringArray = (raw: any): string[] => {
-      const arr = Array.isArray(raw) ? raw : raw ? [raw] : []
-      return arr.map((x: any) => String(x ?? '').trim()).filter(Boolean)
-    }
-    const structureTags = normalizeStringArray(values.structure_tags)
+    const structureStandardCode = String(values.structure_standard_code ?? '').trim() || null
+    const structureMode = String(values.structure_applicability_mode ?? 'slot_internal').trim() as StructureApplicabilityMode
+    const structureSlots = normalizeStringArray(values.structure_slots ?? [])
+    const structureTags = computeStructureTags({
+      structureStandardCode: structureStandardCode ?? undefined,
+      mode: structureMode,
+      slots: structureSlots,
+    })
     const normalizeMaterials = (items: EditorMaterialValue[] = []) =>
       items
         .filter((item) => Boolean(item.material_ref_id))
@@ -1031,7 +1106,12 @@ const ProcessModulesPage = () => {
         category: values.category,
         status: values.status,
         tags: values.tags ?? [],
-        metadata_json: { structure_tags: structureTags },
+        metadata_json: {
+          structure_standard_code: structureStandardCode,
+          structure_applicability_mode: structureMode,
+          structure_slots: structureSlots,
+          structure_tags: structureTags,
+        },
         materials: normalizeMaterials(values.materials),
         steps: normalizeSteps(values.steps),
         operator_id: DEFAULT_OPERATOR,
@@ -1045,6 +1125,9 @@ const ProcessModulesPage = () => {
         // 关键：更新时必须保留原 metadata_json（否则会把 AI/扩展字段覆盖成空对象）
         metadata_json: {
           ...(((detailQuery.data?.metadata_json ?? {}) as any) || {}),
+          structure_standard_code: structureStandardCode,
+          structure_applicability_mode: structureMode,
+          structure_slots: structureSlots,
           structure_tags: structureTags,
         } as any,
         materials: normalizeMaterials(values.materials),
@@ -2088,13 +2171,79 @@ const ProcessModulesPage = () => {
             </Row>
             <Row gutter={16}>
               <Col span={12}>
-                <Form.Item label="结构标签（Tags）" name="structure_tags">
-                  <Select mode="tags" placeholder="例如 pillowcase_v1:zipper（用于结构筛选）" />
-                </Form.Item>
+                <Card title="结构适用范围" size="small" bordered style={{ marginBottom: 0 }}>
+                  <Row gutter={12}>
+                    <Col span={12}>
+                      <Form.Item label="结构标准 code（可选）" name="structure_standard_code">
+                        <Input allowClear placeholder="例如 pillowcase_v1（用于生成结构标签）" />
+                      </Form.Item>
+                    </Col>
+                    <Col span={12}>
+                      <Form.Item label="适用类型" name="structure_applicability_mode">
+                        <Radio.Group
+                          optionType="button"
+                          buttonStyle="solid"
+                          options={[
+                            { label: '内用（slot）', value: 'slot_internal' },
+                            { label: '组合/装配', value: 'assembly' },
+                            { label: 'global', value: 'global' },
+                          ]}
+                        />
+                      </Form.Item>
+                    </Col>
+                  </Row>
+                  {String(structureModeValue ?? 'slot_internal') === 'global' ? null : String(structureModeValue ?? 'slot_internal') === 'assembly' ? (
+                    <Form.Item label="slots（至少2个）" name="structure_slots">
+                      <Select mode="tags" placeholder="例如 front_panel / back_panel（回车新增）" />
+                    </Form.Item>
+                  ) : (
+                    <Form.Item label="slot（1个）" name="structure_slots">
+                      <Select
+                        mode="tags"
+                        placeholder="例如 zipper（回车新增）"
+                        onChange={(vals) => {
+                          const list = normalizeStringArray(vals)
+                          suppressTouchRef.current = true
+                          try {
+                            editorForm.setFieldValue('structure_slots', list.slice(0, 1))
+                          } finally {
+                            suppressTouchRef.current = false
+                          }
+                        }}
+                      />
+                    </Form.Item>
+                  )}
+                  <Form.Item label="结构标签预览">
+                    {computedStructureTags.length ? (
+                      <Space size={6} wrap>
+                        {computedStructureTags.map((t) => (
+                          <Tag
+                            key={t}
+                            style={{
+                              marginInlineEnd: 0,
+                              borderRadius: 999,
+                              padding: '0 6px',
+                              fontSize: 12,
+                              lineHeight: '18px',
+                            }}
+                          >
+                            {t}
+                          </Tag>
+                        ))}
+                      </Space>
+                    ) : (
+                      <Text type="secondary">（将写入 metadata_json.structure_tags[]，当前为空）</Text>
+                    )}
+                  </Form.Item>
+                  {/* auto-maintained hidden field */}
+                  <Form.Item name="structure_tags" hidden>
+                    <Input />
+                  </Form.Item>
+                </Card>
               </Col>
               <Col span={12}>
                 <Text type="secondary" style={{ fontSize: 12, lineHeight: '22px' }}>
-                  说明：结构标签会保存到 <Text code>metadata_json.structure_tags</Text>（默认空数组），用于列表筛选（MVP）。
+                  说明：系统会根据“适用类型 + slot(s)”自动生成并维护 <Text code>metadata_json.structure_tags</Text>（MVP）。global 会写入固定标签 <Text code>GLOBAL</Text>。
                 </Text>
               </Col>
             </Row>

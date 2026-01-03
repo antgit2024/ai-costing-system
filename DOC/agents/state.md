@@ -8,6 +8,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-03 12:39（Frontend：工艺模块结构筛选 + 结构标签维护 MVP）
 - **最近校对（北京时间 GMT+8）**：2026-01-03 13:10（Frontend：标准版本结构标准 code + 模块候选按结构过滤 MVP）
 - **最近校对（北京时间 GMT+8）**：2026-01-03 14:02（Frontend：结构标准字典页 MVP）
+- **最近校对（北京时间 GMT+8）**：2026-01-03 14:35（Frontend：工艺模块“适用类型 + 自动结构标签” MVP）
 - **最近校对（北京时间 GMT+8）**：2026-01-01（Backend：发货异常队列“按批次重试未解决异常（Retry Exceptions）”MVP）
 
 - **最近校对（北京时间 GMT+8）**：2025-12-25 04:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
@@ -213,6 +214,22 @@
     - `frontend/src/components/layout/AppLayout.tsx`
     - `frontend/src/services/planner.ts`
     - `frontend/src/types/planner.ts`
+  - 本轮验收命令（必须）：`npm -C frontend run build`（已通过）
+
+- **本轮闭环产物（Frontend / ProcessModules - ApplicabilityMode + AutoTags MVP）**：
+  - 编辑抽屉新增区块：**结构适用范围**
+    - 结构标准 code（可选，自由输入）
+    - 适用类型（三选一）：`slot_internal / assembly / global`
+    - slots：`slot_internal` 仅保留 1 个；`assembly` 支持多选；`global` 不展示 slots
+  - 自动生成并维护：
+    - `metadata_json.structure_tags: string[]`（只读预览，保存时写入）
+    - 可选辅助字段：`metadata_json.structure_standard_code / structure_applicability_mode / structure_slots`
+  - 生成规则（MVP）：
+    - slot_internal：`CODE:slot`
+    - assembly：`CODE` + `CODE:slot...`
+    - global：固定 `GLOBAL`
+  - 关键改动文件：
+    - `frontend/src/pages/costing/ProcessModulesPage.tsx`
   - 本轮验收命令（必须）：`npm -C frontend run build`（已通过）
 
 - **本轮闭环产物（Backend / 修复 Task Center 500：Postgres SSL）**：

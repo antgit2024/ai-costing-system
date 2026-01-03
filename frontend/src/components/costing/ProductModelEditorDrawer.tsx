@@ -4710,6 +4710,16 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
             placeholder="搜索模块：编码/名称"
             onSearch={(v) => setModulePickerSearch(v.trim())}
           />
+          <Alert
+            type="info"
+            showIcon
+            message="提示"
+            description={
+              <span>
+                标记为 <Tag color="blue">通用（GLOBAL）</Tag> 的模块可跨结构复用；其余为结构相关模块（会随结构标准过滤）。
+              </span>
+            }
+          />
           <Table
             rowKey="id"
             loading={modulePickerQuery.isLoading}
@@ -4722,6 +4732,16 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
             columns={[
               { title: '模块编码', dataIndex: 'module_code', width: 160 },
               { title: '模块名称', dataIndex: 'module_name' },
+              {
+                title: '适用范围',
+                width: 140,
+                render: (_: any, r: any) => {
+                  const meta: any = r?.metadata_json ?? {}
+                  const tags = Array.isArray(meta?.structure_tags) ? meta.structure_tags.map((x: any) => String(x)) : []
+                  const isGlobal = tags.includes('GLOBAL')
+                  return isGlobal ? <Tag color="blue">通用（GLOBAL）</Tag> : <Tag>结构相关</Tag>
+                },
+              },
               { title: '状态', dataIndex: 'status', width: 110, render: (v: string) => <Tag>{v}</Tag> },
               { title: '版本', dataIndex: 'version', width: 80 },
             ]}

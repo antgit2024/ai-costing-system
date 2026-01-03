@@ -14,6 +14,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-03 15:55（Frontend：结构标准 slots 列表式编辑（中文+自动拼音短码）+ 工艺 slot 下拉中文显示）
 - **最近校对（北京时间 GMT+8）**：2026-01-03 16:05（Frontend：工艺模块抽屉补“global/slot/assembly 选择规则”说明）
 - **最近校对（北京时间 GMT+8）**：2026-01-03 16:25（Backend：structure_code 过滤自动包含 GLOBAL 通用模块）
+- **最近校对（北京时间 GMT+8）**：2026-01-03 16:40（Frontend：选工艺模块候选标注 GLOBAL 通用模块）
 - **最近校对（北京时间 GMT+8）**：2026-01-01（Backend：发货异常队列“按批次重试未解决异常（Retry Exceptions）”MVP）
 
 - **最近校对（北京时间 GMT+8）**：2025-12-25 04:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）

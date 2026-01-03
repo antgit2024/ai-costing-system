@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from decimal import Decimal
+import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from sqlalchemy import asc, func, or_
+from sqlalchemy import asc, cast, func, or_
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -17,10 +19,14 @@ class ProcessModuleFilters:
         search: Optional[str] = None,
         status: Optional[str] = None,
         category: Optional[str] = None,
+        structure_tag: Optional[str] = None,
+        structure_code: Optional[str] = None,
     ):
         self.search = search
         self.status = status
         self.category = category
+        self.structure_tag = structure_tag
+        self.structure_code = structure_code
 
 
 def list_modules(
@@ -43,6 +49,56 @@ def list_modules(
         query = query.filter(models.ProcessModule.status == filters.status)
     if filters.category:
         query = query.filter(func.trim(models.ProcessModule.category) == filters.category.strip())
+
+    structure_tag = (filters.structure_tag or "").strip() or None
+    structure_code = (filters.structure_code or "").strip() or None
+    dialect = str(getattr(getattr(db, "bind", None), "dialect", None).name or "")
+
+    # SQLite fallback: apply filter in Python to keep behavior consistent in tests.
+    if (structure_tag or structure_code) and dialect != "postgresql":
+        items_all = query.order_by(models.ProcessModule.updated_at.desc()).all()
+
+        def _tags(meta: Dict[str, Any]) -> List[str]:
+            raw = (meta or {}).get("structure_tags") or []
+            return [str(x) for x in raw] if isinstance(raw, list) else []
+
+        filtered: List[models.ProcessModule] = []
+        for m in items_all:
+            tags = _tags(getattr(m, "metadata_json", {}) or {})
+            if structure_tag and structure_tag not in tags:
+                continue
+            if structure_code:
+                ok = False
+                prefix = f"{structure_code}:"
+                for t in tags:
+                    if t == structure_code or t.startswith(prefix):
+                        ok = True
+                        break
+                if not ok:
+                    continue
+            filtered.append(m)
+
+        total = len(filtered)
+        start = (page - 1) * page_size
+        end = start + page_size
+        return total, filtered[start:end]
+
+    # Postgres: use JSONB queries to avoid full table scans in Python.
+    if structure_tag:
+        meta = cast(models.ProcessModule.metadata_json, JSONB)
+        query = query.filter(meta.op("@>")({"structure_tags": [structure_tag]}))
+    if structure_code:
+        meta = cast(models.ProcessModule.metadata_json, JSONB)
+        regex = f"^{re.escape(structure_code)}:"
+        vars_json = func.jsonb_build_object("code", structure_code, "re", regex)
+        query = query.filter(
+            func.jsonb_path_exists(
+                meta,
+                "$.structure_tags ? (@ == $code || @ like_regex $re)",
+                vars_json,
+            )
+        )
+
     total = query.count()
     items = (
         query.order_by(models.ProcessModule.updated_at.desc())

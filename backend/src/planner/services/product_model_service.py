@@ -75,10 +75,12 @@ class ProductModelVersionFilters:
         search: Optional[str] = None,
         version_kind: Optional[str] = None,
         version_status: Optional[str] = None,
+        structure_standard_code: Optional[str] = None,
     ):
         self.search = search
         self.version_kind = version_kind
         self.version_status = version_status
+        self.structure_standard_code = structure_standard_code
 
 
 def list_versions(
@@ -102,6 +104,29 @@ def list_versions(
                 models.ProductModelVersion.version_label.ilike(pattern),
             )
         )
+    structure_code = (filters.structure_standard_code or "").strip() or None
+    dialect = str(getattr(getattr(db, "bind", None), "dialect", None).name or "")
+
+    # SQLite fallback (tests): filter in Python, keep ordering/pagination consistent.
+    if structure_code and dialect != "postgresql":
+        all_rows = q.order_by(models.ProductModelVersion.updated_at.desc()).all()
+        kept: List[Tuple[models.ProductModelVersion, models.ProductModel]] = []
+        for v, m in all_rows:
+            meta = getattr(v, "metadata_json", {}) or {}
+            if str(meta.get("structure_standard_code") or "") == structure_code:
+                kept.append((v, m))
+        total = len(kept)
+        start = (page - 1) * page_size
+        end = start + page_size
+        return total, kept[start:end]
+
+    if structure_code:
+        from sqlalchemy import cast
+        from sqlalchemy.dialects.postgresql import JSONB
+
+        meta = cast(models.ProductModelVersion.metadata_json, JSONB)
+        q = q.filter(meta["structure_standard_code"].astext == structure_code)
+
     total = q.count()
     items = (
         q.order_by(models.ProductModelVersion.updated_at.desc())

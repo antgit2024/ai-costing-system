@@ -22,6 +22,25 @@
   - 目标：用 `metadata_json` 落 `structure_standard_code`（版本）与 `structure_tags[]`（工艺模块），并给列表接口加筛选参数，支持“按结构找模块/按结构找版本”
   - 验收命令（文档存在性）：`grep -nF "模型结构化落点（结构标准/工艺模块标签）+ 列表筛选 MVP" DOC/agents/briefings/backend_structure_tagging_and_filtering_mvp.md`
 
+- **本轮闭环产物（Backend / 模型结构化落点（结构标准/工艺模块标签）+ 列表筛选 MVP）**：
+  - 产品模型版本结构标准（写入/读取）：
+    - 位置：`product_model_versions.metadata_json.structure_standard_code`
+    - 列表筛选：`GET /api/planner/product-model-versions?structure_standard_code=...`
+  - 工艺模块结构标签（写入/读取）：
+    - 位置：`process_modules.metadata_json.structure_tags`（List[str]，默认空数组）
+    - 支持两种字符串约定：
+      - `<structure_standard_code>`
+      - `<structure_standard_code>:<slot>`（slot 不解析，仅字符串筛选）
+    - 列表筛选：
+      - `GET /api/planner/process-modules?structure_tag=...`（精确匹配）
+      - `GET /api/planner/process-modules?structure_code=...`（命中 `code` 与 `code:*`）
+  - 数据库兼容：
+    - Postgres：使用 JSONB 查询（避免全量拉取后 Python 过滤）
+    - SQLite：测试环境 fallback 为 Python 过滤（保证口径一致）
+  - 最小单测：`backend/tests/planner/test_structure_tag_filters_mvp.py`
+  - 本轮验收命令（必须）：`python -m pytest backend/tests/planner/test_structure_tag_filters_mvp.py -q`
+  - 最近校对（北京时间 GMT+8）：2026-01-03
+
 - **本轮闭环产物（Planner / 环境文件治理：真实 .env 不进 Git）**：
   - 目的：避免“切分支/拉代码后文件看不见/误提交密钥”，同时保留可复现性
   - 规则：

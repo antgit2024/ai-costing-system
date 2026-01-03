@@ -139,12 +139,16 @@ def list_versions(
     search: str | None = Query(None, max_length=128),
     version_kind: str | None = Query(None, max_length=32),
     version_status: str | None = Query(None, max_length=32),
+    structure_standard_code: str | None = Query(None, max_length=128),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     db: Session = Depends(get_db),
 ):
     filters = product_model_service.ProductModelVersionFilters(
-        search=search, version_kind=version_kind, version_status=version_status
+        search=search,
+        version_kind=version_kind,
+        version_status=version_status,
+        structure_standard_code=structure_standard_code,
     )
     total, rows = product_model_service.list_versions(db, filters=filters, page=page, page_size=page_size)
     items: List[schemas.ProductModelVersionListItem] = []

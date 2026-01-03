@@ -44,11 +44,19 @@ def list_process_modules(
     search: Optional[str] = Query(None, max_length=128),
     category: Optional[str] = Query(None, max_length=128),
     status_filter: Optional[str] = Query(None, alias="status", max_length=32),
+    structure_tag: Optional[str] = Query(None, max_length=128),
+    structure_code: Optional[str] = Query(None, max_length=128),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     db: Session = Depends(get_db),
 ):
-    filters = process_module_service.ProcessModuleFilters(search=search, status=status_filter, category=category)
+    filters = process_module_service.ProcessModuleFilters(
+        search=search,
+        status=status_filter,
+        category=category,
+        structure_tag=structure_tag,
+        structure_code=structure_code,
+    )
     total, items = process_module_service.list_modules(
         db,
         filters=filters,

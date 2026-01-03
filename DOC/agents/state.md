@@ -3,6 +3,7 @@
 - **最近校对（北京时间 GMT+8）**：2025-12-30 19:20（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_backend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-30 20:27（Frontend：关联引用直达编辑 + 列宽收口）
 - **最近校对（北京时间 GMT+8）**：2025-12-30 21:03（Backend：关联引用过滤已归档/删除记录）
+- **最近校对（北京时间 GMT+8）**：2026-01-03 11:53（Frontend：发货异常重试 + SKU_NOT_BOUND 去绑定 CTA）
 - **最近校对（北京时间 GMT+8）**：2026-01-01（Backend：发货异常队列“按批次重试未解决异常（Retry Exceptions）”MVP）
 
 - **最近校对（北京时间 GMT+8）**：2025-12-25 04:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
@@ -98,6 +99,18 @@
   - 口径：`count` 与 `items` 使用同一过滤口径（避免“计数包含归档，但列表不包含/或相反”）。
   - 本轮验收命令（必须）：`npm -C frontend run build`（已通过）
   - 后端 smoke（可选）：按 `DOC/agents/commands.md` 执行 curl 示例（已通过）
+
+- **本轮闭环产物（Frontend / Shipments - retry exceptions + bind CTA MVP）**：
+  - 页面：`/costing/shipments`
+  - 异常队列新增按钮：**“重试本批未解决异常”**
+    - 调用：`POST /api/planner/shipments/exceptions/retry`
+    - 行为：对当前 `batch_id` 的未解决异常逐条重试；成功后自动刷新异常列表，并刷新 BOM 快照缓存
+  - 异常行新增 CTA：当 `reason=SKU_NOT_BOUND` 时展示 **“去绑定”**，跳转 `/costing/sku-master?search=<sku_code>`
+  - 关键改动文件：
+    - `frontend/src/pages/costing/ShipmentMonitorPage.tsx`
+    - `frontend/src/services/planner.ts`
+    - `frontend/src/types/planner.ts`
+  - 本轮验收命令（必须）：`npm -C frontend run build`（已通过）
 
 - **本轮闭环产物（Backend / 修复 Task Center 500：Postgres SSL）**：
   - 现象：前端 `GET /api/planner/task-center/recent?limit=5` 轮询报 500

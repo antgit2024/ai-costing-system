@@ -9,6 +9,7 @@ import {
   Form,
   Input,
   message,
+  Modal,
   Row,
   Segmented,
   Space,
@@ -21,7 +22,8 @@ import {
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { useMemo, useState } from 'react'
-import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
 
 import {
   executeShipmentsFromPreview,
@@ -31,6 +33,7 @@ import {
   generateBom,
   previewShipmentsXlsx,
   recomputeShipmentBomSnapshot,
+  retryShipmentExceptions,
 } from '@/services/planner'
 import type { BomGenerateResponse, BomSnapshot, ShipmentException, ShipmentImportBatch } from '@/types/planner'
 
@@ -112,6 +115,7 @@ const guessLineUnit = (line: Record<string, unknown>) =>
 
 const ShipmentMonitorPage = () => {
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
   const [batchPage, setBatchPage] = useState(1)
   const [batchPageSize, setBatchPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null)
@@ -132,6 +136,7 @@ const ShipmentMonitorPage = () => {
     'unresolved',
   )
   const [exceptionLimit, setExceptionLimit] = useState(200)
+  const [retryingExceptions, setRetryingExceptions] = useState(false)
 
   const [snapshotForm] = Form.useForm()
   const [snapshotQuery, setSnapshotQuery] = useState<{
@@ -169,6 +174,35 @@ const ShipmentMonitorPage = () => {
         limit: exceptionLimit,
       }),
     enabled: activeTab === 'exceptions',
+  })
+
+  const retryExceptionsMutation = useMutation({
+    mutationFn: async () => {
+      const batchId = (selectedBatchId || '').trim()
+      if (!batchId) throw new Error('请先填写/选择 batch_id')
+      const operatorId = (uploadRequestedBy || '').trim() || 'planner_user'
+      // MVP: 使用固定 reason，避免额外弹窗/输入；后端要求非空且 <=128
+      const reason = 'ui_retry_unresolved'
+      return await retryShipmentExceptions({
+        batch_id: batchId,
+        only_unresolved: true,
+        limit: exceptionLimit || undefined,
+        operator_id: operatorId,
+        reason,
+      })
+    },
+    onSuccess: (res) => {
+      message.success(`已触发重试：processed=${res.processed}, resolved=${res.resolved}, unresolved=${res.unresolved}`)
+      exceptionsQuery.refetch()
+      // retry 会新建 bom_snapshot，顺带刷新快照 tab 的数据缓存
+      queryClient.invalidateQueries({ queryKey: ['shipments', 'bom-snapshots'] })
+    },
+    onError: (err: any) => {
+      message.error(`重试失败：${err?.response?.data?.detail ?? err?.message ?? 'unknown error'}`)
+    },
+    onSettled: () => {
+      setRetryingExceptions(false)
+    },
   })
 
   const snapshotsQuery = useQuery({
@@ -294,6 +328,27 @@ const ShipmentMonitorPage = () => {
       dataIndex: 'message',
       ellipsis: true,
       render: (v) => safeString(v) || '-',
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 120,
+      render: (_, record) => {
+        const reason = safeString(record?.reason)
+        const sku = safeString(record?.sku_code).trim()
+        if (reason === 'SKU_NOT_BOUND' && sku) {
+          return (
+            <Button
+              size="small"
+              type="link"
+              onClick={() => navigate(`/costing/sku-master?search=${encodeURIComponent(sku)}`)}
+            >
+              去绑定
+            </Button>
+          )
+        }
+        return null
+      },
     },
   ]
 
@@ -653,6 +708,43 @@ const ShipmentMonitorPage = () => {
                               { label: '全部', value: 'all' },
                             ]}
                           />
+                          <Button
+                            type="primary"
+                            disabled={!selectedBatchId || exceptionResolved !== 'unresolved'}
+                            loading={retryingExceptions || retryExceptionsMutation.isPending}
+                            onClick={() => {
+                              if (!selectedBatchId || !(selectedBatchId || '').trim()) {
+                                message.warning('请先填写/选择 batch_id')
+                                return
+                              }
+                              if (exceptionResolved !== 'unresolved') {
+                                message.warning('请先切换到“未解决”视图再重试')
+                                return
+                              }
+                              // 轻量确认，避免误触造成大量重算
+                              ;(async () => {
+                                setRetryingExceptions(true)
+                                const ok = await new Promise<boolean>((resolve) => {
+                                  Modal.confirm({
+                                    title: '重试本批未解决异常？',
+                                    content:
+                                      '将对当前 batch_id 的未解决异常逐条重新执行“绑定→解析→BOM生成”，成功会生成新的 BOM 快照并标记异常已解决。',
+                                    okText: '确认重试',
+                                    cancelText: '取消',
+                                    onOk: () => resolve(true),
+                                    onCancel: () => resolve(false),
+                                  })
+                                })
+                                if (!ok) {
+                                  setRetryingExceptions(false)
+                                  return
+                                }
+                                retryExceptionsMutation.mutate()
+                              })()
+                            }}
+                          >
+                            重试本批未解决异常
+                          </Button>
                           <Input
                             style={{ width: 240 }}
                             placeholder="batch_id（可空=全局）"

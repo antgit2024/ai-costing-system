@@ -1391,6 +1391,32 @@ export interface ShipmentException {
   updated_at: string
 }
 
+export interface ShipmentExceptionRetryRequest {
+  batch_id: string
+  only_unresolved: boolean
+  limit?: number | null
+  operator_id: string
+  reason: string
+}
+
+export interface ShipmentExceptionRetryResultItem {
+  exception_id: string
+  shipment_line_id?: string | null
+  status: 'resolved' | 'unresolved'
+  new_bom_snapshot_id?: string | null
+  error?: string | null
+}
+
+export interface ShipmentExceptionRetryResponse {
+  batch_id: string
+  only_unresolved: boolean
+  limit?: number | null
+  processed: number
+  resolved: number
+  unresolved: number
+  items: ShipmentExceptionRetryResultItem[]
+}
+
 export interface BomSnapshot {
   id: string
   batch_id: string

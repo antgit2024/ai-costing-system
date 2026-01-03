@@ -99,6 +99,8 @@ import type {
   BomGenerateResponse,
   BomSnapshot,
   ShipmentException,
+  ShipmentExceptionRetryRequest,
+  ShipmentExceptionRetryResponse,
   ShipmentImportBatchListResponse,
   ShipmentImportBatch,
   SkuMaster,
@@ -1197,6 +1199,13 @@ export const fetchShipmentExceptions = async (
   params: { batch_id?: string; resolved?: boolean; limit?: number } = {},
 ): Promise<ShipmentException[]> => {
   const response = await plannerClient.get('/shipments/exceptions', { params: sanitizeParams(params) })
+  return response.data
+}
+
+export const retryShipmentExceptions = async (
+  payload: ShipmentExceptionRetryRequest,
+): Promise<ShipmentExceptionRetryResponse> => {
+  const response = await plannerClient.post('/shipments/exceptions/retry', payload)
   return response.data
 }
 

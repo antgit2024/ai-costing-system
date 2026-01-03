@@ -907,6 +907,19 @@ class ProductModelVersionPublishRequest(BaseModel):
     note: Optional[str] = Field(None, max_length=255)
 
 
+class ProductModelVersionPatchRequest(BaseModel):
+    """
+    MVP: partial update for version-level metadata_json.
+    IMPORTANT: server should MERGE metadata_json (not overwrite entire object).
+    """
+
+    metadata: Dict[str, Any] = Field(default_factory=dict, alias="metadata_json")
+    operator_id: Optional[str] = Field(None, max_length=64)
+
+    class Config:
+        allow_population_by_field_name = True
+
+
 class SkuModelVersionMappingCreateRequest(BaseModel):
     sku_code: str = Field(..., max_length=64)
     model_version_id: str

@@ -975,6 +975,11 @@ export interface ProductModelVersionPublishPayload {
   note?: string
 }
 
+export interface ProductModelVersionPatchPayload {
+  metadata_json: Record<string, unknown>
+  operator_id?: string
+}
+
 export interface ModelVersionImageRead {
   index: number
   url: string

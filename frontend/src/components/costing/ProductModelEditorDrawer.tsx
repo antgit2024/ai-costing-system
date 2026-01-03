@@ -66,6 +66,7 @@ import {
   listLineVariants,
   cloneProductModelFromStandardVersion,
   publishProductModelVersion,
+  patchProductModelVersion,
   refreshProductModelMaterialPrices,
   refreshProductModelVersionMaterialPrices,
   syncProductModelVersionFromModules,
@@ -306,6 +307,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   const [form] = Form.useForm()
   const navigate = useNavigate()
 
+  const DEFAULT_OPERATOR = import.meta.env.VITE_PLANNER_USER_ID ?? 'planner_user'
+
   const [activeTab, setActiveTab] = useState<'basic' | 'versions' | 'lines'>('lines')
   // 标准模型：型号识别规则（用于 SKU 自动绑定模型）
   const [recognitionDraftKeywords, setRecognitionDraftKeywords] = useState<string[]>([])
@@ -349,6 +352,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   const [modulePickerOpen, setModulePickerOpen] = useState(false)
   const [modulePickerSearch, setModulePickerSearch] = useState('')
   const [modulePickerSelected, setModulePickerSelected] = useState<string[]>([])
+  const [structureStandardCodeDraft, setStructureStandardCodeDraft] = useState<string>('')
+  const [savingStructureCode, setSavingStructureCode] = useState(false)
 
   const [materialPickerOpen, setMaterialPickerOpen] = useState(false)
   const [processPickerOpen, setProcessPickerOpen] = useState(false)
@@ -551,9 +556,19 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     return ((filteredVersions as any[]) ?? []).find((v: any) => String(v?.id ?? '').trim() === sid) ?? null
   }, [filteredVersions, selectedVersionId])
 
+  const selectedStructureStandardCode = useMemo(() => {
+    const meta: any = (selectedVersion as any)?.metadata_json ?? {}
+    return String(meta?.structure_standard_code ?? '').trim()
+  }, [selectedVersion])
+
   const selectedVersionStatus = String((selectedVersion as any)?.version_status ?? '').trim()
   // 规则：标准版本仅 draft 允许修改；已发布/已归档禁止修改
   const canEditSelectedVersion = entryContext === 'sample' ? true : selectedVersionStatus === 'draft'
+
+  useEffect(() => {
+    // hydrate draft input from version metadata when switching versions / refreshing list
+    setStructureStandardCodeDraft(selectedStructureStandardCode)
+  }, [selectedVersionId, selectedStructureStandardCode])
 
   const hasDerivedStandardFromSample = (sampleVersionId: string): boolean => {
     if (!sampleVersionId) return false
@@ -679,10 +694,13 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   const modulePickerParams: ProcessModuleQueryParams = useMemo(
     () => ({
       search: modulePickerSearch || undefined,
+      ...(entryContext === 'standard' && selectedStructureStandardCode
+        ? { structure_code: selectedStructureStandardCode }
+        : {}),
       page: 1,
       page_size: 50,
     }),
-    [modulePickerSearch],
+    [modulePickerSearch, entryContext, selectedStructureStandardCode],
   )
 
   const modulePickerQuery = useQuery({
@@ -2891,6 +2909,44 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                       onChange={(v) => setSelectedVersionId(v)}
                       allowClear
                     />
+                    {entryContext === 'standard' ? (
+                      <Space.Compact>
+                        <Input
+                          size="small"
+                          style={{ width: 240 }}
+                          placeholder="结构标准 code（可空）"
+                          value={structureStandardCodeDraft}
+                          disabled={!selectedVersionId || !canEditSelectedVersion}
+                          onChange={(e) => setStructureStandardCodeDraft(e.target.value)}
+                        />
+                        <Button
+                          size="small"
+                          type="primary"
+                          loading={savingStructureCode}
+                          disabled={!selectedVersionId || !canEditSelectedVersion}
+                          onClick={async () => {
+                            const vid = String(selectedVersionId ?? '').trim()
+                            if (!vid) return
+                            const code = String(structureStandardCodeDraft ?? '').trim()
+                            setSavingStructureCode(true)
+                            try {
+                              await patchProductModelVersion(vid, {
+                                metadata_json: { structure_standard_code: code || null },
+                                operator_id: DEFAULT_OPERATOR,
+                              })
+                              message.success('结构标准已保存')
+                              await versionsQuery.refetch()
+                            } catch (err: any) {
+                              message.error(err?.response?.data?.detail ?? err?.message ?? '保存失败')
+                            } finally {
+                              setSavingStructureCode(false)
+                            }
+                          }}
+                        >
+                          保存结构标准
+                        </Button>
+                      </Space.Compact>
+                    ) : null}
                     <Button size="small" onClick={openCreateVersionModal} disabled={!modelId}>
                       新增版本
                     </Button>
@@ -2901,6 +2957,13 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                       刷新
                     </Button>
                   </Space>
+                  {entryContext === 'standard' && selectedStructureStandardCode ? (
+                    <div style={{ marginTop: 8 }}>
+                      <Text type="secondary">
+                        当前结构标准：<Text code>{selectedStructureStandardCode}</Text>（选择工艺模块候选将自动按该结构过滤）
+                      </Text>
+                    </div>
+                  ) : null}
                 </Card>
 
                 {entryContext === 'standard' ? null : null}

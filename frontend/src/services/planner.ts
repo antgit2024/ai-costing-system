@@ -103,6 +103,7 @@ import type {
   ShipmentExceptionRetryResponse,
   ShipmentImportBatchListResponse,
   ShipmentImportBatch,
+  ProductModelVersionPatchPayload,
   SkuMaster,
   SkuMasterImportResponse,
   SkuMasterListResponse,
@@ -873,6 +874,7 @@ export const fetchProductModelVersionsPaged = async (
     search?: string
     version_kind?: string
     version_status?: string
+    structure_standard_code?: string
     page?: number
     page_size?: number
   } = {},
@@ -946,6 +948,14 @@ export const publishProductModelVersion = async (
   payload: ProductModelVersionPublishPayload = {},
 ): Promise<ProductModelVersionRead> => {
   const response = await plannerClient.post(`/product-model-versions/${versionId}/publish`, payload)
+  return response.data
+}
+
+export const patchProductModelVersion = async (
+  versionId: string,
+  payload: ProductModelVersionPatchPayload,
+): Promise<ProductModelVersionRead> => {
+  const response = await plannerClient.patch(`/product-model-versions/${versionId}`, payload)
   return response.data
 }
 

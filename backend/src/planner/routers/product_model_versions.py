@@ -354,6 +354,59 @@ def publish_product_model_version(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.patch(
+    "/product-model-versions/{version_id}",
+    response_model=schemas.ProductModelVersionRead,
+)
+def patch_product_model_version(
+    version_id: str, payload: schemas.ProductModelVersionPatchRequest, db: Session = Depends(get_db)
+):
+    """
+    MVP: allow patching version-level metadata_json (merge, not overwrite).
+    Used by frontend to persist structure_standard_code and other light metadata.
+    """
+    v = _get_version_or_404(db, version_id)
+
+    # Deep-copy to avoid SQLAlchemy JSON change-tracking pitfalls on nested mutables.
+    base = json.loads(json.dumps(v.metadata_json or {}, ensure_ascii=False))
+    incoming = payload.metadata or {}
+    if not isinstance(incoming, dict):
+        raise HTTPException(status_code=400, detail="metadata_json 必须是对象")
+
+    # Minimal validation for structure_standard_code (if present)
+    if "structure_standard_code" in incoming:
+        code = incoming.get("structure_standard_code")
+        if code is None:
+            # allow clearing
+            pass
+        else:
+            s = str(code).strip()
+            if len(s) > 128:
+                raise HTTPException(status_code=400, detail="structure_standard_code 长度超限（<=128）")
+            incoming["structure_standard_code"] = s
+
+    base.update(incoming)
+    v.metadata_json = base
+    db.commit()
+    db.refresh(v)
+
+    try:
+        audit_service.log(
+            db,
+            actor_id=payload.operator_id or "system",
+            action="product_model_version.patch",
+            entity_type="product_model_version",
+            entity_id=v.id,
+            payload={"metadata_json": incoming},
+        )
+        db.commit()
+    except Exception:
+        # audit is best-effort; do not fail patch
+        db.rollback()
+
+    return schemas.ProductModelVersionRead.from_orm(v)
+
+
 @router.post(
     "/product-model-versions/{version_id}/clone-model",
     response_model=schemas.CloneModelFromVersionResponse,

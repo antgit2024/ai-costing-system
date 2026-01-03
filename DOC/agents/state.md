@@ -6,6 +6,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-03 11:53（Frontend：发货异常重试 + SKU_NOT_BOUND 去绑定 CTA）
 - **最近校对（北京时间 GMT+8）**：2026-01-03 11:57（Frontend：Shipments 静态资源原子发布到 47.99.89.206）
 - **最近校对（北京时间 GMT+8）**：2026-01-03 12:39（Frontend：工艺模块结构筛选 + 结构标签维护 MVP）
+- **最近校对（北京时间 GMT+8）**：2026-01-03 13:10（Frontend：标准版本结构标准 code + 模块候选按结构过滤 MVP）
 - **最近校对（北京时间 GMT+8）**：2026-01-01（Backend：发货异常队列“按批次重试未解决异常（Retry Exceptions）”MVP）
 
 - **最近校对（北京时间 GMT+8）**：2025-12-25 04:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
@@ -167,6 +168,23 @@
     - `frontend/src/pages/costing/ProcessModulesPage.tsx`
     - `frontend/src/types/planner.ts`
     - `frontend/src/services/planner.ts`（仅透传 query params，无额外改动）
+  - 本轮验收命令（必须）：`npm -C frontend run build`（已通过）
+
+- **本轮闭环产物（Frontend / StandardModels - VersionStructureCode + ModuleFilter MVP）**：
+  - 标准模型编辑抽屉（`ProductModelEditorDrawer`）：
+    - 新增字段：**结构标准 code**（可空，自由输入）
+    - 保存位置：`product_model_versions.metadata_json.structure_standard_code`
+  - 模块候选过滤：
+    - 打开“选择工艺模块”弹窗时，若当前标准版本存在 `structure_standard_code`，则候选请求自动带 `structure_code=<该值>`
+    - 若为空：不加筛选（兼容历史模型）
+  - 后端依赖（本轮补齐最小接口）：
+    - 新增 `PATCH /api/planner/product-model-versions/{version_id}`：合并更新版本 `metadata_json`（用于保存结构标准 code）
+  - 关键改动文件：
+    - `frontend/src/components/costing/ProductModelEditorDrawer.tsx`
+    - `frontend/src/services/planner.ts`
+    - `frontend/src/types/planner.ts`
+    - `backend/src/planner/routers/product_model_versions.py`
+    - `backend/src/planner/schemas.py`
   - 本轮验收命令（必须）：`npm -C frontend run build`（已通过）
 
 - **本轮闭环产物（Backend / 修复 Task Center 500：Postgres SSL）**：

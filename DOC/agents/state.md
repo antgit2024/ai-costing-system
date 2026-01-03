@@ -4,6 +4,7 @@
 - **最近校对（北京时间 GMT+8）**：2025-12-30 20:27（Frontend：关联引用直达编辑 + 列宽收口）
 - **最近校对（北京时间 GMT+8）**：2025-12-30 21:03（Backend：关联引用过滤已归档/删除记录）
 - **最近校对（北京时间 GMT+8）**：2026-01-03 11:53（Frontend：发货异常重试 + SKU_NOT_BOUND 去绑定 CTA）
+- **最近校对（北京时间 GMT+8）**：2026-01-03 11:57（Frontend：Shipments 静态资源原子发布到 47.99.89.206）
 - **最近校对（北京时间 GMT+8）**：2026-01-01（Backend：发货异常队列“按批次重试未解决异常（Retry Exceptions）”MVP）
 
 - **最近校对（北京时间 GMT+8）**：2025-12-25 04:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
@@ -111,6 +112,19 @@
     - `frontend/src/services/planner.ts`
     - `frontend/src/types/planner.ts`
   - 本轮验收命令（必须）：`npm -C frontend run build`（已通过）
+
+- **本轮闭环产物（Frontend / Shipments - 原子发布到 47.99.89.206）**：
+  - 发布方式：仅发布前端静态资源（不改后端），使用 `frontend/scripts/deploy_static.sh` 原子切换到：
+    - `PLANNER_STATIC_DIR=/var/www/html/ai-costing/dist`
+  - 发布步骤（执行记录）：
+    - `git pull --ff-only`（已 up-to-date，包含 `f35569e`/`feat(shipments): ...`）
+    - `cd frontend && npm ci && npm run build`（已通过）
+    - `PLANNER_STATIC_DIR=/var/www/html/ai-costing/dist ./scripts/deploy_static.sh`（已完成原子切换）
+  - 线上验收命令（只给 1 条）：`curl -sS http://47.99.89.206/ | head -n 5`（已通过，返回 index.html）
+  - 点验项（浏览器）：
+    - `/costing/shipments` 可见“重试本批未解决异常”按钮
+    - `SKU_NOT_BOUND` 行可见“去绑定”按钮，跳转 `/costing/sku-master?search=<sku_code>`
+    - 控制台无 `Failed to load module script (MIME text/html)` 报错
 
 - **本轮闭环产物（Backend / 修复 Task Center 500：Postgres SSL）**：
   - 现象：前端 `GET /api/planner/task-center/recent?limit=5` 轮询报 500

@@ -9,6 +9,17 @@ from ...config import settings
 
 logger = logging.getLogger(__name__)
 
+DISCLAIMER_LINE = "本描述不包含任何默认数值，仅描述流程/口径。"
+
+
+def _ensure_disclaimer(text: str) -> str:
+    s = str(text or "").strip()
+    if not s:
+        return DISCLAIMER_LINE
+    if "不包含任何默认数值" in s:
+        return s
+    return f"{s}\n\n{DISCLAIMER_LINE}"
+
 
 def _fallback_description(payload: Dict[str, Any]) -> str:
     module_name = str(payload.get("module_name") or "").strip()
@@ -60,7 +71,7 @@ def _fallback_description(payload: Dict[str, Any]) -> str:
             suffix = f"（{'，'.join(parts)}）" if parts else ""
             lines.append(f"- {i}. {name}{suffix}")
 
-    return "\n".join(lines).strip()
+    return _ensure_disclaimer("\n".join(lines).strip())
 
 
 def generate_process_module_description(payload: Dict[str, Any]) -> Tuple[str, str]:
@@ -122,7 +133,7 @@ def generate_process_module_description(payload: Dict[str, Any]) -> Tuple[str, s
                     content = str(out.get("text") or "").strip()
                 if not content:
                     return _fallback_description(payload), "fallback"
-                return content, "llm"
+                return _ensure_disclaimer(content), "llm"
         except Exception as e:
             logger.exception("dashscope llm call failed; fallback to template. err=%r", e)
             return _fallback_description(payload), "fallback"
@@ -151,7 +162,7 @@ def generate_process_module_description(payload: Dict[str, Any]) -> Tuple[str, s
             content = str(content or "").strip()
             if not content:
                 return _fallback_description(payload), "fallback"
-            return content, "llm"
+            return _ensure_disclaimer(content), "llm"
     except Exception as e:
         logger.exception("openai-compatible llm call failed; fallback to template. err=%r", e)
         return _fallback_description(payload), "fallback"

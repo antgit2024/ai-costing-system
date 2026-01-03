@@ -2247,6 +2247,7 @@ const ProcessModulesPage = () => {
                           scope ? `适用范围：${scope}` : '',
                           stepsText.length ? `工序：${stepsText.join(' → ')}` : '',
                           matsText.length ? `物料：${matsText.slice(0, 8).join('、')}` : '',
+                          '本描述不包含任何默认数值，仅描述流程/口径。',
                         ]
                           .filter(Boolean)
                           .join('\n')

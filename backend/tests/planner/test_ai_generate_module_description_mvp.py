@@ -19,5 +19,6 @@ def test_ai_generate_process_module_description_accepts_structure(client):
     data = resp.json()
     assert isinstance(data.get("description"), str) and data["description"].strip()
     assert data.get("provider") in {"llm", "fallback"}
+    assert "不包含任何默认数值" in data["description"]
 
 

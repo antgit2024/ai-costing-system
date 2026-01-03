@@ -2228,31 +2228,6 @@ const ProcessModulesPage = () => {
                 <Card title="结构适用范围" size="small" bordered style={{ marginBottom: 0 }}>
                   <Row gutter={12}>
                     <Col span={12}>
-                      <Form.Item label="结构标准" name="structure_standard_code">
-                        <Select
-                          allowClear
-                          showSearch
-                          optionFilterProp="label"
-                          placeholder="选择结构标准（来自结构标准字典）"
-                          loading={structureStandardsQuery.isLoading}
-                          options={(structureStandardsQuery.data?.items ?? []).map((it) => ({
-                            value: it.code,
-                            label: `${it.code}${it.name && it.name !== it.code ? ` / ${it.name}` : ''}${it.status === 'inactive' ? '（停用）' : ''}`,
-                            disabled: it.status === 'inactive',
-                          }))}
-                          onChange={() => {
-                            // 换结构标准后：slots 清空，避免错配
-                            suppressTouchRef.current = true
-                            try {
-                              editorForm.setFieldValue('structure_slots', [])
-                            } finally {
-                              suppressTouchRef.current = false
-                            }
-                          }}
-                        />
-                      </Form.Item>
-                    </Col>
-                    <Col span={12}>
                       <Form.Item label="适用类型" name="structure_applicability_mode">
                         <Radio.Group
                           optionType="button"
@@ -2262,9 +2237,49 @@ const ProcessModulesPage = () => {
                             { label: '组合/装配', value: 'assembly' },
                             { label: 'global', value: 'global' },
                           ]}
+                          onChange={(e) => {
+                            const next = String(e?.target?.value ?? '')
+                            if (next === 'global') {
+                              // global: hide structure standard; clear related fields to avoid accidental selection
+                              suppressTouchRef.current = true
+                              try {
+                                editorForm.setFieldValue('structure_standard_code', undefined)
+                                editorForm.setFieldValue('structure_slots', [])
+                              } finally {
+                                suppressTouchRef.current = false
+                              }
+                            }
+                          }}
                         />
                       </Form.Item>
                     </Col>
+                    {String(structureModeValue ?? 'slot_internal') === 'global' ? null : (
+                      <Col span={12}>
+                        <Form.Item label="结构标准" name="structure_standard_code">
+                          <Select
+                            allowClear
+                            showSearch
+                            optionFilterProp="label"
+                            placeholder="选择结构标准（来自结构标准字典）"
+                            loading={structureStandardsQuery.isLoading}
+                            options={(structureStandardsQuery.data?.items ?? []).map((it) => ({
+                              value: it.code,
+                              label: `${it.code}${it.name && it.name !== it.code ? ` / ${it.name}` : ''}${it.status === 'inactive' ? '（停用）' : ''}`,
+                              disabled: it.status === 'inactive',
+                            }))}
+                            onChange={() => {
+                              // 换结构标准后：slots 清空，避免错配
+                              suppressTouchRef.current = true
+                              try {
+                                editorForm.setFieldValue('structure_slots', [])
+                              } finally {
+                                suppressTouchRef.current = false
+                              }
+                            }}
+                          />
+                        </Form.Item>
+                      </Col>
+                    )}
                   </Row>
                   {String(structureModeValue ?? 'slot_internal') === 'global' ? null : String(structureModeValue ?? 'slot_internal') === 'assembly' ? (
                     <Form.Item

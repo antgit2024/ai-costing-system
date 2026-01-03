@@ -658,6 +658,11 @@ export interface ProcessModuleQueryParams extends Record<string, string | number
   search?: string
   category?: string
   status?: string
+  // structure filters (MVP)
+  // - structure_code: match "<code>" or "<code>:<slot>" prefix
+  // - structure_tag: exact match any tag in metadata_json.structure_tags[]
+  structure_code?: string
+  structure_tag?: string
   page?: number
   page_size?: number
 }

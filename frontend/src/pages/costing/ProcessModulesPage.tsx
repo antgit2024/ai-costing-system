@@ -519,6 +519,7 @@ const ProcessModulesPage = () => {
         category: '',
         status: 'draft',
         tags: [],
+        structure_tags: [],
         materials: [],
         steps: [],
       })
@@ -614,6 +615,8 @@ const ProcessModulesPage = () => {
       search: values.search?.trim() || undefined,
       status: values.status || undefined,
       category: values.category || undefined,
+      structure_code: values.structure_code?.trim() || undefined,
+      structure_tag: values.structure_tag?.trim() || undefined,
     })
     setPagination((prev) => ({ ...prev, current: 1 }))
   }
@@ -713,6 +716,52 @@ const ProcessModulesPage = () => {
               </Space>
             </div>
           </div>
+        )
+      },
+    },
+    {
+      title: '结构标签',
+      key: 'structure_tags',
+      width: 220,
+      render: (_: any, r: ProcessModuleSummary) => {
+        const meta = ((r.metadata_json ?? {}) as any) || {}
+        const raw = meta?.structure_tags
+        const tags = Array.isArray(raw)
+          ? raw.map((x: any) => String(x ?? '').trim()).filter(Boolean)
+          : []
+        if (!tags.length) return <Text type="secondary">-</Text>
+        const show = tags.slice(0, 3)
+        const rest = tags.length - show.length
+        return (
+          <Space size={6} wrap>
+            {show.map((t) => (
+              <Tag
+                key={t}
+                style={{
+                  marginInlineEnd: 0,
+                  borderRadius: 999,
+                  padding: '0 6px',
+                  fontSize: 12,
+                  lineHeight: '18px',
+                }}
+              >
+                {t}
+              </Tag>
+            ))}
+            {rest > 0 ? (
+              <Tag
+                style={{
+                  marginInlineEnd: 0,
+                  borderRadius: 999,
+                  padding: '0 6px',
+                  fontSize: 12,
+                  lineHeight: '18px',
+                }}
+              >
+                …+{rest}
+              </Tag>
+            ) : null}
+          </Space>
         )
       },
     },
@@ -925,6 +974,11 @@ const ProcessModulesPage = () => {
     update: ProcessModuleUpdatePayload
   } => {
     const values = editorForm.getFieldsValue()
+    const normalizeStringArray = (raw: any): string[] => {
+      const arr = Array.isArray(raw) ? raw : raw ? [raw] : []
+      return arr.map((x: any) => String(x ?? '').trim()).filter(Boolean)
+    }
+    const structureTags = normalizeStringArray(values.structure_tags)
     const normalizeMaterials = (items: EditorMaterialValue[] = []) =>
       items
         .filter((item) => Boolean(item.material_ref_id))
@@ -977,7 +1031,7 @@ const ProcessModulesPage = () => {
         category: values.category,
         status: values.status,
         tags: values.tags ?? [],
-        metadata_json: {},
+        metadata_json: { structure_tags: structureTags },
         materials: normalizeMaterials(values.materials),
         steps: normalizeSteps(values.steps),
         operator_id: DEFAULT_OPERATOR,
@@ -989,7 +1043,10 @@ const ProcessModulesPage = () => {
         status: values.status,
         tags: values.tags ?? [],
         // 关键：更新时必须保留原 metadata_json（否则会把 AI/扩展字段覆盖成空对象）
-        metadata_json: (detailQuery.data?.metadata_json ?? {}) as any,
+        metadata_json: {
+          ...(((detailQuery.data?.metadata_json ?? {}) as any) || {}),
+          structure_tags: structureTags,
+        } as any,
         materials: normalizeMaterials(values.materials),
         steps: normalizeSteps(values.steps),
         operator_id: DEFAULT_OPERATOR,
@@ -1769,6 +1826,20 @@ const ProcessModulesPage = () => {
               style={{ width: 160 }}
             />
           </Form.Item>
+          <Form.Item name="structure_code" label="结构标准code">
+            <Input
+              allowClear
+              placeholder='例如 pillowcase_v1 或 pillowcase_v1:zipper'
+              style={{ width: 240 }}
+            />
+          </Form.Item>
+          <Form.Item name="structure_tag" label="结构标签">
+            <Input
+              allowClear
+              placeholder="例如 pillowcase_v1:zipper"
+              style={{ width: 220 }}
+            />
+          </Form.Item>
           <Form.Item>
             <Space>
               <Button type="primary" htmlType="submit">
@@ -2013,6 +2084,18 @@ const ProcessModulesPage = () => {
                     将当前物料组+工序组汇总生成模块描述（通常 5-20 秒）
                   </Text>
                 </div>
+              </Col>
+            </Row>
+            <Row gutter={16}>
+              <Col span={12}>
+                <Form.Item label="结构标签（Tags）" name="structure_tags">
+                  <Select mode="tags" placeholder="例如 pillowcase_v1:zipper（用于结构筛选）" />
+                </Form.Item>
+              </Col>
+              <Col span={12}>
+                <Text type="secondary" style={{ fontSize: 12, lineHeight: '22px' }}>
+                  说明：结构标签会保存到 <Text code>metadata_json.structure_tags</Text>（默认空数组），用于列表筛选（MVP）。
+                </Text>
               </Col>
             </Row>
           </Card>

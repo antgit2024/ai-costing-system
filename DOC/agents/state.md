@@ -5,6 +5,7 @@
 - **最近校对（北京时间 GMT+8）**：2025-12-30 21:03（Backend：关联引用过滤已归档/删除记录）
 - **最近校对（北京时间 GMT+8）**：2026-01-03 11:53（Frontend：发货异常重试 + SKU_NOT_BOUND 去绑定 CTA）
 - **最近校对（北京时间 GMT+8）**：2026-01-03 11:57（Frontend：Shipments 静态资源原子发布到 47.99.89.206）
+- **最近校对（北京时间 GMT+8）**：2026-01-03 12:39（Frontend：工艺模块结构筛选 + 结构标签维护 MVP）
 - **最近校对（北京时间 GMT+8）**：2026-01-01（Backend：发货异常队列“按批次重试未解决异常（Retry Exceptions）”MVP）
 
 - **最近校对（北京时间 GMT+8）**：2025-12-25 04:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
@@ -149,6 +150,19 @@
     - `/costing/shipments` 可见“重试本批未解决异常”按钮
     - `SKU_NOT_BOUND` 行可见“去绑定”按钮，跳转 `/costing/sku-master?search=<sku_code>`
     - 控制台无 `Failed to load module script (MIME text/html)` 报错
+
+- **本轮闭环产物（Frontend / ProcessModules - StructureFiltersAndTags MVP）**：
+  - 列表筛选区新增：
+    - 结构标准 code → query `structure_code`
+    - 结构标签（如 `pillowcase_v1:zipper`）→ query `structure_tag`
+  - 列表新增列：**结构标签**（读取 `metadata_json.structure_tags`，展示前 3 个 + `…+N`）
+  - 编辑抽屉新增字段：**结构标签（Tags）**
+    - 保存到 `metadata_json.structure_tags: string[]`（默认空数组，支持增删）
+  - 关键改动文件（严格按 workset）：
+    - `frontend/src/pages/costing/ProcessModulesPage.tsx`
+    - `frontend/src/types/planner.ts`
+    - `frontend/src/services/planner.ts`（仅透传 query params，无额外改动）
+  - 本轮验收命令（必须）：`npm -C frontend run build`（已通过）
 
 - **本轮闭环产物（Backend / 修复 Task Center 500：Postgres SSL）**：
   - 现象：前端 `GET /api/planner/task-center/recent?limit=5` 轮询报 500

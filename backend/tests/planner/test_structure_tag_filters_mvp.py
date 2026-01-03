@@ -21,7 +21,14 @@ def test_process_modules_filter_by_structure_tag_and_code(client, db_session):
         tags=[],
         metadata_json={"structure_tags": ["decoration_combo_painting_v1:frame"]},
     )
-    db_session.add_all([m1, m2])
+    m3 = models.ProcessModule(
+        module_code="PMOD-STRUCT-003",
+        module_name="通用模块-打印",
+        status="active",
+        tags=[],
+        metadata_json={"structure_tags": ["GLOBAL"]},
+    )
+    db_session.add_all([m1, m2, m3])
     db_session.commit()
 
     # exact tag match
@@ -41,7 +48,19 @@ def test_process_modules_filter_by_structure_tag_and_code(client, db_session):
     )
     assert resp2.status_code == 200, resp2.text
     codes2 = [x["module_code"] for x in resp2.json()["items"]]
-    assert codes2 == ["PMOD-STRUCT-001"]
+    # should include GLOBAL modules as common candidates
+    assert "PMOD-STRUCT-001" in codes2
+    assert "PMOD-STRUCT-003" in codes2
+
+    # when both tag and code are specified, do not widen by GLOBAL
+    resp3 = client.get(
+        f"{API_PREFIX}/process-modules",
+        params={"structure_tag": "pillowcase_v1:zipper", "structure_code": "pillowcase_v1", "page": 1, "page_size": 50},
+    )
+    assert resp3.status_code == 200, resp3.text
+    codes3 = [x["module_code"] for x in resp3.json()["items"]]
+    assert "PMOD-STRUCT-001" in codes3
+    assert "PMOD-STRUCT-003" not in codes3
 
 
 def test_product_model_versions_filter_by_structure_standard_code(client, db_session):

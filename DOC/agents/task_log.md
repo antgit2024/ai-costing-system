@@ -2,6 +2,7 @@
 
 | 日期 | 模块 | 角色 | 任务/问题 | 结论 | 待办 |
 | --- | --- | --- | --- | --- | --- |
+| 2026-01-03 | ProcessModules（结构过滤包含 GLOBAL） | Hub Agent（Planner） | 用户确认专业做法：通用工艺模块（如卷材UV打印）只建 1 个并标记 global，但在“按结构过滤候选模块”时不能被漏掉。 | ✅ 后端 `structure_code` 过滤口径更新：命中 `<code>`/`<code>:*` 的同时，**当仅传 structure_code 时额外包含 `GLOBAL`**（通用模块）。补单测 `test_structure_tag_filters_mvp.py` 覆盖。 | 下一步：如要更显式，可在前端候选对话框里把 `GLOBAL` 模块分组展示为“通用工艺”。 |
 | 2026-01-03 | 工艺模块（结构适用范围：规则说明文案） | Hub Agent（Planner） | 用户希望在工艺模块抽屉中增加一段“如何选 global/slot_internal/assembly”的简单规则说明，降低填错成本。 | ✅ 在工艺模块抽屉“结构适用范围”说明区追加规则：通用不依赖部位→global；单部位→slot_internal+1个slot；跨部位装配→assembly+多个slots。 | 无 |
 | 2026-01-03 | 结构标准/slots（列表式编辑 + 自动拼音短码） | Hub Agent（Planner） | 用户要求 slots 从 tags 输入改为“中文名 + 自动翻拼音短码”的列表式行编辑，并让工艺模块 slot 下拉按中文选择。 | ✅ `StructureStandardsPage` slots 改为列表式（中文名输入 → 自动生成拼音短码，可手改），保存落到 `metadata.slots`（短码数组）+ `metadata.slot_display_names`（短码→中文名）；工艺模块 slot 下拉展示“中文（短码）”，但结构标签预览/落库仍为短码 tag。 | 下一步：如需“中文输入时实时建议拼音且检测同音冲突/重复短码”，再单开闭环做校验与提示。 |
 | 2026-01-03 | 结构标准（字典页：删除能力） | Hub Agent（Planner） | 用户要求结构标准列表增加“删除”功能，减少脏数据与误建结构。 | ✅ 前端结构标准字典页新增“删除（归档）”按钮（要求先停用再删除，带二次确认）；底层复用 taxonomy `DELETE /taxonomy/items/{id}`。 | 下一步：如需“删除前引用检查/阻断”，再派后端补 references 校验或前端调用现有引用接口做提示。 |

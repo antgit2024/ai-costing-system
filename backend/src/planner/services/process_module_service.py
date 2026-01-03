@@ -53,6 +53,7 @@ def list_modules(
     structure_tag = (filters.structure_tag or "").strip() or None
     structure_code = (filters.structure_code or "").strip() or None
     dialect = str(getattr(getattr(db, "bind", None), "dialect", None).name or "")
+    include_global = bool(structure_code and not structure_tag)
 
     # SQLite fallback: apply filter in Python to keep behavior consistent in tests.
     if (structure_tag or structure_code) and dialect != "postgresql":
@@ -74,6 +75,8 @@ def list_modules(
                     if t == structure_code or t.startswith(prefix):
                         ok = True
                         break
+                if (not ok) and include_global and ("GLOBAL" in tags):
+                    ok = True
                 if not ok:
                     continue
             filtered.append(m)
@@ -90,14 +93,22 @@ def list_modules(
     if structure_code:
         meta = cast(models.ProcessModule.metadata_json, JSONB)
         regex = f"^{re.escape(structure_code)}:"
-        vars_json = func.jsonb_build_object("code", structure_code, "re", regex)
-        query = query.filter(
-            func.jsonb_path_exists(
-                meta,
-                "$.structure_tags ? (@ == $code || @ like_regex $re)",
-                vars_json,
-            )
+        vars_json = func.jsonb_build_object("code", structure_code, "re", regex, "global", "GLOBAL")
+        cond = func.jsonb_path_exists(
+            meta,
+            "$.structure_tags ? (@ == $code || @ like_regex $re)",
+            func.jsonb_build_object("code", structure_code, "re", regex),
         )
+        if include_global:
+            cond = or_(
+                cond,
+                func.jsonb_path_exists(
+                    meta,
+                    "$.structure_tags ? (@ == $global)",
+                    func.jsonb_build_object("global", "GLOBAL"),
+                ),
+            )
+        query = query.filter(cond)
 
     total = query.count()
     items = (

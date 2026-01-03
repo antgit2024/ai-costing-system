@@ -9,6 +9,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-03 13:10（Frontend：标准版本结构标准 code + 模块候选按结构过滤 MVP）
 - **最近校对（北京时间 GMT+8）**：2026-01-03 14:02（Frontend：结构标准字典页 MVP）
 - **最近校对（北京时间 GMT+8）**：2026-01-03 14:35（Frontend：工艺模块“适用类型 + 自动结构标签” MVP）
+- **最近校对（北京时间 GMT+8）**：2026-01-03 14:56（Frontend：结构标准/slot 下拉防呆收口 MVP）
 - **最近校对（北京时间 GMT+8）**：2026-01-01（Backend：发货异常队列“按批次重试未解决异常（Retry Exceptions）”MVP）
 
 - **最近校对（北京时间 GMT+8）**：2025-12-25 04:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
@@ -235,6 +236,19 @@
     - global：固定 `GLOBAL`
   - 关键改动文件：
     - `frontend/src/pages/costing/ProcessModulesPage.tsx`
+  - 本轮验收命令（必须）：`npm -C frontend run build`（已通过）
+
+- **本轮闭环产物（Frontend / Guardrails - 结构标准/slot 下拉收口 MVP）**：
+  - 工艺模块编辑抽屉：
+    - “结构标准 code”由输入框改为下拉选择（数据源：结构标准字典 taxonomy domain=`structure_standard`）
+    - `slot_internal`：slot 单选下拉（选项=当前结构标准的 `slots[]`）
+    - `assembly`：slots 多选下拉（选项=当前结构标准的 `slots[]`）
+    - 未选结构标准时：slot/slots disabled，并提示“请先选择结构标准”
+  - 标准模型版本编辑：
+    - “结构标准 code”由输入框改为下拉选择（同一数据源），保存链路不变（仍 PATCH version.metadata_json）
+  - 关键改动文件（严格按任务单范围）：
+    - `frontend/src/pages/costing/ProcessModulesPage.tsx`
+    - `frontend/src/components/costing/ProductModelEditorDrawer.tsx`
   - 本轮验收命令（必须）：`npm -C frontend run build`（已通过）
 
 - **本轮闭环产物（Backend / 修复 Task Center 500：Postgres SSL）**：

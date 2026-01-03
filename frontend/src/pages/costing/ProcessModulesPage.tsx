@@ -50,6 +50,7 @@ import {
   createProcessModule,
   deactivateProcessModule,
   deleteProcessModule,
+  fetchStructureStandards,
   fetchMaterial,
   fetchProcess,
   fetchVirtualMaterial,
@@ -73,6 +74,7 @@ import type {
   ProcessModuleStepInput,
   ProcessModuleSummary,
   ProcessModuleUpdatePayload,
+  StructureStandardRead,
   VirtualMaterial,
 } from '@/types/planner'
 import { CALCULATION_METHOD_OPTIONS } from '@/constants/calculationMethods'
@@ -431,6 +433,13 @@ const ProcessModulesPage = () => {
     queryFn: () => fetchTaxonomyItems('team', { include_inactive: true }),
   })
 
+  const structureStandardsQuery = useQuery({
+    queryKey: ['structure-standards', 'dropdown'],
+    enabled: drawerOpen,
+    staleTime: 5 * 60 * 1000,
+    queryFn: () => fetchStructureStandards({ status: 'all', page: 1, page_size: 500 }),
+  })
+
   const teamRateByName = useMemo(() => {
     const m = new Map<string, number>()
     for (const it of teamQuery.data?.items ?? []) {
@@ -618,6 +627,21 @@ const ProcessModulesPage = () => {
       slots: structureSlotsValue ?? [],
     })
   }, [structureStandardCodeValue, structureModeValue, structureSlotsValue])
+
+  const structureStandardByCode = useMemo(() => {
+    const m = new Map<string, StructureStandardRead>()
+    for (const it of structureStandardsQuery.data?.items ?? []) {
+      const code = String(it.code ?? '').trim()
+      if (!code) continue
+      m.set(code, it)
+    }
+    return m
+  }, [structureStandardsQuery.data?.items])
+
+  const selectedStructureStandard = useMemo(() => {
+    const code = String(structureStandardCodeValue ?? '').trim()
+    return code ? structureStandardByCode.get(code) ?? null : null
+  }, [structureStandardByCode, structureStandardCodeValue])
 
   // Auto-maintain structure_tags based on structure standard + mode + slots
   useEffect(() => {
@@ -2174,8 +2198,28 @@ const ProcessModulesPage = () => {
                 <Card title="结构适用范围" size="small" bordered style={{ marginBottom: 0 }}>
                   <Row gutter={12}>
                     <Col span={12}>
-                      <Form.Item label="结构标准 code（可选）" name="structure_standard_code">
-                        <Input allowClear placeholder="例如 pillowcase_v1（用于生成结构标签）" />
+                      <Form.Item label="结构标准" name="structure_standard_code">
+                        <Select
+                          allowClear
+                          showSearch
+                          optionFilterProp="label"
+                          placeholder="选择结构标准（来自结构标准字典）"
+                          loading={structureStandardsQuery.isLoading}
+                          options={(structureStandardsQuery.data?.items ?? []).map((it) => ({
+                            value: it.code,
+                            label: `${it.code}${it.name && it.name !== it.code ? ` / ${it.name}` : ''}${it.status === 'inactive' ? '（停用）' : ''}`,
+                            disabled: it.status === 'inactive',
+                          }))}
+                          onChange={() => {
+                            // 换结构标准后：slots 清空，避免错配
+                            suppressTouchRef.current = true
+                            try {
+                              editorForm.setFieldValue('structure_slots', [])
+                            } finally {
+                              suppressTouchRef.current = false
+                            }
+                          }}
+                        />
                       </Form.Item>
                     </Col>
                     <Col span={12}>
@@ -2193,19 +2237,46 @@ const ProcessModulesPage = () => {
                     </Col>
                   </Row>
                   {String(structureModeValue ?? 'slot_internal') === 'global' ? null : String(structureModeValue ?? 'slot_internal') === 'assembly' ? (
-                    <Form.Item label="slots（至少2个）" name="structure_slots">
-                      <Select mode="tags" placeholder="例如 front_panel / back_panel（回车新增）" />
-                    </Form.Item>
-                  ) : (
-                    <Form.Item label="slot（1个）" name="structure_slots">
+                    <Form.Item
+                      label="slots（至少2个）"
+                      name="structure_slots"
+                      help={!selectedStructureStandard ? '请先选择结构标准' : undefined}
+                      validateStatus={!selectedStructureStandard ? 'warning' : undefined}
+                    >
                       <Select
-                        mode="tags"
-                        placeholder="例如 zipper（回车新增）"
+                        mode="multiple"
+                        allowClear
+                        disabled={!selectedStructureStandard}
+                        placeholder={selectedStructureStandard ? '选择 slots（来自结构标准 slots[]）' : '请先选择结构标准'}
+                        options={(selectedStructureStandard?.slots ?? []).map((s) => ({ value: s, label: s }))}
+                        value={structureSlotsValue ?? []}
                         onChange={(vals) => {
-                          const list = normalizeStringArray(vals)
                           suppressTouchRef.current = true
                           try {
-                            editorForm.setFieldValue('structure_slots', list.slice(0, 1))
+                            editorForm.setFieldValue('structure_slots', normalizeStringArray(vals))
+                          } finally {
+                            suppressTouchRef.current = false
+                          }
+                        }}
+                      />
+                    </Form.Item>
+                  ) : (
+                    <Form.Item
+                      label="slot（1个）"
+                      name="structure_slots"
+                      help={!selectedStructureStandard ? '请先选择结构标准' : undefined}
+                      validateStatus={!selectedStructureStandard ? 'warning' : undefined}
+                    >
+                      <Select
+                        allowClear
+                        disabled={!selectedStructureStandard}
+                        placeholder={selectedStructureStandard ? '选择 slot（来自结构标准 slots[]）' : '请先选择结构标准'}
+                        options={(selectedStructureStandard?.slots ?? []).map((s) => ({ value: s, label: s }))}
+                        value={String((structureSlotsValue ?? [])[0] ?? '') || undefined}
+                        onChange={(v) => {
+                          suppressTouchRef.current = true
+                          try {
+                            editorForm.setFieldValue('structure_slots', v ? [String(v)] : [])
                           } finally {
                             suppressTouchRef.current = false
                           }

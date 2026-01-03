@@ -76,6 +76,7 @@ import {
   fetchVirtualMaterial,
   uploadProductModelVersionImage,
   fetchTaxonomyItems,
+  fetchStructureStandards,
 } from '@/services/planner'
 import type {
   Material,
@@ -525,6 +526,13 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     queryKey: ['taxonomy-items', 'team'],
     queryFn: () => fetchTaxonomyItems('team', { include_inactive: true }),
     enabled: open,
+  })
+
+  const structureStandardsQuery = useQuery({
+    queryKey: ['structure-standards', 'dropdown'],
+    enabled: open && entryContext === 'standard' && activeTab === 'lines',
+    staleTime: 5 * 60 * 1000,
+    queryFn: () => fetchStructureStandards({ status: 'all', page: 1, page_size: 500 }),
   })
 
   // 标准模型：行级变体（Overlay）提示（仅用于 UI 标记，不影响逻辑）
@@ -2911,13 +2919,22 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                     />
                     {entryContext === 'standard' ? (
                       <Space.Compact>
-                        <Input
+                        <Select
                           size="small"
-                          style={{ width: 240 }}
-                          placeholder="结构标准 code（可空）"
-                          value={structureStandardCodeDraft}
+                          style={{ width: 320 }}
+                          placeholder="选择结构标准（可空）"
+                          allowClear
+                          showSearch
+                          optionFilterProp="label"
+                          loading={structureStandardsQuery.isLoading}
+                          value={structureStandardCodeDraft || undefined}
                           disabled={!selectedVersionId || !canEditSelectedVersion}
-                          onChange={(e) => setStructureStandardCodeDraft(e.target.value)}
+                          options={(structureStandardsQuery.data?.items ?? []).map((it) => ({
+                            value: it.code,
+                            label: `${it.code}${it.name && it.name !== it.code ? ` / ${it.name}` : ''}${it.status === 'inactive' ? '（停用）' : ''}`,
+                            disabled: it.status === 'inactive',
+                          }))}
+                          onChange={(v) => setStructureStandardCodeDraft(String(v ?? '').trim())}
                         />
                         <Button
                           size="small"

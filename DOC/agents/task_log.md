@@ -193,6 +193,7 @@
 | 2025-12-25 | 物料列表：采购/入库列顺序调整 | Frontend | 用户要求将“采购单价/单位”和“入库单价/单位”两列交换位置。 | ✅ `/costing/materials` 已将“采购单价/单位”列移动到“入库单价/单位”列之前（其余列不变）。已 build+部署。 | - |
 | 2025-12-25 | 物料详情保存：计量方式与 BOM 单位一致性校验 | Frontend+Backend | 用户要求保存物料时校验“计算方式”和单位是否一致（面积=平米；周长/宽/高=米；数量=个/套），避免后续算价/扣库口径错误。 | ✅ 前端保存前拦截并提示错误；后端 `PATCH /base-config/materials/{id}` 增加兜底校验（normalize 后判断，不做自动补齐）。 | 单位主数据的专业做法是 UoM 表+换算；当前系统先用规范值“平米/米/个/套”，其它“张/块/件”建议先用规格/描述承载，后续再扩展单位字典。 |
 | 2026-01-03 | 工艺模块：适用类型 + 结构标签自动生成（MVP） | Frontend | 用户困惑模块属于哪个 slot/是否跨 slot/是否结构无关，且手填结构标签易漂移；需要在编辑抽屉给出语义并自动维护 tags。 | ✅ `ProcessModulesPage.tsx` 编辑抽屉新增“结构适用范围”：结构标准 code + 适用类型（slot_internal/assembly/global）+ slots 选择，并按规则自动生成/维护 `metadata_json.structure_tags[]`（slot_internal→`CODE:slot`；assembly→`CODE`+`CODE:slot...`；global→`GLOBAL`）；同时可选落 `metadata_json.structure_standard_code/structure_applicability_mode/structure_slots`。`npm -C frontend run build` 通过。 | 后续：如需让 global 也能被 `structure_code` 过滤覆盖，需要后端统一筛选口径或约定 `CODE` 必打。 |
+| 2026-01-03 | 结构标准/slot 下拉收口（防呆）MVP | Frontend | 结构标准 code/slot 允许自由输入导致 code 漂移、slot 错填，进而让筛选与推荐失效；需要用结构标准字典做下拉防呆收口。 | ✅ 工艺模块抽屉：结构标准改为下拉（taxonomy domain=`structure_standard`）；`slot_internal`/`assembly` 的 slot(s) 改为依赖该结构标准 `slots[]` 的下拉（未选结构标准则 disabled 并提示“请先选择结构标准”）；`global` 隐藏 slots。✅ 标准模型版本编辑：结构标准 code 改为同源下拉，保存链路不变（PATCH version.metadata_json）。`npm -C frontend run build` 通过。 | 后续：如需要“至少 2 个 slots”强拦，可在 assembly 模式保存前加前端校验。 |
 
 ## 调试模板
 

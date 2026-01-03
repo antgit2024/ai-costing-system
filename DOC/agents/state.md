@@ -41,6 +41,11 @@
   - 目标：在工艺模块抽屉新增“内用/组合/global”语义与 slot 选择，并自动生成/维护 `metadata_json.structure_tags[]`
   - 验收命令（文档存在性）：`grep -nF "工艺模块“适用类型（内用/组合/global）”+ 结构标签自动生成（MVP）" DOC/agents/briefings/frontend_process_modules_applicability_mode_and_auto_tags_mvp.md`
 
+- **本轮闭环产物（Planner / 下一轮：防呆收口派单（结构标准/slot 下拉））**：
+  - 新增派单：`DOC/agents/briefings/frontend_structure_selection_dropdowns_guardrails_mvp.md`
+  - 目标：将“结构标准 code/slot(s)”从自由输入收口为下拉选择（来源结构标准字典），避免填错与 code 漂移
+  - 验收命令（文档存在性）：`grep -nF "结构标准/slot 下拉收口（防呆）MVP" DOC/agents/briefings/frontend_structure_selection_dropdowns_guardrails_mvp.md`
+
 - **本轮闭环产物（Backend / 模型结构化落点（结构标准/工艺模块标签）+ 列表筛选 MVP）**：
   - 产品模型版本结构标准（写入/读取）：
     - 位置：`product_model_versions.metadata_json.structure_standard_code`

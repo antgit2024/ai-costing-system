@@ -2,6 +2,7 @@
 
 | 日期 | 模块 | 角色 | 任务/问题 | 结论 | 待办 |
 | --- | --- | --- | --- | --- | --- |
+| 2026-01-03 | 工艺模块（结构适用范围：规则说明文案） | Hub Agent（Planner） | 用户希望在工艺模块抽屉中增加一段“如何选 global/slot_internal/assembly”的简单规则说明，降低填错成本。 | ✅ 在工艺模块抽屉“结构适用范围”说明区追加规则：通用不依赖部位→global；单部位→slot_internal+1个slot；跨部位装配→assembly+多个slots。 | 无 |
 | 2026-01-03 | 结构标准/slots（列表式编辑 + 自动拼音短码） | Hub Agent（Planner） | 用户要求 slots 从 tags 输入改为“中文名 + 自动翻拼音短码”的列表式行编辑，并让工艺模块 slot 下拉按中文选择。 | ✅ `StructureStandardsPage` slots 改为列表式（中文名输入 → 自动生成拼音短码，可手改），保存落到 `metadata.slots`（短码数组）+ `metadata.slot_display_names`（短码→中文名）；工艺模块 slot 下拉展示“中文（短码）”，但结构标签预览/落库仍为短码 tag。 | 下一步：如需“中文输入时实时建议拼音且检测同音冲突/重复短码”，再单开闭环做校验与提示。 |
 | 2026-01-03 | 结构标准（字典页：删除能力） | Hub Agent（Planner） | 用户要求结构标准列表增加“删除”功能，减少脏数据与误建结构。 | ✅ 前端结构标准字典页新增“删除（归档）”按钮（要求先停用再删除，带二次确认）；底层复用 taxonomy `DELETE /taxonomy/items/{id}`。 | 下一步：如需“删除前引用检查/阻断”，再派后端补 references 校验或前端调用现有引用接口做提示。 |
 | 2026-01-03 | 模型结构化（slot 双语：拼音短码+中文名） | Planner（Hub Agent） | 用户选择 slot 使用“拼音短码（lalian）”，担心同事英文不好导致结构标签难以人工识别；要求专业做法（存键、显中文）。 | ✅ 新增前端闭环任务单：`DOC/agents/briefings/frontend_structure_slots_bilingual_display_mvp.md`（structure_standard taxonomy metadata 增加 `slot_display_names` 映射；UI 下拉与标签展示中文，tooltip 显示 raw tag）。 | 下一步：@Frontend Agent 落地字典页 slots 双字段编辑与工艺模块标签中文渲染；完成后再评估是否需要后端提供独立 `structure-standards` 实体表。 |

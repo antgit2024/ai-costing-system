@@ -2321,6 +2321,8 @@ const ProcessModulesPage = () => {
               <Col span={12}>
                 <Text type="secondary" style={{ fontSize: 12, lineHeight: '22px' }}>
                   说明：系统会根据“适用类型 + slot(s)”自动生成并维护 <Text code>metadata_json.structure_tags</Text>（MVP）。global 会写入固定标签 <Text code>GLOBAL</Text>。
+                  <br />
+                  规则（建议）：不依赖结构部位且跨品类通用的工艺 → 选 <Text code>global</Text>；只作用在单个部位/位置（拉链位/包边位/装饰位等） → 选 <Text code>slot_internal</Text> 并选 1 个 slot；需要把 ≥2 个部位拼接/装配在一起 → 选 <Text code>assembly</Text> 并选多个 slots。
                 </Text>
               </Col>
             </Row>

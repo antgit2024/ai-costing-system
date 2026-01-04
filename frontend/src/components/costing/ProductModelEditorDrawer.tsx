@@ -360,6 +360,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   const [materialPickerInitialTab, setMaterialPickerInitialTab] = useState<MaterialPickerTab>('real')
   const [pickerProcessKeyword, setPickerProcessKeyword] = useState<string>('')
   const [pickerProcessCategory, setPickerProcessCategory] = useState<string | undefined>(undefined)
+  const [structureCellEditing, setStructureCellEditing] = useState<{ kind: 'material' | 'process'; key: string } | null>(null)
 
   // 备注已合并到“调参面板”（与同一个“应用”按钮一起保存）
 
@@ -438,6 +439,11 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   const getRowSourceModuleId = (row: any): string => {
     const meta = (row?.metadata_json ?? {}) as any
     return String(row?.source_module_id ?? meta?.source_module_id ?? '').trim()
+  }
+
+  const getStructureCellKey = (kind: 'material' | 'process', row: any, idx: number): string => {
+    const id = String(row?.id ?? '').trim()
+    return id ? `${kind}:${id}` : `${kind}:${kind}-${idx}`
   }
 
   const isPlaceholderMaterialRow = (row: any): boolean => {
@@ -3855,6 +3861,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                               const sourceId = getRowSourceModuleId(r)
                               const moduleInfo = sourceId ? moduleStructureById.get(String(sourceId)) : undefined
                               const canPick = !!selectedStructureStandardCode && canEditSelectedVersion && structureSlotOptions.length > 0
+                              const cellKey = getStructureCellKey('material', r, idx)
+                              const isEditing = structureCellEditing?.kind === 'material' && structureCellEditing?.key === cellKey
 
                               if (!selectedStructureStandardCode) {
                                 return <Text type="secondary">-</Text>
@@ -3883,44 +3891,78 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                 return <Text type="secondary">-</Text>
                               }
 
-                              return (
-                                <Select
-                                  size="small"
-                                  className="pm-lines-select"
-                                  popupClassName="pm-lines-select-dropdown"
-                                  getPopupContainer={() => document.body}
-                                  allowClear
-                                  showSearch
-                                  optionFilterProp="label"
-                                  placeholder={
-                                    sourceId && !moduleInfo?.is_global
-                                      ? moduleInfo?.slots?.length === 1
-                                        ? `默认：${structureSlotOptions.find((o) => o.value === moduleInfo.slots[0])?.label ?? moduleInfo.slots[0]}`
-                                        : moduleInfo?.whole
-                                          ? '继承：整结构（可选区位）'
-                                          : moduleInfo?.slots?.length
-                                            ? `继承：模块含${moduleInfo.slots.length}个区位`
-                                            : '继承模块（可选区位）'
-                                      : '选择区位'
+                              if (isEditing) {
+                                return (
+                                  <Select
+                                    size="small"
+                                    className="pm-lines-select"
+                                    popupClassName="pm-lines-select-dropdown"
+                                    getPopupContainer={() => document.body}
+                                    allowClear
+                                    showSearch
+                                    optionFilterProp="label"
+                                    placeholder="选择区位"
+                                    style={{ width: '100%' }}
+                                    value={curSlot || undefined}
+                                    options={structureSlotOptions}
+                                    onDropdownVisibleChange={(open) => {
+                                      if (!open) setStructureCellEditing(null)
+                                    }}
+                                    open
+                                    onChange={(v) => {
+                                      const next = (materials as any[]).slice()
+                                      const row = next[idx]
+                                      if (!row) return
+                                      const nextMeta = { ...((row?.metadata_json as any) ?? {}) }
+                                      if (!v) delete nextMeta.structure_slot
+                                      else nextMeta.structure_slot = String(v)
+                                      next[idx] = { ...row, metadata_json: nextMeta }
+                                      setMaterials(next as any)
+                                      setStructureCellEditing(null)
+                                    }}
+                                  />
+                                )
+                              }
+
+                              const renderReadonly = () => {
+                                if (curSlot) {
+                                  const opt = structureSlotOptions.find((o) => o.value === curSlot)
+                                  return <Tag>{opt?.label ?? curSlot}</Tag>
+                                }
+                                if (sourceId && !moduleInfo?.is_global) {
+                                  if (moduleInfo?.whole) return <Tag>整结构</Tag>
+                                  if (moduleInfo?.slots?.length) {
+                                    const show = moduleInfo.slots.slice(0, 2)
+                                    const rest = moduleInfo.slots.length - show.length
+                                    return (
+                                      <Space size={4} wrap>
+                                        {show.map((s: string) => {
+                                          const opt = structureSlotOptions.find((o) => o.value === s)
+                                          return <Tag key={s}>{opt?.label ?? s}</Tag>
+                                        })}
+                                        {rest > 0 ? <Text type="secondary">+{rest}</Text> : null}
+                                      </Space>
+                                    )
                                   }
-                                  style={{ width: '100%' }}
-                                  disabled={!canPick}
-                                  value={curSlot || undefined}
-                                  options={structureSlotOptions}
-                                  onChange={(v) => {
-                                    const next = (materials as any[]).slice()
-                                    const row = next[idx]
-                                    if (!row) return
-                                    const nextMeta = { ...((row?.metadata_json as any) ?? {}) }
-                                    if (!v) {
-                                      delete nextMeta.structure_slot
-                                    } else {
-                                      nextMeta.structure_slot = String(v)
-                                    }
-                                    next[idx] = { ...row, metadata_json: nextMeta }
-                                    setMaterials(next as any)
+                                }
+                                return <Text type="secondary">--</Text>
+                              }
+
+                              return (
+                                <div
+                                  style={{
+                                    cursor: canPick ? 'pointer' : 'default',
+                                    minHeight: 22,
+                                    display: 'flex',
+                                    alignItems: 'center',
                                   }}
-                                />
+                                  onClick={() => {
+                                    if (!canPick) return
+                                    setStructureCellEditing({ kind: 'material', key: cellKey })
+                                  }}
+                                >
+                                  {renderReadonly()}
+                                </div>
                               )
                             },
                           },
@@ -4525,6 +4567,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                               const sourceId = getRowSourceModuleId(r)
                               const moduleInfo = sourceId ? moduleStructureById.get(String(sourceId)) : undefined
                               const canPick = !!selectedStructureStandardCode && canEditSelectedVersion && structureSlotOptions.length > 0
+                              const cellKey = getStructureCellKey('process', r, idx)
+                              const isEditing = structureCellEditing?.kind === 'process' && structureCellEditing?.key === cellKey
 
                               if (!selectedStructureStandardCode) {
                                 return <Text type="secondary">-</Text>
@@ -4552,44 +4596,78 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                 return <Text type="secondary">-</Text>
                               }
 
-                              return (
-                                <Select
-                                  size="small"
-                                  className="pm-lines-select"
-                                  popupClassName="pm-lines-select-dropdown"
-                                  getPopupContainer={() => document.body}
-                                  allowClear
-                                  showSearch
-                                  optionFilterProp="label"
-                                  placeholder={
-                                    sourceId && !moduleInfo?.is_global
-                                      ? moduleInfo?.slots?.length === 1
-                                        ? `默认：${structureSlotOptions.find((o) => o.value === moduleInfo.slots[0])?.label ?? moduleInfo.slots[0]}`
-                                        : moduleInfo?.whole
-                                          ? '继承：整结构（可选区位）'
-                                          : moduleInfo?.slots?.length
-                                            ? `继承：模块含${moduleInfo.slots.length}个区位`
-                                            : '继承模块（可选区位）'
-                                      : '选择区位'
+                              if (isEditing) {
+                                return (
+                                  <Select
+                                    size="small"
+                                    className="pm-lines-select"
+                                    popupClassName="pm-lines-select-dropdown"
+                                    getPopupContainer={() => document.body}
+                                    allowClear
+                                    showSearch
+                                    optionFilterProp="label"
+                                    placeholder="选择区位"
+                                    style={{ width: '100%' }}
+                                    value={curSlot || undefined}
+                                    options={structureSlotOptions}
+                                    onDropdownVisibleChange={(open) => {
+                                      if (!open) setStructureCellEditing(null)
+                                    }}
+                                    open
+                                    onChange={(v) => {
+                                      const next = (processes as any[]).slice()
+                                      const row = next[idx]
+                                      if (!row) return
+                                      const nextMeta = { ...((row?.metadata_json as any) ?? {}) }
+                                      if (!v) delete nextMeta.structure_slot
+                                      else nextMeta.structure_slot = String(v)
+                                      next[idx] = { ...row, metadata_json: nextMeta }
+                                      setProcesses(next as any)
+                                      setStructureCellEditing(null)
+                                    }}
+                                  />
+                                )
+                              }
+
+                              const renderReadonly = () => {
+                                if (curSlot) {
+                                  const opt = structureSlotOptions.find((o) => o.value === curSlot)
+                                  return <Tag>{opt?.label ?? curSlot}</Tag>
+                                }
+                                if (sourceId && !moduleInfo?.is_global) {
+                                  if (moduleInfo?.whole) return <Tag>整结构</Tag>
+                                  if (moduleInfo?.slots?.length) {
+                                    const show = moduleInfo.slots.slice(0, 2)
+                                    const rest = moduleInfo.slots.length - show.length
+                                    return (
+                                      <Space size={4} wrap>
+                                        {show.map((s: string) => {
+                                          const opt = structureSlotOptions.find((o) => o.value === s)
+                                          return <Tag key={s}>{opt?.label ?? s}</Tag>
+                                        })}
+                                        {rest > 0 ? <Text type="secondary">+{rest}</Text> : null}
+                                      </Space>
+                                    )
                                   }
-                                  style={{ width: '100%' }}
-                                  disabled={!canPick}
-                                  value={curSlot || undefined}
-                                  options={structureSlotOptions}
-                                  onChange={(v) => {
-                                    const next = (processes as any[]).slice()
-                                    const row = next[idx]
-                                    if (!row) return
-                                    const nextMeta = { ...((row?.metadata_json as any) ?? {}) }
-                                    if (!v) {
-                                      delete nextMeta.structure_slot
-                                    } else {
-                                      nextMeta.structure_slot = String(v)
-                                    }
-                                    next[idx] = { ...row, metadata_json: nextMeta }
-                                    setProcesses(next as any)
+                                }
+                                return <Text type="secondary">--</Text>
+                              }
+
+                              return (
+                                <div
+                                  style={{
+                                    cursor: canPick ? 'pointer' : 'default',
+                                    minHeight: 22,
+                                    display: 'flex',
+                                    alignItems: 'center',
                                   }}
-                                />
+                                  onClick={() => {
+                                    if (!canPick) return
+                                    setStructureCellEditing({ kind: 'process', key: cellKey })
+                                  }}
+                                >
+                                  {renderReadonly()}
+                                </div>
                               )
                             },
                           },

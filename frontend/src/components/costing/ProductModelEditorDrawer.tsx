@@ -3698,6 +3698,16 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                           pagination={false}
                           size="small"
                           style={{ fontSize: TABLE_FONT_SIZE }}
+                          onRow={(r: any) => {
+                            // 保留原本“打散底色”：
+                            // - 来源模块行：按模块色上浅底
+                            // - 手动新增行：统一灰底（色条为白色）
+                            const hasSource = !!(r?.source_module_id || r?.source_module_code)
+                            if (!hasSource) return { style: { background: '#f5f5f5' } }
+                            const key = r.source_module_id ?? r.source_module_code ?? 'model'
+                            const color = getColorForModuleKey(String(key))
+                            return { style: { background: hexToRgba(color, 0.06) } }
+                          }}
                           columns={[
                           {
                             title: '物料',
@@ -4302,6 +4312,16 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                         pagination={false}
                         size="small"
                         style={{ fontSize: TABLE_FONT_SIZE }}
+                        onRow={(r: any) => {
+                          // 保留原本“打散底色”：
+                          // - 来源模块行：按模块色上浅底
+                          // - 手动新增行：统一灰底（色条为白色）
+                          const hasSource = !!(r?.source_module_id || r?.source_module_code)
+                          if (!hasSource) return { style: { background: '#f5f5f5' } }
+                          const key = r.source_module_id ?? r.source_module_code ?? 'model'
+                          const color = getColorForModuleKey(String(key))
+                          return { style: { background: hexToRgba(color, 0.06) } }
+                        }}
                         columns={[
                           {
                             title: '工序',

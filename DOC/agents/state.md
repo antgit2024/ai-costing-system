@@ -76,6 +76,7 @@
   - 两个入口是“管理视图”独立：打样侧与标准侧的版本可分别归档删除，但不会互相连坐。
   - “删除打样”（SampleModelsPage）：仅归档 `sample` 版本（`POST /product-models/{id}/archive-sample`），不影响 `standard` 版本。
   - “删除标准”（StandardModelsPage）：仅归档 `standard` 版本（`POST /product-models/{id}/archive-standard`），不影响 `sample` 版本。
+  - 打样列表可见性口径：**只要模型存在 `sample` 版本就应显示**（即便 `entry_context=standard`），避免“删了标准后看起来打样也没了”（实际是列表过滤导致不可见）。
   - 说明：推导标准版本时会在标准版本 `metadata_json.derived_from_version_id` 记录来源打样版本，用于追溯；但删除/归档口径按入口隔离，确保“推导后可独立管理”。
 
  - **最近校对（北京时间 GMT+8）**：2026-01-04（Frontend：打样管理允许占位物料保存清单（汇总成本按 0），但推导标准/发布标准前硬拦截：存在占位则不允许推导/发布）

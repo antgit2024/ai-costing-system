@@ -45,9 +45,9 @@ export default function SampleModelsPage() {
       const meta: any = m?.metadata_json ?? {}
       const entry = String(meta?.entry_context ?? '').trim()
       const sampleCnt = Number(m?.sample_version_count ?? 0)
-      // 打样列表：只展示“打样入口创建/维护”的模型，避免标准模型克隆/新建混进来
-      if (entry === 'standard') return false
-      return entry === 'sample' || sampleCnt > 0
+      // 打样列表：只要存在 sample 版本，就应该可见（即便模型最初从“标准入口”创建）。
+      // 目的：避免出现“删了标准版本后，看起来打样也被删了”的错觉（实际上是列表过滤导致不可见）。
+      return sampleCnt > 0 || entry === 'sample'
     })
   }, [listQuery.data])
 

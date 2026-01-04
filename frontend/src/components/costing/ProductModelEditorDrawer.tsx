@@ -627,7 +627,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
         const cn = String(names?.[code] ?? '').trim()
         return {
           value: code,
-          label: cn ? `${cn}（${code}）` : code,
+          // 结构列展示口径：优先只显示中文名（不展示短码）；缺中文时兜底显示短码
+          label: cn || code,
         }
       })
       .filter(Boolean) as Array<{ value: string; label: string }>
@@ -3315,7 +3316,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                               const cn = selectedStructureStandard?.slot_display_names?.[s]
                               return (
                                 <Tag key={`on:${s}`} color="green">
-                                  {cn ? `${cn}（${s}）` : s}
+                                  {cn ? cn : s}
                                 </Tag>
                               )
                             })}
@@ -3328,7 +3329,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                 const cn = selectedStructureStandard?.slot_display_names?.[s]
                                 return (
                                   <Tooltip key={`off:${s}`} title="可选位（不参与工艺模块 slot(s) 下拉）">
-                                    <Tag>{cn ? `${cn}（${s}）` : s}</Tag>
+                                    <Tag>{cn ? cn : s}</Tag>
                                   </Tooltip>
                                 )
                               })}

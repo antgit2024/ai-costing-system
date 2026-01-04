@@ -569,6 +569,20 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     return String(meta?.structure_standard_code ?? '').trim()
   }, [selectedVersion])
 
+  const structureStandardByCode = useMemo(() => {
+    const map = new Map<string, any>()
+    for (const it of (structureStandardsQuery.data?.items ?? []) as any[]) {
+      const code = String(it?.code ?? '').trim()
+      if (code) map.set(code, it)
+    }
+    return map
+  }, [structureStandardsQuery.data?.items])
+
+  const selectedStructureStandard = useMemo(() => {
+    if (!selectedStructureStandardCode) return null
+    return structureStandardByCode.get(selectedStructureStandardCode) ?? null
+  }, [structureStandardByCode, selectedStructureStandardCode])
+
   const selectedVersionStatus = String((selectedVersion as any)?.version_status ?? '').trim()
   // 规则：标准版本仅 draft 允许修改；已发布/已归档禁止修改
   const canEditSelectedVersion = entryContext === 'sample' ? true : selectedVersionStatus === 'draft'
@@ -2979,6 +2993,34 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                       <Text type="secondary">
                         当前结构标准：<Text code>{selectedStructureStandardCode}</Text>（选择工艺模块候选将自动按该结构过滤）
                       </Text>
+                      {selectedStructureStandard ? (
+                        <div style={{ marginTop: 6 }}>
+                          <Text type="secondary">结构骨架：</Text>{' '}
+                          <Space size={6} wrap>
+                            {((selectedStructureStandard?.slots ?? []) as string[]).map((s: string) => {
+                              const cn = selectedStructureStandard?.slot_display_names?.[s]
+                              return (
+                                <Tag key={`on:${s}`} color="green">
+                                  {cn ? `${cn}（${s}）` : s}
+                                </Tag>
+                              )
+                            })}
+                            {(
+                              (selectedStructureStandard?.slot_defs ?? []) as Array<{ code: string; enabled?: boolean }>
+                            )
+                              .filter((d) => d && d.code && d.enabled === false)
+                              .map((d) => {
+                                const s = String(d.code)
+                                const cn = selectedStructureStandard?.slot_display_names?.[s]
+                                return (
+                                  <Tooltip key={`off:${s}`} title="可选位（不参与工艺模块 slot(s) 下拉）">
+                                    <Tag>{cn ? `${cn}（${s}）` : s}</Tag>
+                                  </Tooltip>
+                                )
+                              })}
+                          </Space>
+                        </div>
+                      ) : null}
                     </div>
                   ) : null}
                 </Card>

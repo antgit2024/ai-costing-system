@@ -1284,7 +1284,14 @@ def replace_version_lines(
         if kind == "virtual" and ref_id:
             vm = db.get(models.VirtualMaterial, ref_id)
             if vm and not vm.is_archived and _get_virtual_kind(vm) == "placeholder":
-                raise ValueError("版本清单不允许保存占位型虚拟物料：请先在“占位符映射”中选择兜底物料并替换后再保存")
+                # Allow placeholder virtual materials in sample versions for temporary saving / collaboration.
+                # Guardrails are enforced at:
+                # - derive standard (source sample must have placeholders replaced)
+                # - publish standard (standard version must not contain placeholders)
+                if str(getattr(version, "version_kind", "") or "").strip() == "standard":
+                    raise ValueError(
+                        "版本清单不允许保存占位型虚拟物料：请先在“占位符映射”中选择兜底物料并替换后再保存"
+                    )
         method = str(item.get("calculation_method") or "count")
         base_qty = item.get("base_quantity")
         sample_used = item.get("sample_used_quantity")

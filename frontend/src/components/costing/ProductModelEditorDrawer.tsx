@@ -256,36 +256,6 @@ const getMaterialKindColor = (k?: MaterialKind) => {
   return '#1677ff'
 }
 
-const ModuleCodePill = ({
-  code,
-  color,
-  size = 'md',
-}: {
-  code: string
-  color: string
-  size?: 'sm' | 'md'
-}) => {
-  const fontSize = size === 'sm' ? 9 : 10
-  const padding = size === 'sm' ? '0px 4px' : '1px 6px'
-  return (
-    <span
-      style={{
-        display: 'inline-block',
-        padding,
-        borderRadius: 999,
-        border: `1px solid ${hexToRgba(color, 0.35)}`,
-        background: hexToRgba(color, 0.12),
-        color,
-        fontVariantNumeric: 'tabular-nums',
-        fontWeight: 600,
-        fontSize,
-      }}
-    >
-      {code}
-    </span>
-  )
-}
-
 const CodePill = ({
   code,
   color,
@@ -3418,11 +3388,6 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                     <Tag color="purple">人工费：{summary.labor_cost.toFixed(2)}</Tag>
                     <Tag color="orange">制造费(30%)：{summary.overhead_cost.toFixed(2)}</Tag>
                     <Tag color="green">合计：{summary.total_cost.toFixed(2)}</Tag>
-                    {(materials as any[]).some((r: any) => isPlaceholderMaterialRow(r)) ? (
-                      <Tooltip title="当前版本包含占位型物料，汇总金额为避免误导统一按 0 显示（请先替换占位物料后再看准确合计）">
-                        <Tag color="gold">含占位：合计按0</Tag>
-                      </Tooltip>
-                    ) : null}
                   </Space>
                   {null}
                 </Card>
@@ -3488,8 +3453,11 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                             },
                             render: (_: any, r: any) => {
                               const code = r.module?.module_code ?? '-'
-                              const color = getColorForModuleKey(r.module_id)
-                              return <ModuleCodePill code={code} color={color} size="sm" />
+                              return (
+                                <span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>
+                                  {code}
+                                </span>
+                              )
                             },
                           },
                           {
@@ -3693,7 +3661,28 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                 return (
                                   <Space size={4} wrap>
                                     {show.map((k) => (
-                                      <ModuleCodePill key={k} code={k} color={getColorForModuleKey(k)} size="sm" />
+                                      <span
+                                        key={k}
+                                        style={{
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: 6,
+                                          fontSize: 11,
+                                          color: '#595959',
+                                        }}
+                                      >
+                                        <span
+                                          style={{
+                                            width: 4,
+                                            height: 14,
+                                            borderRadius: 2,
+                                            background: getColorForModuleKey(k),
+                                            border: '1px solid #e5e5e5',
+                                            display: 'inline-block',
+                                          }}
+                                        />
+                                        <span style={{ fontVariantNumeric: 'tabular-nums' }}>{k}</span>
+                                      </span>
                                     ))}
                                     {rest > 0 ? <Text type="secondary">+{rest}</Text> : null}
                                   </Space>
@@ -3709,29 +3698,27 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                           pagination={false}
                           size="small"
                           style={{ fontSize: TABLE_FONT_SIZE }}
-                          onRow={(r: any) => {
-                            // 手动新增（非来源模块）的行：统一灰底，避免彩色背景造成“新增行很花”的视觉干扰
-                            const hasSource = !!(r?.source_module_id || r?.source_module_code)
-                            if (!hasSource) return { style: { background: '#f5f5f5' } }
-                            const key = r.source_module_id ?? r.source_module_code ?? 'model'
-                            const color = getColorForModuleKey(String(key))
-                            return { style: { background: hexToRgba(color, 0.06) } }
-                          }}
                           columns={[
                           {
                             title: '物料',
                             width: FIRST_COL_WIDTH,
                             render: (_: any, r: any) => (
                               <Space>
+                                {/* source-module color bar: same visual language as the left "modules" list */}
+                                <span
+                                  style={{
+                                    display: 'inline-block',
+                                    width: 4,
+                                    height: 16,
+                                    borderRadius: 2,
+                                    background: r?.source_module_id || r?.source_module_code
+                                      ? getColorForModuleKey(String(r.source_module_id ?? r.source_module_code))
+                                      : '#ffffff',
+                                    border: '1px solid #e5e5e5',
+                                  }}
+                                />
                                 {r.material_code ? (
                                   <CodePill code={r.material_code} color={getMaterialKindColor(r.material_kind as MaterialKind)} size="sm" />
-                                ) : null}
-                                {r.source_module_code ? (
-                                  <ModuleCodePill
-                                    code={String(r.source_module_code)}
-                                    color={getColorForModuleKey(String(r.source_module_id ?? r.source_module_code))}
-                                    size="sm"
-                                  />
                                 ) : null}
                                 <Button
                                   type="link"
@@ -4277,7 +4264,28 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                   return (
                                     <Space size={4} wrap>
                                       {show.map((k) => (
-                                        <ModuleCodePill key={k} code={k} color={getColorForModuleKey(k)} size="sm" />
+                                      <span
+                                        key={k}
+                                        style={{
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: 6,
+                                          fontSize: 11,
+                                          color: '#595959',
+                                        }}
+                                      >
+                                        <span
+                                          style={{
+                                            width: 4,
+                                            height: 14,
+                                            borderRadius: 2,
+                                            background: getColorForModuleKey(k),
+                                            border: '1px solid #e5e5e5',
+                                            display: 'inline-block',
+                                          }}
+                                        />
+                                        <span style={{ fontVariantNumeric: 'tabular-nums' }}>{k}</span>
+                                      </span>
                                       ))}
                                       {rest > 0 ? <Text type="secondary">+{rest}</Text> : null}
                                     </Space>
@@ -4294,28 +4302,26 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                         pagination={false}
                         size="small"
                         style={{ fontSize: TABLE_FONT_SIZE }}
-                        onRow={(r: any) => {
-                          // 手动新增（非来源模块）的行：统一灰底，避免彩色背景造成“新增行很花”的视觉干扰
-                          const hasSource = !!(r?.source_module_id || r?.source_module_code)
-                          if (!hasSource) return { style: { background: '#f5f5f5' } }
-                          const key = r.source_module_id ?? r.source_module_code ?? 'model'
-                          const color = getColorForModuleKey(String(key))
-                          return { style: { background: hexToRgba(color, 0.06) } }
-                        }}
                         columns={[
                           {
                             title: '工序',
                             width: FIRST_COL_WIDTH,
                             render: (_: any, r: any) => (
                               <Space>
+                                {/* source-module color bar: same visual language as the left "modules" list */}
+                                <span
+                                  style={{
+                                    display: 'inline-block',
+                                    width: 4,
+                                    height: 16,
+                                    borderRadius: 2,
+                                    background: r?.source_module_id || r?.source_module_code
+                                      ? getColorForModuleKey(String(r.source_module_id ?? r.source_module_code))
+                                      : '#ffffff',
+                                    border: '1px solid #e5e5e5',
+                                  }}
+                                />
                                 {r.process_code ? <CodePill code={r.process_code} color="#595959" /> : null}
-                                {r.source_module_code ? (
-                                  <ModuleCodePill
-                                    code={String(r.source_module_code)}
-                                    color={getColorForModuleKey(String(r.source_module_id ?? r.source_module_code))}
-                                    size="sm"
-                                  />
-                                ) : null}
                                 <span style={{ whiteSpace: 'nowrap' }}>{r.process_name ?? r.process_id}</span>
                               </Space>
                             ),

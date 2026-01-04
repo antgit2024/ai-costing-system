@@ -3416,21 +3416,19 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                       size="small"
                       title="工艺模块"
                       extra={
-                        <Space direction="vertical" size={4}>
-                          <Space wrap>
-                            <Button size="small" onClick={() => setModulePickerOpen(true)} disabled={!modelId}>
-                              添加
-                            </Button>
-                            <Button
-                              size="small"
-                              loading={syncingFromModules}
-                              onClick={() => void handleSyncFromModules()}
-                              disabled={!selectedVersionId}
-                              type="primary"
-                            >
-                              同步
-                            </Button>
-                          </Space>
+                        <Space wrap>
+                          <Button size="small" onClick={() => setModulePickerOpen(true)} disabled={!modelId}>
+                            添加
+                          </Button>
+                          <Button
+                            size="small"
+                            loading={syncingFromModules}
+                            onClick={() => void handleSyncFromModules()}
+                            disabled={!selectedVersionId}
+                            type="primary"
+                          >
+                            同步
+                          </Button>
                           <Tooltip
                             getPopupContainer={() => document.body}
                             title={syncKeepOverrides ? '同步时保留版本清单已调参字段' : '同步时以模块内容覆盖版本清单调参'}

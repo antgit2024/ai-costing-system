@@ -72,6 +72,12 @@
     - `frontend/src/components/costing/MaterialPickerDrawer.tsx`
   - 验收命令（必须）：`npm -C frontend run build`
 
+- **备注（重要口径：打样模型 / 标准模型“删除”互不误伤）**：
+  - 两个入口是“管理视图”独立：打样侧与标准侧的版本可分别归档删除，但不会互相连坐。
+  - “删除打样”（SampleModelsPage）：仅归档 `sample` 版本（`POST /product-models/{id}/archive-sample`），不影响 `standard` 版本。
+  - “删除标准”（StandardModelsPage）：仅归档 `standard` 版本（`POST /product-models/{id}/archive-standard`），不影响 `sample` 版本。
+  - 说明：推导标准版本时会在标准版本 `metadata_json.derived_from_version_id` 记录来源打样版本，用于追溯；但删除/归档口径按入口隔离，确保“推导后可独立管理”。
+
  - **最近校对（北京时间 GMT+8）**：2026-01-04（Frontend：打样管理允许占位物料保存清单（汇总成本按 0），但推导标准/发布标准前硬拦截：存在占位则不允许推导/发布）
  - **最近校对（北京时间 GMT+8）**：2026-01-04（Backend：版本清单保存占位型虚拟物料校验按 version_kind 拆分：sample 允许临时保存，standard 继续禁止）
  - **最近校对（北京时间 GMT+8）**：2026-01-04（Frontend：保存清单后不再跳回旧版本：versionsQuery 刷新时保留当前 selectedVersionId，仅在首次/当前不存在时自动选版本）

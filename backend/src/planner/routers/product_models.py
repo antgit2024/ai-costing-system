@@ -719,3 +719,83 @@ def archive_sample_versions_only(model_id: str, db: Session = Depends(get_db)):
     return None
 
 
+@router.post("/{model_id}/archive-standard", status_code=status.HTTP_204_NO_CONTENT)
+def archive_standard_versions_only(model_id: str, db: Session = Depends(get_db)):
+    """
+    Archive standard versions of a model only (do NOT archive sample versions).
+
+    Rationale:
+    - The UI has separate entrances: 打样模型 / 标准模型.
+    - Users may want to "删除标准" without affecting existing 打样版本。
+    """
+    model = _get_model_or_404(model_id, db)
+
+    # Same guardrails as deleting a whole model (standard side is subject to publish/bind constraints).
+    published_std_cnt = (
+        db.query(models.ProductModelVersion)
+        .filter(
+            models.ProductModelVersion.model_id == model.id,
+            models.ProductModelVersion.version_kind == "standard",
+            models.ProductModelVersion.version_status == "published",
+            models.ProductModelVersion.is_archived.is_(False),
+        )
+        .count()
+    )
+    if published_std_cnt > 0:
+        raise HTTPException(status_code=400, detail="该模型存在已发布标准版本（published），不允许删除标准版本")
+
+    std_version_ids = [
+        x[0]
+        for x in db.query(models.ProductModelVersion.id)
+        .filter(
+            models.ProductModelVersion.model_id == model.id,
+            models.ProductModelVersion.version_kind == "standard",
+            models.ProductModelVersion.is_archived.is_(False),
+        )
+        .all()
+        if x and x[0]
+    ]
+    if std_version_ids:
+        bound_cnt = (
+            db.query(models.SkuModelVersionMapping)
+            .filter(
+                models.SkuModelVersionMapping.model_version_id.in_(std_version_ids),
+                models.SkuModelVersionMapping.is_archived.is_(False),
+                models.SkuModelVersionMapping.is_active.is_(True),
+            )
+            .count()
+        )
+        if bound_cnt > 0:
+            raise HTTPException(status_code=400, detail="该模型存在SKU绑定关系（active），不允许删除标准版本")
+
+    # Archive standard versions
+    (
+        db.query(models.ProductModelVersion)
+        .filter(
+            models.ProductModelVersion.model_id == model.id,
+            models.ProductModelVersion.version_kind == "standard",
+            models.ProductModelVersion.is_archived.is_(False),
+        )
+        .update({"is_archived": True}, synchronize_session=False)
+    )
+
+    # If model has no remaining non-archived versions, archive model as well.
+    remain_cnt = (
+        db.query(models.ProductModelVersion)
+        .filter(models.ProductModelVersion.model_id == model.id, models.ProductModelVersion.is_archived.is_(False))
+        .count()
+    )
+    if remain_cnt == 0:
+        model.is_archived = True
+
+    audit_service.log_audit_event(
+        db,
+        target_type="product_model",
+        target_id=model.id,
+        action="archive_standard_versions",
+        actor_id="system",
+        payload={"model_code": model.model_code},
+    )
+    db.commit()
+    return None
+

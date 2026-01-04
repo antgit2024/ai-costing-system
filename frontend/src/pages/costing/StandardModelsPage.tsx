@@ -7,11 +7,11 @@ import { useLocation, useNavigate } from 'react-router-dom'
 
 import {
   createProductModel,
-  deleteProductModel,
   fetchProductModelVersions,
   fetchProductModels,
   previewProductModel,
   fetchTaxonomyItems,
+  archiveStandardVersionsOnly,
 } from '@/services/planner'
 import type { ProductModel } from '@/types/planner'
 import ProductModelEditorDrawer from '@/components/costing/ProductModelEditorDrawer'
@@ -165,14 +165,16 @@ export default function StandardModelsPage() {
   const handleDeleteModel = async (model: ProductModel) => {
     Modal.confirm({
       title: '删除模型',
-      content: `确认删除（归档）模型：${model.model_code} - ${model.model_name}？`,
-      okText: '删除',
+      content: `确认删除（归档）标准版本：${model.model_code} - ${model.model_name}？（不会影响打样版本）`,
+      okText: '删除标准',
       okButtonProps: { danger: true },
       cancelText: '取消',
       onOk: async () => {
         try {
-          await deleteProductModel(model.id)
-          message.success('已删除（归档）')
+          // 标准入口的“删除”口径：仅归档 standard 版本；若模型没有任何剩余版本，再归档模型本身
+          // 目的：确保“删除标准模型”不会误伤同一 model 下的打样版本（sample）。
+          await archiveStandardVersionsOnly(model.id)
+          message.success('已删除标准（归档标准版本）')
           await listQuery.refetch()
         } catch (err: any) {
           message.error(err?.response?.data?.detail ?? err?.message ?? '删除失败')
@@ -238,7 +240,7 @@ export default function StandardModelsPage() {
           <Button loading={Boolean(auditingModelIds[r.id])} onClick={() => handleRealtimeAudit(r)}>
             实时核价
           </Button>
-          <Tooltip title="删除为“归档删除”。规则：存在已发布标准版本或存在SKU绑定则不允许删除；否则允许删除。">
+          <Tooltip title="删除为“归档删除标准版本（不影响打样版本）”。规则：存在已发布标准版本或存在SKU绑定则不允许删除；否则允许删除标准版本。">
             <Button
               danger
               disabled={Boolean((r as any).current_published_standard_version_id)}

@@ -1000,6 +1000,10 @@ export const archiveSampleVersionsOnly = async (modelId: string): Promise<void> 
   await plannerClient.post(`/product-models/${modelId}/archive-sample`)
 }
 
+export const archiveStandardVersionsOnly = async (modelId: string): Promise<void> => {
+  await plannerClient.post(`/product-models/${modelId}/archive-standard`)
+}
+
 export const createProductModel = async (
   payload: ProductModelCreatePayload,
 ): Promise<ProductModel> => {

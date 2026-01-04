@@ -978,6 +978,16 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                         <Text type="secondary" style={{ fontSize: 12 }}>
                           单位：{r.item.unit_of_measure ?? '-'}
                         </Text>
+                        {(() => {
+                          const baseU = baseUnitFromBom
+                          const targetU = normalizeUnit(r.item.unit_of_measure)
+                          if (!r.enabled) return null
+                          if (!lastPreviewOk || previewStale) return null
+                          if (!baseU) return <Text type="danger">基准单位缺失：请先补齐主数据单位并保存清单</Text>
+                          if (!targetU) return <Text type="danger">替换物料单位缺失：请先保存规则（让后端回填）</Text>
+                          if (baseU !== targetU) return <Text type="danger">单位不一致：基准={baseU}，替换={targetU}</Text>
+                          return null
+                        })()}
                       </Space>
                     ),
                   },
@@ -1188,8 +1198,8 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
           onSelect={(m) => {
             const key = materialPickerRowKey
             if (!key) return
-          const inheritedMethod = baseLineParamsFromBom.calculation_method
-          const inheritedBaseQty = baseLineParamsFromBom.base_quantity
+            const inheritedMethod = baseLineParamsFromBom.calculation_method
+            const inheritedBaseQty = baseLineParamsFromBom.base_quantity
             updateModalRow(key, {
               item: {
                 ...(modalRows.find((x) => x.key === key)?.item ?? ({} as any)),
@@ -1197,12 +1207,14 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                 material_code: m.material_code,
                 material_name: m.material_name,
                 unit_of_measure: m.unit ?? null,
-              // 关键：替换物料默认继承基准行的计量方式与 β，避免出现替换后 computed_quantity=0 的误导
-              calculation_method: inheritedMethod ?? ((modalRows.find((x) => x.key === key)?.item as any)?.calculation_method ?? 'count'),
-              base_quantity:
-                inheritedBaseQty != null && Number.isFinite(inheritedBaseQty)
-                  ? inheritedBaseQty
-                  : ((modalRows.find((x) => x.key === key)?.item as any)?.base_quantity ?? 1),
+                // 关键：替换物料默认继承基准行的计量方式与 β，避免出现替换后 computed_quantity=0 的误导
+                calculation_method:
+                  inheritedMethod ??
+                  ((modalRows.find((x) => x.key === key)?.item as any)?.calculation_method ?? 'count'),
+                base_quantity:
+                  inheritedBaseQty != null && Number.isFinite(inheritedBaseQty)
+                    ? inheritedBaseQty
+                    : ((modalRows.find((x) => x.key === key)?.item as any)?.base_quantity ?? 1),
               } as any,
             })
           }}

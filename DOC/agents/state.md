@@ -41,6 +41,11 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-01 17:05（Planner：环境文件治理（真实 .env 不进 Git））
 - **分支**：`backup/20251214-1535`
 
+- **本轮闭环产物（Frontend / LineVariants - 替换物料选择器验收修复）**：
+  - 产物：`LineVariantDrawer` 的“替换物料”选择器链路可用（打开→搜索→选择→回填），并修复缩进错位导致的构建失败；启用时补齐“单位缺失/不一致”红字提示（不改后端口径）。
+  - 验收命令（必须）：`npm -C frontend run build`
+  - 下一步（建议下一轮再做）：在选择器中支持“同单位优先/筛选”，进一步减少启用时才发现单位不一致的返工。
+
 - **本轮闭环产物（Planner / 下一轮：模型结构化落点派单）**：
   - 新增派单：`DOC/agents/briefings/backend_structure_tagging_and_filtering_mvp.md`
   - 目标：用 `metadata_json` 落 `structure_standard_code`（版本）与 `structure_tags[]`（工艺模块），并给列表接口加筛选参数，支持“按结构找模块/按结构找版本”

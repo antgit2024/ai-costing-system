@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import dayjs from 'dayjs'
-import { Button, Card, Col, Input, Modal, Row, Select, Space, Table, Tag, Tooltip, Typography, message } from 'antd'
+import { Button, Card, Col, Input, Modal, Row, Select, Space, Switch, Table, Tag, Tooltip, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useQuery } from '@tanstack/react-query'
 
@@ -13,6 +13,7 @@ const { Title, Text } = Typography
 export default function SampleModelsPage() {
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState<string | undefined>(undefined)
+  const [includeArchived, setIncludeArchived] = useState(false)
   const [editorOpen, setEditorOpen] = useState(false)
   const [editingModelId, setEditingModelId] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
@@ -23,10 +24,11 @@ export default function SampleModelsPage() {
     () => ({
       search: search || undefined,
       category: category || undefined,
+      include_archived: includeArchived || undefined,
       page: 1,
       page_size: 50,
     }),
-    [category, search],
+    [category, includeArchived, search],
   )
 
   const listQuery = useQuery({
@@ -40,15 +42,8 @@ export default function SampleModelsPage() {
   })
 
   const listItems = useMemo(() => {
-    const items = (((listQuery.data as any)?.items ?? []) as any[]).slice()
-    return items.filter((m) => {
-      const meta: any = m?.metadata_json ?? {}
-      const entry = String(meta?.entry_context ?? '').trim()
-      const sampleCnt = Number(m?.sample_version_count ?? 0)
-      // 打样列表：只要存在 sample 版本，就应该可见（即便模型最初从“标准入口”创建）。
-      // 目的：避免出现“删了标准版本后，看起来打样也被删了”的错觉（实际上是列表过滤导致不可见）。
-      return sampleCnt > 0 || entry === 'sample'
-    })
+    // 打样列表：为了“可见即可删/可见可查”，不再做 entry_context/版本数过滤（需要时可打开“显示已归档”）。
+    return ((((listQuery.data as any)?.items ?? []) as any[]) || []).slice()
   }, [listQuery.data])
 
   const handleDeleteModel = async (model: ProductModel) => {
@@ -116,6 +111,15 @@ export default function SampleModelsPage() {
     { title: '模型名称', dataIndex: 'model_name' },
     { title: '品类', dataIndex: 'category', width: 140, render: (v: any) => String(v ?? '').trim() || '-' },
     {
+      title: '入口',
+      width: 90,
+      render: (_: any, r: any) => {
+        const meta: any = (r as any)?.metadata_json ?? {}
+        const entry = String(meta?.entry_context ?? '').trim() || '-'
+        return <Tag>{entry}</Tag>
+      },
+    },
+    {
       title: '打样人',
       width: 120,
       render: (_: any, r: any) => {
@@ -126,6 +130,7 @@ export default function SampleModelsPage() {
     },
     { title: '状态', dataIndex: 'status', width: 110, render: (v: string) => <Tag>{v}</Tag> },
     { title: '打样版本数', width: 110, render: (_, r) => (r.sample_version_count ?? '-') },
+    { title: '标准版本数', width: 110, render: (_, r) => (r.standard_version_count ?? '-') },
     { title: '当前发布标准', width: 180, render: (_, r) => r.current_published_standard_version_label ?? '-' },
     {
       title: '更新时间',
@@ -220,6 +225,10 @@ export default function SampleModelsPage() {
                 onChange={(v) => setCategory(v ?? undefined)}
                 options={(taxonomyCategoryQuery.data?.items ?? []).map((it: any) => ({ label: it.name, value: it.name }))}
               />
+              <Space size={6}>
+                <Switch checked={includeArchived} onChange={setIncludeArchived} />
+                <Text type="secondary">显示已归档</Text>
+              </Space>
             </Space>
           </Card>
         </Col>

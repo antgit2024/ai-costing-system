@@ -743,10 +743,11 @@ export interface ProductModel {
   latest_sample_version_id?: string | null
 }
 
-export interface ProductModelQueryParams extends Record<string, string | number | undefined> {
+export interface ProductModelQueryParams extends Record<string, string | number | boolean | undefined> {
   search?: string
   category?: string
   status?: string
+  include_archived?: boolean
   page?: number
   page_size?: number
 }

@@ -36,16 +36,20 @@ class ProductModelFilters:
         search: Optional[str] = None,
         status: Optional[str] = None,
         category: Optional[str] = None,
+        include_archived: bool = False,
     ):
         self.search = search
         self.status = status
         self.category = category
+        self.include_archived = include_archived
 
 
 def list_models(
     db: Session, *, filters: ProductModelFilters, page: int, page_size: int
 ) -> Tuple[int, Sequence[models.ProductModel]]:
-    query = db.query(models.ProductModel).filter(models.ProductModel.is_archived.is_(False))
+    query = db.query(models.ProductModel)
+    if not getattr(filters, "include_archived", False):
+        query = query.filter(models.ProductModel.is_archived.is_(False))
     if filters.search:
         pattern = f"%{filters.search.strip()}%"
         query = query.filter(

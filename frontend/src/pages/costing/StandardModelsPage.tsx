@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import dayjs from 'dayjs'
-import { Button, Card, Col, Input, Modal, Row, Select, Space, Table, Tag, Tooltip, Typography, message } from 'antd'
+import { Button, Card, Col, Input, Modal, Row, Select, Space, Switch, Table, Tag, Tooltip, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useQuery } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
@@ -23,6 +23,7 @@ export default function StandardModelsPage() {
   const navigate = useNavigate()
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState<string | undefined>(undefined)
+  const [includeArchived, setIncludeArchived] = useState(false)
   const [page] = useState(1)
   const [pageSize] = useState(50)
 
@@ -64,10 +65,11 @@ export default function StandardModelsPage() {
     () => ({
       search: search || undefined,
       category: category || undefined,
+      include_archived: includeArchived || undefined,
       page,
       page_size: pageSize,
     }),
-    [category, page, pageSize, search],
+    [category, includeArchived, page, pageSize, search],
   )
 
   const listQuery = useQuery({
@@ -81,14 +83,8 @@ export default function StandardModelsPage() {
   })
 
   const listItems = useMemo(() => {
-    const items = (((listQuery.data as any)?.items ?? []) as any[]).slice()
-    return items.filter((m) => {
-      const meta: any = m?.metadata_json ?? {}
-      const entry = String(meta?.entry_context ?? '').trim()
-      const stdCnt = Number(m?.standard_version_count ?? 0)
-      // 标准列表：只展示“标准入口创建/维护”的模型，避免打样模型混进来
-      return entry === 'standard' || stdCnt > 0
-    })
+    // 标准列表：为了“可见即可删/可见可查”，不再做 entry_context/版本数过滤（需要时可打开“显示已归档”）。
+    return ((((listQuery.data as any)?.items ?? []) as any[]) || []).slice()
   }, [listQuery.data])
 
   const getBaselineTotalFromPublished = async (modelId: string, publishedVersionId: string) => {
@@ -188,6 +184,16 @@ export default function StandardModelsPage() {
     { title: '模型名称', dataIndex: 'model_name' },
     { title: '品类', dataIndex: 'category', width: 140, render: (v: any) => String(v ?? '').trim() || '-' },
     { title: '状态', dataIndex: 'status', width: 110, render: (v: string) => <Tag>{v}</Tag> },
+    {
+      title: '入口',
+      width: 90,
+      render: (_: any, r: any) => {
+        const meta: any = (r as any)?.metadata_json ?? {}
+        const entry = String(meta?.entry_context ?? '').trim() || '-'
+        return <Tag>{entry}</Tag>
+      },
+    },
+    { title: '打样版本数', width: 110, render: (_: any, r: any) => (r.sample_version_count ?? '-') },
     { title: '标准版本数', width: 110, render: (_, r) => (r.standard_version_count ?? '-') },
     { title: '当前发布标准', width: 180, render: (_, r) => r.current_published_standard_version_label ?? '-' },
     {
@@ -354,6 +360,10 @@ export default function StandardModelsPage() {
                 onChange={(v) => setCategory(v ?? undefined)}
                 options={(taxonomyCategoryQuery.data?.items ?? []).map((it: any) => ({ label: it.name, value: it.name }))}
               />
+              <Space size={6}>
+                <Switch checked={includeArchived} onChange={setIncludeArchived} />
+                <Text type="secondary">显示已归档</Text>
+              </Space>
             </Space>
           </Card>
         </Col>

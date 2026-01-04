@@ -414,6 +414,12 @@ const deriveStepProcessCode = (s: EditorStepValue): string | null => {
   return fromSnapshot || null
 }
 
+const isUuid = (value: unknown): boolean => {
+  const s = String(value ?? '').trim()
+  // UUID v4-ish format (we don't validate version bits strictly; just block obvious junk like "null")
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)
+}
+
 const ProcessModulesPage = () => {
   const queryClient = useQueryClient()
   const location = useLocation() as any
@@ -450,7 +456,12 @@ const ProcessModulesPage = () => {
   useEffect(() => {
     const st = (location as any)?.state ?? {}
     const openId = String(st?.openProcessModuleId ?? '').trim()
-    if (!openId || openId === 'null' || openId === 'undefined') return
+    if (!openId) return
+    if (!isUuid(openId)) {
+      // Clear invalid state early; avoid accidental requests like /process-modules/null
+      navigate(location.pathname, { replace: true, state: null })
+      return
+    }
     setDrawerMode('view')
     setSelectedId(openId)
     setDrawerOpen(true)
@@ -508,7 +519,7 @@ const ProcessModulesPage = () => {
   const detailQuery = useQuery({
     queryKey: ['process-module', selectedId],
     queryFn: () => fetchProcessModule(selectedId as string),
-    enabled: drawerOpen && !!selectedId,
+    enabled: drawerOpen && isUuid(selectedId),
   })
 
   const referencesQuery = useQuery({
@@ -518,7 +529,7 @@ const ProcessModulesPage = () => {
         module_ids: selectedId ? [selectedId] : undefined,
         status: 'active',
       }),
-    enabled: referenceDrawerOpen && !!selectedId,
+    enabled: referenceDrawerOpen && isUuid(selectedId),
   })
 
   const createMutation = useMutation({

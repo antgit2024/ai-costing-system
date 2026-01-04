@@ -22,6 +22,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-03 18:00（Frontend：工艺模块查看模式也可点 AI生成）
 - **最近校对（北京时间 GMT+8）**：2026-01-03 18:28（Frontend：结构标准 slots 支持“启用/可选位”（默认启用，取消则不进工艺下拉））
 - **最近校对（北京时间 GMT+8）**：2026-01-03 18:45（Frontend：标准模型展示所选结构标准的结构骨架预览）
+- **最近校对（北京时间 GMT+8）**：2026-01-04（Frontend：新接力验收通过：`npm -C frontend run build` + Docs grep + Backend curl smoke）
 - **最近校对（北京时间 GMT+8）**：2026-01-01（Backend：发货异常队列“按批次重试未解决异常（Retry Exceptions）”MVP）
 
 - **最近校对（北京时间 GMT+8）**：2025-12-25 04:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）

@@ -291,7 +291,8 @@ def update_version_lines(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return get_version_lines(version_id, db)
+    # NOTE: get_version_lines signature includes include_archived; use keyword args to avoid positional mismatch.
+    return get_version_lines(version_id=version_id, db=db)
 
 
 @router.post("/product-model-versions/{version_id}/sync-from-modules", response_model=schemas.ProductModelLinesResponse)
@@ -313,7 +314,7 @@ def sync_version_from_modules(
     # IMPORTANT: SessionLocal has autoflush=False; without an explicit commit, sync results
     # won't be persisted nor visible to subsequent reads in this request.
     db.commit()
-    return get_version_lines(version_id, db)
+    return get_version_lines(version_id=version_id, db=db)
 
 
 @router.post("/product-model-versions/{version_id}/refresh-material-prices", response_model=schemas.ProductModelLinesResponse)
@@ -325,7 +326,7 @@ def refresh_version_material_prices(version_id: str, db: Session = Depends(get_d
     v = _get_version_or_404(db, version_id)
     product_model_service.refresh_version_material_price_snapshots(db, v)
     db.commit()
-    return get_version_lines(version_id, db)
+    return get_version_lines(version_id=version_id, db=db)
 
 
 @router.post("/product-model-versions/{version_id}/preview", response_model=schemas.ProductModelPreviewResponse)

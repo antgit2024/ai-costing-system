@@ -225,7 +225,8 @@ def refresh_model_material_prices(model_id: str, db: Session = Depends(get_db)):
     product_model_service.refresh_model_material_price_snapshots(db, model)
     db.commit()
     # return latest lines for immediate UI refresh
-    return get_model_lines(model_id, db)
+    # NOTE: get_model_lines signature includes include_archived; use keyword args to avoid positional mismatch.
+    return get_model_lines(model_id=model_id, db=db)
 
 
 @router.get("/{model_id}/lines", response_model=schemas.ProductModelLinesResponse)

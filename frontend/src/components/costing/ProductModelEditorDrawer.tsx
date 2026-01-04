@@ -541,7 +541,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
 
   const moduleMetaByIdQuery = useQuery({
     queryKey: ['processModuleMetaById', missingStructureMetaModuleIds],
-    enabled: open && activeTab === 'lines' && entryContext === 'standard' && missingStructureMetaModuleIds.length > 0,
+    enabled: open && activeTab === 'lines' && missingStructureMetaModuleIds.length > 0,
     staleTime: 5 * 60 * 1000,
     queryFn: async () => {
       const results = await Promise.allSettled(missingStructureMetaModuleIds.map((id) => fetchProcessModule(id)))
@@ -558,7 +558,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
 
   const structureStandardsQuery = useQuery({
     queryKey: ['structure-standards', 'dropdown'],
-    enabled: open && entryContext === 'standard' && activeTab === 'lines',
+    enabled: open && activeTab === 'lines',
     staleTime: 5 * 60 * 1000,
     queryFn: () => fetchStructureStandards({ status: 'all', page: 1, page_size: 500 }),
   })
@@ -783,13 +783,11 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   const modulePickerParams: ProcessModuleQueryParams = useMemo(
     () => ({
       search: modulePickerSearch || undefined,
-      ...(entryContext === 'standard' && selectedStructureStandardCode
-        ? { structure_code: selectedStructureStandardCode }
-        : {}),
+      ...(selectedStructureStandardCode ? { structure_code: selectedStructureStandardCode } : {}),
       page: 1,
       page_size: 50,
     }),
-    [modulePickerSearch, entryContext, selectedStructureStandardCode],
+    [modulePickerSearch, selectedStructureStandardCode],
   )
 
   const modulePickerQuery = useQuery({
@@ -1116,7 +1114,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       sample_minutes: p.sample_minutes != null ? Number(p.sample_minutes) : p.sample_minutes,
       standard_minutes: p.standard_minutes != null ? Number(p.standard_minutes) : p.standard_minutes,
     }))
-    const doAutofill = !!opts?.autofill_structure_slot && entryContext === 'standard' && !!selectedStructureStandardCode
+    const doAutofill = !!opts?.autofill_structure_slot && !!selectedStructureStandardCode
     const applyAutofill = (rows: any[]): any[] => {
       if (!doAutofill) return rows
       if (!structureSlotOptions.length) return rows
@@ -3243,8 +3241,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                       onChange={(v) => setSelectedVersionId(v)}
                       allowClear
                     />
-                    {entryContext === 'standard' ? (
-                      <Space.Compact>
+                    <Space.Compact>
                         <Select
                           size="small"
                           style={{ width: 320 }}
@@ -3289,7 +3286,6 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                           保存结构标准
                         </Button>
                       </Space.Compact>
-                    ) : null}
                     <Button size="small" onClick={openCreateVersionModal} disabled={!modelId}>
                       新增版本
                     </Button>

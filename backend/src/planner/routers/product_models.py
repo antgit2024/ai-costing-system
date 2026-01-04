@@ -615,7 +615,13 @@ def delete_product_model(model_id: str, db: Session = Depends(get_db)):
     Rule:
     - If the model has any published standard versions, deletion is disallowed.
     - If any SKU is actively bound to any standard version of this model, deletion is disallowed.
-    - Otherwise, allow soft-delete (archive) the model and archive its versions.
+    - Otherwise, archive **standard versions only** by default to avoid accidentally removing sample versions.
+
+    Rationale:
+    - The UI has separate entrances: 打样模型 / 标准模型.
+    - Some older clients may still call `DELETE /product-models/{id}` from the 标准入口.
+      If we cascade-archive all versions, it will look like “删除标准把打样也删了”.
+    - For safety, default behavior is aligned with 标准入口：only archive `standard` versions.
     """
     model = _get_model_or_404(model_id, db)
 
@@ -657,13 +663,25 @@ def delete_product_model(model_id: str, db: Session = Depends(get_db)):
         if bound_cnt > 0:
             raise HTTPException(status_code=400, detail="该模型存在SKU绑定关系（active），不允许删除")
 
-    # Archive model and its versions
-    model.is_archived = True
+    # Safety default: archive standard versions only (do NOT archive sample versions).
     (
         db.query(models.ProductModelVersion)
-        .filter(models.ProductModelVersion.model_id == model.id, models.ProductModelVersion.is_archived.is_(False))
+        .filter(
+            models.ProductModelVersion.model_id == model.id,
+            models.ProductModelVersion.version_kind == "standard",
+            models.ProductModelVersion.is_archived.is_(False),
+        )
         .update({"is_archived": True}, synchronize_session=False)
     )
+
+    # If model has no remaining non-archived versions, archive model as well.
+    remain_cnt = (
+        db.query(models.ProductModelVersion)
+        .filter(models.ProductModelVersion.model_id == model.id, models.ProductModelVersion.is_archived.is_(False))
+        .count()
+    )
+    if remain_cnt == 0:
+        model.is_archived = True
     audit_service.log_audit_event(
         db,
         target_type="product_model",

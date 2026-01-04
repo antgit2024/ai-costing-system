@@ -1,0 +1,25 @@
+from __future__ import annotations
+
+
+def test_parse_spec_extracts_code_tokens_from_mixed_text(client):
+    # Given: real-world style text (ERP “交易规格”)
+    spec_text = "枕套 / Q25121102A黄金绒双面印花（棕色毛球） 45X45;1003433256386"
+    r = client.post("/api/planner/spec/parse", json={"spec_text": spec_text})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    tokens = data.get("tokens") or []
+
+    # Should extract these stable identifiers even when glued to other text
+    assert "Q25121102A" in tokens
+    assert "1003433256386" in tokens
+
+
+def test_parse_spec_extracts_material_code_tokens(client):
+    spec_text = "WB01176棉麻布300本白防水,WB02339 1012本白雪尼尔"
+    r = client.post("/api/planner/spec/parse", json={"spec_text": spec_text})
+    assert r.status_code == 200, r.text
+    tokens = r.json().get("tokens") or []
+    assert "WB01176" in tokens
+    assert "WB02339" in tokens
+
+

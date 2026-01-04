@@ -68,6 +68,7 @@ def parse_spec(spec_text: str) -> Dict[str, Any]:
     width_cm: Decimal | None = None
     height_cm: Decimal | None = None
     diameter_cm: Decimal | None = None
+    extra_tokens: List[str] = []
 
     def _is_height_label(lbl: str) -> bool:
         return (lbl or "").strip() in ("竖", "高")
@@ -138,6 +139,36 @@ def parse_spec(spec_text: str) -> Dict[str, Any]:
             continue
         tokens.append(token)
         explanations.append({"token": token, "source": token, "rule": "segment"})
+
+        # Extract stable “code tokens” from within a segment so rules can target them directly,
+        # even when they are glued to other text (e.g. "Q25121102A黄金绒…" / "WB01176棉麻…").
+        #
+        # This is intentionally conservative: only extract high-signal identifiers.
+        # - Material codes: WBxxxxx / VMxxxxx
+        # - Style/color codes: Qxxxxxxxx + optional letters
+        # - Barcodes: 12~14 digit sequences (common EAN/UPC variants used in ERP exports)
+        for m in re.findall(r"(WB\d{5})", token, flags=re.IGNORECASE):
+            extra_tokens.append(m.upper())
+            explanations.append({"token": m.upper(), "source": token, "rule": "extract_material_code"})
+        for m in re.findall(r"(VM\d{5})", token, flags=re.IGNORECASE):
+            extra_tokens.append(m.upper())
+            explanations.append({"token": m.upper(), "source": token, "rule": "extract_virtual_code"})
+        for m in re.findall(r"(Q\d{6,}[A-Z]*)", token, flags=re.IGNORECASE):
+            extra_tokens.append(m.upper())
+            explanations.append({"token": m.upper(), "source": token, "rule": "extract_style_code"})
+        for m in re.findall(r"(\d{12,14})", token):
+            extra_tokens.append(m)
+            explanations.append({"token": m, "source": token, "rule": "extract_barcode"})
+
+    # De-duplicate but keep stable order (original segments first, then extracted codes).
+    if extra_tokens:
+        seen = set(t.lower() for t in tokens)
+        for t in extra_tokens:
+            k = t.lower()
+            if k in seen:
+                continue
+            tokens.append(t)
+            seen.add(k)
 
     area_m2, perimeter_m = _derive_area_perimeter(width_cm, height_cm, diameter_cm)
     return {

@@ -41,7 +41,7 @@ export default function MaterialSelectModal({
 
   const q = useQuery({
     queryKey: ['materialsPicker', params],
-    queryFn: () => fetchMaterials(params),
+    queryFn: ({ signal }) => fetchMaterials(params, { signal }),
     enabled: open,
   })
 

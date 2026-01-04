@@ -682,9 +682,11 @@ export const fetchAuditLogs = async (
 
 export const fetchMaterials = async (
   params: MaterialQueryParams = {},
+  opts?: { signal?: AbortSignal },
 ): Promise<MaterialListResponse> => {
   const response = await plannerClient.get('/base-config/materials', {
     params: sanitizeParams(params as Record<string, unknown>),
+    signal: opts?.signal,
   })
   return response.data
 }

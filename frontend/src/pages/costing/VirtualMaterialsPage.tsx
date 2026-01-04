@@ -500,8 +500,12 @@ const VirtualMaterialsPage = () => {
     if (!drawerOpen || !activeBindings.length) {
       return
     }
-    const fetchMissing = async () => {
+    const ac = new AbortController()
+    let cancelled = false
+
+    ;(async () => {
       for (const binding of activeBindings) {
+        if (cancelled) return
         if (!binding.material_id || (binding.purchase_unit_price && binding.bom_unit_price)) {
           continue
         }
@@ -509,11 +513,15 @@ const VirtualMaterialsPage = () => {
           continue
         }
         try {
-          const response = await fetchMaterials({
-            search: binding.material_code,
-            page: 1,
-            page_size: 5,
-          })
+          const response = await fetchMaterials(
+            {
+              search: binding.material_code,
+              page: 1,
+              page_size: 5,
+            },
+            { signal: ac.signal },
+          )
+          if (cancelled) return
           const match = response.items.find(
             (item) => item.id === binding.material_id || item.material_code === binding.material_code,
           )
@@ -539,11 +547,17 @@ const VirtualMaterialsPage = () => {
             bindingUpdateRef.current = false
           }
         } catch (error) {
+          // close/cancel should not be treated as an error
+          if ((error as any)?.name === 'CanceledError') return
           console.error('Failed to fetch material info', error)
         }
       }
+    })()
+
+    return () => {
+      cancelled = true
+      ac.abort()
     }
-    fetchMissing()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [drawerOpen, activeBindings.length])
 
@@ -2056,15 +2070,18 @@ const MaterialSelectModal = ({ open, onClose, onConfirm }: MaterialSelectModalPr
 
   const pickerQuery = useQuery({
     queryKey: ['material-picker', search, category, onlyBom, pagination],
-    queryFn: () =>
-      fetchMaterials({
-        search: search || undefined,
-        category,
-        page: pagination.current,
-        page_size: pagination.pageSize,
-        is_active: true,
-        is_bom_material: onlyBom || undefined,
-      }),
+    queryFn: ({ signal }) =>
+      fetchMaterials(
+        {
+          search: search || undefined,
+          category,
+          page: pagination.current,
+          page_size: pagination.pageSize,
+          is_active: true,
+          is_bom_material: onlyBom || undefined,
+        },
+        { signal },
+      ),
     enabled: open,
     placeholderData: keepPreviousData,
     staleTime: 0,

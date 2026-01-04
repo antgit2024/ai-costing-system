@@ -59,6 +59,18 @@
   - 更新（北京时间 GMT+8 2026-01-04）：打样管理抽屉加宽 50px；并将左侧“工艺模块”栏固定为 330px，让新增宽度全部让给右侧清单区域（不挤乱模块区）。
   - 下一步（建议下一轮再做）：后端在“从工艺同步”落库时直接回填每行 `structure_slot`（统一口径），并可选支持“模块按 slots 拆行”（若业务确认需要）。
 
+- **本轮闭环产物（Frontend / VirtualMaterials - 添加真实物料卡顿与关闭后仍持续请求修复）**：
+  - 现象：虚拟物料抽屉“添加物料（真实物料）”打开很慢；关闭抽屉后仍感觉卡顿持续。
+  - 根因：物料查询与“补齐绑定物料信息”的循环请求不可取消（关闭弹窗/抽屉后仍在跑）。
+  - 修复：
+    - `fetchMaterials` 支持 `AbortSignal`；选择器查询与补齐循环接入 signal，关闭时会 abort in-flight 请求。
+    - `VirtualMaterialsPage` 的补齐循环在 cleanup 中停止并 `abort()`，避免拖慢主线程/页面交互。
+  - 关键文件：
+    - `frontend/src/services/planner.ts`
+    - `frontend/src/pages/costing/VirtualMaterialsPage.tsx`
+    - `frontend/src/components/costing/MaterialPickerDrawer.tsx`
+  - 验收命令（必须）：`npm -C frontend run build`
+
  - **最近校对（北京时间 GMT+8）**：2026-01-04（Frontend：打样管理允许占位物料保存清单（汇总成本按 0），但推导标准/发布标准前硬拦截：存在占位则不允许推导/发布）
  - **最近校对（北京时间 GMT+8）**：2026-01-04（Backend：版本清单保存占位型虚拟物料校验按 version_kind 拆分：sample 允许临时保存，standard 继续禁止）
  - **最近校对（北京时间 GMT+8）**：2026-01-04（Frontend：保存清单后不再跳回旧版本：versionsQuery 刷新时保留当前 selectedVersionId，仅在首次/当前不存在时自动选版本）

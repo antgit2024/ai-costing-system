@@ -104,7 +104,7 @@ export default function MaterialPickerDrawer({
 
   const realQuery = useQuery({
     queryKey: ['material-picker', 'real', realParams],
-    queryFn: () => fetchMaterials(realParams),
+    queryFn: ({ signal }) => fetchMaterials(realParams, { signal }),
     enabled: open && activeTab === 'real',
     placeholderData: keepPreviousData,
   })

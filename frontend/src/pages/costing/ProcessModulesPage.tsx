@@ -393,6 +393,16 @@ const isBlankStepRow = (s: EditorStepValue): boolean => {
   return true
 }
 
+const deriveStepProcessId = (s: EditorStepValue): string | null => {
+  const direct = String(s.process_id ?? '').trim()
+  if (direct) return direct
+  const fromProcess = String((s.process as any)?.id ?? '').trim()
+  if (fromProcess) return fromProcess
+  const meta = ((s.metadata_json ?? {}) as any) || {}
+  const fromSnapshot = String(meta?.process_snapshot?.id ?? '').trim()
+  return fromSnapshot || null
+}
+
 const ProcessModulesPage = () => {
   const queryClient = useQueryClient()
   const location = useLocation() as any
@@ -1162,9 +1172,10 @@ const ProcessModulesPage = () => {
 
     const normalizeSteps = (items: EditorStepValue[] = []) =>
       items
-        .filter((item) => Boolean(item.process_id))
-        .map((item, index) => ({
-        process_id: item.process_id ?? null,
+        .map((item) => ({ item, processId: deriveStepProcessId(item) }))
+        .filter(({ processId }) => Boolean(processId))
+        .map(({ item, processId }, index) => ({
+        process_id: processId,
         sequence_order: item.sequence_order ?? index,
         team_name: item.team_name,
         pricing_method: item.pricing_method ?? 'count',
@@ -1273,7 +1284,7 @@ const ProcessModulesPage = () => {
       .map(({ idx }) => idx)
     const invalidStepRows = rawSteps
       .map((s, idx) => ({ s, idx: idx + 1 }))
-      .filter(({ s }) => !s.process_id && !isBlankStepRow(s))
+      .filter(({ s }) => !deriveStepProcessId(s) && !isBlankStepRow(s))
       .map(({ idx }) => idx)
     if (invalidMaterialRows.length) {
       message.error(`物料组存在未选择物料的行：第 ${invalidMaterialRows.join('、')} 行，请先删除或重新选择`)

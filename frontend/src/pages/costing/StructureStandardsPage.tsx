@@ -28,7 +28,7 @@ const normalizeSlots = (raw: any): string[] => {
   return out.filter((x) => (seen.has(x) ? false : (seen.add(x), true)))
 }
 
-type SlotRow = { cn?: string; code?: string }
+type SlotRow = { cn?: string; code?: string; enabled?: boolean }
 
 export default function StructureStandardsPage() {
   const queryClient = useQueryClient()
@@ -87,10 +87,16 @@ export default function StructureStandardsPage() {
   const openEdit = (record: StructureStandardRead) => {
     setDrawerMode('edit')
     setActiveRecord(record)
-    const rows: SlotRow[] = (record.slots ?? []).map((code) => ({
-      code,
-      cn: record.slot_display_names?.[code] ?? '',
-    }))
+    const rows: SlotRow[] = (record.slot_defs?.length
+      ? record.slot_defs
+      : (record.slots ?? []).map((code) => ({ code, enabled: true, name_cn: record.slot_display_names?.[code] ?? '' })) // compat
+    )
+      .map((r: any) => ({
+        code: String(r?.code ?? '').trim(),
+        cn: String(r?.name_cn ?? r?.cn ?? '').trim(),
+        enabled: r?.enabled === false ? false : true,
+      }))
+      .filter((r) => r.code)
     editorForm.setFieldsValue({
       code: record.code,
       name: record.name,
@@ -119,8 +125,11 @@ export default function StructureStandardsPage() {
         title: 'slots',
         key: 'slots',
         render: (_, r) => {
-          const slots = Array.isArray(r.slots) ? r.slots : []
-          if (!slots.length) return <Text type="secondary">-</Text>
+          const defs = Array.isArray(r.slot_defs) ? r.slot_defs : []
+          const enabled = defs.length ? defs.filter((d) => d.enabled !== false).map((d) => d.code) : Array.isArray(r.slots) ? r.slots : []
+          const disabled = defs.length ? defs.filter((d) => d.enabled === false).map((d) => d.code) : []
+          const slots = enabled
+          if (!slots.length && !disabled.length) return <Text type="secondary">-</Text>
           const show = slots.slice(0, 3)
           const rest = slots.length - show.length
           return (
@@ -145,6 +154,13 @@ export default function StructureStandardsPage() {
                   )}
                 </Tag>
               ))}
+              {disabled.length ? (
+                <Tooltip title={`不启用（不参与工艺模块下拉）：${disabled.join('、')}`}>
+                  <Tag color="default" style={{ marginInlineEnd: 0, borderRadius: 999, padding: '0 6px', fontSize: 12, lineHeight: '18px' }}>
+                    可选位 {disabled.length}
+                  </Tag>
+                </Tooltip>
+              ) : null}
               {rest > 0 ? (
                 <Tag
                   style={{
@@ -268,16 +284,21 @@ export default function StructureStandardsPage() {
     const name = String(values.name ?? '').trim()
     const rows: SlotRow[] = Array.isArray(values.slot_rows) ? values.slot_rows : []
     const slot_display_names: Record<string, string> = {}
-    const slotCodes: string[] = []
+    const slotCodesAll: string[] = []
+    const slotCodesActive: string[] = []
+    const slot_defs: Array<{ code: string; name_cn?: string; enabled?: boolean }> = []
     for (const row of rows) {
       const cn = String(row?.cn ?? '').trim()
       const rawCode = String(row?.code ?? '').trim()
       const c = rawCode ? toPinyinCode(rawCode) : toPinyinCode(cn)
       if (!c) continue
-      if (!slotCodes.includes(c)) slotCodes.push(c)
+      const enabled = row?.enabled === false ? false : true
+      if (!slotCodesAll.includes(c)) slotCodesAll.push(c)
+      if (enabled && !slotCodesActive.includes(c)) slotCodesActive.push(c)
       if (cn) slot_display_names[c] = cn
+      slot_defs.push({ code: c, name_cn: cn || undefined, enabled })
     }
-    const slots = normalizeSlots(slotCodes)
+    const slots = normalizeSlots(slotCodesActive)
     const status: StructureStandardStatus = values.is_active ? 'active' : 'inactive'
 
     if (drawerMode === 'create') {
@@ -294,11 +315,11 @@ export default function StructureStandardsPage() {
     setSaving(true)
     try {
       if (drawerMode === 'create') {
-        await createStructureStandard({ code, name, slots, slot_display_names, status })
+        await createStructureStandard({ code, name, slots, slot_display_names, slot_defs, status })
         message.success('结构标准已创建')
       } else if (activeRecord) {
         // MVP: 编辑时锁定 code（避免变更唯一键造成引用漂移）
-        await updateStructureStandard(activeRecord.id, { name, slots, slot_display_names, status })
+        await updateStructureStandard(activeRecord.id, { name, slots, slot_display_names, slot_defs, status })
         message.success('结构标准已更新')
       }
       setDrawerOpen(false)
@@ -432,6 +453,9 @@ export default function StructureStandardsPage() {
                   <Text code>slot_internal</Text> / <Text code>assembly</Text> 来表示适用范围。通用工艺（如印染/打印/包装）可用{' '}
                   <Text code>GLOBAL</Text> 模块表达，<strong>不一定需要</strong>在结构里额外建“通用位”。
                 </Text>
+                <Text type="secondary">
+                  勾选“启用”的 slot 会出现在工艺模块的 slot(s) 下拉里；取消勾选表示“骨架可选位”，仅用于展示/规划，不参与下拉选择。
+                </Text>
               </Space>
             }
           >
@@ -464,6 +488,9 @@ export default function StructureStandardsPage() {
                       <Form.Item {...field} name={[field.name, 'code']} style={{ marginBottom: 0, width: 260 }}>
                         <Input placeholder="拼音短码（自动生成，可手改），例如：lalianwei / lalian" />
                       </Form.Item>
+                      <Form.Item {...field} name={[field.name, 'enabled']} valuePropName="checked" style={{ marginBottom: 0 }}>
+                        <Switch checkedChildren="启用" unCheckedChildren="不启用" defaultChecked />
+                      </Form.Item>
                       <Button danger onClick={() => remove(field.name)}>
                         删除
                       </Button>
@@ -471,7 +498,7 @@ export default function StructureStandardsPage() {
                   ))}
                   <Button
                     type="dashed"
-                    onClick={() => add({ cn: '', code: '' })}
+                    onClick={() => add({ cn: '', code: '', enabled: true })}
                     style={{ width: 540 }}
                   >
                     新增 slot

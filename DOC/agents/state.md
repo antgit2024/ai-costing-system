@@ -48,6 +48,7 @@
 
  - **最近校对（北京时间 GMT+8）**：2026-01-04（Frontend：打样管理允许占位物料保存清单（汇总成本按 0），但推导标准/发布标准前硬拦截：存在占位则不允许推导/发布）
  - **最近校对（北京时间 GMT+8）**：2026-01-04（Backend：版本清单保存占位型虚拟物料校验按 version_kind 拆分：sample 允许临时保存，standard 继续禁止）
+ - **最近校对（北京时间 GMT+8）**：2026-01-04（Frontend：保存清单后不再跳回旧版本：versionsQuery 刷新时保留当前 selectedVersionId，仅在首次/当前不存在时自动选版本）
 
 - **本轮闭环产物（Planner / 下一轮：模型结构化落点派单）**：
   - 新增派单：`DOC/agents/briefings/backend_structure_tagging_and_filtering_mvp.md`

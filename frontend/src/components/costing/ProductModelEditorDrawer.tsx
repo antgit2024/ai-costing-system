@@ -826,7 +826,14 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     if (!versionsQuery.data) return
     const items = (versionsQuery.data ?? []) as ProductModelVersionRead[]
     setVersions(items)
-    // choose version: initialVersionId > latest draft of desired kind > first of desired kind
+    // Choose version (IMPORTANT: do NOT override user's current selection on every refetch).
+    // - first open: initialVersionId (if exists)
+    // - otherwise: keep current selectedVersionId if it still exists
+    // - fallback: latest draft of desired kind > first of desired kind
+    const current = String(selectedVersionId ?? '').trim()
+    if (current && items.some((v) => v.id === current)) {
+      return
+    }
     if (initialVersionId && items.some((v) => v.id === initialVersionId)) {
       setSelectedVersionId(initialVersionId)
       return
@@ -836,7 +843,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       items.find((v) => v.version_kind === desiredKind) ??
       null
     setSelectedVersionId(preferred?.id ?? null)
-  }, [versionsQuery.data, desiredKind, initialVersionId])
+  }, [versionsQuery.data, desiredKind, initialVersionId, selectedVersionId])
 
   const hydrateLinesFromApi = (data: any) => {
     if (!data) return

@@ -1093,6 +1093,18 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   const refreshSummary = async () => {
     // 本地汇总：基于“当前编辑态”的用量/工时立即算（无需先保存清单）
     try {
+      const hasPlaceholderMaterials = (materials as any[]).some((r: any) => isPlaceholderMaterialRow(r))
+      // If placeholder materials exist, the cost summary is not meaningful.
+      // Show 0 to avoid misleading totals during sample iterations.
+      if (hasPlaceholderMaterials) {
+        setSummary({
+          material_cost: 0,
+          labor_cost: 0,
+          overhead_cost: 0,
+          total_cost: 0,
+        })
+        return
+      }
       let materialCost = 0
       let laborCost = 0
 
@@ -3406,6 +3418,11 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                     <Tag color="purple">人工费：{summary.labor_cost.toFixed(2)}</Tag>
                     <Tag color="orange">制造费(30%)：{summary.overhead_cost.toFixed(2)}</Tag>
                     <Tag color="green">合计：{summary.total_cost.toFixed(2)}</Tag>
+                    {(materials as any[]).some((r: any) => isPlaceholderMaterialRow(r)) ? (
+                      <Tooltip title="当前版本包含占位型物料，汇总金额为避免误导统一按 0 显示（请先替换占位物料后再看准确合计）">
+                        <Tag color="gold">含占位：合计按0</Tag>
+                      </Tooltip>
+                    ) : null}
                   </Space>
                   {null}
                 </Card>
@@ -3451,12 +3468,6 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                         pagination={false}
                         size="small"
                         style={{ fontSize: TABLE_FONT_SIZE }}
-                        onRow={(r: any) => {
-                          const key = String(r?.module_id ?? '').trim()
-                          if (!key) return {}
-                          const color = getColorForModuleKey(key)
-                          return { style: { background: hexToRgba(color, 0.06) } }
-                        }}
                         rowSelection={{
                           selectedRowKeys: syncSelectedModuleIds,
                           onChange: (keys) => setSyncSelectedModuleIds(keys.map((k) => String(k))),
@@ -3465,6 +3476,16 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                           {
                             title: '编码',
                             width: 80,
+                            onCell: (_r: any) => {
+                              const key = String(_r?.module_id ?? '').trim()
+                              const color = key ? getColorForModuleKey(key) : '#ffffff'
+                              return {
+                                style: {
+                                  background: key ? hexToRgba(color, 0.14) : undefined,
+                                  borderLeft: key ? `4px solid ${color}` : undefined,
+                                },
+                              }
+                            },
                             render: (_: any, r: any) => {
                               const code = r.module?.module_code ?? '-'
                               const color = getColorForModuleKey(r.module_id)
@@ -3473,6 +3494,11 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                           },
                           {
                             title: '名称',
+                            onCell: (_r: any) => {
+                              const key = String(_r?.module_id ?? '').trim()
+                              const color = key ? getColorForModuleKey(key) : '#ffffff'
+                              return { style: { background: key ? hexToRgba(color, 0.14) : undefined } }
+                            },
                             render: (_: any, r: any) => (
                               <span style={{ fontSize: TABLE_FONT_SIZE }}>{r.module?.module_name ?? '-'}</span>
                             ),
@@ -3480,6 +3506,11 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                           {
                             title: '',
                             width: 44,
+                            onCell: (_r: any) => {
+                              const key = String(_r?.module_id ?? '').trim()
+                              const color = key ? getColorForModuleKey(key) : '#ffffff'
+                              return { style: { background: key ? hexToRgba(color, 0.14) : undefined } }
+                            },
                             render: (_: any, __: any, idx: number) => (
                               <Button
                                 size="small"

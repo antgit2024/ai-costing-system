@@ -360,6 +360,39 @@ const createEmptyStep = (order = 1): ProcessModuleStepInput => ({
   },
 })
 
+const isBlankStepRow = (s: EditorStepValue): boolean => {
+  // Treat a row as "blank placeholder" if it has no selected process AND no user-entered meaningful content.
+  // This avoids blocking save when the UI keeps empty rows for convenience.
+  const processId = String(s.process_id ?? '').trim()
+  if (processId) return false
+
+  const team = String(s.team_name ?? '').trim()
+  const uom = String(s.unit_of_measure ?? '').trim()
+  const desc = String(s.description ?? '').trim()
+  const notes = String(s.notes ?? '').trim()
+
+  // If user typed any visible text fields, it's not blank.
+  if (team || uom || desc || notes) return false
+
+  // Historical numeric fields: treat positive/meaningful values as non-blank.
+  const pricingMethod = String(s.pricing_method ?? '').trim()
+  const workMinutes = Number(s.work_minutes ?? 0)
+  if (pricingMethod && pricingMethod !== 'count') return false
+  if (Number.isFinite(workMinutes) && workMinutes > 0) return false
+
+  const meta = ((s.metadata_json ?? {}) as any) || {}
+  // If it contains a snapshot or any non-default pricing params, it's not blank.
+  if (meta.process_snapshot) return false
+  if (meta.measure_type) return false
+  if (Number(meta.base_minutes ?? 0) > 0) return false
+  if (Number(meta.unit_minutes ?? 0) > 0) return false
+  if (meta.rate_per_minute !== null && meta.rate_per_minute !== undefined && Number(meta.rate_per_minute) > 0) return false
+  if (meta.piece_rate !== null && meta.piece_rate !== undefined && Number(meta.piece_rate) > 0) return false
+
+  // measure_unit/cost_type defaults shouldn't count as user input
+  return true
+}
+
 const ProcessModulesPage = () => {
   const queryClient = useQueryClient()
   const location = useLocation() as any
@@ -1240,7 +1273,7 @@ const ProcessModulesPage = () => {
       .map(({ idx }) => idx)
     const invalidStepRows = rawSteps
       .map((s, idx) => ({ s, idx: idx + 1 }))
-      .filter(({ s }) => !s.process_id)
+      .filter(({ s }) => !s.process_id && !isBlankStepRow(s))
       .map(({ idx }) => idx)
     if (invalidMaterialRows.length) {
       message.error(`物料组存在未选择物料的行：第 ${invalidMaterialRows.join('、')} 行，请先删除或重新选择`)

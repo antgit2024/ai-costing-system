@@ -2490,7 +2490,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     <Drawer
       open={open}
       onClose={onClose}
-      width={1320}
+      // 打样管理：抽屉略加宽，让右侧清单更好扫读（左侧工艺模块栏保持固定宽度）
+      width={entryContext === 'sample' ? 1370 : 1320}
       destroyOnClose
       title={entryContext === 'sample' ? '打样管理' : '标准模型管理'}
       extra={
@@ -3491,8 +3492,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                   {null}
                 </Card>
 
-                <Row gutter={12}>
-                  <Col span={6}>
+                <Row gutter={12} wrap={false}>
+                  <Col flex="330px">
                     <Card
                       size="small"
                       title="工艺模块"
@@ -3690,7 +3691,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                     </Card>
                   </Col>
 
-                  <Col span={18}>
+                  <Col flex="auto">
                     <Card
                       size="small"
                       title="物料组"

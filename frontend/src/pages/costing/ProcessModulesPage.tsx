@@ -403,6 +403,14 @@ const deriveStepProcessId = (s: EditorStepValue): string | null => {
   return fromSnapshot || null
 }
 
+const deriveStepProcessCode = (s: EditorStepValue): string | null => {
+  const fromProcess = String((s.process as any)?.process_code ?? '').trim()
+  if (fromProcess) return fromProcess
+  const meta = ((s.metadata_json ?? {}) as any) || {}
+  const fromSnapshot = String(meta?.process_snapshot?.process_code ?? '').trim()
+  return fromSnapshot || null
+}
+
 const ProcessModulesPage = () => {
   const queryClient = useQueryClient()
   const location = useLocation() as any
@@ -1245,7 +1253,7 @@ const ProcessModulesPage = () => {
     }
     await editorForm.validateFields()
     // prevent saving with placeholder rows (user sees "empty records")
-    const values = editorForm.getFieldsValue()
+    let values = editorForm.getFieldsValue()
 
     // structure applicability validation (strong guardrail)
     {
@@ -1277,7 +1285,90 @@ const ProcessModulesPage = () => {
     }
 
     const rawMaterials = (values.materials ?? []) as EditorMaterialValue[]
-    const rawSteps = (values.steps ?? []) as EditorStepValue[]
+    let rawSteps = (values.steps ?? []) as EditorStepValue[]
+
+    // Auto-repair for copied modules:
+    // some steps may have process_snapshot.process_code but missing process_id (backend requires id).
+    // Try resolving by unique exact match of process_code in /processes/references.
+    {
+      const targets = rawSteps
+        .map((s, idx) => ({ s, rowNo: idx + 1 }))
+        .filter(({ s }) => !deriveStepProcessId(s) && !isBlankStepRow(s) && Boolean(deriveStepProcessCode(s)))
+
+      if (targets.length) {
+        const codeToRows = new Map<string, number[]>()
+        for (const t of targets) {
+          const code = String(deriveStepProcessCode(t.s) ?? '').trim()
+          if (!code) continue
+          const rows = codeToRows.get(code) ?? []
+          rows.push(t.rowNo)
+          codeToRows.set(code, rows)
+        }
+
+        const unresolved: Array<{ code: string; rows: number[]; reason: 'not_found' | 'ambiguous' }> = []
+        const resolvedByRow = new Map<number, ProcessReference>() // rowNo -> process ref
+
+        const hide = message.loading('检测到工序ID缺失，正在按工序编码自动修复...', 0)
+        try {
+          for (const [code, rows] of codeToRows.entries()) {
+            const list = await fetchProcessReferences({
+              search: code,
+              status: 'active',
+              limit: 200,
+            } as any)
+            const exact = (list ?? []).filter((p) => String((p as any).process_code ?? '').trim() === code)
+            if (exact.length === 1) {
+              for (const rowNo of rows) resolvedByRow.set(rowNo, exact[0])
+            } else if (exact.length === 0) {
+              unresolved.push({ code, rows, reason: 'not_found' })
+            } else {
+              unresolved.push({ code, rows, reason: 'ambiguous' })
+            }
+          }
+        } finally {
+          hide()
+        }
+
+        if (resolvedByRow.size) {
+          updateSteps((prev) => {
+            const next = prev.slice()
+            for (const [rowNo, ref] of resolvedByRow.entries()) {
+              const idx = rowNo - 1
+              const cur = next[idx]
+              if (!cur) continue
+              if (deriveStepProcessId(cur)) continue
+              next[idx] = {
+                ...cur,
+                process_id: ref.id,
+                process: ref,
+                metadata_json: {
+                  ...(cur.metadata_json ?? {}),
+                  process_snapshot: {
+                    ...(typeof (cur.metadata_json as any)?.process_snapshot === 'object'
+                      ? (cur.metadata_json as any).process_snapshot
+                      : {}),
+                    ...ref,
+                  },
+                },
+              }
+            }
+            return next
+          })
+          values = editorForm.getFieldsValue()
+          rawSteps = (values.steps ?? []) as EditorStepValue[]
+        }
+
+        if (unresolved.length) {
+          const parts = unresolved.map((u) => {
+            const rows = u.rows.join('、')
+            const suffix = u.reason === 'not_found' ? '未找到匹配工序' : '匹配到多个工序（不唯一）'
+            return `第 ${rows} 行（${u.code}）：${suffix}`
+          })
+          message.error(`工序ID缺失，自动修复失败：${parts.join('；')}。请点“链条”按钮重新选择工序。`)
+          return
+        }
+      }
+    }
     const invalidMaterialRows = rawMaterials
       .map((m, idx) => ({ m, idx: idx + 1 }))
       .filter(({ m }) => !m.material_ref_id && (m.material_code || m.material_name))

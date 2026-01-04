@@ -25,6 +25,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-04（Frontend：新接力验收通过：`npm -C frontend run build` + Docs grep + Backend curl smoke）
 - **最近校对（北京时间 GMT+8）**：2026-01-04（Frontend：工艺模块复制后保存误报“未选择工序行”修复：保存时忽略纯占位空工序行）
 - **最近校对（北京时间 GMT+8）**：2026-01-04（Frontend：工艺模块步骤 process_id 兜底修复：保存/校验兼容 step.process.id 与 metadata_json.process_snapshot.id）
+- **最近校对（北京时间 GMT+8）**：2026-01-04（Frontend：工艺模块复制后步骤缺失 process_id：保存时按 process_code 自动反查并回填（唯一命中则自动修复，否则提示重选））
 - **最近校对（北京时间 GMT+8）**：2026-01-01（Backend：发货异常队列“按批次重试未解决异常（Retry Exceptions）”MVP）
 
 - **最近校对（北京时间 GMT+8）**：2025-12-25 04:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）

@@ -399,8 +399,11 @@ const deriveStepProcessId = (s: EditorStepValue): string | null => {
   const fromProcess = String((s.process as any)?.id ?? '').trim()
   if (fromProcess) return fromProcess
   const meta = ((s.metadata_json ?? {}) as any) || {}
-  const fromSnapshot = String(meta?.process_snapshot?.id ?? '').trim()
-  return fromSnapshot || null
+  // backend historical: process_snapshot.process_id (not id)
+  const fromSnapshotId = String(meta?.process_snapshot?.id ?? '').trim()
+  if (fromSnapshotId) return fromSnapshotId
+  const fromSnapshotProcessId = String(meta?.process_snapshot?.process_id ?? '').trim()
+  return fromSnapshotProcessId || null
 }
 
 const deriveStepProcessCode = (s: EditorStepValue): string | null => {
@@ -2027,6 +2030,7 @@ const ProcessModulesPage = () => {
                 piece_rate: costType === 'piece' ? pieceRate : null,
                 process_snapshot: {
                   ...process,
+                  process_id: process.id,
                   description: detail.description,
                   ai_spec: aiSpec,
                 },
@@ -2055,6 +2059,7 @@ const ProcessModulesPage = () => {
                 piece_rate: costType === 'piece' ? pieceRate : null,
                 process_snapshot: {
                   ...process,
+                  process_id: process.id,
                   description: detail.description,
                   ai_spec: aiSpec,
                 },

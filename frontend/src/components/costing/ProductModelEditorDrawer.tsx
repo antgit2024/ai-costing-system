@@ -145,6 +145,11 @@ const hashDigit = (s: string): number => {
 }
 
 const TABLE_FONT_SIZE = 12
+// Font mapping (as per current UI):
+// - A: current "物料组/工序组" title size (was forced to TABLE_FONT_SIZE)
+// - B: current "工艺模块" title size (use AntD default-ish 14px)
+// - C: current table body size (TABLE_FONT_SIZE)
+const PM_LINES_TITLE_FONT_SIZE = 14
 const FIRST_COL_WIDTH = 280
 
 // 班组从 taxonomy(team) 动态加载（不再硬编码）
@@ -2426,7 +2431,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
         /* Scoped CSS for “清单编辑” (avoid affecting global UI) */
         .pm-lines-scope {
           --pm-lines-font-size: ${TABLE_FONT_SIZE}px;
-          --pm-lines-title-font-size: ${TABLE_FONT_SIZE}px;
+          --pm-lines-title-font-size: ${PM_LINES_TITLE_FONT_SIZE}px;
           --pm-lines-title-font-weight: 600;
         }
 
@@ -2435,13 +2440,19 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
           color: #8c8c8c;
         }
 
-        /* Group cards (物料组/工序组): title 12px bold */
+        /* Group cards (物料组/工序组): title uses B */
         .pm-lines-group-card .ant-card-head-title {
           font-size: var(--pm-lines-title-font-size);
           font-weight: var(--pm-lines-title-font-weight);
         }
 
-        /* Table body text size (headers unchanged) */
+        /* Table header/body size:
+           - list headers use A
+           - list body uses A (C==A in current baseline, but we keep rule explicit)
+        */
+        .pm-lines-group-card .ant-table-thead > tr > th {
+          font-size: var(--pm-lines-font-size);
+        }
         .pm-lines-group-card .ant-table-tbody {
           font-size: var(--pm-lines-font-size);
         }
@@ -3456,7 +3467,12 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                               return <ModuleCodePill code={code} color={color} size="sm" />
                             },
                           },
-                          { title: '名称', render: (_: any, r: any) => r.module?.module_name ?? '-' },
+                          {
+                            title: '名称',
+                            render: (_: any, r: any) => (
+                              <span style={{ fontSize: TABLE_FONT_SIZE }}>{r.module?.module_name ?? '-'}</span>
+                            ),
+                          },
                           {
                             title: '',
                             width: 44,

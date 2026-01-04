@@ -79,6 +79,19 @@
   - 打样列表可见性口径：**只要模型存在 `sample` 版本就应显示**（即便 `entry_context=standard`），避免“删了标准后看起来打样也没了”（实际是列表过滤导致不可见）。
   - 说明：推导标准版本时会在标准版本 `metadata_json.derived_from_version_id` 记录来源打样版本，用于追溯；但删除/归档口径按入口隔离，确保“推导后可独立管理”。
 
+- **更新（北京时间 GMT+8 2026-01-04）：变体规则“跨模型误触发”护栏（后端）**：
+  - 背景：物料可跨品类复用（例如同一面料用于抱枕/桌布），若只用 `spec_text` token 匹配，存在跨模型误触发风险。
+  - 修复口径：`parse_spec(spec_text)` 仍保持“只从交易规格提取 token”（用于审计/回放）；但在 `bom/generate` 进行变体匹配时注入运行时上下文 token（不要求出现在 spec_text）：
+    - `MODEL:<model_code>`（三位码，如 `MODEL:PI5`）
+    - `BOUND_VERSION:<version_id>`
+    - `SKU:<sku_code>`
+  - 备用能力：`spec/parse` 额外支持从交易规格中识别三位模型编码并输出为 `MODEL:<code>`（用于导入/排错/自动绑定候选，不依赖图案码 Qxxxxxx）。
+  - 关键文件：
+    - `backend/src/planner/services/bom_generation_service.py`
+    - `backend/src/planner/services/spec_parser_service.py`
+    - `backend/tests/planner/test_bom_runtime_tokens_guardrail.py`
+    - `backend/tests/planner/test_spec_parser_code_tokens.py`
+
 - **更新（北京时间 GMT+8 2026-01-04）：模型列表“都能看见”便于回收清理**：
   - 标准模型页/打样模型页：不再按 `entry_context/版本数` 过滤列表（避免“看不见就删不了/以为被删”）。
   - 两页新增开关：**显示已归档**（`GET /product-models?include_archived=true`），用于把历史误删/误归档的模型也拉出来核对。

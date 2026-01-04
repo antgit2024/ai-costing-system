@@ -24,6 +24,12 @@ LABELED_DIMENSION_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Model code (3 chars) heuristic for fallback:
+# - exactly 3 alphanumeric chars (A-Z/0-9)
+# - must include at least one letter and one digit
+# Examples: "PI5", "A1B"
+MODEL_CODE_3_PATTERN = re.compile(r"\b(?=[A-Z0-9]{3}\b)(?=.*[A-Z])(?=.*\d)[A-Z0-9]{3}\b", re.IGNORECASE)
+
 
 def _to_decimal(value: Any) -> Decimal | None:
     if value in (None, ""):
@@ -159,6 +165,12 @@ def parse_spec(spec_text: str) -> Dict[str, Any]:
         for m in re.findall(r"(\d{12,14})", token):
             extra_tokens.append(m)
             explanations.append({"token": m, "source": token, "rule": "extract_barcode"})
+        # Fallback: extract 3-char model codes when present (for binding/triage scenarios).
+        # Output as a namespaced token to reduce collision with normal words.
+        for m in MODEL_CODE_3_PATTERN.findall(token):
+            code = m.upper()
+            extra_tokens.append(f"MODEL:{code}")
+            explanations.append({"token": f"MODEL:{code}", "source": token, "rule": "extract_model_code_3"})
 
     # De-duplicate but keep stable order (original segments first, then extracted codes).
     if extra_tokens:

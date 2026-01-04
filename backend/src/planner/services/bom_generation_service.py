@@ -23,6 +23,19 @@ def generate_bom(
         raise ValueError("产品模型不存在或已归档")
 
     spec_result = spec_parser_service.parse_spec(spec_text or "")
+    # IMPORTANT:
+    # - Keep parse_spec output "pure" (only from spec_text) for audit/replay.
+    # - But when matching variants, add binding context tokens to avoid cross-model false hits.
+    #   These tokens are NOT required to exist in spec_text:
+    #   - MODEL:<model_code> (e.g., MODEL:PI5)
+    #   - BOUND_VERSION:<version_id>
+    #   - SKU:<sku_code>
+    runtime_tokens = _augment_runtime_tokens(
+        list(spec_result.get("tokens") or []),
+        sku_code=sku_code,
+        model_code=getattr(model, "model_code", None),
+        bound_version_id=version.id,
+    )
     measurement = _build_measurement(version, spec_result, quantity)
     metrics = _build_metrics(spec_result, measurement)
 
@@ -64,7 +77,7 @@ def generate_bom(
 
             matched = line_variant_service.evaluate_conditions(
                 variant,
-                tokens=spec_result["tokens"],
+                tokens=runtime_tokens,
                 metrics=metrics,
             )
             trace_entry = {
@@ -123,12 +136,49 @@ def generate_bom(
             "model_version_id": version.id,
             "sku_code": sku_code,
             "parsed": spec_result,
+            "runtime_tokens": runtime_tokens,
             "measurement_mm": measurement,
             "matched_variants": trace_hits,
             "costing": costing,
             "inventory": inventory,
         },
     }
+
+
+def _augment_runtime_tokens(
+    tokens: List[str],
+    *,
+    sku_code: Optional[str],
+    model_code: Optional[str],
+    bound_version_id: str,
+) -> List[str]:
+    """
+    Add binding context tokens for safer variant matching, while keeping stable order.
+
+    Tokens are compared case-insensitively by evaluate_conditions, so we de-dup using lower().
+    """
+    out: List[str] = list(tokens or [])
+    seen = {str(t).lower() for t in out if t not in (None, "")}
+
+    def _add(tok: Optional[str]) -> None:
+        if not tok:
+            return
+        s = str(tok).strip()
+        if not s:
+            return
+        k = s.lower()
+        if k in seen:
+            return
+        out.append(s)
+        seen.add(k)
+
+    if model_code:
+        _add(f"MODEL:{str(model_code).strip().upper()}")
+    if bound_version_id:
+        _add(f"BOUND_VERSION:{bound_version_id}")
+    if sku_code:
+        _add(f"SKU:{str(sku_code).strip()}")
+    return out
 
 
 def _attach_costing(

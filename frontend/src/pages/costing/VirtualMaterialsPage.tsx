@@ -682,6 +682,9 @@ const VirtualMaterialsPage = () => {
     },
   })
 
+  // Guard: prevent duplicate submissions while async code generation / validation is running.
+  const [savingBasic, setSavingBasic] = useState(false)
+
   const bindingsMutation = useMutation({
     mutationFn: ({
       id,
@@ -784,83 +787,89 @@ const VirtualMaterialsPage = () => {
   })
 
   const handleSaveBasic = async () => {
-    const values = await basicForm.validateFields()
-    const kind = (values.virtual_kind as VirtualKind) ?? 'kit'
-    const meta = (values.metadata_json ?? {}) as Record<string, unknown>
-    const constraintCategory = String(meta.constraint_category || '').trim()
-    // 单位策略：
-    // - kit：固定“套”
-    // - recipe：自动从子物料单位推导（展示在 BOM 单价里）
-    // - placeholder：必须显式选择 unit（后续模型替换映射依赖）
-    const unit =
-      kind === 'kit'
-        ? DEFAULT_VIRTUAL_UNIT
-        : kind === 'placeholder'
-          ? String(values.unit || '').trim()
-          : (bindingSummary.baseUnit ?? undefined)
-    if (kind === 'placeholder') {
-      if (!unit) {
-        message.error('占位型必须选择单位')
-        return
-      }
-    }
-    const nextMetadata: Record<string, unknown> = { ...(values.metadata_json ?? {}) }
-    if (kind === 'placeholder') {
-      const name = stripPlaceholderSymbol(String(values.name || ''))
-      if (!name) {
-        message.error('占位型必须填写名称')
-        return
-      }
-      nextMetadata.virtual_kind = 'placeholder'
-      nextMetadata.placeholder_name = name
-      nextMetadata.placeholder_symbol = normalizePlaceholderSymbol(name)
-      if (constraintCategory) {
-        nextMetadata.constraint_category = constraintCategory
-      } else {
-        delete (nextMetadata as any).constraint_category
-      }
-    }
-    if (drawerMode === 'create') {
-      // VM 编码只在“实际创建/保存”时申请，避免打开抽屉就消耗递增号
-      let nextCode = String(values.virtual_code || '').trim()
-      if (!nextCode) {
-        try {
-          const res = await generateNextCode({ prefix: 'VM', width: 5 })
-          nextCode = res.code
-          basicForm.setFieldValue('virtual_code', nextCode)
-        } catch {
-          // fallback: keep it usable even if code service is temporarily unavailable
-          nextCode = fallbackRandomCode('VM', 5)
-          basicForm.setFieldValue('virtual_code', nextCode)
+    if (savingBasic || createMutation.isPending || updateMutation.isPending) return
+    setSavingBasic(true)
+    try {
+      const values = await basicForm.validateFields()
+      const kind = (values.virtual_kind as VirtualKind) ?? 'kit'
+      const meta = (values.metadata_json ?? {}) as Record<string, unknown>
+      const constraintCategory = String(meta.constraint_category || '').trim()
+      // 单位策略：
+      // - kit：固定“套”
+      // - recipe：自动从子物料单位推导（展示在 BOM 单价里）
+      // - placeholder：必须显式选择 unit（后续模型替换映射依赖）
+      const unit =
+        kind === 'kit'
+          ? DEFAULT_VIRTUAL_UNIT
+          : kind === 'placeholder'
+            ? String(values.unit || '').trim()
+            : (bindingSummary.baseUnit ?? undefined)
+      if (kind === 'placeholder') {
+        if (!unit) {
+          message.error('占位型必须选择单位')
+          return
         }
       }
-      createMutation.mutate({
-        virtual_code: nextCode,
-        name: kind === 'placeholder' ? normalizePlaceholderSymbol(String(values.name || '')) : values.name,
-        virtual_kind: kind,
-        description: values.description,
-        category: values.category,
-        unit,
-        status: values.status,
-        metadata_json: nextMetadata,
+      const nextMetadata: Record<string, unknown> = { ...(values.metadata_json ?? {}) }
+      if (kind === 'placeholder') {
+        const name = stripPlaceholderSymbol(String(values.name || ''))
+        if (!name) {
+          message.error('占位型必须填写名称')
+          return
+        }
+        nextMetadata.virtual_kind = 'placeholder'
+        nextMetadata.placeholder_name = name
+        nextMetadata.placeholder_symbol = normalizePlaceholderSymbol(name)
+        if (constraintCategory) {
+          nextMetadata.constraint_category = constraintCategory
+        } else {
+          delete (nextMetadata as any).constraint_category
+        }
+      }
+      if (drawerMode === 'create') {
+        // VM 编码只在“实际创建/保存”时申请，避免打开抽屉就消耗递增号
+        let nextCode = String(values.virtual_code || '').trim()
+        if (!nextCode) {
+          try {
+            const res = await generateNextCode({ prefix: 'VM', width: 5 })
+            nextCode = res.code
+            basicForm.setFieldValue('virtual_code', nextCode)
+          } catch {
+            // fallback: keep it usable even if code service is temporarily unavailable
+            nextCode = fallbackRandomCode('VM', 5)
+            basicForm.setFieldValue('virtual_code', nextCode)
+          }
+        }
+        await createMutation.mutateAsync({
+          virtual_code: nextCode,
+          name: kind === 'placeholder' ? normalizePlaceholderSymbol(String(values.name || '')) : values.name,
+          virtual_kind: kind,
+          description: values.description,
+          category: values.category,
+          unit,
+          status: values.status,
+          metadata_json: nextMetadata,
+        })
+        return
+      }
+      if (!selectedId) {
+        return
+      }
+      await updateMutation.mutateAsync({
+        id: selectedId,
+        payload: {
+          name: kind === 'placeholder' ? normalizePlaceholderSymbol(String(values.name || '')) : values.name,
+          virtual_kind: kind,
+          description: values.description,
+          category: values.category,
+          unit,
+          status: values.status,
+          metadata_json: nextMetadata,
+        },
       })
-      return
+    } finally {
+      setSavingBasic(false)
     }
-    if (!selectedId) {
-      return
-    }
-    updateMutation.mutate({
-      id: selectedId,
-      payload: {
-        name: kind === 'placeholder' ? normalizePlaceholderSymbol(String(values.name || '')) : values.name,
-        virtual_kind: kind,
-        description: values.description,
-        category: values.category,
-        unit,
-        status: values.status,
-        metadata_json: nextMetadata,
-      },
-    })
   }
 
   const handleSaveBindings = async () => {
@@ -1541,7 +1550,8 @@ const VirtualMaterialsPage = () => {
                   <Button
                     type="primary"
                     onClick={handleSaveBasic}
-                    loading={createMutation.isPending || updateMutation.isPending}
+                    loading={savingBasic || createMutation.isPending || updateMutation.isPending}
+                    disabled={savingBasic || createMutation.isPending || updateMutation.isPending}
                   >
                     保存基础信息
                   </Button>

@@ -2140,6 +2140,14 @@ def derive_standard_version(
             out_meta = dict(meta)
             out_meta["fixed_quantity"] = str(fixed)
             out_meta["coverage_ratio"] = str(cov)
+            # For standard version UX: make computed totals explicit.
+            # - `standard_used_quantity` should reflect the derived standard baseline (1000×1000×1).
+            # - Many UI paths historically read/display `sample_used_quantity` as the primary "本品用量",
+            #   so we also set it to the standard baseline here to avoid “推导后看起来没计算”.
+            # - Keep the original sample total for traceability.
+            out_meta["source_sample_used_quantity"] = str(sample_used)
+            out_meta["standard_used_quantity"] = str(total_std)
+            out_meta["sample_used_quantity"] = str(total_std)
             out_meta["derived_from_version_id"] = source_sample_version.id
             out_meta["derived_at"] = tmeta["derived_at"]
             out_meta["derive_template"] = tmpl
@@ -2219,6 +2227,11 @@ def derive_standard_version(
             out_meta = dict(meta)
             out_meta["base_minutes"] = str(base_min)
             out_meta["unit_minutes"] = str(unit_out)
+            # For standard version UX: expose derived totals explicitly.
+            # Keep original sample total for traceability.
+            out_meta["source_sample_minutes"] = str(sample_minutes)
+            out_meta["standard_minutes"] = str(total_std)
+            out_meta["sample_minutes"] = str(total_std)
             out_meta["derived_from_version_id"] = source_sample_version.id
             out_meta["derived_at"] = tmeta["derived_at"]
             out_meta["derive_template"] = tmpl

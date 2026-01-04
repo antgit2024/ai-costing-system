@@ -149,6 +149,8 @@ const FIRST_COL_WIDTH = 280
 
 // 班组从 taxonomy(team) 动态加载（不再硬编码）
 
+// Wider palette to reduce collisions when multiple modules are used in one model.
+// Note: colors are only used as a visual cue; module code/name remains the primary identity.
 const MODULE_COLOR_PALETTE = [
   '#1677ff', // blue
   '#52c41a', // green
@@ -160,6 +162,20 @@ const MODULE_COLOR_PALETTE = [
   '#2f54eb', // geekblue
   '#a0d911', // lime
   '#f5222d', // red
+  '#9254de', // purple-2
+  '#36cfc9', // cyan-2
+  '#597ef7', // blue-2
+  '#73d13d', // green-2
+  '#ffc53d', // gold-2
+  '#ff7a45', // volcano-2
+  '#ff4d4f', // red-2
+  '#40a9ff', // geekblue-2
+  '#5cdbd3', // cyan-3
+  '#95de64', // green-3
+  '#ffec3d', // yellow
+  '#d3f261', // lime-2
+  '#ff85c0', // magenta-2
+  '#b37feb', // purple-3
 ] as const
 
 const hashToIndex = (s: string, mod: number) => {
@@ -326,6 +342,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   const [standardSpec, setStandardSpec] = useState<ProductModelSampleSpec>(lockStandardSpec())
   const [materials, setMaterials] = useState<ProductModelMaterialLineInput[]>([])
   const [processes, setProcesses] = useState<ProductModelProcessLineInput[]>([])
+
+  // View mode: detail (editable) vs summary (read-only aggregated view)
+  const [materialSummaryView, setMaterialSummaryView] = useState(false)
+  const [processSummaryView, setProcessSummaryView] = useState(false)
 
   const [materialPreviewOpen, setMaterialPreviewOpen] = useState(false)
   const [materialPreviewRow, setMaterialPreviewRow] = useState<any>(null)
@@ -793,6 +813,174 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     )
 
   }, [modelQuery.data, form])
+
+  // Module color map: prefer "unique within this model" mapping by sequence order.
+  // This avoids confusing collisions when different modules hash to the same palette color.
+  const moduleColorMap = useMemo(() => {
+    const m = new Map<string, string>()
+    const list = (modules ?? []).slice()
+    for (let i = 0; i < list.length; i += 1) {
+      const it: any = list[i]
+      const mid = String(it?.module_id ?? '').trim()
+      const mcode = String(it?.module?.module_code ?? '').trim()
+      const color = MODULE_COLOR_PALETTE[i % MODULE_COLOR_PALETTE.length]
+      if (mid) m.set(mid, color)
+      if (mcode) m.set(mcode, color)
+    }
+    return m
+  }, [modules])
+
+  const getColorForModuleKey = (key?: string | null) => {
+    const k = String(key ?? '').trim()
+    if (!k) return getModuleColor('model')
+    return moduleColorMap.get(k) ?? getModuleColor(k)
+  }
+
+  const materialSummaryRows = useMemo(() => {
+    const groups = new Map<
+      string,
+      {
+        key: string
+        material_kind: any
+        material_ref_id: string
+        material_code: string | null
+        material_name: string | null
+        calculation_method: string | null
+        unit_of_measure: string | null
+        line_count: number
+        total_used: number
+        total_effective_used: number
+        total_cost: number
+        placeholder: boolean
+        anchor: boolean
+        sourceKeys: string[]
+      }
+    >()
+
+    for (const r of (materials as any[]) ?? []) {
+      const kind = String(r?.material_kind ?? '').trim() || 'real'
+      const refId = String(r?.material_ref_id ?? '').trim()
+      const code = String(r?.material_code ?? '').trim() || null
+      const name = String(r?.material_name ?? '').trim() || null
+      const calc = String(r?.calculation_method ?? '').trim() || null
+      const uom = String(r?.unit_of_measure ?? '').trim() || String((r?.metadata_json ?? {})?.bom_unit ?? '').trim() || null
+      const used = Number(r?.sample_used_quantity ?? 0)
+      const loss = Number(r?.loss_rate ?? 0)
+      const meta = (r?.metadata_json ?? {}) as any
+      const unitPrice = meta?.bom_unit_price != null ? Number(meta.bom_unit_price) : NaN
+      const effective = Math.max(0, used) * (1 + Math.max(0, loss) / 100)
+      const cost = Number.isFinite(unitPrice) && unitPrice > 0 ? effective * unitPrice : 0
+
+      const groupKey = `${kind}:${refId || code || name || 'unknown'}:${calc || ''}:${uom || ''}`
+      const cur =
+        groups.get(groupKey) ??
+        ({
+          key: groupKey,
+          material_kind: kind,
+          material_ref_id: refId,
+          material_code: code,
+          material_name: name,
+          calculation_method: calc,
+          unit_of_measure: uom,
+          line_count: 0,
+          total_used: 0,
+          total_effective_used: 0,
+          total_cost: 0,
+          placeholder: false,
+          anchor: false,
+          sourceKeys: [],
+        } as any)
+
+      cur.line_count += 1
+      cur.total_used += Number.isFinite(used) ? used : 0
+      cur.total_effective_used += Number.isFinite(effective) ? effective : 0
+      cur.total_cost += Number.isFinite(cost) ? cost : 0
+      cur.placeholder = cur.placeholder || isPlaceholderMaterialRow(r)
+      cur.anchor = cur.anchor || isAnchorMaterialRow(r)
+      const sk = String(r?.source_module_id ?? r?.source_module_code ?? '').trim()
+      if (sk) cur.sourceKeys.push(sk)
+
+      groups.set(groupKey, cur)
+    }
+
+    return Array.from(groups.values()).map((x) => ({
+      ...x,
+      sourceKeys: Array.from(new Set(x.sourceKeys)),
+    }))
+  }, [materials])
+
+  const processSummaryRows = useMemo(() => {
+    const qty = Number((sampleSpec as any)?.quantity ?? 1) || 1
+    const groups = new Map<
+      string,
+      {
+        key: string
+        process_id: string | null
+        process_code: string | null
+        process_name: string | null
+        cost_type: string
+        measure_type: string | null
+        rate_per_minute: number | null
+        piece_rate: number | null
+        line_count: number
+        total_minutes: number
+        total_cost: number
+        sourceKeys: string[]
+      }
+    >()
+
+    for (const p of (processes as any[]) ?? []) {
+      const pid = String(p?.process_id ?? '').trim() || null
+      const pcode = String(p?.process_code ?? '').trim() || null
+      const pname = String(p?.process_name ?? '').trim() || null
+      const meta = (p?.metadata_json ?? {}) as any
+      const costType = String(p?.cost_type ?? meta?.cost_type ?? 'time').trim()
+      const measureType = String(meta?.measure_type ?? '').trim() || null
+      const rate = meta?.rate_per_minute != null ? Number(meta.rate_per_minute) : p?.rate_per_minute != null ? Number(p.rate_per_minute) : NaN
+      const pieceRate = meta?.piece_rate != null ? Number(meta.piece_rate) : p?.piece_rate != null ? Number(p.piece_rate) : NaN
+      const minutes = meta?.sample_minutes != null ? Number(meta.sample_minutes) : p?.sample_minutes != null ? Number(p.sample_minutes) : NaN
+
+      const key = `${pid || pcode || pname || 'unknown'}:${costType}:${measureType || ''}:${Number.isFinite(rate) ? rate : ''}:${
+        Number.isFinite(pieceRate) ? pieceRate : ''
+      }`
+      const cur =
+        groups.get(key) ??
+        ({
+          key,
+          process_id: pid,
+          process_code: pcode,
+          process_name: pname,
+          cost_type: costType,
+          measure_type: measureType,
+          rate_per_minute: Number.isFinite(rate) ? rate : null,
+          piece_rate: Number.isFinite(pieceRate) ? pieceRate : null,
+          line_count: 0,
+          total_minutes: 0,
+          total_cost: 0,
+          sourceKeys: [],
+        } as any)
+
+      cur.line_count += 1
+      if (costType === 'piece') {
+        const pr = Number.isFinite(pieceRate) ? pieceRate : 0
+        cur.total_cost += pr * Math.max(0, qty)
+      } else {
+        const m = Number.isFinite(minutes) ? minutes : 0
+        const r0 = Number.isFinite(rate) ? rate : 0
+        cur.total_minutes += Math.max(0, m)
+        cur.total_cost += Math.max(0, m) * Math.max(0, r0)
+      }
+
+      const sk = String(p?.source_module_id ?? p?.source_module_code ?? '').trim()
+      if (sk) cur.sourceKeys.push(sk)
+      groups.set(key, cur)
+    }
+
+    return Array.from(groups.values()).map((x) => ({
+      ...x,
+      sourceKeys: Array.from(new Set(x.sourceKeys)),
+    }))
+  }, [processes, sampleSpec])
 
   // hydrate version images from selectedVersion.metadata_json.version_images
   useEffect(() => {
@@ -3264,7 +3452,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                             width: 80,
                             render: (_: any, r: any) => {
                               const code = r.module?.module_code ?? '-'
-                              const color = getModuleColor(r.module_id)
+                              const color = getColorForModuleKey(r.module_id)
                               return <ModuleCodePill code={code} color={color} size="sm" />
                             },
                           },
@@ -3390,26 +3578,95 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                       title="物料组"
                       className="pm-lines-group-card"
                       extra={
-                        <Button size="small" type="primary" onClick={openMaterialPickerForAdd}>
-                          新增物料
-                        </Button>
+                        <Space>
+                          <Tooltip title="汇总视图仅用于查看（合并相同物料/工序），不影响保存；要编辑请切回明细。">
+                            <Space size={6}>
+                              <span className="pm-lines-muted">汇总</span>
+                              <Switch size="small" checked={materialSummaryView} onChange={setMaterialSummaryView} />
+                            </Space>
+                          </Tooltip>
+                          <Button size="small" type="primary" onClick={openMaterialPickerForAdd} disabled={materialSummaryView}>
+                            新增物料
+                          </Button>
+                        </Space>
                       }
                     >
-                      <Table
-                        rowKey={(r: any, idx?: number) => r.id ?? `mat-${idx ?? 0}`}
-                        dataSource={materials as any}
-                        pagination={false}
-                        size="small"
-                        style={{ fontSize: TABLE_FONT_SIZE }}
-                        onRow={(r: any) => {
-                          // 手动新增（非来源模块）的行：统一灰底，避免彩色背景造成“新增行很花”的视觉干扰
-                          const hasSource = !!(r?.source_module_id || r?.source_module_code)
-                          if (!hasSource) return { style: { background: '#f5f5f5' } }
-                          const key = r.source_module_id ?? r.source_module_code ?? 'model'
-                          const color = getModuleColor(String(key))
-                          return { style: { background: hexToRgba(color, 0.06) } }
-                        }}
-                        columns={[
+                      {materialSummaryView ? (
+                        <Table
+                          rowKey={(r: any) => r.key}
+                          dataSource={materialSummaryRows as any}
+                          pagination={false}
+                          size="small"
+                          style={{ fontSize: TABLE_FONT_SIZE }}
+                          columns={[
+                            {
+                              title: '物料（汇总）',
+                              width: FIRST_COL_WIDTH,
+                              render: (_: any, r: any) => (
+                                <Space>
+                                  {r.material_code ? (
+                                    <CodePill code={r.material_code} color={getMaterialKindColor(r.material_kind as MaterialKind)} size="sm" />
+                                  ) : null}
+                                  <span>{String(r.material_name ?? r.material_ref_id ?? '-')}</span>
+                                  <Tag style={{ fontSize: 10, padding: '0 4px', lineHeight: '16px' }}>×{r.line_count}</Tag>
+                                  {r.placeholder ? (
+                                    <Tag color="red" style={{ fontSize: 10, padding: '0 4px', lineHeight: '16px' }}>
+                                      含占位
+                                    </Tag>
+                                  ) : null}
+                                  {r.anchor ? (
+                                    <Tag color="blue" style={{ fontSize: 10, padding: '0 4px', lineHeight: '16px' }}>
+                                      含锚点
+                                    </Tag>
+                                  ) : null}
+                                </Space>
+                              ),
+                            },
+                            {
+                              title: '总用量(含损耗)',
+                              width: 140,
+                              render: (_: any, r: any) => <span>{Number(r.total_effective_used ?? 0).toFixed(2)}</span>,
+                            },
+                            {
+                              title: '总成本',
+                              width: 120,
+                              render: (_: any, r: any) => <span>{Number(r.total_cost ?? 0).toFixed(2)}</span>,
+                            },
+                            {
+                              title: '来源模块',
+                              render: (_: any, r: any) => {
+                                const keys = (r.sourceKeys ?? []) as string[]
+                                if (!keys.length) return <Text type="secondary">-</Text>
+                                const show = keys.slice(0, 3)
+                                const rest = keys.length - show.length
+                                return (
+                                  <Space size={4} wrap>
+                                    {show.map((k) => (
+                                      <ModuleCodePill key={k} code={k} color={getColorForModuleKey(k)} size="sm" />
+                                    ))}
+                                    {rest > 0 ? <Text type="secondary">+{rest}</Text> : null}
+                                  </Space>
+                                )
+                              },
+                            },
+                          ]}
+                        />
+                      ) : (
+                        <Table
+                          rowKey={(r: any, idx?: number) => r.id ?? `mat-${idx ?? 0}`}
+                          dataSource={materials as any}
+                          pagination={false}
+                          size="small"
+                          style={{ fontSize: TABLE_FONT_SIZE }}
+                          onRow={(r: any) => {
+                            // 手动新增（非来源模块）的行：统一灰底，避免彩色背景造成“新增行很花”的视觉干扰
+                            const hasSource = !!(r?.source_module_id || r?.source_module_code)
+                            if (!hasSource) return { style: { background: '#f5f5f5' } }
+                            const key = r.source_module_id ?? r.source_module_code ?? 'model'
+                            const color = getColorForModuleKey(String(key))
+                            return { style: { background: hexToRgba(color, 0.06) } }
+                          }}
+                          columns={[
                           {
                             title: '物料',
                             width: FIRST_COL_WIDTH,
@@ -3417,6 +3674,13 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                               <Space>
                                 {r.material_code ? (
                                   <CodePill code={r.material_code} color={getMaterialKindColor(r.material_kind as MaterialKind)} size="sm" />
+                                ) : null}
+                                {r.source_module_code ? (
+                                  <ModuleCodePill
+                                    code={String(r.source_module_code)}
+                                    color={getColorForModuleKey(String(r.source_module_id ?? r.source_module_code))}
+                                    size="sm"
+                                  />
                                 ) : null}
                                 <Button
                                   type="link"
@@ -3690,6 +3954,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                           },
                         ]}
                       />
+                      )}
 
                       <Drawer
                         open={materialPreviewOpen}
@@ -3905,11 +4170,73 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                       className="pm-lines-group-card"
                       style={{ marginTop: 12 }}
                       extra={
-                        <Button size="small" type="primary" onClick={openProcessPickerForAdd}>
-                          新增工序
-                        </Button>
+                        <Space>
+                          <Tooltip title="汇总视图仅用于查看（合并相同工序口径），不影响保存；要编辑请看下方明细表。">
+                            <Space size={6}>
+                              <span className="pm-lines-muted">汇总</span>
+                              <Switch size="small" checked={processSummaryView} onChange={setProcessSummaryView} />
+                            </Space>
+                          </Tooltip>
+                          <Button size="small" type="primary" onClick={openProcessPickerForAdd}>
+                            新增工序
+                          </Button>
+                        </Space>
                       }
                     >
+                      {processSummaryView ? (
+                        <div style={{ marginBottom: 8 }}>
+                          <Table
+                            rowKey={(r: any) => r.key}
+                            dataSource={processSummaryRows as any}
+                            pagination={false}
+                            size="small"
+                            style={{ fontSize: TABLE_FONT_SIZE }}
+                            columns={[
+                              {
+                                title: '工序（汇总）',
+                                width: FIRST_COL_WIDTH,
+                                render: (_: any, r: any) => (
+                                  <Space>
+                                    {r.process_code ? <CodePill code={r.process_code} color="#595959" /> : null}
+                                    <span style={{ whiteSpace: 'nowrap' }}>{r.process_name ?? r.process_id ?? '-'}</span>
+                                    <Tag style={{ fontSize: 10, padding: '0 4px', lineHeight: '16px' }}>×{r.line_count}</Tag>
+                                  </Space>
+                                ),
+                              },
+                              {
+                                title: '汇总工时/成本',
+                                width: 180,
+                                render: (_: any, r: any) => {
+                                  const costType = String(r.cost_type ?? 'time')
+                                  if (costType === 'piece') return <span>{Number(r.total_cost ?? 0).toFixed(2)}（按件）</span>
+                                  return (
+                                    <span>
+                                      {Number(r.total_minutes ?? 0).toFixed(2)} 分 / {Number(r.total_cost ?? 0).toFixed(2)}
+                                    </span>
+                                  )
+                                },
+                              },
+                              {
+                                title: '来源模块',
+                                render: (_: any, r: any) => {
+                                  const keys = (r.sourceKeys ?? []) as string[]
+                                  if (!keys.length) return <Text type="secondary">-</Text>
+                                  const show = keys.slice(0, 3)
+                                  const rest = keys.length - show.length
+                                  return (
+                                    <Space size={4} wrap>
+                                      {show.map((k) => (
+                                        <ModuleCodePill key={k} code={k} color={getColorForModuleKey(k)} size="sm" />
+                                      ))}
+                                      {rest > 0 ? <Text type="secondary">+{rest}</Text> : null}
+                                    </Space>
+                                  )
+                                },
+                              },
+                            ]}
+                          />
+                        </div>
+                      ) : null}
                       <Table
                         rowKey={(r: any, idx?: number) => r.id ?? `proc-${idx ?? 0}`}
                         dataSource={processes as any}
@@ -3921,7 +4248,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                           const hasSource = !!(r?.source_module_id || r?.source_module_code)
                           if (!hasSource) return { style: { background: '#f5f5f5' } }
                           const key = r.source_module_id ?? r.source_module_code ?? 'model'
-                          const color = getModuleColor(String(key))
+                          const color = getColorForModuleKey(String(key))
                           return { style: { background: hexToRgba(color, 0.06) } }
                         }}
                         columns={[
@@ -3931,6 +4258,13 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                             render: (_: any, r: any) => (
                               <Space>
                                 {r.process_code ? <CodePill code={r.process_code} color="#595959" /> : null}
+                                {r.source_module_code ? (
+                                  <ModuleCodePill
+                                    code={String(r.source_module_code)}
+                                    color={getColorForModuleKey(String(r.source_module_id ?? r.source_module_code))}
+                                    size="sm"
+                                  />
+                                ) : null}
                                 <span style={{ whiteSpace: 'nowrap' }}>{r.process_name ?? r.process_id}</span>
                               </Space>
                             ),
@@ -4120,8 +4454,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                               </Space>
                             ),
                           },
-                        ]}
-                      />
+                          ]}
+                        />
                     </Card>
                   </Col>
                 </Row>

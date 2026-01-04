@@ -578,6 +578,44 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     return structureStandardByCode.get(selectedStructureStandardCode) ?? null
   }, [structureStandardByCode, selectedStructureStandardCode])
 
+  const structureSlotOptions = useMemo(() => {
+    const slots = (selectedStructureStandard?.slots ?? []) as string[]
+    const names = (selectedStructureStandard?.slot_display_names ?? {}) as Record<string, string>
+    return slots
+      .map((s) => {
+        const code = String(s ?? '').trim()
+        if (!code) return null
+        const cn = String(names?.[code] ?? '').trim()
+        return {
+          value: code,
+          label: cn ? `${cn}（${code}）` : code,
+        }
+      })
+      .filter(Boolean) as Array<{ value: string; label: string }>
+  }, [selectedStructureStandard])
+
+  const moduleStructureById = useMemo(() => {
+    const map = new Map<string, { is_global: boolean; whole: boolean; slots: string[] }>()
+    const code = String(selectedStructureStandardCode ?? '').trim()
+    for (const m of modules as any[]) {
+      const mid = String(m?.module_id ?? '').trim()
+      if (!mid) continue
+      const meta: any = (m?.module?.metadata_json ?? m?.module?.metadata ?? {}) as any
+      const tags = Array.isArray(meta?.structure_tags) ? meta.structure_tags.map((x: any) => String(x)) : []
+      const isGlobal = tags.includes('GLOBAL')
+      const whole = code ? tags.includes(code) : false
+      const slots =
+        code && tags.length
+          ? tags
+              .filter((t: string) => t.startsWith(`${code}:`))
+              .map((t: string) => String(t.split(':')[1] ?? '').trim())
+              .filter(Boolean)
+          : []
+      map.set(mid, { is_global: isGlobal, whole, slots })
+    }
+    return map
+  }, [modules, selectedStructureStandardCode])
+
   const selectedVersionStatus = String((selectedVersion as any)?.version_status ?? '').trim()
   // 规则：标准版本仅 draft 允许修改；已发布/已归档禁止修改
   const canEditSelectedVersion = entryContext === 'sample' ? true : selectedVersionStatus === 'draft'
@@ -3755,6 +3793,77 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                             ),
                           },
                           {
+                            title: '结构',
+                            width: 140,
+                            render: (_: any, r: any, idx: number) => {
+                              const meta: any = (r?.metadata_json ?? {}) as any
+                              const curSlot = String(meta?.structure_slot ?? '').trim()
+                              const sourceId = getRowSourceModuleId(r)
+                              const moduleInfo = sourceId ? moduleStructureById.get(String(sourceId)) : undefined
+                              const canPick =
+                                !!selectedStructureStandardCode &&
+                                (!sourceId || !!moduleInfo?.is_global) &&
+                                canEditSelectedVersion
+
+                              if (!selectedStructureStandardCode) {
+                                return <Text type="secondary">-</Text>
+                              }
+
+                              // 模块同步行：默认只读展示（继承模块的结构范围）；通用模块/手动新增允许指定 slot
+                              if (sourceId && !moduleInfo?.is_global) {
+                                if (curSlot) {
+                                  const opt = structureSlotOptions.find((o) => o.value === curSlot)
+                                  return <Tag>{opt?.label ?? curSlot}</Tag>
+                                }
+                                if (moduleInfo?.whole) return <Tag>整结构</Tag>
+                                if (moduleInfo?.slots?.length) {
+                                  const show = moduleInfo.slots.slice(0, 2)
+                                  const rest = moduleInfo.slots.length - show.length
+                                  return (
+                                    <Space size={4} wrap>
+                                      {show.map((s: string) => {
+                                        const opt = structureSlotOptions.find((o) => o.value === s)
+                                        return <Tag key={s}>{opt?.label ?? s}</Tag>
+                                      })}
+                                      {rest > 0 ? <Text type="secondary">+{rest}</Text> : null}
+                                    </Space>
+                                  )
+                                }
+                                return <Text type="secondary">-</Text>
+                              }
+
+                              return (
+                                <Select
+                                  size="small"
+                                  className="pm-lines-select"
+                                  popupClassName="pm-lines-select-dropdown"
+                                  getPopupContainer={() => document.body}
+                                  allowClear
+                                  showSearch
+                                  optionFilterProp="label"
+                                  placeholder="选择区位"
+                                  style={{ width: '100%' }}
+                                  disabled={!canPick}
+                                  value={curSlot || undefined}
+                                  options={structureSlotOptions}
+                                  onChange={(v) => {
+                                    const next = (materials as any[]).slice()
+                                    const row = next[idx]
+                                    if (!row) return
+                                    const nextMeta = { ...((row?.metadata_json as any) ?? {}) }
+                                    if (!v) {
+                                      delete nextMeta.structure_slot
+                                    } else {
+                                      nextMeta.structure_slot = String(v)
+                                    }
+                                    next[idx] = { ...row, metadata_json: nextMeta }
+                                    setMaterials(next as any)
+                                  }}
+                                />
+                              )
+                            },
+                          },
+                          {
                             title: '操作',
                             width: 120,
                             render: (_: any, row: any, idx: number) => {
@@ -4345,6 +4454,76 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                 <span style={{ whiteSpace: 'nowrap' }}>{r.process_name ?? r.process_id}</span>
                               </Space>
                             ),
+                          },
+                          {
+                            title: '结构',
+                            width: 140,
+                            render: (_: any, r: any, idx: number) => {
+                              const meta: any = (r?.metadata_json ?? {}) as any
+                              const curSlot = String(meta?.structure_slot ?? '').trim()
+                              const sourceId = getRowSourceModuleId(r)
+                              const moduleInfo = sourceId ? moduleStructureById.get(String(sourceId)) : undefined
+                              const canPick =
+                                !!selectedStructureStandardCode &&
+                                (!sourceId || !!moduleInfo?.is_global) &&
+                                canEditSelectedVersion
+
+                              if (!selectedStructureStandardCode) {
+                                return <Text type="secondary">-</Text>
+                              }
+
+                              if (sourceId && !moduleInfo?.is_global) {
+                                if (curSlot) {
+                                  const opt = structureSlotOptions.find((o) => o.value === curSlot)
+                                  return <Tag>{opt?.label ?? curSlot}</Tag>
+                                }
+                                if (moduleInfo?.whole) return <Tag>整结构</Tag>
+                                if (moduleInfo?.slots?.length) {
+                                  const show = moduleInfo.slots.slice(0, 2)
+                                  const rest = moduleInfo.slots.length - show.length
+                                  return (
+                                    <Space size={4} wrap>
+                                      {show.map((s: string) => {
+                                        const opt = structureSlotOptions.find((o) => o.value === s)
+                                        return <Tag key={s}>{opt?.label ?? s}</Tag>
+                                      })}
+                                      {rest > 0 ? <Text type="secondary">+{rest}</Text> : null}
+                                    </Space>
+                                  )
+                                }
+                                return <Text type="secondary">-</Text>
+                              }
+
+                              return (
+                                <Select
+                                  size="small"
+                                  className="pm-lines-select"
+                                  popupClassName="pm-lines-select-dropdown"
+                                  getPopupContainer={() => document.body}
+                                  allowClear
+                                  showSearch
+                                  optionFilterProp="label"
+                                  placeholder="选择区位"
+                                  style={{ width: '100%' }}
+                                  disabled={!canPick}
+                                  value={curSlot || undefined}
+                                  options={structureSlotOptions}
+                                  onChange={(v) => {
+                                    const next = (processes as any[]).slice()
+                                    const row = next[idx]
+                                    if (!row) return
+                                    const nextMeta = { ...((row?.metadata_json as any) ?? {}) }
+                                    if (!v) {
+                                      delete nextMeta.structure_slot
+                                    } else {
+                                      nextMeta.structure_slot = String(v)
+                                    }
+                                    next[idx] = { ...row, metadata_json: nextMeta }
+                                    setProcesses(next as any)
+                                  }}
+                                />
+                              )
+                            },
                           },
                           {
                             title: '操作',

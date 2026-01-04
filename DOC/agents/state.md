@@ -46,6 +46,14 @@
   - 验收命令（必须）：`npm -C frontend run build`
   - 下一步（建议下一轮再做）：在选择器中支持“同单位优先/筛选”，进一步减少启用时才发现单位不一致的返工。
 
+- **本轮闭环产物（Frontend / ProductModelEditorDrawer - 清单编辑“结构”列（MVP））**：
+  - 入口：`清单编辑 → 版本选择` 已支持选择并保存 `结构标准`（standard draft 版本）。
+  - 物料/工序明细表新增列：**结构**（slot）。
+    - 模块同步行：默认只读展示（整结构/slots/或行上已有 `metadata_json.structure_slot`）。
+    - 通用模块（GLOBAL）或手动新增行：可下拉选择当前结构标准的 slots，保存到 `metadata_json.structure_slot`。
+  - 验收命令（必须）：`npm -C frontend run build`
+  - 下一步（建议下一轮再做）：在“从工艺同步”落库时直接回填每行 `structure_slot`（需要后端同步口径），并对模块同步行支持“一键展开为 slots 明细行”（如业务确认需要）。
+
  - **最近校对（北京时间 GMT+8）**：2026-01-04（Frontend：打样管理允许占位物料保存清单（汇总成本按 0），但推导标准/发布标准前硬拦截：存在占位则不允许推导/发布）
  - **最近校对（北京时间 GMT+8）**：2026-01-04（Backend：版本清单保存占位型虚拟物料校验按 version_kind 拆分：sample 允许临时保存，standard 继续禁止）
  - **最近校对（北京时间 GMT+8）**：2026-01-04（Frontend：保存清单后不再跳回旧版本：versionsQuery 刷新时保留当前 selectedVersionId，仅在首次/当前不存在时自动选版本）

@@ -3451,6 +3451,12 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                         pagination={false}
                         size="small"
                         style={{ fontSize: TABLE_FONT_SIZE }}
+                        onRow={(r: any) => {
+                          const key = String(r?.module_id ?? '').trim()
+                          if (!key) return {}
+                          const color = getColorForModuleKey(key)
+                          return { style: { background: hexToRgba(color, 0.06) } }
+                        }}
                         rowSelection={{
                           selectedRowKeys: syncSelectedModuleIds,
                           onChange: (keys) => setSyncSelectedModuleIds(keys.map((k) => String(k))),

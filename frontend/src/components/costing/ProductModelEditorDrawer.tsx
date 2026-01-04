@@ -1904,8 +1904,13 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     if (placeholderIdx >= 0) {
       const row = materials[placeholderIdx] as any
       const label = String(row?.material_name ?? row?.material_code ?? row?.material_ref_id ?? '').trim() || '占位物料'
-      message.error(`存在占位物料未替换：第 ${placeholderIdx + 1} 行（${label}），请先替换为真实/BOM/虚拟物料后再保存清单`)
-      return
+      if (entryContext === 'standard') {
+        message.error(`存在占位物料未替换：第 ${placeholderIdx + 1} 行（${label}），请先替换为真实/BOM/虚拟物料后再保存清单`)
+        return
+      }
+      // sample: allow placeholder rows to be saved as a temporary draft (cost will be 0),
+      // but block later actions (derive standard / publish) via dedicated guardrails.
+      message.warning(`打样版本允许临时保存占位物料：第 ${placeholderIdx + 1} 行（${label}）。注意：推导标准/发布前必须替换。`)
     }
 
     // 保存清单前规范化（避免历史/非法计量方式导致 UI 渲染循环或单位口径错乱）
@@ -1988,6 +1993,17 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     mutationFn: async (versionId?: string) => {
       const vid = String(versionId ?? selectedVersionId ?? '').trim()
       if (!vid) throw new Error('请先选择标准版本')
+      // Guardrail: standard publish must not contain placeholder materials
+      {
+        const lines = (await fetchProductModelVersionLines(vid)) as any
+        const mats = Array.isArray(lines?.materials) ? lines.materials : []
+        const idx = mats.findIndex((m: any) => isPlaceholderMaterialRow(m))
+        if (idx >= 0) {
+          const row = mats[idx] as any
+          const label = String(row?.material_name ?? row?.material_code ?? row?.material_ref_id ?? '').trim() || '占位物料'
+          throw new Error(`标准版本发布失败：存在占位物料未替换（第 ${idx + 1} 行：${label}）。请先替换后再发布。`)
+        }
+      }
       return await publishProductModelVersion(vid, {})
     },
     onSuccess: async () => {
@@ -2144,6 +2160,18 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       return
     }
     try {
+      // Guardrail: deriving standard from sample requires all placeholder materials replaced
+      {
+        const lines = (await fetchProductModelVersionLines(sourceSampleVersionId)) as any
+        const mats = Array.isArray(lines?.materials) ? lines.materials : []
+        const idx = mats.findIndex((m: any) => isPlaceholderMaterialRow(m))
+        if (idx >= 0) {
+          const row = mats[idx] as any
+          const label = String(row?.material_name ?? row?.material_code ?? row?.material_ref_id ?? '').trim() || '占位物料'
+          message.error(`推导标准模型失败：打样清单存在占位物料未替换（第 ${idx + 1} 行：${label}）。请先替换后再推导。`)
+          return
+        }
+      }
       const res = await deriveStandardFromSampleVersion(sourceSampleVersionId, {
         target_mode: 'create_new',
         apply_to: 'both',

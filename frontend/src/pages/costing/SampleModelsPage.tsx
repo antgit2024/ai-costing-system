@@ -284,6 +284,7 @@ export default function SampleModelsPage() {
         onClose={() => setEditorOpen(false)}
         entryContext="sample"
         modelId={editingModelId}
+        includeArchived={includeArchived}
       />
     </div>
   )

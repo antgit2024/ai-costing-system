@@ -987,8 +987,13 @@ export const fetchProductModels = async (
   return response.data
 }
 
-export const fetchProductModel = async (modelId: string): Promise<ProductModel> => {
-  const response = await plannerClient.get(`/product-models/${modelId}`)
+export const fetchProductModel = async (
+  modelId: string,
+  params: { include_archived?: boolean } = {},
+): Promise<ProductModel> => {
+  const response = await plannerClient.get(`/product-models/${modelId}`, {
+    params: sanitizeParams(params),
+  })
   return response.data
 }
 
@@ -1044,8 +1049,13 @@ export const previewProductModel = async (
   return response.data
 }
 
-export const fetchProductModelVersions = async (modelId: string): Promise<ProductModelVersionRead[]> => {
-  const response = await plannerClient.get(`/product-models/${modelId}/versions`)
+export const fetchProductModelVersions = async (
+  modelId: string,
+  params: { include_archived?: boolean } = {},
+): Promise<ProductModelVersionRead[]> => {
+  const response = await plannerClient.get(`/product-models/${modelId}/versions`, {
+    params: sanitizeParams(params),
+  })
   return response.data
 }
 
@@ -1073,8 +1083,13 @@ export const createProductModelVersion = async (
   return response.data
 }
 
-export const fetchProductModelVersionLines = async (versionId: string): Promise<ProductModelLinesResponse> => {
-  const response = await plannerClient.get(`/product-model-versions/${versionId}/lines`)
+export const fetchProductModelVersionLines = async (
+  versionId: string,
+  params: { include_archived?: boolean } = {},
+): Promise<ProductModelLinesResponse> => {
+  const response = await plannerClient.get(`/product-model-versions/${versionId}/lines`, {
+    params: sanitizeParams(params),
+  })
   return response.data
 }
 

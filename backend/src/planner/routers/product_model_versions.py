@@ -18,8 +18,8 @@ from ..services import audit_service, line_variant_service, model_version_image_
 router = APIRouter(tags=["product-model-versions"])
 
 
-def _get_model_or_404(db: Session, model_id: str) -> models.ProductModel:
-    model = product_model_service.get_model(db, model_id)
+def _get_model_or_404(db: Session, model_id: str, *, include_archived: bool = False) -> models.ProductModel:
+    model = product_model_service.get_model(db, model_id, include_archived=include_archived)
     if not model:
         raise HTTPException(status_code=404, detail="Product model not found")
     return model
@@ -128,9 +128,13 @@ async def upload_model_version_image(
 
 
 @router.get("/product-models/{model_id}/versions", response_model=List[schemas.ProductModelVersionRead])
-def list_product_model_versions(model_id: str, db: Session = Depends(get_db)):
-    _ = _get_model_or_404(db, model_id)
-    items = product_model_service.list_model_versions(db, model_id)
+def list_product_model_versions(
+    model_id: str,
+    include_archived: bool = Query(False),
+    db: Session = Depends(get_db),
+):
+    _ = _get_model_or_404(db, model_id, include_archived=include_archived)
+    items = product_model_service.list_model_versions(db, model_id, include_archived=include_archived)
     return [schemas.ProductModelVersionRead.from_orm(v) for v in items]
 
 
@@ -195,10 +199,16 @@ def create_product_model_version(
 
 
 @router.get("/product-model-versions/{version_id}/lines", response_model=schemas.ProductModelLinesResponse)
-def get_version_lines(version_id: str, db: Session = Depends(get_db)):
-    v = _get_version_or_404(db, version_id)
+def get_version_lines(
+    version_id: str,
+    include_archived: bool = Query(False),
+    db: Session = Depends(get_db),
+):
+    v = product_model_service.get_model_version(db, version_id, include_archived=include_archived)
+    if not v:
+        raise HTTPException(status_code=404, detail="Product model version not found")
     model = db.get(models.ProductModel, v.model_id)
-    if not model or model.is_archived:
+    if not model or (model.is_archived and not include_archived):
         raise HTTPException(status_code=404, detail="Product model not found")
 
     sample, standard = product_model_service._extract_sample_and_standard_from_version(model, v)  # noqa: SLF001

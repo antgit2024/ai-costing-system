@@ -141,12 +141,11 @@ def list_versions(
     return total, items
 
 
-def get_model(db: Session, model_id: str) -> Optional[models.ProductModel]:
-    return (
-        db.query(models.ProductModel)
-        .filter(models.ProductModel.id == model_id, models.ProductModel.is_archived.is_(False))
-        .one_or_none()
-    )
+def get_model(db: Session, model_id: str, *, include_archived: bool = False) -> Optional[models.ProductModel]:
+    q = db.query(models.ProductModel).filter(models.ProductModel.id == model_id)
+    if not include_archived:
+        q = q.filter(models.ProductModel.is_archived.is_(False))
+    return q.one_or_none()
 
 
 def list_model_modules(db: Session, model_id: str) -> Sequence[models.ModelProcessModule]:
@@ -179,30 +178,23 @@ def list_model_process_lines(db: Session, model_id: str) -> Sequence[models.Mode
     )
 
 
-def list_model_versions(db: Session, model_id: str) -> Sequence[models.ProductModelVersion]:
-    return (
-        db.query(models.ProductModelVersion)
-        .filter(
-            models.ProductModelVersion.model_id == model_id,
-            models.ProductModelVersion.is_archived.is_(False),
-        )
-        .order_by(
-            asc(models.ProductModelVersion.created_at),
-            asc(models.ProductModelVersion.id),
-        )
-        .all()
-    )
+def list_model_versions(db: Session, model_id: str, *, include_archived: bool = False) -> Sequence[models.ProductModelVersion]:
+    q = db.query(models.ProductModelVersion).filter(models.ProductModelVersion.model_id == model_id)
+    if not include_archived:
+        q = q.filter(models.ProductModelVersion.is_archived.is_(False))
+    return q.order_by(
+        asc(models.ProductModelVersion.created_at),
+        asc(models.ProductModelVersion.id),
+    ).all()
 
 
-def get_model_version(db: Session, version_id: str) -> Optional[models.ProductModelVersion]:
-    return (
-        db.query(models.ProductModelVersion)
-        .filter(
-            models.ProductModelVersion.id == version_id,
-            models.ProductModelVersion.is_archived.is_(False),
-        )
-        .one_or_none()
-    )
+def get_model_version(
+    db: Session, version_id: str, *, include_archived: bool = False
+) -> Optional[models.ProductModelVersion]:
+    q = db.query(models.ProductModelVersion).filter(models.ProductModelVersion.id == version_id)
+    if not include_archived:
+        q = q.filter(models.ProductModelVersion.is_archived.is_(False))
+    return q.one_or_none()
 
 
 def list_version_modules(db: Session, version_id: str) -> Sequence[models.ModelVersionModule]:

@@ -118,6 +118,8 @@ export type ProductModelEditorDrawerProps = {
   modelId: string | null
   // Optional: when entering from “标准模型版本列表”，直接定位到该版本
   initialVersionId?: string | null
+  // When true, allow viewing archived model/versions/lines (used by list pages' “显示已归档” toggle)
+  includeArchived?: boolean
 }
 
 const lockStandardSpec = (): ProductModelSampleSpec => ({
@@ -296,7 +298,7 @@ const CodePill = ({
  * - 标准入口支持 initialVersionId：从“标准模型版本列表”进入时优先锁定该版本，避免串台
  */
 export default function ProductModelEditorDrawer(props: ProductModelEditorDrawerProps) {
-  const { open, onClose, entryContext, modelId, initialVersionId } = props
+  const { open, onClose, entryContext, modelId, initialVersionId, includeArchived } = props
   const queryClient = useQueryClient()
   const [form] = Form.useForm()
   const navigate = useNavigate()
@@ -493,7 +495,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
 
   const modelQuery = useQuery({
     queryKey: ['productModel', modelId],
-    queryFn: () => fetchProductModel(modelId as string),
+    queryFn: () => fetchProductModel(modelId as string, { include_archived: includeArchived }),
     enabled: open && !!modelId,
   })
 
@@ -509,13 +511,13 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
 
   const versionsQuery = useQuery({
     queryKey: ['productModelVersions', modelId],
-    queryFn: () => fetchProductModelVersions(modelId as string),
+    queryFn: () => fetchProductModelVersions(modelId as string, { include_archived: includeArchived }),
     enabled: open && !!modelId,
   })
 
   const linesQuery = useQuery({
     queryKey: ['productModelVersionLines', selectedVersionId],
-    queryFn: () => fetchProductModelVersionLines(selectedVersionId as string),
+    queryFn: () => fetchProductModelVersionLines(selectedVersionId as string, { include_archived: includeArchived }),
     enabled: open && !!selectedVersionId,
   })
 

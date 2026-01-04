@@ -419,6 +419,7 @@ export default function StandardModelsPage() {
         entryContext="standard"
         modelId={editingModelId}
         initialVersionId={editingVersionId}
+        includeArchived={includeArchived}
       />
     </div>
   )

@@ -123,8 +123,8 @@ def _serialize_model(db: Session, model: models.ProductModel) -> schemas.Product
     return result
 
 
-def _get_model_or_404(model_id: str, db: Session) -> models.ProductModel:
-    model = product_model_service.get_model(db, model_id)
+def _get_model_or_404(model_id: str, db: Session, *, include_archived: bool = False) -> models.ProductModel:
+    model = product_model_service.get_model(db, model_id, include_archived=include_archived)
     if not model:
         raise HTTPException(status_code=404, detail="Product model not found")
     return model
@@ -186,8 +186,12 @@ def create_product_model(payload: schemas.ProductModelCreateRequest, db: Session
 
 
 @router.get("/{model_id}", response_model=schemas.ProductModelRead)
-def get_product_model(model_id: str, db: Session = Depends(get_db)):
-    model = _get_model_or_404(model_id, db)
+def get_product_model(
+    model_id: str,
+    include_archived: bool = Query(False),
+    db: Session = Depends(get_db),
+):
+    model = _get_model_or_404(model_id, db, include_archived=include_archived)
     return _serialize_model(db, model)
 
 
@@ -225,8 +229,12 @@ def refresh_model_material_prices(model_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{model_id}/lines", response_model=schemas.ProductModelLinesResponse)
-def get_model_lines(model_id: str, db: Session = Depends(get_db)):
-    model = _get_model_or_404(model_id, db)
+def get_model_lines(
+    model_id: str,
+    include_archived: bool = Query(False),
+    db: Session = Depends(get_db),
+):
+    model = _get_model_or_404(model_id, db, include_archived=include_archived)
     sample, standard = product_model_service._extract_sample_and_standard(model)  # noqa: SLF001
     materials = product_model_service.list_model_material_lines(db, model.id)
     processes = product_model_service.list_model_process_lines(db, model.id)

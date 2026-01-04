@@ -54,6 +54,7 @@
 - `backend/src/planner/schemas.py`（如需核对字段名/response 结构）
 - `backend/src/planner/services/bom_generation_service.py`（动态 BOM 生成：overlay 套用与 replace_bundle 语义）
 - `backend/src/planner/services/line_variant_service.py`（行级变体：bundle 选择范围与 CRUD 细节）
+- `backend/src/planner/services/product_model_service.py`（推导标准版本 derive_standard_version：排查“打样版本推导后标准列表出现多个版本/误推导”的根因与最小修复）
 - `backend/tests/planner/test_clone_model_from_standard_version.py`（克隆新标准模型：从标准版本克隆新模型+新版本+复制清单/变体的最小验收用例）
 
 ### 3) 文档：口径与验收

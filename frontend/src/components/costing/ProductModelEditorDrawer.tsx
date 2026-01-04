@@ -2315,6 +2315,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   const [versionOpName, setVersionOpName] = useState('')
   const [versionOpSourceId, setVersionOpSourceId] = useState<string | null>(null)
   const [versionOpLoading, setVersionOpLoading] = useState(false)
+  const [derivingStandardFromSampleId, setDerivingStandardFromSampleId] = useState<string | null>(null)
 
   const openCreateVersionModal = () => {
     setVersionOpMode('create')
@@ -2442,6 +2443,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       message.warning('请先选择要推导的打样版本')
       return
     }
+    if (derivingStandardFromSampleId) return
+    setDerivingStandardFromSampleId(sourceSampleVersionId)
     try {
       // Guardrail: deriving standard from sample requires all placeholder materials replaced
       {
@@ -2455,11 +2458,28 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
           return
         }
       }
+
+      // 同一模型通常只需要维护一个“标准草稿”。若已存在 standard draft，则默认覆盖该草稿，避免生成多个标准版本造成误解。
+      const allVersions = (versions ?? []) as any[]
+      const standardDrafts = allVersions
+        .filter((v) => String(v?.version_kind ?? '') === 'standard' && String(v?.version_status ?? '') === 'draft')
+        .sort((a, b) => {
+          const ta = new Date(String(a?.updated_at ?? a?.created_at ?? 0)).getTime()
+          const tb = new Date(String(b?.updated_at ?? b?.created_at ?? 0)).getTime()
+          return tb - ta
+        })
+      const overwriteTargetId = String(standardDrafts[0]?.id ?? '').trim() || null
+
       const res = await deriveStandardFromSampleVersion(sourceSampleVersionId, {
-        target_mode: 'create_new',
+        target_mode: overwriteTargetId ? 'overwrite_draft' : 'create_new',
+        target_standard_version_id: overwriteTargetId || undefined,
         apply_to: 'both',
       } as any)
-      message.success('已生成标准版本（草稿）')
+
+      if (overwriteTargetId && standardDrafts.length > 1) {
+        message.warning('检测到多个“标准草稿”，已默认覆盖最新的一个；建议到“标准模型”入口删除多余草稿版本。')
+      }
+      message.success(overwriteTargetId ? '已更新标准版本（草稿）' : '已生成标准版本（草稿）')
       await versionsQuery.refetch()
       const standardId = String(res?.standard_version_id ?? '').trim()
       if (!standardId) return
@@ -2483,6 +2503,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       })
     } catch (err: any) {
       message.error(err?.response?.data?.detail ?? '生成标准模型失败')
+    } finally {
+      setDerivingStandardFromSampleId(null)
     }
   }
 
@@ -2796,6 +2818,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                               size="small"
                               type="primary"
                               style={{ minWidth: 48, paddingInline: 6 }}
+                              loading={derivingStandardFromSampleId === v.id}
+                              disabled={Boolean(derivingStandardFromSampleId) && derivingStandardFromSampleId !== v.id}
                               onClick={() => void deriveStandardFrom(v.id)}
                             >
                               生成

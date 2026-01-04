@@ -52,7 +52,8 @@
     - 模块同步行：默认只读展示（整结构/slots/或行上已有 `metadata_json.structure_slot`）。
     - 通用模块（GLOBAL）或手动新增行：可下拉选择当前结构标准的 slots，保存到 `metadata_json.structure_slot`。
   - 验收命令（必须）：`npm -C frontend run build`
-  - 下一步（建议下一轮再做）：在“从工艺同步”落库时直接回填每行 `structure_slot`（需要后端同步口径），并对模块同步行支持“一键展开为 slots 明细行”（如业务确认需要）。
+  - 更新（北京时间 GMT+8 2026-01-04）：模块同步行也支持下拉选择结构 slots；同步完成后若模块范围唯一命中 1 个 slot，会自动回填 `metadata_json.structure_slot`（多 slot 保持空让人选）。
+  - 下一步（建议下一轮再做）：后端在“从工艺同步”落库时直接回填每行 `structure_slot`（统一口径），并可选支持“模块按 slots 拆行”（若业务确认需要）。
 
  - **最近校对（北京时间 GMT+8）**：2026-01-04（Frontend：打样管理允许占位物料保存清单（汇总成本按 0），但推导标准/发布标准前硬拦截：存在占位则不允许推导/发布）
  - **最近校对（北京时间 GMT+8）**：2026-01-04（Backend：版本清单保存占位型虚拟物料校验按 version_kind 拆分：sample 允许临时保存，standard 继续禁止）

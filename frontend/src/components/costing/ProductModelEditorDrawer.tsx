@@ -60,6 +60,7 @@ import {
   fetchProductModel,
   fetchProductModelVersionLines,
   fetchProductModelVersions,
+  fetchProcessModule,
   fetchProcessModules,
   fetchProcesses,
   fetchProcess,
@@ -88,6 +89,7 @@ import type {
   ProductModelVersionRead,
   ProcessDetail,
   ProcessModuleQueryParams,
+  ProcessModuleDetail,
   ProcessModuleSummary,
   ProductModelLinesResponse as ProductModelLinesResponseModel,
   ModelVersionImageRead,
@@ -523,6 +525,37 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     enabled: open,
   })
 
+  const missingStructureMetaModuleIds = useMemo(() => {
+    // Some model.modules may not include `module` payload; or may omit metadata_json.
+    // We lazily fetch module detail to get metadata_json.structure_tags for the "结构" column rendering/autofill.
+    const ids: string[] = []
+    for (const m of modules as any[]) {
+      const id = String(m?.module_id ?? '').trim()
+      if (!id) continue
+      const meta = (m?.module?.metadata_json ?? m?.module?.metadata ?? null) as any
+      const tags = Array.isArray(meta?.structure_tags) ? meta.structure_tags : null
+      if (!tags) ids.push(id)
+    }
+    return Array.from(new Set(ids)).sort()
+  }, [modules])
+
+  const moduleMetaByIdQuery = useQuery({
+    queryKey: ['processModuleMetaById', missingStructureMetaModuleIds],
+    enabled: open && activeTab === 'lines' && entryContext === 'standard' && missingStructureMetaModuleIds.length > 0,
+    staleTime: 5 * 60 * 1000,
+    queryFn: async () => {
+      const results = await Promise.allSettled(missingStructureMetaModuleIds.map((id) => fetchProcessModule(id)))
+      const map = new Map<string, ProcessModuleDetail>()
+      for (let i = 0; i < results.length; i += 1) {
+        const id = missingStructureMetaModuleIds[i]
+        const r = results[i]
+        if (r.status !== 'fulfilled') continue
+        map.set(id, r.value as any)
+      }
+      return map
+    },
+  })
+
   const structureStandardsQuery = useQuery({
     queryKey: ['structure-standards', 'dropdown'],
     enabled: open && entryContext === 'standard' && activeTab === 'lines',
@@ -600,7 +633,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     for (const m of modules as any[]) {
       const mid = String(m?.module_id ?? '').trim()
       if (!mid) continue
-      const meta: any = (m?.module?.metadata_json ?? m?.module?.metadata ?? {}) as any
+      const moduleDetail = (m?.module ?? (moduleMetaByIdQuery.data?.get(mid) as any) ?? null) as any
+      const meta: any = (moduleDetail?.metadata_json ?? moduleDetail?.metadata ?? {}) as any
       const tags = Array.isArray(meta?.structure_tags) ? meta.structure_tags.map((x: any) => String(x)) : []
       const isGlobal = tags.includes('GLOBAL')
       const whole = code ? tags.includes(code) : false
@@ -614,7 +648,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       map.set(mid, { is_global: isGlobal, whole, slots })
     }
     return map
-  }, [modules, selectedStructureStandardCode])
+  }, [modules, selectedStructureStandardCode, moduleMetaByIdQuery.data])
 
   const selectedVersionStatus = String((selectedVersion as any)?.version_status ?? '').trim()
   // 规则：标准版本仅 draft 允许修改；已发布/已归档禁止修改
@@ -1046,7 +1080,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     setSelectedVersionId(preferred?.id ?? null)
   }, [versionsQuery.data, desiredKind, initialVersionId, selectedVersionId])
 
-  const hydrateLinesFromApi = (data: any) => {
+  const hydrateLinesFromApi = (data: any, opts?: { autofill_structure_slot?: boolean }) => {
     if (!data) return
     setSampleSpec({ ...(data.sample ?? {}), unit_label: normalizeSpecUnitLabel(data?.sample?.unit_label) })
     setStandardSpec(data.standard)
@@ -1082,8 +1116,32 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       sample_minutes: p.sample_minutes != null ? Number(p.sample_minutes) : p.sample_minutes,
       standard_minutes: p.standard_minutes != null ? Number(p.standard_minutes) : p.standard_minutes,
     }))
-    setMaterials(normalizedMaterials)
-    setProcesses(normalizedProcesses)
+    const doAutofill = !!opts?.autofill_structure_slot && entryContext === 'standard' && !!selectedStructureStandardCode
+    const applyAutofill = (rows: any[]): any[] => {
+      if (!doAutofill) return rows
+      if (!structureSlotOptions.length) return rows
+      return (rows ?? []).map((r: any) => {
+        const meta: any = (r?.metadata_json ?? {}) as any
+        const cur = String(meta?.structure_slot ?? '').trim()
+        if (cur) return r
+        const sid = String(r?.source_module_id ?? meta?.source_module_id ?? '').trim()
+        if (!sid) return r
+        const info = moduleStructureById.get(sid)
+        if (!info) return r
+        // 只在“唯一命中 1 个 slot”时自动回填，避免多 slot 猜错。
+        if (Array.isArray(info.slots) && info.slots.length === 1) {
+          const slot = String(info.slots[0] ?? '').trim()
+          if (!slot) return r
+          return { ...r, metadata_json: { ...meta, structure_slot: slot } }
+        }
+        return r
+      })
+    }
+
+    const nextMaterials = applyAutofill(normalizedMaterials)
+    const nextProcesses = applyAutofill(normalizedProcesses)
+    setMaterials(nextMaterials as any)
+    setProcesses(nextProcesses as any)
 
     // standard entry forces lock
     if (entryContext === 'standard') {
@@ -1095,7 +1153,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   useEffect(() => {
     if (!linesQuery.data) return
     const d = linesQuery.data as ProductModelLinesResponse
-    hydrateLinesFromApi(d)
+    hydrateLinesFromApi(d, { autofill_structure_slot: false })
   }, [linesQuery.data, entryContext])
 
   const refreshSummary = async () => {
@@ -1974,7 +2032,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
         return
       }
       const res = await syncProductModelVersionFromModules(vid, { keep_overrides: true, module_ids: appendedIds })
-      hydrateLinesFromApi(res)
+      hydrateLinesFromApi(res, { autofill_structure_slot: true })
       await queryClient.invalidateQueries({ queryKey: ['productModel', modelId] })
       await queryClient.invalidateQueries({ queryKey: ['productModelVersionLines', vid] })
       message.success('已添加模块并生成版本清单')
@@ -2022,7 +2080,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
               })),
           } as any)
           const res = await syncProductModelVersionFromModules(selectedVersionId, { keep_overrides: true })
-          hydrateLinesFromApi(res)
+          hydrateLinesFromApi(res, { autofill_structure_slot: true })
           await queryClient.invalidateQueries({ queryKey: ['productModel', modelId] })
           await queryClient.invalidateQueries({ queryKey: ['productModelVersionLines', selectedVersionId] })
           message.success('已删除模块并同步版本清单')
@@ -2072,7 +2130,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
           keep_overrides: syncKeepOverrides,
           module_ids: selectedIds,
         })
-        hydrateLinesFromApi(res)
+        hydrateLinesFromApi(res, { autofill_structure_slot: true })
         await queryClient.invalidateQueries({ queryKey: ['productModelVersionLines', vid] })
         message.success(syncKeepOverrides ? '已同步到版本清单（保留版本层调参）' : '已同步到版本清单（覆盖版本层调参）')
       } catch (err: any) {
@@ -3800,17 +3858,14 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                               const curSlot = String(meta?.structure_slot ?? '').trim()
                               const sourceId = getRowSourceModuleId(r)
                               const moduleInfo = sourceId ? moduleStructureById.get(String(sourceId)) : undefined
-                              const canPick =
-                                !!selectedStructureStandardCode &&
-                                (!sourceId || !!moduleInfo?.is_global) &&
-                                canEditSelectedVersion
+                              const canPick = !!selectedStructureStandardCode && canEditSelectedVersion && structureSlotOptions.length > 0
 
                               if (!selectedStructureStandardCode) {
                                 return <Text type="secondary">-</Text>
                               }
 
-                              // 模块同步行：默认只读展示（继承模块的结构范围）；通用模块/手动新增允许指定 slot
-                              if (sourceId && !moduleInfo?.is_global) {
+                              // 只读态：保持展示，不提供下拉（避免已发布版本被误改）
+                              if (!canEditSelectedVersion) {
                                 if (curSlot) {
                                   const opt = structureSlotOptions.find((o) => o.value === curSlot)
                                   return <Tag>{opt?.label ?? curSlot}</Tag>
@@ -3841,7 +3896,17 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                   allowClear
                                   showSearch
                                   optionFilterProp="label"
-                                  placeholder="选择区位"
+                                  placeholder={
+                                    sourceId && !moduleInfo?.is_global
+                                      ? moduleInfo?.slots?.length === 1
+                                        ? `默认：${structureSlotOptions.find((o) => o.value === moduleInfo.slots[0])?.label ?? moduleInfo.slots[0]}`
+                                        : moduleInfo?.whole
+                                          ? '继承：整结构（可选区位）'
+                                          : moduleInfo?.slots?.length
+                                            ? `继承：模块含${moduleInfo.slots.length}个区位`
+                                            : '继承模块（可选区位）'
+                                      : '选择区位'
+                                  }
                                   style={{ width: '100%' }}
                                   disabled={!canPick}
                                   value={curSlot || undefined}
@@ -4463,16 +4528,13 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                               const curSlot = String(meta?.structure_slot ?? '').trim()
                               const sourceId = getRowSourceModuleId(r)
                               const moduleInfo = sourceId ? moduleStructureById.get(String(sourceId)) : undefined
-                              const canPick =
-                                !!selectedStructureStandardCode &&
-                                (!sourceId || !!moduleInfo?.is_global) &&
-                                canEditSelectedVersion
+                              const canPick = !!selectedStructureStandardCode && canEditSelectedVersion && structureSlotOptions.length > 0
 
                               if (!selectedStructureStandardCode) {
                                 return <Text type="secondary">-</Text>
                               }
 
-                              if (sourceId && !moduleInfo?.is_global) {
+                              if (!canEditSelectedVersion) {
                                 if (curSlot) {
                                   const opt = structureSlotOptions.find((o) => o.value === curSlot)
                                   return <Tag>{opt?.label ?? curSlot}</Tag>
@@ -4503,7 +4565,17 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                   allowClear
                                   showSearch
                                   optionFilterProp="label"
-                                  placeholder="选择区位"
+                                  placeholder={
+                                    sourceId && !moduleInfo?.is_global
+                                      ? moduleInfo?.slots?.length === 1
+                                        ? `默认：${structureSlotOptions.find((o) => o.value === moduleInfo.slots[0])?.label ?? moduleInfo.slots[0]}`
+                                        : moduleInfo?.whole
+                                          ? '继承：整结构（可选区位）'
+                                          : moduleInfo?.slots?.length
+                                            ? `继承：模块含${moduleInfo.slots.length}个区位`
+                                            : '继承模块（可选区位）'
+                                      : '选择区位'
+                                  }
                                   style={{ width: '100%' }}
                                   disabled={!canPick}
                                   value={curSlot || undefined}

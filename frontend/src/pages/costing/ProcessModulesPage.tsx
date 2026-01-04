@@ -450,7 +450,7 @@ const ProcessModulesPage = () => {
   useEffect(() => {
     const st = (location as any)?.state ?? {}
     const openId = String(st?.openProcessModuleId ?? '').trim()
-    if (!openId) return
+    if (!openId || openId === 'null' || openId === 'undefined') return
     setDrawerMode('view')
     setSelectedId(openId)
     setDrawerOpen(true)
@@ -667,7 +667,16 @@ const ProcessModulesPage = () => {
         const slots = normalizeStringArray(meta?.structure_slots ?? [])
         const tags = normalizeStringArray(meta?.structure_tags ?? [])
         const nextMaterials = module.materials.length ? (module.materials as any) : []
-        const nextSteps = module.steps.length ? (module.steps as any) : []
+        // IMPORTANT: backend copied modules may have step.process_id = null but embed process id in metadata_json.process_snapshot.process_id.
+        // AntD Form may drop unregistered nested fields (like process_snapshot) in getFieldsValue(),
+        // so we must normalize it into the canonical step.process_id at hydration time.
+        const nextSteps = (module.steps.length ? (module.steps as any) : []).map((s: any) => {
+          const direct = String(s?.process_id ?? '').trim()
+          if (direct) return s
+          const snap = (s?.metadata_json ?? {})?.process_snapshot ?? {}
+          const snapPid = String((snap as any)?.process_id ?? (snap as any)?.id ?? '').trim()
+          return snapPid ? { ...s, process_id: snapPid } : s
+        })
         editorForm.setFieldsValue({
           module_code: module.module_code,
           module_name: module.module_name,

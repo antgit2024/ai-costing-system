@@ -4,8 +4,7 @@ from decimal import Decimal
 import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from sqlalchemy import asc, cast, func, or_
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import asc, func, or_
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -52,11 +51,15 @@ def list_modules(
 
     structure_tag = (filters.structure_tag or "").strip() or None
     structure_code = (filters.structure_code or "").strip() or None
-    dialect = str(getattr(getattr(db, "bind", None), "dialect", None).name or "")
     include_global = bool(structure_code and not structure_tag)
 
-    # SQLite fallback: apply filter in Python to keep behavior consistent in tests.
-    if (structure_tag or structure_code) and dialect != "postgresql":
+    # Apply structure filter in Python for compatibility and stability.
+    #
+    # Rationale:
+    # - The production Postgres may not support JSONPath functions consistently.
+    # - A 500 here blocks critical UX: “标准模型 → 添加工艺模块”弹窗会一直加载。
+    # - Process modules volume is small, so Python filtering is acceptable for MVP.
+    if structure_tag or structure_code:
         items_all = query.order_by(models.ProcessModule.updated_at.desc()).all()
 
         def _tags(meta: Dict[str, Any]) -> List[str]:
@@ -85,30 +88,6 @@ def list_modules(
         start = (page - 1) * page_size
         end = start + page_size
         return total, filtered[start:end]
-
-    # Postgres: use JSONB queries to avoid full table scans in Python.
-    if structure_tag:
-        meta = cast(models.ProcessModule.metadata_json, JSONB)
-        query = query.filter(meta.op("@>")({"structure_tags": [structure_tag]}))
-    if structure_code:
-        meta = cast(models.ProcessModule.metadata_json, JSONB)
-        regex = f"^{re.escape(structure_code)}:"
-        vars_json = func.jsonb_build_object("code", structure_code, "re", regex, "global", "GLOBAL")
-        cond = func.jsonb_path_exists(
-            meta,
-            "$.structure_tags ? (@ == $code || @ like_regex $re)",
-            func.jsonb_build_object("code", structure_code, "re", regex),
-        )
-        if include_global:
-            cond = or_(
-                cond,
-                func.jsonb_path_exists(
-                    meta,
-                    "$.structure_tags ? (@ == $global)",
-                    func.jsonb_build_object("global", "GLOBAL"),
-                ),
-            )
-        query = query.filter(cond)
 
     total = query.count()
     items = (

@@ -27,6 +27,7 @@ def generate_bom(
             model_version_id=payload.model_version_id,
             sku_code=payload.sku_code,
             quantity=payload.quantity,
+            include_disabled_variants=bool(getattr(payload, "include_disabled_variants", False)),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

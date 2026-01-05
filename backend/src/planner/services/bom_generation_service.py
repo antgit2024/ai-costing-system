@@ -16,6 +16,7 @@ def generate_bom(
     model_version_id: Optional[str],
     sku_code: Optional[str],
     quantity: Optional[Decimal],
+    include_disabled_variants: bool = False,
 ) -> Dict[str, Any]:
     version = _resolve_version(db, model_version_id=model_version_id, sku_code=sku_code)
     model = db.get(models.ProductModel, version.model_id)
@@ -63,7 +64,7 @@ def generate_bom(
         additions: List[Dict[str, Any]] = []
 
         for variant in variant_rules:
-            if not variant.enabled:
+            if not variant.enabled and not include_disabled_variants:
                 trace_hits.append(
                     {
                         "variant_id": variant.id,

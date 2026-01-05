@@ -1207,6 +1207,7 @@ export interface BomGenerateRequest {
   sku_code?: string
   quantity?: number
   operator_id?: string
+  include_disabled_variants?: boolean
 }
 
 export interface BomGenerateResponse {

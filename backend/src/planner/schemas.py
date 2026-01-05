@@ -1920,6 +1920,8 @@ class BomGenerateRequest(BaseModel):
     sku_code: Optional[str] = None
     quantity: Optional[Decimal] = Field(None, gt=0)
     operator_id: Optional[str] = Field("system", max_length=64)
+    # Preview helper: if true, treat disabled variants as enabled (simulation only).
+    include_disabled_variants: bool = False
 
     @root_validator
     def _ensure_scope(cls, values):

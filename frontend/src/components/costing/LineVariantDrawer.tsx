@@ -52,6 +52,7 @@ type ModalRuleRow = {
   enabled: boolean
   // UI-only: local edits not persisted to backend yet.
   dirty?: boolean
+  token_mode?: TokenMode
   // condition
   op: Exclude<MetricOp, 'off'>
   min: number | null
@@ -246,7 +247,11 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
   const rowFromVariant = (v: LineVariantDetailRead): ModalRuleRow => {
     const cond = (v.conditions ?? {}) as any
     const anyArr = asStringArray(cond.spec_contains_any)
-    const allArr = asStringArray(cond.spec_contains_all)
+    let allArr = asStringArray(cond.spec_contains_all)
+    // If backend stored auto anchor token, hide it from user input (show separately in UI).
+    if (modelAnchorToken && autoAnchorModelToken) {
+      allArr = allArr.filter((t) => String(t).toLowerCase() !== String(modelAnchorToken).toLowerCase())
+    }
     const key = v.id
     let op: Exclude<MetricOp, 'off'> = 'gte'
     let min: number | null = null
@@ -272,6 +277,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
       id: v.id,
       enabled: !!v.enabled,
       dirty: false,
+      token_mode: anyArr.length > 0 ? 'any' : 'all',
       op,
       min,
       max,
@@ -311,11 +317,11 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
   }
 
   const inferTokenMode = (r: ModalRuleRow): TokenMode => {
+    if (r.token_mode) return r.token_mode
     const allCnt = (r.token_all ?? []).length
     const anyCnt = (r.token_any ?? []).length
-    if (allCnt && !anyCnt) return 'all'
-    if (anyCnt && !allCnt) return 'any'
-    // ambiguous (both empty or both filled): default to "all" for safer matching
+    if (anyCnt) return 'any'
+    if (allCnt) return 'all'
     return 'all'
   }
 
@@ -628,7 +634,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
       if (!text) throw new Error('请先输入 spec_text')
       const [parsed, bom] = await Promise.all([
         parseSpec({ spec_text: text }),
-        generateBom({ spec_text: text, model_version_id: versionId }),
+        generateBom({ spec_text: text, model_version_id: versionId, include_disabled_variants: true }),
       ])
       return { parsed, bom }
     },
@@ -1019,8 +1025,12 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                               onChange={(v) => {
                                 const next = (v as TokenMode) ?? 'all'
                                 // 切换模式时，把当前 token 迁移到对应字段，避免用户反复手填
-                                if (next === 'all') updateModalRow(r.key, { token_all: r.token_all?.length ? r.token_all : r.token_any, token_any: [] })
-                                if (next === 'any') updateModalRow(r.key, { token_any: r.token_any?.length ? r.token_any : r.token_all, token_all: [] })
+                                if (next === 'all') {
+                                  updateModalRow(r.key, { token_mode: 'all', token_all: r.token_all?.length ? r.token_all : r.token_any, token_any: [] })
+                                }
+                                if (next === 'any') {
+                                  updateModalRow(r.key, { token_mode: 'any', token_any: r.token_any?.length ? r.token_any : r.token_all, token_all: [] })
+                                }
                               }}
                             />
                             <Input

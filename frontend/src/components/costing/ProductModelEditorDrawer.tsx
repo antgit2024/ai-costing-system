@@ -519,6 +519,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     queryKey: ['productModelVersionLines', selectedVersionId],
     queryFn: () => fetchProductModelVersionLines(selectedVersionId as string, { include_archived: includeArchived }),
     enabled: open && !!selectedVersionId,
+    // 关键：编辑清单时禁止“切到别的窗口/断网重连”触发自动 refetch，
+    // 否则会把本地未保存的新增/调参覆盖回接口旧数据，造成“没带入列表/没落库”的错觉。
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   })
 
   const taxonomyModelCategoryQuery = useQuery({
@@ -1872,7 +1876,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
           display_category: payload.category ?? undefined,
         },
       }
-      setMaterials([...(materials as any[]), appended] as any)
+      setMaterials((prev: any[]) => ([...(prev ?? []), appended] as any))
       if (shouldClose) setMaterialPickerOpen(false)
       return
     }
@@ -1975,7 +1979,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
           standard_minutes: base + unit * stdMq,
         },
       }
-      setProcesses([...(processes as any[]), appended] as any)
+      setProcesses((prev: any[]) => ([...(prev ?? []), appended] as any))
       setProcessPickerOpen(false)
       return
     }

@@ -1421,6 +1421,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   }, [open, activeTab, sampleSpec.width_mm, sampleSpec.height_mm, sampleSpec.quantity, sampleSpec.unit_label, specLocked])
 
   const openMaterialPickerForRow = (rowIndex: number) => {
+    if (!canEditSelectedVersion) {
+      message.error('该版本不是草稿（draft），不允许修改。请先“复制版本”生成草稿后再编辑。')
+      return
+    }
     setPickerMode('replace')
     setPickerRowIndex(rowIndex)
     const row = (materials as any[])[rowIndex] ?? {}
@@ -1430,6 +1434,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   }
 
   const openMaterialPickerForAdd = () => {
+    if (!canEditSelectedVersion) {
+      message.error('该版本不是草稿（draft），不允许修改。请先“复制版本”生成草稿后再编辑。')
+      return
+    }
     setPickerMode('add')
     setPickerRowIndex(null)
     setMaterialPickerInitialTab('real')
@@ -1639,6 +1647,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   }
 
   const openProcessPickerForRow = (rowIndex: number) => {
+    if (!canEditSelectedVersion) {
+      message.error('该版本不是草稿（draft），不允许修改。请先“复制版本”生成草稿后再编辑。')
+      return
+    }
     setPickerMode('replace')
     setPickerRowIndex(rowIndex)
     setPickerProcessKeyword('')
@@ -1647,6 +1659,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   }
 
   const openProcessPickerForAdd = () => {
+    if (!canEditSelectedVersion) {
+      message.error('该版本不是草稿（draft），不允许修改。请先“复制版本”生成草稿后再编辑。')
+      return
+    }
     setPickerMode('add')
     setPickerRowIndex(null)
     setPickerProcessKeyword('')
@@ -3071,7 +3087,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                     <Space wrap>
                       <Button
                         type="primary"
-                        onClick={() => publishMutation.mutate(selectedVersionId ?? undefined)}
+                        onClick={() => publishMutation.mutate(selectedVersionId!)}
                         loading={publishMutation.isPending}
                         disabled={!selectedVersionId}
                       >
@@ -3730,7 +3746,12 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                               <Switch size="small" checked={materialSummaryView} onChange={setMaterialSummaryView} />
                             </Space>
                           </Tooltip>
-                          <Button size="small" type="primary" onClick={openMaterialPickerForAdd} disabled={materialSummaryView}>
+                          <Button
+                            size="small"
+                            type="primary"
+                            onClick={openMaterialPickerForAdd}
+                            disabled={materialSummaryView || !canEditSelectedVersion}
+                          >
                             新增物料
                           </Button>
                         </Space>
@@ -4465,7 +4486,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                               <Switch size="small" checked={processSummaryView} onChange={setProcessSummaryView} />
                             </Space>
                           </Tooltip>
-                          <Button size="small" type="primary" onClick={openProcessPickerForAdd}>
+                          <Button size="small" type="primary" onClick={openProcessPickerForAdd} disabled={!canEditSelectedVersion}>
                             新增工序
                           </Button>
                         </Space>

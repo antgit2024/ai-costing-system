@@ -6,6 +6,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-05（Ops-ish：按强制流程重构并原子发布前端静态资源：`cd /home/admin/ai-costing-system/frontend && npm run build` + `PLANNER_STATIC_DIR=/var/www/html/ai-costing/dist ./scripts/deploy_static.sh`）
 - **最近校对（北京时间 GMT+8）**：2026-01-05（Frontend：新增“产品上架（测试台）”页：`/costing/product-listing`，支持输入交易规格→spec/parse→bom/generate 只读诊断（解析结果/命中情况/最终BOM）；验收 `npm -C frontend run build`）
 - **最近校对（北京时间 GMT+8）**：2026-01-05（Frontend：产品上架（测试台）版本选择支持“显示全部标准版本（含 draft/archived）”，默认仍仅 published，便于未发布版本先测试；验收 `npm -C frontend run build`）
+- **最近校对（北京时间 GMT+8）**：2026-01-05（Frontend：产品上架（测试台）在最终BOM下追加“工序明细”与成本汇总：合计=物料+工序+制造费30%，金额保留2位；验收 `npm -C frontend run build`）
 
 - **最近校对（北京时间 GMT+8）**：2025-12-30 19:20（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_backend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-30 20:27（Frontend：关联引用直达编辑 + 列宽收口）

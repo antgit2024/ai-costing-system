@@ -7,6 +7,28 @@ import type { BomGenerateResponse, ProductModel, ProductModelVersionRead, SpecPa
 
 const { Text } = Typography
 
+const toNumberOrNull = (v: any): number | null => {
+  if (v == null || v === '') return null
+  const n = Number(v)
+  return Number.isFinite(n) ? n : null
+}
+
+const formatMoney2 = (v: any): string => {
+  const n = toNumberOrNull(v)
+  if (n == null) return '-'
+  return n.toFixed(2)
+}
+
+const computeMaterialCostFromLines = (lines: any[]): number => {
+  return (lines ?? []).reduce((acc, r) => {
+    const qty = toNumberOrNull((r as any)?.computed_quantity) ?? 0
+    const unit = toNumberOrNull((r as any)?.bom_unit_price) ?? 0
+    const lineCost = toNumberOrNull((r as any)?.line_cost)
+    const v = lineCost != null ? lineCost : qty * unit
+    return acc + (Number.isFinite(v) ? v : 0)
+  }, 0)
+}
+
 type ProductListingDraft = {
   sku_code: string
   model_id: string | null
@@ -99,7 +121,45 @@ export default function ProductListingPage() {
     return Array.isArray(arr) ? arr : []
   }, [bom])
 
+  const processLines = useMemo(() => {
+    const traceAny = (bom?.trace ?? {}) as any
+    const arr = traceAny?.costing?.process_lines
+    return Array.isArray(arr) ? arr : []
+  }, [bom])
+
   const finalLines = useMemo(() => bom?.final_material_lines ?? [], [bom])
+
+  const costingSummary = useMemo(() => {
+    if (!bom) return null
+    const traceAny = (bom.trace ?? {}) as any
+    const costing = (traceAny?.costing ?? {}) as any
+
+    const material_cost_total =
+      toNumberOrNull(costing?.material_cost_total) ??
+      computeMaterialCostFromLines((bom.final_material_lines ?? []) as any[])
+    const process_cost_total =
+      toNumberOrNull(costing?.process_cost_total) ??
+      (processLines ?? []).reduce((acc: number, r: any) => acc + (toNumberOrNull(r?.total_cost) ?? 0), 0)
+
+    const overhead_rate = 0.3
+    const overhead_cost =
+      toNumberOrNull(costing?.overhead_cost) ?? (material_cost_total + process_cost_total) * overhead_rate
+    const total_cost =
+      toNumberOrNull(costing?.total_cost) ?? material_cost_total + process_cost_total + overhead_cost
+    const unit_cost = toNumberOrNull(costing?.unit_cost) ?? total_cost
+
+    return {
+      material_cost_total,
+      process_cost_total,
+      overhead_rate,
+      overhead_cost,
+      total_cost,
+      unit_cost,
+      priced_material_lines: costing?.priced_material_lines ?? costing?.priced_lines ?? null,
+      missing_price_material_lines: costing?.missing_price_material_lines ?? costing?.missing_price_lines ?? null,
+      missing_price_process_lines: costing?.missing_price_process_lines ?? null,
+    }
+  }, [bom, processLines])
 
   const modelOptions = useMemo(
     () =>
@@ -268,7 +328,11 @@ export default function ProductListingPage() {
                   {selectedVersion ? (
                     <Space size={8}>
                       <Text strong>{selectedVersion.version_label || selectedVersion.id}</Text>
-                      <Tag color="green">published</Tag>
+                      {String(selectedVersion.version_status) === 'published' ? (
+                        <Tag color="green">published</Tag>
+                      ) : (
+                        <Tag color="orange">{String(selectedVersion.version_status || 'draft')}</Tag>
+                      )}
                     </Space>
                   ) : (
                     <Text type="secondary">未选择</Text>
@@ -340,22 +404,74 @@ export default function ProductListingPage() {
                   key: 'bom',
                   label: '最终 BOM（final_material_lines）',
                   children: bom ? (
-                    <Table
-                      rowKey={(r) => String((r as any)?.id ?? `${(r as any)?.material_ref_id ?? ''}-${(r as any)?.sequence_order ?? ''}`)}
-                      size="small"
-                      pagination={false}
-                      dataSource={finalLines}
-                      columns={[
-                        { title: '编码', dataIndex: 'material_code', width: 140, render: (v) => v ?? '-' },
-                        { title: '名称', dataIndex: 'material_name', render: (v) => v ?? '-' },
-                        { title: '数量', dataIndex: 'computed_quantity', width: 120, render: (v) => (v == null ? '-' : String(v)) },
-                        { title: '单位', dataIndex: 'unit_of_measure', width: 90, render: (v) => v ?? '-' },
-                        { title: '计量方式', dataIndex: 'calculation_method', width: 110, render: (v) => String(v ?? '-') },
-                        { title: '损耗%', dataIndex: 'loss_rate', width: 90, render: (v) => (v == null ? '-' : String(v)) },
-                        { title: 'BOM单价', dataIndex: 'bom_unit_price', width: 110, render: (v) => (v == null ? '-' : String(v)) },
-                        { title: '行成本', dataIndex: 'line_cost', width: 110, render: (v) => (v == null ? '-' : String(v)) },
-                      ]}
-                    />
+                    <Space direction="vertical" style={{ width: '100%' }} size={12}>
+                      <Descriptions bordered size="small" column={3}>
+                        <Descriptions.Item label="合计成本（CNY）">
+                          <b>{formatMoney2(costingSummary?.total_cost)}</b>
+                        </Descriptions.Item>
+                        <Descriptions.Item label="物料成本（CNY）">{formatMoney2(costingSummary?.material_cost_total)}</Descriptions.Item>
+                        <Descriptions.Item label="工序成本（CNY）">{formatMoney2(costingSummary?.process_cost_total)}</Descriptions.Item>
+                        <Descriptions.Item label="制造费用（CNY，30%）">{formatMoney2(costingSummary?.overhead_cost)}</Descriptions.Item>
+                        <Descriptions.Item label="制造费率">{costingSummary ? '30%' : '-'}</Descriptions.Item>
+                        <Descriptions.Item label="单位成本（CNY/件）">{formatMoney2(costingSummary?.unit_cost)}</Descriptions.Item>
+                        <Descriptions.Item label="已计价物料行">{String(costingSummary?.priced_material_lines ?? '-')}</Descriptions.Item>
+                        <Descriptions.Item label="缺物料单价行">{String(costingSummary?.missing_price_material_lines ?? '-')}</Descriptions.Item>
+                        <Descriptions.Item label="缺工序单价行">{String(costingSummary?.missing_price_process_lines ?? '-')}</Descriptions.Item>
+                      </Descriptions>
+
+                      <Divider style={{ margin: '4px 0' }} />
+                      <Text strong>物料（{finalLines.length}）</Text>
+                      <Table
+                        rowKey={(r) =>
+                          String((r as any)?.id ?? `${(r as any)?.material_ref_id ?? ''}-${(r as any)?.sequence_order ?? ''}`)
+                        }
+                        size="small"
+                        pagination={false}
+                        dataSource={finalLines}
+                        columns={[
+                          { title: '编码', dataIndex: 'material_code', width: 140, render: (v) => v ?? '-' },
+                          { title: '名称', dataIndex: 'material_name', render: (v) => v ?? '-' },
+                          { title: '数量', dataIndex: 'computed_quantity', width: 120, render: (v) => (v == null ? '-' : String(v)) },
+                          { title: '单位', dataIndex: 'unit_of_measure', width: 90, render: (v) => v ?? '-' },
+                          { title: '计量方式', dataIndex: 'calculation_method', width: 110, render: (v) => String(v ?? '-') },
+                          { title: '损耗%', dataIndex: 'loss_rate', width: 90, render: (v) => (v == null ? '-' : String(v)) },
+                          { title: 'BOM单价', dataIndex: 'bom_unit_price', width: 110, render: (v) => formatMoney2(v) },
+                          { title: '行成本', dataIndex: 'line_cost', width: 110, render: (v) => formatMoney2(v) },
+                        ]}
+                      />
+
+                      <Divider style={{ margin: '4px 0' }} />
+                      <Text strong>工序（{processLines.length}）</Text>
+                      {processLines.length ? (
+                        <Table
+                          size="small"
+                          pagination={false}
+                          rowKey={(r) => String((r as any).process_id ?? '') + '-' + String((r as any).process_code ?? '')}
+                          columns={[
+                            { title: '工序编码', dataIndex: 'process_code', width: 120, ellipsis: true },
+                            { title: '工序名称', dataIndex: 'process_name', ellipsis: true },
+                            { title: '班组', dataIndex: 'team_name', width: 110, ellipsis: true },
+                            { title: '计量', dataIndex: 'pricing_method', width: 90 },
+                            { title: '计量值', dataIndex: 'measure_quantity', width: 90 },
+                            { title: '计价', dataIndex: 'cost_type', width: 90 },
+                            { title: '分钟', dataIndex: 'total_minutes', width: 90 },
+                            { title: '分钟单价', dataIndex: 'rate_per_minute', width: 90 },
+                            { title: '计件单价', dataIndex: 'piece_rate', width: 90 },
+                            { title: '行成本', dataIndex: 'total_cost', width: 110, render: (v) => formatMoney2(v) },
+                            {
+                              title: '警告',
+                              dataIndex: 'warnings',
+                              width: 220,
+                              render: (v) =>
+                                Array.isArray(v) && v.length ? <Text type="warning">{String(v.join('；'))}</Text> : '-',
+                            },
+                          ]}
+                          dataSource={processLines}
+                        />
+                      ) : (
+                        <Alert type="info" showIcon message="该版本未返回工序明细（可能未配置工序行或后端未回传）。" />
+                      )}
+                    </Space>
                   ) : (
                     <Text type="secondary">暂无（先点“解析+预演”）</Text>
                   ),

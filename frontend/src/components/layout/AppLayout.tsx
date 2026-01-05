@@ -94,6 +94,10 @@ const menuItems: MenuProps['items'] = [
         label: <Link to="/costing/shipments">发货批次 / BOM快照</Link>,
       },
       {
+        key: '/costing/product-listing',
+        label: <Link to="/costing/product-listing">产品上架（测试台）</Link>,
+      },
+      {
         key: '/costing/sku-master',
         label: <Link to="/costing/sku-master">SKU 主档 / 商品关联</Link>,
       },
@@ -189,6 +193,9 @@ const AppLayout = ({ children }: AppLayoutProps) => {
       }
       if (location.pathname.startsWith('/costing/shipments')) {
         return ['/costing/shipments']
+      }
+      if (location.pathname.startsWith('/costing/product-listing')) {
+        return ['/costing/product-listing']
       }
       if (location.pathname.startsWith('/costing/sku-master')) {
         return ['/costing/sku-master']

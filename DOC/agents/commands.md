@@ -11,6 +11,16 @@
 - 构建（验收门槛）：
   - `npm -C frontend run build`
 
+### 1.2) 前端静态资源发布（服务器同机部署，强制）
+
+> 口径：每次前端/路由/依赖有改动并准备上线时，必须执行“构建 + 原子发布”两步，
+> 避免出现 chunk 404 → 回退 HTML 导致 `Failed to load module script (MIME type: text/html)`。
+
+- 构建：
+  - `cd /home/admin/ai-costing-system/frontend && npm run build`
+- 原子发布到 nginx 静态目录（按机器实际路径调整 `PLANNER_STATIC_DIR`）：
+  - `cd /home/admin/ai-costing-system/frontend && PLANNER_STATIC_DIR=/var/www/html/ai-costing/dist ./scripts/deploy_static.sh`
+
 ### 1.1) 环境变量文件（强约束：真实 .env 不进 Git）
 
 > 口径：仓库只保留模板文件（例如 `.env.sample`、`frontend/env.production.example`），真实环境文件由部署/个人机器自行提供。

@@ -2,8 +2,8 @@ import { useMemo, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { Alert, Button, Card, Col, Descriptions, Divider, Input, Row, Select, Space, Table, Tabs, Tag, Typography, message } from 'antd'
 
-import { fetchProductModels, fetchProductModelVersions, generateBom, parseSpec } from '@/services/planner'
-import type { BomGenerateResponse, ProductModel, ProductModelVersionRead, SpecParseResponse } from '@/types/planner'
+import { fetchProductModelVersionLines, fetchProductModels, fetchProductModelVersions, generateBom, listLineVariants, parseSpec } from '@/services/planner'
+import type { BomGenerateResponse, LineVariantCondition, LineVariantDetailRead, ProductModel, ProductModelLinesResponse, ProductModelVersionRead, SpecParseResponse } from '@/types/planner'
 
 const { Text } = Typography
 
@@ -120,6 +120,89 @@ export default function ProductListingPage() {
     const arr = traceAny?.matched_variants
     return Array.isArray(arr) ? arr : []
   }, [bom])
+
+  const matchedBaseLineIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const r of matchedVariants as any[]) {
+      const id = String((r as any)?.base_line_id ?? '').trim()
+      if (id) ids.add(id)
+    }
+    return Array.from(ids)
+  }, [matchedVariants])
+
+  const versionLinesQuery = useQuery({
+    queryKey: ['product-listing', 'version-lines', draft.model_version_id],
+    queryFn: () => fetchProductModelVersionLines(String(draft.model_version_id)),
+    enabled: !!draft.model_version_id && !!bom,
+  })
+
+  const variantsByBaseLineQuery = useQuery({
+    queryKey: ['product-listing', 'line-variants-by-base-line', draft.model_version_id, matchedBaseLineIds.join(',')],
+    queryFn: async () => {
+      const version_id = String(draft.model_version_id)
+      const res = await Promise.all(
+        matchedBaseLineIds.map(async (base_line_id) => {
+          const items = await listLineVariants({ version_id, base_line_id })
+          return { base_line_id, items }
+        }),
+      )
+      return res
+    },
+    enabled: !!draft.model_version_id && !!bom && matchedBaseLineIds.length > 0,
+  })
+
+  const baseLineMaterialMap = useMemo(() => {
+    const data = versionLinesQuery.data as ProductModelLinesResponse | undefined
+    const mats = (data?.materials ?? []) as any[]
+    const m = new Map<string, any>()
+    for (const r of mats) {
+      const id = String(r?.id ?? '').trim()
+      if (!id) continue
+      m.set(id, r)
+    }
+    return m
+  }, [versionLinesQuery.data])
+
+  const variantMap = useMemo(() => {
+    const m = new Map<string, LineVariantDetailRead>()
+    const groups = (variantsByBaseLineQuery.data ?? []) as Array<{ base_line_id: string; items: LineVariantDetailRead[] }>
+    for (const g of groups) {
+      for (const v of g.items ?? []) {
+        if (!v?.id) continue
+        m.set(String(v.id), v)
+      }
+    }
+    return m
+  }, [variantsByBaseLineQuery.data])
+
+  const formatBetween = (pair: any, unit: string) => {
+    if (!Array.isArray(pair) || pair.length < 2) return null
+    const [a, b] = pair
+    const hasA = a != null && a !== ''
+    const hasB = b != null && b !== ''
+    if (!hasA && !hasB) return null
+    if (hasA && hasB) return `${a}~${b}${unit}`
+    if (hasA) return `>=${a}${unit}`
+    return `<=${b}${unit}`
+  }
+
+  const formatTrigger = (condRaw: any): string => {
+    const cond = (condRaw ?? {}) as LineVariantCondition
+    const any = Array.isArray(cond.spec_contains_any) ? cond.spec_contains_any.filter(Boolean) : []
+    const all = Array.isArray(cond.spec_contains_all) ? cond.spec_contains_all.filter(Boolean) : []
+    const parts: string[] = []
+    if (any.length) parts.push(`TOKEN(any): ${any.join('、')}`)
+    if (all.length) parts.push(`TOKEN(all): ${all.join('、')}`)
+    const w = formatBetween((cond as any).width_between, 'cm')
+    const h = formatBetween((cond as any).height_between, 'cm')
+    const a = formatBetween((cond as any).area_between, 'm²')
+    const p = formatBetween((cond as any).perimeter_between, 'm')
+    if (w) parts.push(`宽: ${w}`)
+    if (h) parts.push(`高: ${h}`)
+    if (a) parts.push(`面积: ${a}`)
+    if (p) parts.push(`周长: ${p}`)
+    return parts.join('；') || '-'
+  }
 
   const processLines = useMemo(() => {
     const traceAny = (bom?.trace ?? {}) as any
@@ -378,12 +461,57 @@ export default function ProductListingPage() {
                   label: '命中情况',
                   children: bom ? (
                     <>
+                      <Space wrap style={{ marginBottom: 8 }}>
+                        {variantsByBaseLineQuery.isLoading ? <Tag>加载规则详情中…</Tag> : null}
+                        {versionLinesQuery.isLoading ? <Tag>加载基准清单中…</Tag> : null}
+                      </Space>
                       <Table
                         rowKey={(r: any, idx) => String(r?.variant_id ?? idx)}
                         size="small"
                         pagination={false}
                         dataSource={matchedVariants}
                         columns={[
+                          {
+                            title: '触发条件',
+                            key: 'trigger',
+                            width: 320,
+                            render: (_: any, r: any) => {
+                              const v = variantMap.get(String(r?.variant_id ?? ''))
+                              return <Text>{formatTrigger((v as any)?.conditions)}</Text>
+                            },
+                          },
+                          {
+                            title: '基准物料',
+                            key: 'base_material',
+                            width: 220,
+                            render: (_: any, r: any) => {
+                              const base = baseLineMaterialMap.get(String(r?.base_line_id ?? ''))
+                              if (!base) return <Text type="secondary">-</Text>
+                              return (
+                                <Space size={6}>
+                                  <Text code>{String(base.material_code ?? base.material_ref_id ?? '-')}</Text>
+                                  <Text>{String(base.material_name ?? '')}</Text>
+                                </Space>
+                              )
+                            },
+                          },
+                          {
+                            title: '替换物料',
+                            key: 'target_material',
+                            width: 240,
+                            render: (_: any, r: any) => {
+                              const v = variantMap.get(String(r?.variant_id ?? ''))
+                              const it = (v?.items ?? [])[0]
+                              if (!it) return <Text type="secondary">-</Text>
+                              return (
+                                <Space size={6}>
+                                  <Text code>{String(it.material_code ?? it.material_ref_id ?? '-')}</Text>
+                                  <Text>{String(it.material_name ?? '')}</Text>
+                                  {it.unit_of_measure ? <Tag>{String(it.unit_of_measure)}</Tag> : null}
+                                </Space>
+                              )
+                            },
+                          },
                           { title: 'variant_id', dataIndex: 'variant_id', width: 240, render: (v) => <Text code>{String(v)}</Text> },
                           { title: 'base_line_id', dataIndex: 'base_line_id', width: 240, render: (v) => <Text code>{String(v)}</Text> },
                           { title: 'action', dataIndex: 'action', width: 120 },

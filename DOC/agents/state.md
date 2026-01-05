@@ -8,6 +8,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-05（Frontend：产品上架（测试台）版本选择支持“显示全部标准版本（含 draft/archived）”，默认仍仅 published，便于未发布版本先测试；验收 `npm -C frontend run build`）
 - **最近校对（北京时间 GMT+8）**：2026-01-05（Frontend：产品上架（测试台）在最终BOM下追加“工序明细”与成本汇总：合计=物料+工序+制造费30%，金额保留2位；验收 `npm -C frontend run build`）
 - **最近校对（北京时间 GMT+8）**：2026-01-05（Frontend：产品上架（测试台）补齐“扣库清单（真实物料展开）”展示：读取 `trace.inventory.inventory_lines`（用于库存/对账口径）；验收 `npm -C frontend run build`）
+- **最近校对（北京时间 GMT+8）**：2026-01-05（Frontend：产品上架（测试台）“命中情况”Tab 增强：展示触发条件表达式 + 基准物料 + 替换物料（通过版本清单 + line-variants 查询拼装），便于运营一眼排错；验收 `npm -C frontend run build`）
 
 - **最近校对（北京时间 GMT+8）**：2025-12-30 19:20（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_backend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-30 20:27（Frontend：关联引用直达编辑 + 列宽收口）

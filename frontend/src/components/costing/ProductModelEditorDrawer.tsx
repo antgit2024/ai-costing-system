@@ -5526,6 +5526,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
         versionId={String(selectedVersionId ?? '')}
         baseLineId={String(lineVariantBaseLineId ?? '')}
         baseLineLabel={lineVariantBaseLineLabel}
+        modelCode={String((modelQuery.data as any)?.model_code ?? '') || null}
       />
 
       <GuideDrawer

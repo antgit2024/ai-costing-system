@@ -4,7 +4,16 @@ import type { ColumnsType } from 'antd/es/table'
 import { DeleteOutlined, EditOutlined, PlayCircleOutlined } from '@ant-design/icons'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { createLineVariant, deleteLineVariant, generateBom, listLineVariants, parseSpec, replaceLineVariantItems, updateLineVariant } from '@/services/planner'
+import {
+  createLineVariant,
+  deleteLineVariant,
+  fetchProductModelVersionLines,
+  generateBom,
+  listLineVariants,
+  parseSpec,
+  replaceLineVariantItems,
+  updateLineVariant,
+} from '@/services/planner'
 import MaterialSelectModal from './MaterialSelectModal'
 import { normalizeUnit as normalizeUnitText } from '@/utils/unit'
 import type {
@@ -25,6 +34,8 @@ export type LineVariantDrawerProps = {
   versionId: string
   baseLineId: string
   baseLineLabel?: string
+  // Optional: allow UI to show/anchor by model code (e.g. PI5). If omitted, UI still works.
+  modelCode?: string | null
 }
 
 type EditableItemRow = LineVariantItemPayload & {
@@ -33,6 +44,7 @@ type EditableItemRow = LineVariantItemPayload & {
 
 type MetricOp = 'off' | 'gte' | 'lte' | 'eq' | 'between'
 type TriggerType = 'token' | 'width' | 'height' | 'area' | 'perimeter'
+type TokenMode = 'any' | 'all'
 
 type ModalRuleRow = {
   key: string
@@ -109,7 +121,7 @@ const buildEditableItems = (items: Array<any>): EditableItemRow[] =>
   }))
 
 export default function LineVariantDrawer(props: LineVariantDrawerProps) {
-  const { open, onClose, versionId, baseLineId, baseLineLabel } = props
+  const { open, onClose, versionId, baseLineId, baseLineLabel, modelCode } = props
   const queryClient = useQueryClient()
 
   const [selectedVariantId, setSelectedVariantId] = useState<string | null>(null)
@@ -122,6 +134,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
   const [materialPickerRowKey, setMaterialPickerRowKey] = useState<string | null>(null)
   const [editMode, setEditMode] = useState<'create' | 'edit'>('edit')
   const [modalRows, setModalRows] = useState<ModalRuleRow[]>([])
+  const [autoAnchorModelToken, setAutoAnchorModelToken] = useState(true)
 
   const [specText, setSpecText] = useState('')
   const [specParsed, setSpecParsed] = useState<SpecParseResponse | null>(null)
@@ -156,6 +169,30 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     [selectedVariantId, variants],
   )
 
+  const modelAnchorToken = useMemo(() => {
+    const raw = String(modelCode ?? '').trim()
+    if (!raw) return null
+    return `MODEL:${raw.toUpperCase()}`
+  }, [modelCode])
+
+  // Base line defaults (β/α/覆盖率/损耗% / 计量方式) for better UX when creating replacement items.
+  const baseLineQuery = useQuery({
+    queryKey: ['variantBaseLine', versionId, baseLineId],
+    queryFn: () => fetchProductModelVersionLines(versionId),
+    enabled: open && !!versionId,
+  })
+  const baseLineDefaults = useMemo(() => {
+    const mats = (baseLineQuery.data as any)?.materials ?? []
+    const base = (mats as any[]).find((x) => String(x?.id ?? '') === String(baseLineId))
+    return {
+      calculation_method: (base?.calculation_method ?? null) as any,
+      base_quantity: base?.base_quantity != null ? Number(base.base_quantity) : null,
+      fixed_quantity: base?.fixed_quantity != null ? Number(base.fixed_quantity) : null,
+      coverage_ratio: base?.coverage_ratio != null ? Number(base.coverage_ratio) : null,
+      loss_rate: base?.loss_rate != null ? Number(base.loss_rate) : null,
+    }
+  }, [baseLineQuery.data, baseLineId])
+
   const inferTriggerType = (cond: any): TriggerType => {
     const anyCnt = asStringArray(cond?.spec_contains_any).length
     const allCnt = asStringArray(cond?.spec_contains_all).length
@@ -183,12 +220,17 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     material_code: null,
     material_name: null,
     unit_of_measure: null,
-    calculation_method: 'count' as any,
-    // 避免默认=0 导致 preview 出现 “替换物料用量=0”的误导；用户仍可手工改回 0，但主路径不应是 0。
-    base_quantity: 1,
-    fixed_quantity: 0,
-    coverage_ratio: 1,
-    loss_rate: 0,
+    calculation_method: (baseLineDefaults.calculation_method ?? 'count') as any,
+    // 默认继承基准行参数：避免新增规则时要重复手填，且减少“替换后数量=0”的误导。
+    base_quantity:
+      baseLineDefaults.base_quantity != null && Number.isFinite(baseLineDefaults.base_quantity) && baseLineDefaults.base_quantity > 0
+        ? baseLineDefaults.base_quantity
+        : 1,
+    fixed_quantity:
+      baseLineDefaults.fixed_quantity != null && Number.isFinite(baseLineDefaults.fixed_quantity) ? baseLineDefaults.fixed_quantity : 0,
+    coverage_ratio:
+      baseLineDefaults.coverage_ratio != null && Number.isFinite(baseLineDefaults.coverage_ratio) ? baseLineDefaults.coverage_ratio : 1,
+    loss_rate: baseLineDefaults.loss_rate != null && Number.isFinite(baseLineDefaults.loss_rate) ? baseLineDefaults.loss_rate : 0,
     metadata_json: {},
   })
 
@@ -231,7 +273,17 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
 
   const rowToConditions = (trigger: TriggerType, row: ModalRuleRow): any => {
     if (trigger === 'token') {
-      return { spec_contains_any: row.token_any, spec_contains_all: row.token_all }
+      const anyArr = row.token_any ?? []
+      const allArr0 = row.token_all ?? []
+      // UI 侧默认自动锚定 MODEL:<code>（用户不用手输），以减少跨品类扩展后的误触发风险。
+      const allArr = (() => {
+        if (!autoAnchorModelToken) return allArr0
+        if (!modelAnchorToken) return allArr0
+        const lower = new Set(allArr0.map((x) => String(x).toLowerCase()))
+        if (lower.has(modelAnchorToken.toLowerCase())) return allArr0
+        return [...allArr0, modelAnchorToken]
+      })()
+      return { spec_contains_any: anyArr, spec_contains_all: allArr }
     }
     const toPair = (): [number | null, number | null] | null => {
       const a = row.min
@@ -246,6 +298,15 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     if (trigger === 'height') return { spec_contains_any: [], spec_contains_all: [], height_between: pair }
     if (trigger === 'area') return { spec_contains_any: [], spec_contains_all: [], area_between: pair }
     return { spec_contains_any: [], spec_contains_all: [], perimeter_between: pair }
+  }
+
+  const inferTokenMode = (r: ModalRuleRow): TokenMode => {
+    const allCnt = (r.token_all ?? []).length
+    const anyCnt = (r.token_any ?? []).length
+    if (allCnt && !anyCnt) return 'all'
+    if (anyCnt && !allCnt) return 'any'
+    // ambiguous (both empty or both filled): default to "all" for safer matching
+    return 'all'
   }
 
   const invalidatePreview = () => {
@@ -448,7 +509,10 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
       // validate rows first
       for (const r of modalRows) {
         if (draftTriggerType === 'token') {
-          if (r.token_any.length === 0 && r.token_all.length === 0) throw new Error('token 规则至少填写 1 个 token（any 或 all）')
+          // UI 会自动追加 MODEL 锚定，但规则仍必须至少填写 1 个“业务 token”（例如 WB02339）
+          if ((r.token_any?.length ?? 0) === 0 && (r.token_all?.length ?? 0) === 0) {
+            throw new Error('token 规则至少填写 1 个 token（推荐 token(all)：例如 WB02339）')
+          }
         } else {
           if (r.op === 'between') {
             if (r.min == null || r.max == null) throw new Error(`区间条件必须同时填写 min/max（单位 ${unitOfTrigger}）`)
@@ -802,6 +866,17 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                     onChange={(v) => handleTriggerTypeChange(v as any)}
                   />
                   <Tag color="blue">action=replace_self</Tag>
+                  {draftTriggerType === 'token' && modelAnchorToken ? (
+                    <Space size={6}>
+                      <Tag color={autoAnchorModelToken ? 'blue' : 'default'}>自动锚定：{modelAnchorToken}</Tag>
+                      <Switch
+                        checked={autoAnchorModelToken}
+                        onChange={(v) => setAutoAnchorModelToken(v)}
+                        checkedChildren="开"
+                        unCheckedChildren="关"
+                      />
+                    </Space>
+                  ) : null}
                 </Space>
               }
               extra={
@@ -880,22 +955,43 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                     title: '条件表达式',
                     render: (_: any, r: ModalRuleRow) => {
                       if (draftTriggerType === 'token') {
-                        const anyStr = (r.token_any ?? []).join(',')
-                        const allStr = (r.token_all ?? []).join(',')
+                        const mode = inferTokenMode(r)
+                        const tokenStr = (mode === 'all' ? r.token_all : r.token_any).join(',')
                         return (
-                          <Space wrap>
-                            <Input
-                              placeholder="token(any) 逗号分隔"
-                              value={anyStr}
-                              onChange={(e) => updateModalRow(r.key, { token_any: e.target.value.split(',').map((x) => x.trim()).filter(Boolean) })}
-                              style={{ width: 220 }}
+                          <Space wrap size={6}>
+                            <Select
+                              size="small"
+                              value={mode}
+                              style={{ width: 120 }}
+                              options={[
+                                { label: 'token(all)', value: 'all' },
+                                { label: 'token(any)', value: 'any' },
+                              ]}
+                              onChange={(v) => {
+                                const next = (v as TokenMode) ?? 'all'
+                                // 切换模式时，把当前 token 迁移到对应字段，避免用户反复手填
+                                if (next === 'all') updateModalRow(r.key, { token_all: r.token_all?.length ? r.token_all : r.token_any, token_any: [] })
+                                if (next === 'any') updateModalRow(r.key, { token_any: r.token_any?.length ? r.token_any : r.token_all, token_all: [] })
+                              }}
                             />
                             <Input
-                              placeholder="token(all) 逗号分隔"
-                              value={allStr}
-                              onChange={(e) => updateModalRow(r.key, { token_all: e.target.value.split(',').map((x) => x.trim()).filter(Boolean) })}
-                              style={{ width: 220 }}
+                              placeholder={mode === 'all' ? 'token(all) 逗号分隔' : 'token(any) 逗号分隔'}
+                              value={tokenStr}
+                              onChange={(e) => {
+                                const arr = e.target.value
+                                  .split(',')
+                                  .map((x) => x.trim())
+                                  .filter(Boolean)
+                                updateModalRow(r.key, mode === 'all' ? { token_all: arr } : { token_any: arr })
+                              }}
+                              style={{ width: 260 }}
+                              size="small"
                             />
+                            {modelAnchorToken ? (
+                              <Tag color={autoAnchorModelToken ? 'blue' : 'default'}>
+                                自动锚定：{modelAnchorToken} {autoAnchorModelToken ? '' : '（已关闭）'}
+                              </Tag>
+                            ) : null}
                           </Space>
                         )
                       }
@@ -954,23 +1050,6 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                           >
                             选择
                           </Button>
-                          <Button
-                            size="small"
-                            danger
-                            onClick={() =>
-                              updateModalRow(r.key, {
-                                item: {
-                                  ...r.item,
-                                  material_ref_id: '',
-                                  material_code: null,
-                                  material_name: null,
-                                  unit_of_measure: null,
-                                },
-                              })
-                            }
-                          >
-                            清空
-                          </Button>
                         </Space.Compact>
                         <Text type="secondary" style={{ fontSize: 12 }}>
                           {r.item.material_code ?? '-'} {r.item.material_name ?? ''}
@@ -993,31 +1072,33 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                   },
                   {
                     title: '用量(β)',
-                    width: 110,
+                    width: 70,
                     render: (_: any, r: ModalRuleRow) => (
                       <InputNumber
                         size="small"
                         min={0}
                         value={toNumber(r.item.base_quantity, 0)}
                         onChange={(v) => updateModalRow(r.key, { item: { ...r.item, base_quantity: toNumber(v, 0) } })}
+                        style={{ width: 70 }}
                       />
                     ),
                   },
                   {
                     title: '固定(α)',
-                    width: 110,
+                    width: 70,
                     render: (_: any, r: ModalRuleRow) => (
                       <InputNumber
                         size="small"
                         min={0}
                         value={toNumber(r.item.fixed_quantity, 0)}
                         onChange={(v) => updateModalRow(r.key, { item: { ...r.item, fixed_quantity: toNumber(v, 0) } })}
+                        style={{ width: 70 }}
                       />
                     ),
                   },
                   {
                     title: '覆盖率',
-                    width: 110,
+                    width: 70,
                     render: (_: any, r: ModalRuleRow) => (
                       <InputNumber
                         size="small"
@@ -1026,12 +1107,13 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                         step={0.1}
                         value={toNumber(r.item.coverage_ratio, 1)}
                         onChange={(v) => updateModalRow(r.key, { item: { ...r.item, coverage_ratio: toNumber(v, 1) } })}
+                        style={{ width: 70 }}
                       />
                     ),
                   },
                   {
                     title: '损耗%',
-                    width: 100,
+                    width: 70,
                     render: (_: any, r: ModalRuleRow) => (
                       <InputNumber
                         size="small"
@@ -1039,6 +1121,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                         max={100}
                         value={toNumber(r.item.loss_rate, 0)}
                         onChange={(v) => updateModalRow(r.key, { item: { ...r.item, loss_rate: toNumber(v, 0) } })}
+                        style={{ width: 70 }}
                       />
                     ),
                   },

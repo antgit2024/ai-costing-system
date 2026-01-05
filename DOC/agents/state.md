@@ -5,6 +5,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-05（Backend：spec/parse 增补短语 token（白名单，先覆盖“背面纯色”），使 TOKEN(any) 规则可命中；验收 `./backend/venv/bin/python -m pytest backend/tests/planner/test_spec_parser_code_tokens.py -q`）
 - **最近校对（北京时间 GMT+8）**：2026-01-05（Ops-ish：按强制流程重构并原子发布前端静态资源：`cd /home/admin/ai-costing-system/frontend && npm run build` + `PLANNER_STATIC_DIR=/var/www/html/ai-costing/dist ./scripts/deploy_static.sh`）
 - **最近校对（北京时间 GMT+8）**：2026-01-05（Frontend：新增“产品上架（测试台）”页：`/costing/product-listing`，支持输入交易规格→spec/parse→bom/generate 只读诊断（解析结果/命中情况/最终BOM）；验收 `npm -C frontend run build`）
+- **最近校对（北京时间 GMT+8）**：2026-01-05（Frontend：产品上架（测试台）版本选择支持“显示全部标准版本（含 draft/archived）”，默认仍仅 published，便于未发布版本先测试；验收 `npm -C frontend run build`）
 
 - **最近校对（北京时间 GMT+8）**：2025-12-30 19:20（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_backend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-30 20:27（Frontend：关联引用直达编辑 + 列宽收口）

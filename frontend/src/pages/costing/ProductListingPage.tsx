@@ -40,16 +40,21 @@ export default function ProductListingPage() {
   })
   const versions = (versionsQuery.data ?? []) as ProductModelVersionRead[]
 
-  const publishedStandardVersions = useMemo(() => {
-    return versions.filter(
-      (v) => String(v.version_kind) === 'standard' && String(v.version_status) === 'published',
-    )
+  const [showAllStandardVersions, setShowAllStandardVersions] = useState(false)
+
+  const standardVersions = useMemo(() => {
+    return versions.filter((v) => String(v.version_kind) === 'standard')
   }, [versions])
+
+  const selectableStandardVersions = useMemo(() => {
+    if (showAllStandardVersions) return standardVersions
+    return standardVersions.filter((v) => String(v.version_status) === 'published')
+  }, [showAllStandardVersions, standardVersions])
 
   const selectedModel = useMemo(() => models.find((m) => m.id === draft.model_id) ?? null, [models, draft.model_id])
   const selectedVersion = useMemo(
-    () => publishedStandardVersions.find((v) => v.id === draft.model_version_id) ?? null,
-    [publishedStandardVersions, draft.model_version_id],
+    () => selectableStandardVersions.find((v) => v.id === draft.model_version_id) ?? null,
+    [selectableStandardVersions, draft.model_version_id],
   )
 
   const parseMutation = useMutation({
@@ -114,16 +119,20 @@ export default function ProductListingPage() {
 
   const versionOptions = useMemo(
     () =>
-      publishedStandardVersions.map((v) => ({
+      selectableStandardVersions.map((v) => ({
         value: v.id,
         label: (
           <Space size={8}>
             <Text strong>{v.version_label || v.id.slice(0, 8)}</Text>
-            <Tag color="green">published</Tag>
+            {String(v.version_status) === 'published' ? (
+              <Tag color="green">published</Tag>
+            ) : (
+              <Tag color="orange">{String(v.version_status || 'draft')}</Tag>
+            )}
           </Space>
         ),
       })),
-    [publishedStandardVersions],
+    [selectableStandardVersions],
   )
 
   return (
@@ -179,11 +188,35 @@ export default function ProductListingPage() {
 
               {!draft.model_id ? (
                 <Alert type="info" showIcon message="提示：先选择一个标准模型，再选择“已发布标准版本”用于预演。" />
-              ) : publishedStandardVersions.length === 0 ? (
+              ) : !showAllStandardVersions && selectableStandardVersions.length === 0 ? (
                 <Alert
                   type="warning"
                   showIcon
                   message="该模型暂无已发布标准版本（published）。请先发布标准版本，否则无法用于生产级预演。"
+                />
+              ) : null}
+
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  版本候选：
+                  {showAllStandardVersions ? '全部标准版本（含 draft/archived）' : '仅 published 标准版本'}
+                </Text>
+                <Button
+                  size="small"
+                  onClick={() => {
+                    setShowAllStandardVersions((v) => !v)
+                    setDraft((d) => ({ ...d, model_version_id: null }))
+                    setBom(null)
+                  }}
+                >
+                  {showAllStandardVersions ? '切回仅 published' : '显示全部标准版本'}
+                </Button>
+              </div>
+              {showAllStandardVersions ? (
+                <Alert
+                  type="info"
+                  showIcon
+                  message="你正在使用“全部标准版本”模式：允许选择 draft/archived 用于测试预演（不代表可用于生产）。"
                 />
               ) : null}
 

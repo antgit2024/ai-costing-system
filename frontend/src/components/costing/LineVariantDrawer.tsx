@@ -1348,6 +1348,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
           }}
           title="选择替换物料（同单位平替）"
           onlyBom
+          baseUnit={baseUnit}
           onSelect={(m) => {
             const key = materialPickerRowKey
             if (!key) return

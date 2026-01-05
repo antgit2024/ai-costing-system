@@ -50,6 +50,8 @@ type ModalRuleRow = {
   key: string
   id?: string
   enabled: boolean
+  // UI-only: local edits not persisted to backend yet.
+  dirty?: boolean
   // condition
   op: Exclude<MetricOp, 'off'>
   min: number | null
@@ -269,6 +271,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
       key,
       id: v.id,
       enabled: !!v.enabled,
+      dirty: false,
       op,
       min,
       max,
@@ -325,6 +328,8 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     setLastPreviewSummary(null)
     setLastPreviewFingerprint(null)
   }
+
+  const anyDirty = useMemo(() => modalRows.some((r) => !!r.dirty), [modalRows])
 
   useEffect(() => {
     if (!open) return
@@ -598,6 +603,8 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     },
     onSuccess: async () => {
       message.success('已保存')
+      // Saving clears local dirty state; users must re-preview to enable again (preview gating handles it).
+      setModalRows((prev) => prev.map((r) => ({ ...r, dirty: false })))
       await queryClient.invalidateQueries({ queryKey: ['lineVariants', versionId, baseLineId] })
     },
     onError: (err: any) => message.error(err?.response?.data?.detail ?? err?.message ?? '保存失败'),
@@ -730,7 +737,23 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
   ]
 
   const updateModalRow = (key: string, patch: Partial<ModalRuleRow>) => {
-    setModalRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)))
+    setModalRows((prev) =>
+      prev.map((r) => {
+        if (r.key !== key) return r
+        const keys = Object.keys(patch ?? {})
+        const onlyEnabledToggle = keys.length === 1 && keys[0] === 'enabled'
+        const merged: ModalRuleRow = { ...r, ...patch }
+        if (!onlyEnabledToggle) {
+          merged.dirty = true
+          // 修改规则内容后，必须“保存→预演→再启动”。避免出现“本地改了但后端还按旧启用规则预演”的错觉。
+          if (merged.enabled) {
+            merged.enabled = false
+            message.warning('你修改了规则内容：已自动关闭“启动”。请先保存→预演→再启动。')
+          }
+        }
+        return merged
+      }),
+    )
     // 仅切换“启动(enabled)”不应使预演失效，否则会出现：预演通过→打开启动→保存时又提示必须预演 的冲突
     const keys = Object.keys(patch ?? {})
     const onlyEnabledToggle = keys.length === 1 && keys[0] === 'enabled'
@@ -753,6 +776,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
       {
         key,
         enabled: false,
+        dirty: true,
         op: 'gte',
         min: null,
         max: null,
@@ -929,6 +953,10 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                       <Switch
                         checked={!!r.enabled}
                         onChange={(v) => {
+                          if (v && r.dirty) {
+                            message.error('规则有未保存改动：请先保存→预演→再启动。')
+                            return
+                          }
                           if (v && (!lastPreviewOk || previewStale)) {
                             message.error(previewStale ? '预演已过期：请先重新预演' : '启用前必须先预演成功')
                             return
@@ -953,7 +981,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                               message.error('请先选择替换物料并保存（让后端回填单位）')
                               return
                             }
-                            if (!baseUnitFromBom) {
+                            if (!baseUnit) {
                               message.error('基准行单位缺失：请先补齐主数据单位并“保存清单”，再回来启用规则')
                               return
                             }
@@ -962,8 +990,8 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                               message.error('替换物料单位缺失：请先保存（让后端回填 unit_of_measure）')
                               return
                             }
-                            if (targetU !== baseUnitFromBom) {
-                              message.error(`单位不一致：基准=${baseUnitFromBom}，替换物料=${targetU}（只允许同单位平替）`)
+                            if (targetU !== baseUnit) {
+                              message.error(`单位不一致：基准=${baseUnit}，替换物料=${targetU}（只允许同单位平替）`)
                               return
                             }
                           }
@@ -1172,7 +1200,13 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                   type="primary"
                   icon={<PlayCircleOutlined />}
                   loading={previewMutation.isPending}
-                  onClick={() => previewMutation.mutate()}
+                    onClick={() => {
+                      if (anyDirty) {
+                        message.error('你有未保存的改动：预演只读取“已保存入库”的规则。请先点“保存/创建并保存”。')
+                        return
+                      }
+                      previewMutation.mutate()
+                    }}
                 >
                   预演
                 </Button>

@@ -80,6 +80,13 @@ const formatQty2 = (v: any): string => {
   return n.toFixed(2)
 }
 
+const splitTokens = (raw: string): string[] => {
+  return String(raw ?? '')
+    .split(/[,\uFF0C|]+/g) // "," / "，" / "|"
+    .map((x) => x.trim())
+    .filter(Boolean)
+}
+
 const normalizeUnit = (u: unknown): string | null => {
   const s = normalizeUnitText(String(u ?? ''))
   return s ? s : null
@@ -1037,10 +1044,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                               placeholder={mode === 'all' ? 'token(all) 逗号分隔' : 'token(any) 逗号分隔'}
                               value={tokenStr}
                               onChange={(e) => {
-                                const arr = e.target.value
-                                  .split(',')
-                                  .map((x) => x.trim())
-                                  .filter(Boolean)
+                                const arr = splitTokens(e.target.value)
                                 updateModalRow(r.key, mode === 'all' ? { token_all: arr } : { token_any: arr })
                               }}
                               style={{ width: 260 }}

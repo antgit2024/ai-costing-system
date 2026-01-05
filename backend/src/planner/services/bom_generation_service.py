@@ -159,6 +159,15 @@ def _fill_missing_units(db: Session, final_lines: List[Dict[str, Any]]) -> None:
             continue
         if line.get("unit_of_measure"):
             continue
+        # Prefer metadata hints when available (common for placeholder/bom lines):
+        # - metadata.display_unit: explicitly prepared for UI display
+        # - metadata.bom_unit: derived from material/virtual master during sync
+        meta = line.get("metadata") or {}
+        if isinstance(meta, dict):
+            hinted = (meta.get("display_unit") or meta.get("bom_unit") or "").strip()
+            if hinted:
+                line["unit_of_measure"] = hinted
+                continue
         mid = str(line.get("material_ref_id") or "").strip()
         if mid:
             missing_ids.append(mid)

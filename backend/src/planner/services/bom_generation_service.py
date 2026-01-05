@@ -126,6 +126,11 @@ def generate_bom(
             for add_line in additions:
                 _push(add_line)
 
+    # Fill missing unit_of_measure (common data issue in base lines):
+    # - If version line unit_of_measure is empty, try fallback to material master unit by material_ref_id.
+    # - This improves preview readability and reduces downstream confusion without mutating stored lines.
+    _fill_missing_units(db, final_lines)
+
     costing = _attach_costing(db, final_lines, process_lines=process_lines, measurement=measurement)
     inventory = _build_inventory_lines(db, final_lines)
 
@@ -143,6 +148,35 @@ def generate_bom(
             "inventory": inventory,
         },
     }
+
+
+def _fill_missing_units(db: Session, final_lines: List[Dict[str, Any]]) -> None:
+    missing_ids: List[str] = []
+    for line in final_lines:
+        kind = str(line.get("material_kind") or "real")
+        if kind not in ("real", "bom"):
+            continue
+        if line.get("unit_of_measure"):
+            continue
+        mid = str(line.get("material_ref_id") or "").strip()
+        if mid:
+            missing_ids.append(mid)
+    if not missing_ids:
+        return
+
+    rows = (
+        db.query(models.Material)
+        .filter(models.Material.id.in_(list({*missing_ids})))
+        .all()
+    )
+    unit_map = {str(m.id): (m.unit or None) for m in rows}
+    for line in final_lines:
+        if line.get("unit_of_measure"):
+            continue
+        mid = str(line.get("material_ref_id") or "").strip()
+        unit = unit_map.get(mid)
+        if unit:
+            line["unit_of_measure"] = unit
 
 
 def _augment_runtime_tokens(

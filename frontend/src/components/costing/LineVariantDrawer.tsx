@@ -443,6 +443,20 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     return normalizeUnit(baseLine?.unit_of_measure)
   }, [bomPreview, baseLineId])
 
+  const baseUnitFromLines = useMemo(() => {
+    // When replace_self matches, the base_line row disappears from final_material_lines,
+    // so baseUnitFromBom may be null even though base line has a valid unit.
+    const mats = ((baseLineQuery.data as any)?.materials ?? []) as any[]
+    const base = mats.find((x) => String(x?.id ?? '') === String(baseLineId))
+    const u =
+      (base?.unit_of_measure ?? null) ||
+      (base?.metadata_json?.display_unit ?? null) ||
+      (base?.metadata_json?.bom_unit ?? null)
+    return normalizeUnit(u)
+  }, [baseLineQuery.data, baseLineId])
+
+  const baseUnit = useMemo(() => baseUnitFromBom || baseUnitFromLines, [baseUnitFromBom, baseUnitFromLines])
+
   const baseLineParamsFromBom = useMemo(() => {
     const lines = (bomPreview?.final_material_lines ?? []) as any[]
     const baseLine = lines.find(
@@ -504,10 +518,10 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
         if (needDim && (lastPreviewSummary as any)?.[needDim] == null) return `你选择了“${triggerLabel(draftTriggerType)}”，但预演样例未解析出对应数值，请换 spec_text 重新预演`
         const ref = String(row.item.material_ref_id ?? '').trim()
         if (!ref) return '请先选择替换物料并保存（让后端回填单位）'
-        if (!baseUnitFromBom || !normalizeUnit(row.item.unit_of_measure)) {
+        if (!baseUnit || !normalizeUnit(row.item.unit_of_measure)) {
           return '单位信息缺失：请先保存（让后端回填 unit_of_measure）并预演；主数据单位未补齐也会导致缺失'
         }
-        const baseU = baseUnitFromBom
+        const baseU = baseUnit
         const targetU = normalizeUnit(row.item.unit_of_measure)
         if (baseU && targetU && baseU !== targetU) return `单位不一致：基准=${baseU}，替换物料=${targetU}（只允许同单位平替）`
         return null
@@ -1065,7 +1079,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                           单位：{r.item.unit_of_measure ?? '-'}
                         </Text>
                         {(() => {
-                          const baseU = baseUnitFromBom
+                          const baseU = baseUnit
                           const targetU = normalizeUnit(r.item.unit_of_measure)
                           if (!r.enabled) return null
                           if (!lastPreviewOk || previewStale) return null

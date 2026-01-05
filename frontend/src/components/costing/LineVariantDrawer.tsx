@@ -82,7 +82,7 @@ const formatQty2 = (v: any): string => {
 
 const splitTokens = (raw: string): string[] => {
   return String(raw ?? '')
-    .split(/[,\uFF0C|]+/g) // "," / "，" / "|"
+    .split(/[,\uFF0C|\u003B\uFF1B]+/g) // "," / "，" / "|" / ";" / "；"
     .map((x) => x.trim())
     .filter(Boolean)
 }

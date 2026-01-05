@@ -127,6 +127,12 @@ export default function ProductListingPage() {
     return Array.isArray(arr) ? arr : []
   }, [bom])
 
+  const inventoryLines = useMemo(() => {
+    const traceAny = (bom?.trace ?? {}) as any
+    const arr = traceAny?.inventory?.inventory_lines
+    return Array.isArray(arr) ? arr : []
+  }, [bom])
+
   const finalLines = useMemo(() => bom?.final_material_lines ?? [], [bom])
 
   const costingSummary = useMemo(() => {
@@ -470,6 +476,36 @@ export default function ProductListingPage() {
                         />
                       ) : (
                         <Alert type="info" showIcon message="该版本未返回工序明细（可能未配置工序行或后端未回传）。" />
+                      )}
+
+                      <Divider style={{ margin: '4px 0' }} />
+                      <Text strong>扣库清单（真实物料展开）</Text>
+                      {inventoryLines.length ? (
+                        <Table
+                          size="small"
+                          pagination={false}
+                          rowKey={(r) => String((r as any)?.material_code ?? '')}
+                          columns={[
+                            { title: '物料编码', dataIndex: 'material_code', width: 140, ellipsis: true },
+                            { title: '物料名称', dataIndex: 'material_name', ellipsis: true },
+                            { title: '单位', dataIndex: 'unit_of_measure', width: 90 },
+                            { title: '扣库数量', dataIndex: 'quantity', width: 140 },
+                            {
+                              title: '来源(展开)',
+                              dataIndex: 'sources',
+                              width: 110,
+                              render: (v) => (Array.isArray(v) ? v.length : 0),
+                            },
+                          ]}
+                          dataSource={inventoryLines}
+                        />
+                      ) : (
+                        <Alert
+                          type="info"
+                          showIcon
+                          message="暂未生成扣库清单（真实物料展开）。"
+                          description="当前“物料”表可能包含虚拟物料（VM）。若需要对账/扣库，请以“扣库清单（真实物料展开）”为准。"
+                        />
                       )}
                     </Space>
                   ) : (

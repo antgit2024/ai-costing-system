@@ -17,6 +17,13 @@ DIAMETER_PATTERN = re.compile(
 )
 TOKEN_SPLIT_PATTERN = re.compile(r"[;\n\r,，/\\\+|、]+")
 
+# Common, business-meaningful phrases that should be emitted as standalone tokens
+# when present in the ERP “交易规格（spec_text）”. Keep this list conservative to
+# avoid token explosion and accidental over-matching.
+PHRASE_TOKEN_WHITELIST = [
+    "背面纯色",
+]
+
 # e.g. "竖120CM*横150CM" / "横150*竖120" / "宽120×高150"
 LABELED_DIMENSION_PATTERN = re.compile(
     r"(?P<label1>竖|横|宽|高|长)\s*(?P<v1>\d{1,4}(?:\.\d+)?)\s*(?P<u1>cm|厘米|mm|毫米|m|米)?\s*"
@@ -171,6 +178,12 @@ def parse_spec(spec_text: str) -> Dict[str, Any]:
             code = m.upper()
             extra_tokens.append(f"MODEL:{code}")
             explanations.append({"token": f"MODEL:{code}", "source": token, "rule": "extract_model_code_3"})
+
+        # Extract whitelist phrase tokens from within a segment
+        for phrase in PHRASE_TOKEN_WHITELIST:
+            if phrase and phrase in token:
+                extra_tokens.append(phrase)
+                explanations.append({"token": phrase, "source": token, "rule": "extract_phrase"})
 
     # De-duplicate but keep stable order (original segments first, then extracted codes).
     if extra_tokens:

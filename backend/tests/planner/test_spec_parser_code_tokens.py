@@ -25,3 +25,12 @@ def test_parse_spec_extracts_material_code_tokens(client):
     assert "WB02339" in tokens
 
 
+def test_parse_spec_extracts_phrase_tokens_for_variants(client):
+    # Given: common ERP “交易规格” string
+    spec_text = "Q25121102D黄金绒背面纯色30X50"
+    r = client.post("/api/planner/spec/parse", json={"spec_text": spec_text})
+    assert r.status_code == 200, r.text
+    tokens = r.json().get("tokens") or []
+    # Should emit standalone phrase token so line-variant conditions can match it
+    assert "背面纯色" in tokens
+

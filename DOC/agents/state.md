@@ -2,6 +2,7 @@
 
 - **最近校对（北京时间 GMT+8）**：2026-01-05（Planner：接力清理崩溃遗留的跨域未提交改动，恢复干净工作区；已硬验收 `npm -C frontend run build` 通过）
 - **最近校对（北京时间 GMT+8）**：2026-01-05（Frontend：行级变体“替换物料”选择器新增“同单位置顶 + 仅同单位筛选”，通过 `baseUnit` 透传，减少单位不一致返工；验收 `npm -C frontend run build`）
+- **最近校对（北京时间 GMT+8）**：2026-01-05（Backend：spec/parse 增补短语 token（白名单，先覆盖“背面纯色”），使 TOKEN(any) 规则可命中；验收 `./backend/venv/bin/python -m pytest backend/tests/planner/test_spec_parser_code_tokens.py -q`）
 
 - **最近校对（北京时间 GMT+8）**：2025-12-30 19:20（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_backend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-30 20:27（Frontend：关联引用直达编辑 + 列宽收口）

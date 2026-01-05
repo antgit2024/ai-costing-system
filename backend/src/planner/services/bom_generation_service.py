@@ -152,6 +152,7 @@ def generate_bom(
 
 def _fill_missing_units(db: Session, final_lines: List[Dict[str, Any]]) -> None:
     missing_ids: List[str] = []
+    missing_codes: List[str] = []
     for line in final_lines:
         kind = str(line.get("material_kind") or "real")
         if kind not in ("real", "bom"):
@@ -161,20 +162,41 @@ def _fill_missing_units(db: Session, final_lines: List[Dict[str, Any]]) -> None:
         mid = str(line.get("material_ref_id") or "").strip()
         if mid:
             missing_ids.append(mid)
-    if not missing_ids:
+            continue
+        code = str(line.get("material_code") or "").strip()
+        if code:
+            missing_codes.append(code)
+    if not missing_ids and not missing_codes:
         return
 
-    rows = (
-        db.query(models.Material)
-        .filter(models.Material.id.in_(list({*missing_ids})))
-        .all()
-    )
-    unit_map = {str(m.id): (m.unit or None) for m in rows}
+    unit_by_id: Dict[str, str | None] = {}
+    unit_by_code: Dict[str, str | None] = {}
+
+    if missing_ids:
+        rows = (
+            db.query(models.Material)
+            .filter(models.Material.id.in_(list({*missing_ids})))
+            .all()
+        )
+        unit_by_id = {str(m.id): (m.unit or None) for m in rows}
+
+    if missing_codes:
+        rows2 = (
+            db.query(models.Material)
+            .filter(models.Material.material_code.in_(list({*missing_codes})))
+            .all()
+        )
+        unit_by_code = {str(m.material_code): (m.unit or None) for m in rows2}
+
     for line in final_lines:
         if line.get("unit_of_measure"):
             continue
         mid = str(line.get("material_ref_id") or "").strip()
-        unit = unit_map.get(mid)
+        unit = unit_by_id.get(mid) if mid else None
+        if not unit:
+            code = str(line.get("material_code") or "").strip()
+            if code:
+                unit = unit_by_code.get(code)
         if unit:
             line["unit_of_measure"] = unit
 

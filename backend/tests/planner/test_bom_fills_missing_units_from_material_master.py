@@ -5,8 +5,18 @@ from decimal import Decimal
 from src.planner import models
 
 
-def test_bom_fills_missing_unit_from_material_master(client, db_session):
-    model = models.ProductModel(model_code="PI5", model_name="抱枕 PI5", status="active", unit_of_measure="套", metadata_json={})
+def test_bom_fills_missing_unit_from_material_master_by_ref_id(client, db_session):
+    """
+    If a model version material line has missing unit_of_measure, BOM preview should fallback
+    to material master unit (via material_ref_id) to avoid showing '-' in UI.
+    """
+    model = models.ProductModel(
+        model_code="PI5",
+        model_name="抱枕 PI5",
+        status="active",
+        unit_of_measure="套",
+        metadata_json={},
+    )
     db_session.add(model)
     db_session.flush()
 
@@ -36,7 +46,7 @@ def test_bom_fills_missing_unit_from_material_master(client, db_session):
     db_session.add(m)
     db_session.flush()
 
-    # Simulate bad data: version line doesn't have unit_of_measure saved.
+    # Bad data: unit_of_measure missing on version line.
     line = models.ModelVersionMaterial(
         version_id=version.id,
         material_type="real",

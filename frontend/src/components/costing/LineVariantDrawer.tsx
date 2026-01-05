@@ -70,6 +70,13 @@ const toNumber = (v: any, fallback = 0): number => {
   return Number.isFinite(n) ? n : fallback
 }
 
+const formatQty2 = (v: any): string => {
+  if (v == null || v === '') return '-'
+  const n = Number(v)
+  if (!Number.isFinite(n)) return String(v)
+  return n.toFixed(2)
+}
+
 const normalizeUnit = (u: unknown): string | null => {
   const s = normalizeUnitText(String(u ?? ''))
   return s ? s : null
@@ -1241,7 +1248,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                           title: '数量',
                           width: 120,
                           dataIndex: 'computed_quantity',
-                          render: (v) => (v != null ? String(v) : '-'),
+                          render: (v) => formatQty2(v),
                         },
                         {
                           title: '单位',

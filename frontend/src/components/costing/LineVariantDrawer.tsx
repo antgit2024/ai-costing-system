@@ -1254,7 +1254,8 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                           title: '单位',
                           width: 80,
                           dataIndex: 'unit_of_measure',
-                          render: (v) => normalizeUnit(v) ?? '-',
+                          // normalizeUnit returns '' when empty; use || to show '-' instead of blank cell.
+                          render: (v) => normalizeUnit(v) || '-',
                         },
                       ]}
                     />

@@ -2494,27 +2494,32 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
             const oldBase = String(v?.base_line_id ?? '').trim()
             const newBase = idMap.get(oldBase) ?? ''
             if (!newBase) continue
+
+            // Backend contract: payload.version_id must equal path param version_id.
             await createLineVariant(created.id, {
+              version_id: created.id,
               base_line_id: newBase,
-              action: v.action,
-              enabled: v.enabled,
-              trigger_type: v.trigger_type,
-              conditions: v.conditions ?? {},
-              items: (v.items ?? []).map((it: any) => ({
-                action: it.action,
-                material_kind: it.material_kind,
-                material_ref_id: it.material_ref_id,
-                material_code: it.material_code,
-                material_name: it.material_name,
-                unit_of_measure: it.unit_of_measure,
-                calculation_method: it.calculation_method,
-                base_quantity: it.base_quantity,
-                fixed_quantity: it.fixed_quantity,
-                coverage_ratio: it.coverage_ratio,
-                loss_rate: it.loss_rate,
-                metadata_json: it.metadata_json ?? {},
+              priority: Number(v?.priority ?? 100),
+              enabled: !!v?.enabled,
+              action: v?.action,
+              stop_on_hit: v?.stop_on_hit ?? true,
+              notes: v?.notes ?? undefined,
+              conditions: (v?.conditions ?? {}) as any,
+              metadata_json: (v?.metadata ?? v?.metadata_json ?? {}) as any,
+              items: (v?.items ?? []).map((it: any) => ({
+                sequence_order: it?.sequence_order ?? undefined,
+                material_kind: it?.material_kind,
+                material_ref_id: it?.material_ref_id ?? undefined,
+                material_code: it?.material_code ?? undefined,
+                material_name: it?.material_name ?? undefined,
+                unit_of_measure: it?.unit_of_measure ?? undefined,
+                calculation_method: it?.calculation_method,
+                base_quantity: Number(it?.base_quantity ?? 0),
+                fixed_quantity: Number(it?.fixed_quantity ?? 0),
+                coverage_ratio: Number(it?.coverage_ratio ?? 1),
+                loss_rate: Number(it?.loss_rate ?? 0),
+                metadata_json: (it?.metadata_json ?? it?.metadata ?? {}) as any,
               })),
-              metadata_json: v.metadata_json ?? {},
             } as any)
           }
         } catch (err: any) {

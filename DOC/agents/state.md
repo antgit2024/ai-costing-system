@@ -40,6 +40,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Backend+Frontend：强制刷新物料图片：material image proxy 支持 `force_refresh=1` 跳过本地缓存并重新下载覆盖；物料详情“同步宜搭”后预拉取图片时带 force_refresh，避免缓存占位导致重复/缺图；已重启后端并发布前端）
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：发布/归档标准版本的“清单编辑→工艺模块”禁用：添加/同步/删除/勾选同步均禁止（避免触发 sync-from-modules 导致右侧清单重置/自动保存）；验收 `npm -C frontend run build`）
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Backend：修复 Product Listing 里工序告警误报：当版本工序行缺失 `metadata_json.cost_type` 时，BOM 核算默认按计时(time)兼容处理（若存在 piece_rate 则推断为计件），不再提示“未配置工序计价类型”；已重启后端生效）
+- **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：修复标准模型管理“复制版本”未复制行级变体（Overlay）：补齐 createLineVariant 必需的 `version_id`，并按后端 LineVariantCreateRequest 契约修正字段/去除无效字段，复制时即可连同清单一起复制变体；验收 `npm -C frontend run build`）
 
 ### 关键口径备忘（避免回滚/重构改坏）
 

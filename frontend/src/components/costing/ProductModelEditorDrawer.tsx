@@ -2076,7 +2076,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
 
     Modal.confirm({
       title: '删除模块',
-      content: '删除后将移除该模块，并同时删除右侧由该模块拆分出来的物料行/工序行（不会影响其它模块）。确认删除？',
+      content:
+        '删除后将移除该模块，并同时删除右侧由该模块拆分出来的物料行/工序行（不会影响其它模块）。注意：删除模块不再触发“从模块重新同步”，避免覆盖版本层调参。确认删除？',
       okText: '删除',
       okButtonProps: { danger: true },
       cancelText: '取消',
@@ -2086,10 +2087,12 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
         const normalizedModules = nextModules.map((m, i) => ({ ...m, sequence_order: i + 1 }))
 
         const moduleId = target.module_id
+        const nextMaterials = (materials as any[]).filter((x: any) => getRowSourceModuleId(x) !== String(moduleId))
+        const nextProcesses = (processes as any[]).filter((x: any) => getRowSourceModuleId(x) !== String(moduleId))
         setModules(normalizedModules)
         setSyncSelectedModuleIds(normalizedModules.map((m) => m.module_id))
-        setMaterials((prev) => prev.filter((x: any) => getRowSourceModuleId(x) !== String(moduleId)))
-        setProcesses((prev) => prev.filter((x: any) => getRowSourceModuleId(x) !== String(moduleId)))
+        setMaterials(nextMaterials as any)
+        setProcesses(nextProcesses as any)
 
         if (!modelId || !selectedVersionId) return
 
@@ -2106,11 +2109,52 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                 metadata_json: m.metadata_json ?? {},
               })),
           } as any)
-          const res = await syncProductModelVersionFromModules(selectedVersionId, { keep_overrides: true })
-          hydrateLinesFromApi(res, { autofill_structure_slot: true })
+
+          // Persist current version lines WITHOUT re-syncing from modules
+          // (avoid overwriting version-level replacements/overrides).
+          const placeholderIdx = nextMaterials.findIndex((m: any) => isPlaceholderMaterialRow(m))
+          if (placeholderIdx >= 0 && entryContext === 'standard') {
+            const row = nextMaterials[placeholderIdx] as any
+            const label = String(row?.material_name ?? row?.material_code ?? row?.material_ref_id ?? '').trim() || '占位物料'
+            message.warning(
+              `模块已删除，但清单里仍存在占位物料：第 ${placeholderIdx + 1} 行（${label}）。请先替换占位物料后点击“保存清单”固化版本清单。`,
+            )
+          } else {
+            const normalizedMaterials = (nextMaterials as any[]).map((m) => {
+              const bomUnit = getBomUnitForRow(m)
+              const allowedList = allowedCalcMethodsByBomUnit(bomUnit)
+              if (!allowedList.length) return m
+              const allowed = new Set(allowedList)
+              const cur = String(m.calculation_method ?? '').trim() as CalcMethod
+              if (!cur || allowed.has(cur)) return m
+              const v = allowedList[0] as CalcMethod
+              const baseQty = Number(m.base_quantity ?? 0)
+              const fixedQty = Number(m.fixed_quantity ?? 0)
+              const cov = Number(m.coverage_ratio ?? 1)
+              const rowMeta = ((m?.metadata_json as any) ?? {})
+              const mqSample = Math.max(0, measureQty(v, sampleSpec, rowMeta))
+              const mqStandard = Math.max(0, measureQty(v, standardSpec, rowMeta))
+              const sampleUsed = fixedQty + mqSample * baseQty * cov
+              const standardUsed = fixedQty + mqStandard * baseQty * cov
+              return {
+                ...m,
+                calculation_method: v,
+                sample_used_quantity: sampleUsed,
+                standard_used_quantity: standardUsed,
+              }
+            })
+            await updateProductModelVersionLines(selectedVersionId, {
+              sample: entryContext === 'standard' ? lockStandardSpec() : sampleSpec,
+              standard: lockStandardSpec(),
+              materials: normalizedMaterials,
+              processes: nextProcesses,
+            } as any)
+            await queryClient.invalidateQueries({ queryKey: ['productModelVersionLines', selectedVersionId] })
+            await computeVersionStats(selectedVersionId)
+            await versionsQuery.refetch()
+          }
           await queryClient.invalidateQueries({ queryKey: ['productModel', modelId] })
-          await queryClient.invalidateQueries({ queryKey: ['productModelVersionLines', selectedVersionId] })
-          message.success('已删除模块并同步版本清单')
+          message.success('已删除模块（不重跑模块同步）')
         } catch (err: any) {
           message.error(err?.response?.data?.detail ?? '删除模块失败')
         } finally {

@@ -344,13 +344,10 @@ class MaterialRead(BaseModel):
                         out.append(url.strip())
             return out
 
-        # 1) canonical
+        normalized: list[str] = []
+        # 1) canonical (may be incomplete historically; do NOT early-return)
         images0 = metadata.get("images")
-        normalized: list[str] = _normalize_one(images0)
-        if normalized:
-            # de-dup preserve order
-            seen: set[str] = set()
-            return [x for x in normalized if not (x in seen or seen.add(x))]
+        normalized.extend(_normalize_one(images0))
 
         raw_form = metadata.get("raw_form_data") or {}
         if isinstance(raw_form, dict):
@@ -363,9 +360,10 @@ class MaterialRead(BaseModel):
                 normalized.extend(_normalize_one(v))
 
         # 3) legacy field id fallback (historical deployments)
-        if not normalized:
-            legacy = metadata.get("imageField_lbef2r0b") or (raw_form.get("imageField_lbef2r0b") if isinstance(raw_form, dict) else None)
-            normalized.extend(_normalize_one(legacy))
+        legacy = metadata.get("imageField_lbef2r0b") or (
+            raw_form.get("imageField_lbef2r0b") if isinstance(raw_form, dict) else None
+        )
+        normalized.extend(_normalize_one(legacy))
 
         # de-dup preserve order
         seen2: set[str] = set()

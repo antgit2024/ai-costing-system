@@ -266,14 +266,25 @@ const getImageUrls = (record: Material): string[] => {
   return []
 }
 
-const prefetchMaterialImages = async (record: Material): Promise<void> => {
+const appendQuery = (url: string, query: Record<string, string>): string => {
+  const u = String(url ?? '').trim()
+  if (!u) return u
+  const hasQ = u.includes('?')
+  const qs = Object.entries(query)
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+    .join('&')
+  return hasQ ? `${u}&${qs}` : `${u}?${qs}`
+}
+
+const prefetchMaterialImages = async (record: Material, opts?: { force_refresh?: boolean }): Promise<void> => {
   const urls = getImageUrls(record)
   if (!urls.length) return
   // Prefetch sequentially to avoid hammering backend/DingTalk; each hit will cache locally (if enabled).
   for (const url of urls) {
     try {
       // Force GET to trigger backend image proxy download & local persistence.
-      await fetch(url, { method: 'GET' })
+      const u = opts?.force_refresh ? appendQuery(url, { force_refresh: '1' }) : url
+      await fetch(u, { method: 'GET' })
     } catch {
       // ignore; UI will still attempt to load when user opens the image tab
     }
@@ -1864,7 +1875,7 @@ const MaterialMasterPage = () => {
                       if (hit) {
                         setEditingMaterial(hit)
                         // After sync completes, eagerly fetch images so operator can view them immediately.
-                        await prefetchMaterialImages(hit)
+                        await prefetchMaterialImages(hit, { force_refresh: true })
                       }
                     }
                   } catch (err: any) {

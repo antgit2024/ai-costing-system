@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { Alert, Button, Card, Col, Descriptions, Divider, Input, Row, Select, Space, Table, Tabs, Tag, Typography, message } from 'antd'
 
-import { fetchProductModelVersionLines, fetchProductModels, fetchProductModelVersions, generateBom, listLineVariants, parseSpec } from '@/services/planner'
+import { fetchProductModelVersionLines, fetchProductModels, fetchProductModelVersions, generateBom, generateBomBundle, listLineVariants, parseSpec } from '@/services/planner'
 import type { BomGenerateResponse, LineVariantCondition, LineVariantDetailRead, ProductModel, ProductModelLinesResponse, ProductModelVersionRead, SpecParseResponse } from '@/types/planner'
 
 const { Text } = Typography
@@ -46,6 +46,10 @@ export default function ProductListingPage() {
 
   const [parsed, setParsed] = useState<SpecParseResponse | null>(null)
   const [bom, setBom] = useState<BomGenerateResponse | null>(null)
+  const [bundleComponents, setBundleComponents] = useState<
+    Array<{ width_cm: number; height_cm: number; quantity: number; tokens: string }>
+  >([{ width_cm: 45, height_cm: 45, quantity: 1, tokens: '' }])
+  const [bundleDetail, setBundleDetail] = useState<any[] | null>(null)
   const [lastError, setLastError] = useState<string | null>(null)
 
   const modelsQuery = useQuery({
@@ -112,6 +116,45 @@ export default function ProductListingPage() {
       return bomRes
     },
     onSuccess: () => message.success('解析+预演完成'),
+    onError: (e: any) => setLastError(String(e?.message ?? e)),
+  })
+
+  const bundlePreviewMutation = useMutation({
+    mutationFn: async () => {
+      const model_version_id = String(draft.model_version_id ?? '').trim()
+      if (!model_version_id) throw new Error('请先选择标准版本')
+      const comps = (bundleComponents ?? [])
+        .map((c) => ({
+          width_mm: Number(c.width_cm) * 10,
+          height_mm: Number(c.height_cm) * 10,
+          quantity: Number(c.quantity),
+          tokens: String(c.tokens || '')
+            .split(/[\s,，;；/|]+/g)
+            .map((x) => x.trim())
+            .filter(Boolean),
+        }))
+        .filter(
+          (c) =>
+            Number.isFinite(c.width_mm) &&
+            Number.isFinite(c.height_mm) &&
+            Number.isFinite(c.quantity) &&
+            c.width_mm > 0 &&
+            c.height_mm > 0 &&
+            c.quantity > 0,
+        )
+      if (!comps.length) throw new Error('请先填写套装组件（宽/高/数量）')
+      setLastError(null)
+      const res = await generateBomBundle({
+        model_version_id,
+        sku_code: draft.sku_code || undefined,
+        components: comps as any,
+      } as any)
+      setBundleDetail((res as any)?.components ?? [])
+      setBom(((res as any)?.merged ?? null) as any)
+      setParsed(null)
+      return res
+    },
+    onSuccess: () => message.success('套装预演完成'),
     onError: (e: any) => setLastError(String(e?.message ?? e)),
   })
 
@@ -376,11 +419,108 @@ export default function ProductListingPage() {
                 onChange={(e) => setDraft((d) => ({ ...d, spec_text: e.target.value }))}
               />
 
+              <Divider style={{ margin: '8px 0' }} />
+              <Alert
+                type="info"
+                showIcon
+                message="套装模式（不从交易规格解析尺寸）"
+                description="手工录入组件尺寸/数量。可选填 tokens（如：背面纯色）用于触发行级变体。"
+              />
+              <div style={{ marginTop: 8 }}>
+                <Table
+                  size="small"
+                  pagination={false}
+                  rowKey={(_, idx) => `bundle-${idx}`}
+                  dataSource={bundleComponents}
+                  columns={[
+                    {
+                      title: '宽(cm)',
+                      width: 90,
+                      render: (_: any, r: any, idx: number) => (
+                        <Input
+                          value={String(r.width_cm)}
+                          onChange={(e) => {
+                            const v = Number(e.target.value)
+                            setBundleComponents((prev) =>
+                              prev.map((x, i) => (i === idx ? { ...x, width_cm: Number.isFinite(v) ? v : 0 } : x)),
+                            )
+                          }}
+                        />
+                      ),
+                    },
+                    {
+                      title: '高(cm)',
+                      width: 90,
+                      render: (_: any, r: any, idx: number) => (
+                        <Input
+                          value={String(r.height_cm)}
+                          onChange={(e) => {
+                            const v = Number(e.target.value)
+                            setBundleComponents((prev) =>
+                              prev.map((x, i) => (i === idx ? { ...x, height_cm: Number.isFinite(v) ? v : 0 } : x)),
+                            )
+                          }}
+                        />
+                      ),
+                    },
+                    {
+                      title: '数量',
+                      width: 80,
+                      render: (_: any, r: any, idx: number) => (
+                        <Input
+                          value={String(r.quantity)}
+                          onChange={(e) => {
+                            const v = Number(e.target.value)
+                            setBundleComponents((prev) =>
+                              prev.map((x, i) => (i === idx ? { ...x, quantity: Number.isFinite(v) ? v : 1 } : x)),
+                            )
+                          }}
+                        />
+                      ),
+                    },
+                    {
+                      title: 'tokens（逗号/空格分隔）',
+                      render: (_: any, r: any, idx: number) => (
+                        <Input
+                          value={String(r.tokens ?? '')}
+                          onChange={(e) =>
+                            setBundleComponents((prev) => prev.map((x, i) => (i === idx ? { ...x, tokens: e.target.value } : x)))
+                          }
+                        />
+                      ),
+                    },
+                    {
+                      title: '操作',
+                      width: 140,
+                      render: (_: any, __: any, idx: number) => (
+                        <Space>
+                          <Button
+                            size="small"
+                            onClick={() => setBundleComponents((prev) => [...prev, { width_cm: 45, height_cm: 45, quantity: 1, tokens: '' }])}
+                          >
+                            +行
+                          </Button>
+                          <Button
+                            size="small"
+                            danger
+                            disabled={bundleComponents.length <= 1}
+                            onClick={() => setBundleComponents((prev) => prev.filter((_, i) => i !== idx))}
+                          >
+                            删除
+                          </Button>
+                        </Space>
+                      ),
+                    },
+                  ]}
+                />
+              </div>
+
               <Space>
                 <Button
                   onClick={() => {
                     setParsed(null)
                     setBom(null)
+                    setBundleDetail(null)
                     setLastError(null)
                   }}
                 >
@@ -395,6 +535,9 @@ export default function ProductListingPage() {
                   onClick={() => previewMutation.mutate()}
                 >
                   解析 + 预演 BOM（bom/generate）
+                </Button>
+                <Button type="primary" ghost loading={bundlePreviewMutation.isPending} onClick={() => bundlePreviewMutation.mutate()}>
+                  套装：预演 BOM（合并器）
                 </Button>
               </Space>
 
@@ -638,6 +781,47 @@ export default function ProductListingPage() {
                     </Space>
                   ) : (
                     <Text type="secondary">暂无（先点“解析+预演”）</Text>
+                  ),
+                },
+                {
+                  key: 'bundle',
+                  label: '套装明细',
+                  children: bundleDetail ? (
+                    <Table
+                      size="small"
+                      pagination={false}
+                      rowKey={(r: any) => String(r?.component_index ?? Math.random())}
+                      dataSource={bundleDetail}
+                      columns={[
+                        { title: '组件', width: 80, render: (_: any, r: any) => `#${Number(r?.component_index ?? 0) + 1}` },
+                        {
+                          title: '尺寸/数量',
+                          render: (_: any, r: any) => {
+                            const m = (r?.trace ?? {})?.measurement_mm ?? {}
+                            const w = toNumberOrNull((m as any)?.width_mm) ?? 0
+                            const h = toNumberOrNull((m as any)?.height_mm) ?? 0
+                            const q = toNumberOrNull((m as any)?.quantity) ?? 0
+                            return `${(w / 10).toFixed(0)}×${(h / 10).toFixed(0)}cm ×${q}`
+                          },
+                        },
+                        {
+                          title: '成本(合计)',
+                          width: 120,
+                          render: (_: any, r: any) => {
+                            const c = (r?.trace ?? {})?.costing ?? {}
+                            return formatMoney2((c as any)?.total_cost)
+                          },
+                        },
+                        { title: '物料行数', width: 90, render: (_: any, r: any) => ((r?.final_material_lines ?? []) as any[]).length },
+                        {
+                          title: '命中变体数',
+                          width: 90,
+                          render: (_: any, r: any) => (((r?.trace ?? {})?.matched_variants ?? []) as any[]).length,
+                        },
+                      ]}
+                    />
+                  ) : (
+                    <Text type="secondary">暂无（先点“套装：预演 BOM（合并器）”）</Text>
                   ),
                 },
               ]}

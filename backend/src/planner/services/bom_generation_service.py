@@ -151,6 +151,271 @@ def generate_bom(
     }
 
 
+def generate_bom_bundle(
+    db: Session,
+    *,
+    model_version_id: str,
+    sku_code: Optional[str],
+    components: List[Dict[str, Any]],
+    include_disabled_variants: bool = False,
+) -> Dict[str, Any]:
+    """
+    Bundle/set wrapper:
+    - components provide explicit width_mm/height_mm/quantity.
+    - spec_text/tokens are optional and only used for variant matching.
+    - output includes per-component BOM + merged BOM summary.
+    """
+    if not components:
+        raise ValueError("components 不能为空")
+
+    version = _resolve_version(db, model_version_id=model_version_id, sku_code=None)
+    model = db.get(models.ProductModel, version.model_id)
+    if not model or model.is_archived:
+        raise ValueError("产品模型不存在或已归档")
+
+    base_lines = product_model_service.list_version_material_lines(db, version.id)
+    process_lines = product_model_service.list_version_process_lines(db, version.id)
+    variants = line_variant_service.list_variants(db, version_id=version.id)
+    variants_by_line: Dict[str, List[models.ProductModelLineVariant]] = {}
+    for variant in variants:
+        variants_by_line.setdefault(variant.base_line_id, []).append(variant)
+
+    component_results: List[Dict[str, Any]] = []
+    merged_material_lines: List[Dict[str, Any]] = []
+    merged_inventory_lines: List[Dict[str, Any]] = []
+
+    # cost totals (apply overhead once on sum)
+    material_cost_total = Decimal("0")
+    process_cost_total = Decimal("0")
+    overhead_rate = Decimal("0.3")
+
+    def _d(v: Any) -> Decimal:
+        if v in (None, ""):
+            return Decimal("0")
+        if isinstance(v, Decimal):
+            return v
+        try:
+            return Decimal(str(v))
+        except Exception:
+            return Decimal("0")
+
+    def _merge_material_lines(lines: List[Dict[str, Any]]) -> None:
+        nonlocal merged_material_lines
+        agg: Dict[str, Dict[str, Any]] = {}
+        for r in lines or []:
+            kind = str(r.get("material_kind") or "real")
+            ref = str(r.get("material_ref_id") or "")
+            code = str(r.get("material_code") or "")
+            name = str(r.get("material_name") or "")
+            uom = str(r.get("unit_of_measure") or "")
+            method = str(r.get("calculation_method") or "count")
+            key = "|".join([kind, ref or code or name, method, uom])
+            cur = agg.get(key)
+            if not cur:
+                cur = dict(r)
+                cur["computed_quantity"] = _d(r.get("computed_quantity"))
+                cur["line_cost"] = _d(r.get("line_cost"))
+                agg[key] = cur
+            else:
+                cur["computed_quantity"] = _d(cur.get("computed_quantity")) + _d(r.get("computed_quantity"))
+                cur["line_cost"] = _d(cur.get("line_cost")) + _d(r.get("line_cost"))
+        merged_material_lines = list(agg.values())
+        # assign stable line_index
+        merged_material_lines.sort(key=lambda x: str(x.get("material_code") or x.get("material_name") or ""))
+        for i, r in enumerate(merged_material_lines, 1):
+            r["line_index"] = i
+
+    def _merge_inventory_lines(lines: List[Dict[str, Any]]) -> None:
+        nonlocal merged_inventory_lines
+        agg: Dict[str, Dict[str, Any]] = {}
+        for r in lines or []:
+            code = str(r.get("material_code") or r.get("virtual_code") or "")
+            mid = str(r.get("material_id") or "")
+            unit = str(r.get("unit") or "")
+            key = "|".join([mid or code, unit])
+            cur = agg.get(key)
+            if not cur:
+                cur = dict(r)
+                cur["quantity"] = _d(r.get("quantity"))
+                agg[key] = cur
+            else:
+                cur["quantity"] = _d(cur.get("quantity")) + _d(r.get("quantity"))
+        merged_inventory_lines = list(agg.values())
+        merged_inventory_lines.sort(key=lambda x: str(x.get("material_code") or x.get("virtual_code") or ""))
+
+    for idx, comp in enumerate(components):
+        width_mm = _d(comp.get("width_mm"))
+        height_mm = _d(comp.get("height_mm"))
+        qty = _d(comp.get("quantity") or Decimal("1"))
+        if width_mm <= 0 or height_mm <= 0 or qty <= 0:
+            raise ValueError(f"components[{idx}] 尺寸/数量非法：width_mm/height_mm/quantity 必须 > 0")
+
+        spec_text = str(comp.get("spec_text") or "").strip()
+        spec_result = spec_parser_service.parse_spec(spec_text)
+        extra_tokens = []
+        if isinstance(comp.get("tokens"), list):
+            extra_tokens = [str(x).strip() for x in comp.get("tokens") if str(x).strip()]
+        runtime_tokens = _augment_runtime_tokens(
+            list(spec_result.get("tokens") or []) + extra_tokens,
+            sku_code=sku_code,
+            model_code=getattr(model, "model_code", None),
+            bound_version_id=version.id,
+        )
+        measurement = {"width_mm": width_mm, "height_mm": height_mm, "quantity": qty}
+        metrics = _build_metrics(spec_result, measurement)
+
+        # Apply variants per line (mostly same as generate_bom)
+        final_lines: List[Dict[str, Any]] = []
+        trace_hits: List[Dict[str, Any]] = []
+        line_counter = 0
+
+        def _push(line: Dict[str, Any]) -> None:
+            nonlocal line_counter
+            line_counter += 1
+            line["line_index"] = line_counter
+            final_lines.append(line)
+
+        for row in base_lines:
+            variant_rules = variants_by_line.get(row.id, [])
+            keep_base = True
+            replacement_lines: List[Dict[str, Any]] = []
+            additions: List[Dict[str, Any]] = []
+
+            for variant in variant_rules:
+                if not variant.enabled and not include_disabled_variants:
+                    trace_hits.append(
+                        {
+                            "variant_id": variant.id,
+                            "base_line_id": row.id,
+                            "action": variant.action,
+                            "matched": False,
+                            "reason": "disabled",
+                        }
+                    )
+                    continue
+
+                matched = line_variant_service.evaluate_conditions(
+                    variant,
+                    tokens=runtime_tokens,
+                    metrics=metrics,
+                )
+                trace_entry = {
+                    "variant_id": variant.id,
+                    "base_line_id": row.id,
+                    "action": variant.action,
+                    "matched": matched,
+                }
+                if matched:
+                    produced = [
+                        _materialize_variant_item(
+                            item,
+                            base_row=row,
+                            measurement=measurement,
+                            variant_id=variant.id,
+                            base_line_id=row.id,
+                        )
+                        for item in variant.items or []
+                    ]
+                    trace_entry["produced_item_ids"] = [line["variant_item_id"] for line in produced]
+                    if variant.action in ("replace_bundle", "replace_self"):
+                        keep_base = False
+                        replacement_lines = produced
+                        trace_entry["effect"] = f"replace_with_{len(produced)}"
+                    elif variant.action == "remove_self":
+                        keep_base = False
+                        replacement_lines = []
+                        trace_entry["effect"] = "removed"
+                    elif variant.action == "add_siblings":
+                        additions.extend(produced)
+                        trace_entry["effect"] = f"added_{len(produced)}"
+                    trace_hits.append(trace_entry)
+                    if variant.stop_on_hit:
+                        break
+                else:
+                    trace_entry["effect"] = "skipped"
+                    trace_hits.append(trace_entry)
+
+            if keep_base:
+                _push(_materialize_base_line(row, measurement=measurement))
+                for add_line in additions:
+                    _push(add_line)
+            else:
+                for repl_line in replacement_lines:
+                    _push(repl_line)
+                for add_line in additions:
+                    _push(add_line)
+
+        _fill_missing_units(db, final_lines)
+        costing = _attach_costing(db, final_lines, process_lines=process_lines, measurement=measurement)
+        inventory = _build_inventory_lines(db, final_lines)
+
+        component_results.append(
+            {
+                "component_index": idx,
+                "final_material_lines": final_lines,
+                "trace": {
+                    "model_id": model.id,
+                    "model_version_id": version.id,
+                    "sku_code": sku_code,
+                    "parsed": spec_result,
+                    "runtime_tokens": runtime_tokens,
+                    "measurement_mm": measurement,
+                    "matched_variants": trace_hits,
+                    "costing": costing,
+                    "inventory": inventory,
+                },
+            }
+        )
+
+        material_cost_total += _d(costing.get("material_cost_total"))
+        process_cost_total += _d(costing.get("process_cost_total"))
+        overhead_rate = _d(costing.get("overhead_rate") or overhead_rate)
+
+        # merge accumulators
+        _merge_material_lines((merged_material_lines or []) + final_lines)
+        _merge_inventory_lines((merged_inventory_lines or []) + list((inventory or {}).get("inventory_lines") or []))
+
+    # Bundle totals (overhead once)
+    overhead_cost = (material_cost_total + process_cost_total) * overhead_rate
+    total_cost = material_cost_total + process_cost_total + overhead_cost
+
+    merged_costing = {
+        "currency": "CNY",
+        "material_cost_total": material_cost_total,
+        "process_cost_total": process_cost_total,
+        "overhead_rate": overhead_rate,
+        "overhead_cost": overhead_cost,
+        "total_cost": total_cost,
+        "unit_cost": total_cost,  # per bundle (kit) default
+        "process_lines": [],  # per-component kept in components.trace.costing.process_lines
+    }
+    merged_inventory = {
+        "inventory_lines": merged_inventory_lines,
+        "inventory_line_count": len(merged_inventory_lines),
+        "warnings": [],
+    }
+
+    merged = {
+        "final_material_lines": merged_material_lines,
+        "trace": {
+            "model_id": model.id,
+            "model_version_id": version.id,
+            "sku_code": sku_code,
+            "bundle_components": [
+                {
+                    "index": r.get("component_index"),
+                    "measurement_mm": (r.get("trace") or {}).get("measurement_mm"),
+                    "tokens": (r.get("trace") or {}).get("runtime_tokens"),
+                }
+                for r in component_results
+            ],
+            "costing": merged_costing,
+            "inventory": merged_inventory,
+        },
+    }
+    return {"merged": merged, "components": component_results}
+
+
 def _fill_missing_units(db: Session, final_lines: List[Dict[str, Any]]) -> None:
     missing_ids: List[str] = []
     missing_codes: List[str] = []

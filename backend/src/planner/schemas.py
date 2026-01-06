@@ -2023,6 +2023,55 @@ class BomGenerateResponse(BaseModel):
         json_encoders = {Decimal: _decimal_to_str}
 
 
+# -----------------------------
+# Bundle / Set (组合装/套装) BOM
+# -----------------------------
+
+
+class BomBundleComponent(BaseModel):
+    """
+    One component inside a bundle/set.
+
+    IMPORTANT:
+    - width/height/quantity are explicit inputs (do NOT parse from spec_text).
+    - tokens/spec_text are optional and only used for variant matching.
+    """
+
+    width_mm: Decimal = Field(..., gt=0, description="组件宽度（mm）")
+    height_mm: Decimal = Field(..., gt=0, description="组件高度（mm）")
+    quantity: Decimal = Field(Decimal("1"), gt=0, description="组件数量（个）")
+    # optional matching hints (NOT used to derive dimensions)
+    spec_text: Optional[str] = Field(None, max_length=512, description="组件特征串（仅用于命中变体，可空）")
+    tokens: List[str] = Field(default_factory=list, description="额外 tokens（仅用于命中变体，可空）")
+    notes: Optional[str] = Field(None, max_length=255)
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class BomGenerateBundleRequest(BaseModel):
+    model_version_id: str = Field(..., max_length=36)
+    sku_code: Optional[str] = Field(None, max_length=128)
+    components: List[BomBundleComponent] = Field(default_factory=list, min_items=1)
+    include_disabled_variants: bool = False
+    operator_id: Optional[str] = Field("system", max_length=64)
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class BomGenerateBundleResponse(BaseModel):
+    """
+    Response structure:
+    - merged: same shape as BomGenerateResponse (final_material_lines + trace{costing,inventory,...})
+    - components: per-component BomGenerateResponse-like dicts for debugging.
+    """
+
+    merged: Dict[str, Any] = Field(default_factory=dict)
+    components: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+
 class ModelVersionImageRead(BaseModel):
     index: int
     url: str

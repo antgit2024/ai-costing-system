@@ -2027,6 +2027,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   }
 
   const addSelectedModules = async () => {
+    if (!canEditSelectedVersion) {
+      message.error('该版本不是草稿（draft），不允许修改工艺模块。请先复制版本生成草稿。')
+      return
+    }
     const items = (modulePickerQuery.data as any)?.items ?? []
     const selected = new Set(modulePickerSelected)
     const picked = items.filter((m: any) => selected.has(m.id))
@@ -2190,6 +2194,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   const handleSyncFromModules = async () => {
     if (!modelId) {
       message.warning('缺少 modelId')
+      return
+    }
+    if (!canEditSelectedVersion) {
+      message.error('该版本不是草稿（draft），不允许同步/覆盖清单。请先复制版本生成草稿。')
       return
     }
     const ensureVersion = async () => {
@@ -3665,14 +3673,29 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                       title="工艺模块"
                       extra={
                         <Space wrap>
-                          <Button size="small" onClick={() => setModulePickerOpen(true)} disabled={!modelId}>
+                          <Tooltip
+                            getPopupContainer={() => document.body}
+                            title={!canEditSelectedVersion ? '该版本不是草稿（draft），不允许修改工艺模块。请先复制版本生成草稿。' : undefined}
+                          >
+                            <Button
+                              size="small"
+                              onClick={() => {
+                                if (!canEditSelectedVersion) {
+                                  message.error('该版本不是草稿（draft），不允许修改工艺模块。请先复制版本生成草稿。')
+                                  return
+                                }
+                                setModulePickerOpen(true)
+                              }}
+                              disabled={!modelId || !selectedVersionId || !canEditSelectedVersion}
+                            >
                             添加
-                          </Button>
+                            </Button>
+                          </Tooltip>
                           <Button
                             size="small"
                             loading={syncingFromModules}
                             onClick={() => void handleSyncFromModules()}
-                            disabled={!selectedVersionId}
+                            disabled={!selectedVersionId || !canEditSelectedVersion}
                             type="primary"
                           >
                             同步
@@ -3686,6 +3709,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                               <Switch
                                 size="small"
                                 checked={syncKeepOverrides}
+                                disabled={!canEditSelectedVersion}
                                 onChange={(checked) => setSyncKeepOverrides(checked)}
                               />
                             </Space>
@@ -3701,7 +3725,11 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                         style={{ fontSize: TABLE_FONT_SIZE }}
                         rowSelection={{
                           selectedRowKeys: syncSelectedModuleIds,
-                          onChange: (keys) => setSyncSelectedModuleIds(keys.map((k) => String(k))),
+                          onChange: (keys) => {
+                            if (!canEditSelectedVersion) return
+                            setSyncSelectedModuleIds(keys.map((k) => String(k)))
+                          },
+                          getCheckboxProps: () => ({ disabled: !canEditSelectedVersion }),
                         }}
                         columns={[
                           {
@@ -3752,6 +3780,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                 danger
                                 icon={<DeleteOutlined />}
                                 title="删除模块"
+                                disabled={!canEditSelectedVersion}
                                 onClick={() => void removeModuleAndLinkedLines(idx)}
                               />
                             ),

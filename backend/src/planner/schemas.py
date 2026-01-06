@@ -298,40 +298,78 @@ class MaterialRead(BaseModel):
     def _extract_image_sources(metadata: dict | None) -> list[str]:
         if not metadata:
             return []
-        candidates = metadata.get("images")
-        if not candidates:
-            candidates = (
-                metadata.get("imageField_lbef2r0b")
-                or (metadata.get("raw_form_data") or {}).get("imageField_lbef2r0b")
-            )
-        if not candidates:
-            return []
-        data: list[Any]
-        if isinstance(candidates, str):
-            try:
-                parsed = json.loads(candidates)
-            except json.JSONDecodeError:
-                return [candidates]
-            else:
-                data = parsed if isinstance(parsed, list) else [parsed]
-        elif isinstance(candidates, list):
-            data = candidates
-        else:
-            data = [candidates]
+        # Sources priority:
+        # 1) metadata["images"] (canonical normalized list we maintain)
+        # 2) YiDa raw_form_data image fields (field ids often look like "imageField_xxx")
+        # 3) legacy hard-coded field id fallback (kept for backward compatibility)
 
-        normalized: list[str] = []
-        for item in data:
-            if isinstance(item, str) and item:
-                normalized.append(item)
-            elif isinstance(item, dict):
-                url = (
-                    item.get("downloadUrl")
-                    or item.get("url")
-                    or item.get("previewUrl")
-                )
-                if isinstance(url, str) and url:
-                    normalized.append(url)
-        return normalized
+        def _normalize_one(value: Any) -> list[str]:
+            if value in (None, "", []):
+                return []
+            data: list[Any]
+            if isinstance(value, str):
+                s = value.strip()
+                if not s:
+                    return []
+                try:
+                    parsed = json.loads(s)
+                except json.JSONDecodeError:
+                    # could be ossFileHandle or a direct url
+                    return [s]
+                data = parsed if isinstance(parsed, list) else [parsed]
+            elif isinstance(value, list):
+                data = value
+            else:
+                data = [value]
+
+            out: list[str] = []
+            for item in data:
+                if isinstance(item, str):
+                    s = item.strip()
+                    if s:
+                        out.append(s)
+                    continue
+                if isinstance(item, dict):
+                    # YiDa attachment objects may contain:
+                    # - ossFileHandle / fileUrl (for DingTalk temporary url API)
+                    # - downloadUrl / url / previewUrl (sometimes present)
+                    url = (
+                        item.get("ossFileHandle")
+                        or item.get("fileUrl")
+                        or item.get("downloadUrl")
+                        or item.get("url")
+                        or item.get("previewUrl")
+                    )
+                    if isinstance(url, str) and url.strip():
+                        out.append(url.strip())
+            return out
+
+        # 1) canonical
+        images0 = metadata.get("images")
+        normalized: list[str] = _normalize_one(images0)
+        if normalized:
+            # de-dup preserve order
+            seen: set[str] = set()
+            return [x for x in normalized if not (x in seen or seen.add(x))]
+
+        raw_form = metadata.get("raw_form_data") or {}
+        if isinstance(raw_form, dict):
+            # 2) search all YiDa image fields (more robust than hard-coding a single field id)
+            # We intentionally keep the scan lightweight: only consider keys that look like image controls.
+            for k, v in raw_form.items():
+                key = str(k)
+                if not (key.startswith("imageField_") or key.lower().endswith("image") or "image" in key.lower()):
+                    continue
+                normalized.extend(_normalize_one(v))
+
+        # 3) legacy field id fallback (historical deployments)
+        if not normalized:
+            legacy = metadata.get("imageField_lbef2r0b") or (raw_form.get("imageField_lbef2r0b") if isinstance(raw_form, dict) else None)
+            normalized.extend(_normalize_one(legacy))
+
+        # de-dup preserve order
+        seen2: set[str] = set()
+        return [x for x in normalized if not (x in seen2 or seen2.add(x))]
 
     @root_validator(pre=True)
     def _populate_images(cls, values):

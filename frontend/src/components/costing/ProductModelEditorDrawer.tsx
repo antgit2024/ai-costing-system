@@ -1057,12 +1057,33 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       setVersionImageCursor(0)
       return
     }
-    const list: ModelVersionImageRead[] = items.map((it: any, idx: number) => ({
-      index: idx,
-      url: `/api/planner/product-model-versions/${selectedVersionId}/images/${idx}`,
-      filename: typeof it?.filename === 'string' ? it.filename : null,
-      content_type: typeof it?.content_type === 'string' ? it.content_type : null,
-    }))
+    // IMPORTANT: backend deletion keeps indices stable by setting version_images[idx] = null.
+    // UI should only render items that actually exist (has path / legacy string), otherwise it will show broken images.
+    const list: ModelVersionImageRead[] = []
+    for (let idx = 0; idx < items.length; idx += 1) {
+      const it = items[idx]
+      if (typeof it === 'string') {
+        const s = String(it ?? '').trim()
+        if (!s) continue
+        list.push({
+          index: idx,
+          url: `/api/planner/product-model-versions/${selectedVersionId}/images/${idx}`,
+          filename: null,
+          content_type: null,
+        })
+        continue
+      }
+      if (it && typeof it === 'object') {
+        const hasPath = !!String((it as any)?.path ?? '').trim()
+        if (!hasPath) continue
+        list.push({
+          index: idx,
+          url: `/api/planner/product-model-versions/${selectedVersionId}/images/${idx}`,
+          filename: typeof (it as any)?.filename === 'string' ? (it as any).filename : null,
+          content_type: typeof (it as any)?.content_type === 'string' ? (it as any).content_type : null,
+        })
+      }
+    }
     setVersionImages(list)
     setVersionImageCursor((cur) => {
       if (list.length === 0) return 0

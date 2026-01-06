@@ -69,6 +69,7 @@ export default function StandardModelsPage() {
   const location = useLocation() as any
   const navigate = useNavigate()
   const [search, setSearch] = useState('')
+  const [mappingSearch, setMappingSearch] = useState('')
   const [category, setCategory] = useState<string | undefined>(undefined)
   const [includeArchived, setIncludeArchived] = useState(false)
   const [page] = useState(1)
@@ -133,6 +134,26 @@ export default function StandardModelsPage() {
     // 标准列表：为了“可见即可删/可见可查”，不再做 entry_context/版本数过滤（需要时可打开“显示已归档”）。
     return ((((listQuery.data as any)?.items ?? []) as any[]) || []).slice()
   }, [listQuery.data])
+
+  const filteredItems = useMemo(() => {
+    const q = String(mappingSearch || '').trim()
+    if (!q) return listItems
+    const terms = q
+      .split(/[\s,，;；/|]+/g)
+      .map((x) => x.trim())
+      .filter(Boolean)
+    if (!terms.length) return listItems
+
+    return (listItems as any[]).filter((r: any) => {
+      const meta: any = r?.metadata_json ?? {}
+      const raw = Array.isArray(meta?.recognition_keywords) ? meta.recognition_keywords : []
+      const kws = raw
+        .map((x: any) => String(x ?? '').trim())
+        .filter((x: string) => x)
+      const hay = kws.join(' ').toLowerCase()
+      return terms.some((t) => hay.includes(String(t).toLowerCase()))
+    })
+  }, [listItems, mappingSearch])
 
   const getBaselineTotalFromPublished = async (modelId: string, publishedVersionId: string) => {
     const versions = await fetchProductModelVersions(modelId)
@@ -458,6 +479,13 @@ export default function StandardModelsPage() {
                 placeholder="搜索三位编码 / 模型名 / 版本号"
                 style={{ width: 420 }}
               />
+              <Input
+                allowClear
+                value={mappingSearch}
+                onChange={(e) => setMappingSearch(e.target.value)}
+                placeholder="搜索货品映射（关键词）"
+                style={{ width: 260 }}
+              />
               <Select
                 allowClear
                 showSearch
@@ -492,7 +520,7 @@ export default function StandardModelsPage() {
             <Table
               rowKey={(r) => r.id}
               loading={listQuery.isLoading}
-              dataSource={listItems as ProductModel[]}
+              dataSource={filteredItems as ProductModel[]}
               columns={columns}
               pagination={false}
               scroll={{ x: 980 }}

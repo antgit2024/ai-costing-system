@@ -420,7 +420,7 @@ export default function StructureStandardsPage() {
       <Drawer
         open={drawerOpen}
         title={drawerMode === 'create' ? '新增结构标准' : '编辑结构标准'}
-        width={840}
+        width={890}
         onClose={() => setDrawerOpen(false)}
         destroyOnClose
         extra={
@@ -471,7 +471,7 @@ export default function StructureStandardsPage() {
                 <Space direction="vertical" style={{ width: '100%' }} size={8}>
                   {fields.map((field) => (
                     <div key={field.key} style={{ padding: 10, border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                      <Space style={{ display: 'flex', width: '100%' }} align="baseline" wrap>
+                      <Space style={{ display: 'flex', width: '100%' }} align="baseline">
                         {/* 中文名（缩到原来的 ~2/3 宽度） */}
                         <Form.Item
                           {...field}
@@ -506,15 +506,20 @@ export default function StructureStandardsPage() {
                         </Form.Item>
 
                         {/* 备注（自适应占满剩余空间） */}
-                        <Form.Item {...field} name={[field.name, 'remark']} style={{ marginBottom: 0, flex: 1, minWidth: 260 }}>
+                        <Form.Item {...field} name={[field.name, 'remark']} style={{ marginBottom: 0, flex: 1, minWidth: 220 }}>
                           <Input placeholder="备注：口径/余量/缝耗说明" />
                         </Form.Item>
 
-                        <Form.Item {...field} name={[field.name, 'enabled']} valuePropName="checked" style={{ marginBottom: 0 }}>
+                        <Form.Item
+                          {...field}
+                          name={[field.name, 'enabled']}
+                          valuePropName="checked"
+                          style={{ marginBottom: 0, alignSelf: 'flex-start' }}
+                        >
                           <Switch checkedChildren="启用" unCheckedChildren="不启用" defaultChecked />
                         </Form.Item>
 
-                        <Button danger onClick={() => remove(field.name)}>
+                        <Button danger style={{ alignSelf: 'flex-start' }} onClick={() => remove(field.name)}>
                           删除
                         </Button>
                       </Space>

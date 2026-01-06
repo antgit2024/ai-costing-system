@@ -5609,6 +5609,58 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                   return isGlobal ? <Tag color="blue">通用（GLOBAL）</Tag> : <Tag>结构相关</Tag>
                 },
               },
+              {
+                title: '结构位/驱动量',
+                width: 220,
+                render: (_: any, r: any) => {
+                  const structureCode = String(selectedStructureStandardCode ?? '').trim()
+                  const meta: any = r?.metadata_json ?? {}
+                  const tags = Array.isArray(meta?.structure_tags) ? meta.structure_tags.map((x: any) => String(x)) : []
+                  const isGlobal = tags.includes('GLOBAL')
+                  if (!structureCode || isGlobal) return <Text type="secondary">-</Text>
+
+                  const slots =
+                    tags
+                      .filter((t: string) => t.startsWith(`${structureCode}:`))
+                      .map((t: string) => String(t.split(':')[1] ?? '').trim())
+                      .filter(Boolean) ?? []
+
+                  const defs = (selectedStructureStandard as any)?.slot_defs ?? []
+                  const labelByCode = (selectedStructureStandard as any)?.slot_display_names ?? {}
+                  const defByCode = new Map<string, any>()
+                  for (const d of defs as any[]) {
+                    const c = String(d?.code ?? '').trim()
+                    if (c) defByCode.set(c, d)
+                  }
+
+                  if (!slots.length) return <Text type="secondary">-</Text>
+                  const show = slots.slice(0, 2)
+                  const rest = slots.length - show.length
+                  return (
+                    <Space direction="vertical" size={2}>
+                      <Space size={6} wrap>
+                        {show.map((s: string) => {
+                          const d = defByCode.get(s) ?? {}
+                          const driver = String(d?.driver_quantity ?? '').trim()
+                          const cn = String((labelByCode as any)?.[s] ?? s).trim()
+                          const tip = [driver ? `驱动量：${driver}` : '', String(d?.remark ?? '').trim()].filter(Boolean).join('；')
+                          return tip ? (
+                            <Tooltip key={s} title={tip}>
+                              <Tag style={{ marginInlineEnd: 0 }}>{cn}</Tag>
+                            </Tooltip>
+                          ) : (
+                            <Tag key={s} style={{ marginInlineEnd: 0 }}>
+                              {cn}
+                            </Tag>
+                          )
+                        })}
+                        {rest > 0 ? <Text type="secondary">+{rest}</Text> : null}
+                      </Space>
+                      {slots.length > 1 ? <Text type="warning">提示：该模块标记了多个 slot，可能引发漂移</Text> : null}
+                    </Space>
+                  )
+                },
+              },
               { title: '状态', dataIndex: 'status', width: 110, render: (v: string) => <Tag>{v}</Tag> },
               { title: '版本', dataIndex: 'version', width: 80 },
             ]}

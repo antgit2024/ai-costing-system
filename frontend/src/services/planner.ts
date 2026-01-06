@@ -291,12 +291,16 @@ const normalizeStructureStandard = (item: any): StructureStandardRead => {
   const meta = (item?.metadata ?? item?.metadata_json ?? {}) as any
   const displayName = String(meta?.display_name ?? meta?.name ?? '').trim()
   const defsRaw = meta?.slot_defs
-  const slot_defs: Array<{ code: string; name_cn?: string; enabled?: boolean }> | undefined = Array.isArray(defsRaw)
+  const slot_defs:
+    | Array<{ code: string; name_cn?: string; enabled?: boolean; remark?: string; driver_quantity?: string }>
+    | undefined = Array.isArray(defsRaw)
     ? defsRaw
         .map((r: any) => ({
           code: String(r?.code ?? '').trim(),
           name_cn: String(r?.name_cn ?? '').trim() || undefined,
           enabled: r?.enabled === false ? false : true,
+          remark: String(r?.remark ?? '').trim() || undefined,
+          driver_quantity: String(r?.driver_quantity ?? '').trim() || undefined,
         }))
         .filter((r: any) => r.code)
     : undefined
@@ -371,7 +375,7 @@ export const createStructureStandard = async (payload: {
   name: string
   slots: string[]
   slot_display_names?: Record<string, string>
-  slot_defs?: Array<{ code: string; name_cn?: string; enabled?: boolean }>
+  slot_defs?: Array<{ code: string; name_cn?: string; enabled?: boolean; remark?: string; driver_quantity?: string }>
   status?: 'active' | 'inactive'
 }): Promise<StructureStandardRead> => {
   const code = String(payload.code ?? '').trim()
@@ -404,7 +408,7 @@ export const updateStructureStandard = async (
     name?: string
     slots?: string[]
     slot_display_names?: Record<string, string>
-    slot_defs?: Array<{ code: string; name_cn?: string; enabled?: boolean }>
+    slot_defs?: Array<{ code: string; name_cn?: string; enabled?: boolean; remark?: string; driver_quantity?: string }>
     status?: 'active' | 'inactive'
   },
 ): Promise<StructureStandardRead> => {

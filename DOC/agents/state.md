@@ -11,6 +11,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-05（Frontend：产品上架（测试台）“命中情况”Tab 增强：展示触发条件表达式 + 基准物料 + 替换物料（通过版本清单 + line-variants 查询拼装），便于运营一眼排错；验收 `npm -C frontend run build`）
 - **最近校对（北京时间 GMT+8）**：2026-01-05（Frontend：标准模型管理清单编辑防呆：仅 draft 版本允许“新增/替换物料、工序”；非 draft 直接禁用入口并提示先复制版本，避免误以为“没落库”；验收 `npm -C frontend run build`）
 - **最近校对（北京时间 GMT+8）**：2026-01-05（Frontend：标准模型管理清单编辑稳定性修复：版本清单查询 `linesQuery` 禁止 focus/reconnect 自动 refetch，避免覆盖本地未保存新增/调参；新增行改为函数式 setState 防止闭包旧值；验收 `npm -C frontend run build`）
+- **最近校对（北京时间 GMT+8）**：2026-01-05（Frontend：结构标准 slots 扩展元数据：每个 slot 支持“驱动量/备注”字段（落在 taxonomy.metadata.slot_defs），并在“选择工艺模块”弹窗内展示模块对应 slot 的驱动量/备注，辅助防漂移；验收 `npm -C frontend run build`）
 - **最近校对（北京时间 GMT+8）**：2026-01-05（Backend：修复 `GET /api/planner/process-modules?structure_code=...` 500（兼容性：结构筛选改为 Python 过滤，避免 Postgres JSONPath 不兼容）；验证：`curl -sS "http://127.0.0.1:8800/api/planner/process-modules?page=1&page_size=10&structure_code=baozhen"`；验收：`./backend/venv/bin/python -m pytest backend/tests/planner/test_structure_tag_filters_mvp.py -q`）
 
 - **最近校对（北京时间 GMT+8）**：2025-12-30 19:20（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_backend.md`）

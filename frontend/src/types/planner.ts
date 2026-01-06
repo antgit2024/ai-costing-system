@@ -1602,7 +1602,13 @@ export interface StructureStandardRead {
   name: string
   slots: string[]
   slot_display_names?: Record<string, string>
-  slot_defs?: Array<{ code: string; name_cn?: string; enabled?: boolean }>
+  slot_defs?: Array<{
+    code: string
+    name_cn?: string
+    enabled?: boolean
+    remark?: string
+    driver_quantity?: string
+  }>
   status: StructureStandardStatus
   updated_at?: string
 }

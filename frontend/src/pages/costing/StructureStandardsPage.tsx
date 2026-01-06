@@ -28,7 +28,7 @@ const normalizeSlots = (raw: any): string[] => {
   return out.filter((x) => (seen.has(x) ? false : (seen.add(x), true)))
 }
 
-type SlotRow = { cn?: string; code?: string; enabled?: boolean }
+type SlotRow = { cn?: string; code?: string; enabled?: boolean; remark?: string; driver_quantity?: string }
 
 export default function StructureStandardsPage() {
   const queryClient = useQueryClient()
@@ -95,6 +95,8 @@ export default function StructureStandardsPage() {
         code: String(r?.code ?? '').trim(),
         cn: String(r?.name_cn ?? r?.cn ?? '').trim(),
         enabled: r?.enabled === false ? false : true,
+        remark: String(r?.remark ?? '').trim() || undefined,
+        driver_quantity: String(r?.driver_quantity ?? '').trim() || undefined,
       }))
       .filter((r) => r.code)
     editorForm.setFieldsValue({
@@ -286,9 +288,11 @@ export default function StructureStandardsPage() {
     const slot_display_names: Record<string, string> = {}
     const slotCodesAll: string[] = []
     const slotCodesActive: string[] = []
-    const slot_defs: Array<{ code: string; name_cn?: string; enabled?: boolean }> = []
+    const slot_defs: Array<{ code: string; name_cn?: string; enabled?: boolean; remark?: string; driver_quantity?: string }> = []
     for (const row of rows) {
       const cn = String(row?.cn ?? '').trim()
+      const remark = String(row?.remark ?? '').trim() || undefined
+      const driver_quantity = String(row?.driver_quantity ?? '').trim() || undefined
       const rawCode = String(row?.code ?? '').trim()
       const c = rawCode ? toPinyinCode(rawCode) : toPinyinCode(cn)
       if (!c) continue
@@ -296,7 +300,7 @@ export default function StructureStandardsPage() {
       if (!slotCodesAll.includes(c)) slotCodesAll.push(c)
       if (enabled && !slotCodesActive.includes(c)) slotCodesActive.push(c)
       if (cn) slot_display_names[c] = cn
-      slot_defs.push({ code: c, name_cn: cn || undefined, enabled })
+      slot_defs.push({ code: c, name_cn: cn || undefined, enabled, remark, driver_quantity })
     }
     const slots = normalizeSlots(slotCodesActive)
     const status: StructureStandardStatus = values.is_active ? 'active' : 'inactive'
@@ -463,42 +467,57 @@ export default function StructureStandardsPage() {
               {(fields, { add, remove }) => (
                 <Space direction="vertical" style={{ width: '100%' }} size={8}>
                   {fields.map((field) => (
-                    <Space key={field.key} style={{ display: 'flex' }} align="baseline">
-                      <Form.Item
-                        {...field}
-                        name={[field.name, 'cn']}
-                        style={{ marginBottom: 0, width: 260 }}
-                        rules={[{ required: true, message: '请输入中文名' }]}
-                      >
-                        <Input
-                          placeholder="中文名，例如：拉链位"
-                          onChange={(e) => {
-                            const cn = String(e.target.value ?? '')
-                            const currentRows: SlotRow[] = editorForm.getFieldValue('slot_rows') ?? []
-                            const idx = Number(field.name)
-                            const curCode = String(currentRows?.[idx]?.code ?? '').trim()
-                            // only auto-fill when code is empty
-                            if (!curCode) {
-                              const next = toPinyinCode(cn)
-                              editorForm.setFieldValue(['slot_rows', idx, 'code'], next)
-                            }
-                          }}
-                        />
-                      </Form.Item>
-                      <Form.Item {...field} name={[field.name, 'code']} style={{ marginBottom: 0, width: 260 }}>
-                        <Input placeholder="拼音短码（自动生成，可手改），例如：lalianwei / lalian" />
-                      </Form.Item>
-                      <Form.Item {...field} name={[field.name, 'enabled']} valuePropName="checked" style={{ marginBottom: 0 }}>
-                        <Switch checkedChildren="启用" unCheckedChildren="不启用" defaultChecked />
-                      </Form.Item>
-                      <Button danger onClick={() => remove(field.name)}>
-                        删除
-                      </Button>
-                    </Space>
+                    <div key={field.key} style={{ padding: 10, border: '1px solid #f0f0f0', borderRadius: 8 }}>
+                      <Space style={{ display: 'flex', width: '100%', justifyContent: 'space-between' }} align="baseline" wrap>
+                        <Space align="baseline" wrap>
+                          <Form.Item
+                            {...field}
+                            name={[field.name, 'cn']}
+                            style={{ marginBottom: 0, width: 260 }}
+                            rules={[{ required: true, message: '请输入中文名' }]}
+                          >
+                            <Input
+                              placeholder="中文名，例如：主体面 / 边缘处理"
+                              onChange={(e) => {
+                                const cn = String(e.target.value ?? '')
+                                const currentRows: SlotRow[] = editorForm.getFieldValue('slot_rows') ?? []
+                                const idx = Number(field.name)
+                                const curCode = String(currentRows?.[idx]?.code ?? '').trim()
+                                // only auto-fill when code is empty
+                                if (!curCode) {
+                                  const next = toPinyinCode(cn)
+                                  editorForm.setFieldValue(['slot_rows', idx, 'code'], next)
+                                }
+                              }}
+                            />
+                          </Form.Item>
+                          <Form.Item {...field} name={[field.name, 'code']} style={{ marginBottom: 0, width: 260 }}>
+                            <Input placeholder="拼音短码（自动生成，可手改），例如：body / edge_finish" />
+                          </Form.Item>
+                          <Form.Item {...field} name={[field.name, 'enabled']} valuePropName="checked" style={{ marginBottom: 0 }}>
+                            <Switch checkedChildren="启用" unCheckedChildren="不启用" defaultChecked />
+                          </Form.Item>
+                        </Space>
+                        <Button danger onClick={() => remove(field.name)}>
+                          删除
+                        </Button>
+                      </Space>
+
+                      <div style={{ marginTop: 8 }}>
+                        <Space style={{ display: 'flex', width: '100%' }} align="baseline" wrap>
+                          <Form.Item {...field} name={[field.name, 'driver_quantity']} label="驱动量" style={{ marginBottom: 0, width: 220 }}>
+                            <Input placeholder="例如：area_m2 / perimeter_m / count" />
+                          </Form.Item>
+                          <Form.Item {...field} name={[field.name, 'remark']} label="备注" style={{ marginBottom: 0, flex: 1, minWidth: 260 }}>
+                            <Input placeholder="例如：主体面=面积×片数；边缘处理=周长+工艺余量" />
+                          </Form.Item>
+                        </Space>
+                      </div>
+                    </div>
                   ))}
                   <Button
                     type="dashed"
-                    onClick={() => add({ cn: '', code: '', enabled: true })}
+                    onClick={() => add({ cn: '', code: '', enabled: true, remark: '', driver_quantity: '' })}
                     style={{ width: 540 }}
                   >
                     新增 slot

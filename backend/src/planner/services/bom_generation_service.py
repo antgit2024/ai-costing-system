@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session
 
 from .. import models
-from . import line_variant_service, product_model_service, spec_parser_service
+from . import bundle_template_service, line_variant_service, product_model_service, spec_parser_service
 
 
 def generate_bom(
@@ -149,6 +149,52 @@ def generate_bom(
             "inventory": inventory,
         },
     }
+
+
+def generate_bom_by_spec(
+    db: Session,
+    *,
+    spec_text: str,
+    sku_code: Optional[str],
+    include_disabled_variants: bool = False,
+) -> Dict[str, Any]:
+    """
+    Generate BOM by spec_text tokens (high-priority, customer-facing).
+
+    Current supported token(s):
+    - BUNDLE:<code> => load bundle template and generate multi-model merged BOM.
+    """
+    spec_result = spec_parser_service.parse_spec(spec_text or "")
+    tokens = [str(x) for x in (spec_result.get("tokens") or [])]
+    bundle_token = next((t for t in tokens if str(t).upper().startswith("BUNDLE:")), None)
+    if not bundle_token:
+        raise ValueError("交易规格未包含套装编码（BUNDLE:XXXX）")
+    code = str(bundle_token).split(":", 1)[1].strip().upper()
+    if not code:
+        raise ValueError("套装编码非法")
+
+    tpl = bundle_template_service.get_by_code(db, code)
+    components = list(tpl.components_json or [])
+    if not components:
+        raise ValueError(f"套装模板无组件：{code}")
+
+    res = generate_bom_multi_bundle(
+        db,
+        sku_code=sku_code,
+        components=components,
+        include_disabled_variants=include_disabled_variants,
+    )
+    merged = res.get("merged") or {}
+    if not isinstance(merged, dict):
+        raise ValueError("合并器返回异常")
+    trace = merged.get("trace") if isinstance(merged.get("trace"), dict) else {}
+    trace = dict(trace)
+    trace["bundle_code"] = f"BUNDLE:{code}"
+    trace["bundle_template_id"] = tpl.id
+    trace["bundle_template_name"] = tpl.name
+    trace["parsed"] = spec_result  # overwrite parsed to be the original spec parse result
+    merged["trace"] = trace
+    return merged
 
 
 def generate_bom_bundle(

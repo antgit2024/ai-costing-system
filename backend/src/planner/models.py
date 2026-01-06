@@ -759,6 +759,23 @@ class SkuModelVersionMapping(Base, TimestampMixin, SoftDeleteMixin):
     model_version: Mapped["ProductModelVersion"] = relationship("ProductModelVersion")
 
 
+class BundleTemplate(Base, TimestampMixin, SoftDeleteMixin):
+    """
+    Bundle/kit template definition addressed by a short human-friendly code.
+
+    The code is intended to be embedded in ERP/customer-facing spec_text, e.g.:
+    - "BUNDLE:K8F3J2"
+    """
+
+    __tablename__ = "bundle_templates"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    code: Mapped[str] = Column(String(32), nullable=False, unique=True, index=True)
+    name: Mapped[str | None] = Column(String(128))
+    components_json: Mapped[List[Dict[str, Any]]] = Column("components", JSON, default=list, nullable=False)
+    metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict, nullable=False)
+
+
 class ModelProcessModule(Base, TimestampMixin, SoftDeleteMixin):
     __tablename__ = "model_process_modules"
 

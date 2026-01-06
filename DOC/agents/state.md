@@ -46,7 +46,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：标准模型列表 UI 优化：品类列缩窄并移到模型名前；模型名列缩窄；“匹配模块”改名“货品映射”并加宽；隐藏状态/入口列；“当前发布标准”改为更小的带边框标签显示；验收 `npm -C frontend run build` 并已发布静态资源）
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：标准模型列表增加“货品映射（关键词）”筛选框：在当前列表数据中按 `metadata_json.recognition_keywords` 进行过滤（支持空格/逗号分隔的任意命中）；验收 `npm -C frontend run build` 并已发布静态资源）
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Backend+Frontend：套装壳（方案A）MVP：新增后端 `/api/planner/bom/generate-bundle`（组件尺寸/数量显式输入，不从交易规格解析；支持 tokens 触发行级变体；输出单件结果+合并BOM/成本/扣库）；前端“产品上架（测试台）”新增套装模式组件录入与“套装：预演BOM（合并器）”按钮；验收 `npm -C frontend run build`，已发布静态并重启后端）
-- **最近校对（北京时间 GMT+8）**：2026-01-06（Backend：继续修复兜底物料扣库缺失：inventory 构建将 `material_kind=bom` 视为可扣库（按真实物料扣库），并对未知 kind 输出 warnings 便于定位；验收后端 py_compile+pytest（扣库单测新增覆盖 bom），已重启后端）
+- **最近校对（北京时间 GMT+8）**：2026-01-06（Backend+Frontend：交易规格编码闭环（BUNDLE）MVP：新增 `bundle_templates` 表与接口（创建/按code查询），`spec/parse` 抽取 `BUNDLE:XXXX` token；新增 `/api/planner/bom/generate-by-spec`：识别交易规格里的 `BUNDLE` 并自动调用多模型合并器返回合并BOM；前端测试台多模型TAB新增“保存为套装编码”，单模型TAB预演时检测到 `BUNDLE` 将优先走 token 预演；验收：alembic upgrade head + pytest + 后端重启 + `npm -C frontend run build` + 静态发布）
 
 ### 关键口径备忘（避免回滚/重构改坏）
 

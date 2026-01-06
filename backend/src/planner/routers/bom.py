@@ -85,3 +85,29 @@ def generate_bom_multi_bundle(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return schemas.BomGenerateMultiBundleResponse(**result)
 
+
+@router.post(
+    "/generate-by-spec",
+    response_model=schemas.BomGenerateResponse,
+    status_code=status.HTTP_200_OK,
+)
+def generate_bom_by_spec(
+    payload: schemas.BomGenerateBySpecRequest,
+    db: Session = Depends(get_db),
+) -> schemas.BomGenerateResponse:
+    """
+    Generate BOM by customer-facing spec_text token(s).
+    Currently supports:
+    - BUNDLE:<code> (bundle template code)
+    """
+    try:
+        result = bom_generation_service.generate_bom_by_spec(
+            db,
+            spec_text=payload.spec_text,
+            sku_code=payload.sku_code,
+            include_disabled_variants=bool(payload.include_disabled_variants),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return schemas.BomGenerateResponse(**result)
+

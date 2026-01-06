@@ -1302,6 +1302,51 @@ export const generateBomMultiBundle = async (
   return response.data
 }
 
+export type BundleTemplateComponent = {
+  model_version_id: string
+  width_mm: number
+  height_mm: number
+  quantity: number
+  spec_text?: string
+  label?: string
+}
+
+export type BundleTemplateCreateRequest = {
+  name?: string
+  components: BundleTemplateComponent[]
+  metadata?: Record<string, any>
+}
+
+export type BundleTemplateRead = {
+  id: string
+  code: string
+  name?: string | null
+  components: BundleTemplateComponent[]
+  metadata: Record<string, any>
+  is_archived: boolean
+}
+
+export const createBundleTemplate = async (payload: BundleTemplateCreateRequest): Promise<BundleTemplateRead> => {
+  const response = await plannerClient.post(`/bundle-templates`, payload)
+  return response.data
+}
+
+export const fetchBundleTemplateByCode = async (code: string): Promise<BundleTemplateRead> => {
+  const response = await plannerClient.get(`/bundle-templates/by-code/${encodeURIComponent(code)}`)
+  return response.data
+}
+
+export type BomGenerateBySpecRequest = {
+  spec_text: string
+  sku_code?: string
+  include_disabled_variants?: boolean
+}
+
+export const generateBomBySpec = async (payload: BomGenerateBySpecRequest): Promise<BomGenerateResponse> => {
+  const response = await plannerClient.post(`/bom/generate-by-spec`, payload)
+  return response.data
+}
+
 export const fetchProductModelMaterials = async (
   modelId: string,
 ): Promise<Array<Record<string, any>>> => {

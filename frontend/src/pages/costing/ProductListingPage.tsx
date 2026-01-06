@@ -7,7 +7,9 @@ import {
   fetchProductModels,
   fetchProductModelVersions,
   fetchProductModelVersionsPaged,
+  createBundleTemplate,
   generateBom,
+  generateBomBySpec,
   generateBomMultiBundle,
   listLineVariants,
   parseSpec,
@@ -61,6 +63,7 @@ export default function ProductListingPage() {
   >([{ model_version_id: null, width_cm: 45, height_cm: 45, quantity: 1, spec_text: '' }])
   const [multiDetail, setMultiDetail] = useState<any[] | null>(null)
   const [lastError, setLastError] = useState<string | null>(null)
+  const [bundleTokenHint, setBundleTokenHint] = useState<string | null>(null)
 
   const modelsQuery = useQuery({
     queryKey: ['product-models', 'listing', 'search', draft.sku_code ? '' : ''],
@@ -110,6 +113,13 @@ export default function ProductListingPage() {
     [selectableStandardVersions, draft.model_version_id],
   )
 
+  const bundleTokenInSpec = useMemo(() => {
+    const t = String(draft.spec_text || '')
+    const m = t.match(/BUNDLE:([A-Z0-9]{4,16})/i)
+    if (!m) return null
+    return `BUNDLE:${String(m[1]).toUpperCase()}`
+  }, [draft.spec_text])
+
   const parseMutation = useMutation({
     mutationFn: async () => {
       const spec_text = String(draft.spec_text ?? '').trim()
@@ -125,20 +135,26 @@ export default function ProductListingPage() {
   const previewMutation = useMutation({
     mutationFn: async () => {
       const spec_text = String(draft.spec_text ?? '').trim()
-      const model_version_id = String(draft.model_version_id ?? '').trim()
-      if (!model_version_id) throw new Error('请先选择“已发布标准版本”')
       if (!spec_text) throw new Error('请先输入交易规格（spec_text）')
       setLastError(null)
 
+      // 优先：交易规格中的套装编码（运营口径，避免依赖SKU/ERP同步）
+      if (bundleTokenInSpec) {
+        const bomRes = await generateBomBySpec({
+          spec_text,
+          sku_code: draft.sku_code || undefined,
+        })
+        setBom(bomRes)
+        setParsed(((bomRes as any)?.trace ?? {})?.parsed ?? null)
+        return bomRes
+      }
+
+      const model_version_id = String(draft.model_version_id ?? '').trim()
+      if (!model_version_id) throw new Error('请先选择“已发布标准版本”（或在交易规格中提供 BUNDLE:XXXX）')
+
       const parsedRes = await parseSpec({ spec_text, sku_code: draft.sku_code || undefined })
       setParsed(parsedRes)
-
-      const bomRes = await generateBom({
-        spec_text,
-        model_version_id,
-        sku_code: draft.sku_code || undefined,
-        quantity: 1,
-      })
+      const bomRes = await generateBom({ spec_text, model_version_id, sku_code: draft.sku_code || undefined, quantity: 1 })
       setBom(bomRes)
       return bomRes
     },
@@ -170,6 +186,33 @@ export default function ProductListingPage() {
     },
     onSuccess: () => message.success('多模型套装预演完成'),
     onError: (e: any) => setLastError(String(e?.message ?? e)),
+  })
+
+  const saveBundleTemplateMutation = useMutation({
+    mutationFn: async () => {
+      const comps = (multiComponents ?? [])
+        .map((c) => ({
+          model_version_id: String(c.model_version_id ?? '').trim(),
+          width_mm: Number(c.width_cm) * 10,
+          height_mm: Number(c.height_cm) * 10,
+          quantity: Number(c.quantity),
+          spec_text: String(c.spec_text || '').trim() || undefined,
+        }))
+        .filter((c) => c.model_version_id && c.width_mm > 0 && c.height_mm > 0 && c.quantity > 0)
+      if (!comps.length) throw new Error('请先填写多模型组件（模型版本/宽/高/数量）')
+      const res = await createBundleTemplate({
+        name: draft.sku_code ? `SKU:${draft.sku_code}` : undefined,
+        components: comps as any,
+        metadata: { source: 'product_listing_console' },
+      } as any)
+      return res
+    },
+    onSuccess: (res: any) => {
+      const token = `BUNDLE:${String(res?.code ?? '').toUpperCase()}`
+      setBundleTokenHint(token)
+      message.success(`已生成套装编码：${token}`)
+    },
+    onError: (e: any) => message.error(String(e?.message ?? e)),
   })
 
   const matchedVariants = useMemo(() => {
@@ -358,6 +401,7 @@ export default function ProductListingPage() {
                   setParsed(null)
                   setBom(null)
                   setMultiDetail(null)
+                  setBundleTokenHint(null)
                 }}
                 items={[
                   { key: 'single', label: '单模型测试' },
@@ -409,6 +453,15 @@ export default function ProductListingPage() {
               ) : (
                 <Alert type="info" showIcon message="多模型测试：每一行单独选择模型版本（可来自同一交易规格拆分后人工录入）。" />
               )}
+
+              {mode === 'single' && bundleTokenInSpec ? (
+                <Alert
+                  type="success"
+                  showIcon
+                  message={`检测到套装编码：${bundleTokenInSpec}`}
+                  description="将优先按交易规格中的 BUNDLE 编码生成合并BOM（无需选择模型/版本，也不解析尺寸）。"
+                />
+              ) : null}
 
               {mode === 'single' ? (
                 <>
@@ -478,11 +531,25 @@ export default function ProductListingPage() {
                     </Button>
                   </>
                 ) : (
-                  <Button type="primary" loading={multiBundlePreviewMutation.isPending} onClick={() => multiBundlePreviewMutation.mutate()}>
-                    多模型：预演 BOM（合并器）
-                  </Button>
+                  <>
+                    <Button type="primary" loading={multiBundlePreviewMutation.isPending} onClick={() => multiBundlePreviewMutation.mutate()}>
+                      多模型：预演 BOM（合并器）
+                    </Button>
+                    <Button loading={saveBundleTemplateMutation.isPending} onClick={() => saveBundleTemplateMutation.mutate()}>
+                      保存为套装编码
+                    </Button>
+                  </>
                 )}
               </Space>
+
+              {mode === 'multi' && bundleTokenHint ? (
+                <Alert
+                  type="success"
+                  showIcon
+                  message={`套装编码已生成：${bundleTokenHint}`}
+                  description={`把这个编码放进交易规格里即可直接预演合并BOM，例如：组合装 ${bundleTokenHint} 40*50`}
+                />
+              ) : null}
 
               {mode === 'multi' ? (
                 <>

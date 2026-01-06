@@ -2087,6 +2087,42 @@ class BomGenerateMultiBundleResponse(BaseModel):
     components: List[Dict[str, Any]] = Field(default_factory=list)
 
 
+class BundleTemplateComponent(BaseModel):
+    model_version_id: str = Field(..., max_length=36)
+    width_mm: Decimal = Field(..., ge=0)
+    height_mm: Decimal = Field(..., ge=0)
+    quantity: Decimal = Field(Decimal("1"), gt=0)
+    spec_text: Optional[str] = Field(None, max_length=512, description="组件交易规格（可选，仅用于触发变体）")
+    label: Optional[str] = Field(None, max_length=128)
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class BundleTemplateCreateRequest(BaseModel):
+    name: Optional[str] = Field(None, max_length=128)
+    components: List[BundleTemplateComponent] = Field(default_factory=list, min_items=1)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class BundleTemplateRead(BaseModel):
+    id: str
+    code: str
+    name: Optional[str] = None
+    components: List[BundleTemplateComponent] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    is_archived: bool = False
+
+
+class BomGenerateBySpecRequest(BaseModel):
+    spec_text: str = Field(..., min_length=1, max_length=512)
+    sku_code: Optional[str] = Field(None, max_length=128)
+    include_disabled_variants: bool = False
+
+
 
 class ModelVersionImageRead(BaseModel):
     index: int

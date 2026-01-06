@@ -34,3 +34,11 @@ def test_parse_spec_extracts_phrase_tokens_for_variants(client):
     # Should emit standalone phrase token so line-variant conditions can match it
     assert "背面纯色" in tokens
 
+
+def test_parse_spec_extracts_bundle_code_tokens(client):
+    spec_text = "组合装BUNDLE:K8F3J2 40X50"
+    r = client.post("/api/planner/spec/parse", json={"spec_text": spec_text})
+    assert r.status_code == 200, r.text
+    tokens = r.json().get("tokens") or []
+    assert "BUNDLE:K8F3J2" in tokens
+

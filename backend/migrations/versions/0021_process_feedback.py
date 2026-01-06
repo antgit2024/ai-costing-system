@@ -18,6 +18,11 @@ depends_on = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    dialect = getattr(getattr(bind, "dialect", None), "name", "")
+    json_default = sa.text("'{}'::json") if dialect == "postgresql" else sa.text("'{}'")
+    bool_false = sa.text("false") if dialect == "postgresql" else sa.text("0")
+    now_default = sa.text("now()") if dialect == "postgresql" else sa.text("CURRENT_TIMESTAMP")
     op.create_table(
         "process_feedback",
         sa.Column("id", sa.String(length=36), primary_key=True, nullable=False),
@@ -33,10 +38,10 @@ def upgrade() -> None:
         sa.Column("quality_score", sa.Numeric(5, 2), nullable=True),
         sa.Column("is_success", sa.Boolean(), nullable=True),
         sa.Column("notes", sa.Text(), nullable=True),
-        sa.Column("metadata", sa.JSON(), nullable=False, server_default=sa.text("'{}'::json")),
-        sa.Column("is_archived", sa.Boolean(), nullable=False, server_default=sa.text("false")),
-        sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.text("now()")),
-        sa.Column("updated_at", sa.DateTime(), nullable=False, server_default=sa.text("now()")),
+        sa.Column("metadata", sa.JSON(), nullable=False, server_default=json_default),
+        sa.Column("is_archived", sa.Boolean(), nullable=False, server_default=bool_false),
+        sa.Column("created_at", sa.DateTime(), nullable=False, server_default=now_default),
+        sa.Column("updated_at", sa.DateTime(), nullable=False, server_default=now_default),
     )
     op.create_index("ix_process_feedback_process_id", "process_feedback", ["process_id"])
 

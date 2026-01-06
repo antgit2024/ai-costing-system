@@ -36,6 +36,8 @@ LABELED_DIMENSION_PATTERN = re.compile(
 # - must include at least one letter and one digit
 # Examples: "PI5", "A1B"
 MODEL_CODE_3_PATTERN = re.compile(r"\b(?=[A-Z0-9]{3}\b)(?=.*[A-Z])(?=.*\d)[A-Z0-9]{3}\b", re.IGNORECASE)
+# Avoid \b here because ERP/spec_text often glues Chinese text with BUNDLE:CODE, and \b may not match.
+BUNDLE_CODE_PATTERN = re.compile(r"(BUNDLE:[A-Z0-9]{4,16})", re.IGNORECASE)
 
 
 def _to_decimal(value: Any) -> Decimal | None:
@@ -178,6 +180,11 @@ def parse_spec(spec_text: str) -> Dict[str, Any]:
             code = m.upper()
             extra_tokens.append(f"MODEL:{code}")
             explanations.append({"token": f"MODEL:{code}", "source": token, "rule": "extract_model_code_3"})
+
+        # Extract bundle template codes (e.g. "BUNDLE:K8F3J2") so BOM can be generated without parsing sizes.
+        for m in BUNDLE_CODE_PATTERN.findall(token):
+            extra_tokens.append(m.upper())
+            explanations.append({"token": m.upper(), "source": token, "rule": "extract_bundle_code"})
 
         # Extract whitelist phrase tokens from within a segment
         for phrase in PHRASE_TOKEN_WHITELIST:

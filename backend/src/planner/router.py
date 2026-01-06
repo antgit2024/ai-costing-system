@@ -8,6 +8,7 @@ from .routers import (
     base_config,
     benchmarks,
     bom,
+    bundle_templates,
     callbacks,
     codes,
     health,
@@ -52,4 +53,5 @@ router.include_router(shipments.router)
 router.include_router(sku_master.router)
 router.include_router(specs.router)
 router.include_router(taxonomy.router)
+router.include_router(bundle_templates.router)
 router.include_router(bom.router)

@@ -798,6 +798,15 @@ export default function ProductListingPage() {
 
                       <Divider style={{ margin: '4px 0' }} />
                       <Text strong>扣库清单（真实物料展开）</Text>
+                      {Array.isArray((bom?.trace as any)?.inventory?.warnings) && ((bom?.trace as any)?.inventory?.warnings ?? []).length ? (
+                        <Alert
+                          style={{ marginTop: 8 }}
+                          type="warning"
+                          showIcon
+                          message="扣库展开存在提示（可能导致部分物料未展开）"
+                          description={String(((bom?.trace as any)?.inventory?.warnings ?? []).slice(0, 5).join('；'))}
+                        />
+                      ) : null}
                       {inventoryLines.length ? (
                         <Table
                           size="small"

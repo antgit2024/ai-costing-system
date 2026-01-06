@@ -231,8 +231,9 @@ def generate_bom_bundle(
         for r in lines or []:
             code = str(r.get("material_code") or r.get("virtual_code") or "")
             mid = str(r.get("material_id") or "")
-            unit = str(r.get("unit") or "")
-            key = "|".join([mid or code, unit])
+            name = str(r.get("material_name") or r.get("virtual_name") or "")
+            unit = str(r.get("unit_of_measure") or r.get("unit") or "")
+            key = "|".join([mid or code or name, unit])
             cur = agg.get(key)
             if not cur:
                 cur = dict(r)
@@ -389,10 +390,16 @@ def generate_bom_bundle(
         "unit_cost": total_cost,  # per bundle (kit) default
         "process_lines": [],  # per-component kept in components.trace.costing.process_lines
     }
+    merged_warnings: List[str] = []
+    for r in component_results:
+        inv = ((r.get("trace") or {}).get("inventory") or {}) if isinstance(r.get("trace"), dict) else {}
+        ws = inv.get("warnings")
+        if isinstance(ws, list):
+            merged_warnings.extend([str(x) for x in ws if str(x)])
     merged_inventory = {
         "inventory_lines": merged_inventory_lines,
         "inventory_line_count": len(merged_inventory_lines),
-        "warnings": [],
+        "warnings": merged_warnings[:50],
     }
 
     merged = {
@@ -489,8 +496,9 @@ def generate_bom_multi_bundle(
         for r in (existing or []) + (incoming or []):
             code = str(r.get("material_code") or r.get("virtual_code") or "")
             mid = str(r.get("material_id") or "")
-            unit = str(r.get("unit") or "")
-            key = "|".join([mid or code, unit])
+            name = str(r.get("material_name") or r.get("virtual_name") or "")
+            unit = str(r.get("unit_of_measure") or r.get("unit") or "")
+            key = "|".join([mid or code or name, unit])
             cur = agg.get(key)
             if not cur:
                 cur = dict(r)
@@ -501,6 +509,7 @@ def generate_bom_multi_bundle(
         out = list(agg.values())
         out.sort(key=lambda x: str(x.get("material_code") or x.get("virtual_code") or ""))
         return out
+    merged_inventory_warnings: List[str] = []
 
     for vid, comps in groups.items():
         # strip model_version_id before passing into single-version bundle generator
@@ -529,8 +538,12 @@ def generate_bom_multi_bundle(
         overhead_rate = _d(costing.get("overhead_rate") or overhead_rate)
 
         merged_material_lines = _merge_material_lines(merged_material_lines, list(merged.get("final_material_lines") or []))
-        inv_lines = (((merged.get("trace") or {}).get("inventory") or {}).get("inventory_lines") or []) if isinstance(merged.get("trace"), dict) else []
+        inv = ((merged.get("trace") or {}).get("inventory") or {}) if isinstance(merged.get("trace"), dict) else {}
+        inv_lines = (inv.get("inventory_lines") or []) if isinstance(inv, dict) else []
         merged_inventory_lines = _merge_inventory_lines(merged_inventory_lines, list(inv_lines))
+        inv_ws = inv.get("warnings") if isinstance(inv, dict) else None
+        if isinstance(inv_ws, list):
+            merged_inventory_warnings.extend([f"[{vid}] {str(x)}" for x in inv_ws if str(x)])
 
     overhead_cost = (material_cost_total + process_cost_total) * overhead_rate
     total_cost = material_cost_total + process_cost_total + overhead_cost
@@ -549,7 +562,11 @@ def generate_bom_multi_bundle(
                 "total_cost": total_cost,
                 "unit_cost": total_cost,
             },
-            "inventory": {"inventory_lines": merged_inventory_lines, "inventory_line_count": len(merged_inventory_lines), "warnings": []},
+            "inventory": {
+                "inventory_lines": merged_inventory_lines,
+                "inventory_line_count": len(merged_inventory_lines),
+                "warnings": merged_inventory_warnings[:50],
+            },
         },
     }
     return {"merged": merged_out, "components": all_component_results}
@@ -1035,15 +1052,19 @@ def _build_inventory_lines(db: Session, final_lines: List[Dict[str, Any]]) -> Di
                 }
             )
 
-    # Aggregate by real material_code for readability
+    # Aggregate by real material_code (fallback to material_id/name) for readability
     agg: Dict[str, Dict[str, Any]] = {}
     for r in out_lines:
-        code = str(r.get("material_code") or "")
-        if not code:
+        code = str(r.get("material_code") or "").strip()
+        mid = str(r.get("material_id") or "").strip()
+        name = str(r.get("material_name") or "").strip()
+        key = code or mid or name
+        if not key:
             continue
         agg.setdefault(
-            code,
+            key,
             {
+                "material_id": r.get("material_id"),
                 "material_code": r.get("material_code"),
                 "material_name": r.get("material_name"),
                 "unit_of_measure": r.get("unit_of_measure"),
@@ -1051,10 +1072,10 @@ def _build_inventory_lines(db: Session, final_lines: List[Dict[str, Any]]) -> Di
                 "sources": [],
             },
         )
-        agg[code]["quantity"] = _d(agg[code]["quantity"]) + _d(r.get("quantity"))
+        agg[key]["quantity"] = _d(agg[key]["quantity"]) + _d(r.get("quantity"))
         # keep limited trace
-        if len(agg[code]["sources"]) < 20:
-            agg[code]["sources"].append(
+        if len(agg[key]["sources"]) < 20:
+            agg[key]["sources"].append(
                 {
                     "source": r.get("source"),
                     "from_line_index": r.get("from_line_index"),
@@ -1065,7 +1086,7 @@ def _build_inventory_lines(db: Session, final_lines: List[Dict[str, Any]]) -> Di
                 }
             )
 
-    agg_lines = sorted(agg.values(), key=lambda x: str(x.get("material_code") or ""))
+    agg_lines = sorted(agg.values(), key=lambda x: str(x.get("material_code") or x.get("material_id") or x.get("material_name") or ""))
     total_qty = sum([_d(x.get("quantity")) for x in agg_lines], Decimal("0"))
     return {
         "inventory_lines": agg_lines,

@@ -13,7 +13,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-05（Frontend：标准模型管理清单编辑稳定性修复：版本清单查询 `linesQuery` 禁止 focus/reconnect 自动 refetch，避免覆盖本地未保存新增/调参；新增行改为函数式 setState 防止闭包旧值；验收 `npm -C frontend run build`）
 - **最近校对（北京时间 GMT+8）**：2026-01-05（Frontend：结构标准 slots 扩展元数据：每个 slot 支持“驱动量/备注”字段（落在 taxonomy.metadata.slot_defs），并在“选择工艺模块”弹窗内展示模块对应 slot 的驱动量/备注，辅助防漂移；验收 `npm -C frontend run build`）
 - **最近校对（北京时间 GMT+8）**：2026-01-05（Frontend：结构标准 slots 编辑体验优化：单行 4 输入框（中文/短码缩为约 2/3 宽度），删除整行字段；抽屉宽度 +50px；验收 `npm -C frontend run build`）
-- **最近校对（北京时间 GMT+8）**：2026-01-05（Frontend：结构标准 slots 编辑体验优化：抽屉宽度 +20px（790）；验收 `npm -C frontend run build`）
+- **最近校对（北京时间 GMT+8）**：2026-01-05（Frontend：结构标准 slots 编辑体验优化：抽屉宽度加宽（840），并补充“新建结构原则：只建实物区位，虚拟/重叠区位不需要”提示文案；验收 `npm -C frontend run build`）
 - **最近校对（北京时间 GMT+8）**：2026-01-05（Backend：修复 `GET /api/planner/process-modules?structure_code=...` 500（兼容性：结构筛选改为 Python 过滤，避免 Postgres JSONPath 不兼容）；验证：`curl -sS "http://127.0.0.1:8800/api/planner/process-modules?page=1&page_size=10&structure_code=baozhen"`；验收：`./backend/venv/bin/python -m pytest backend/tests/planner/test_structure_tag_filters_mvp.py -q`）
 
 - **最近校对（北京时间 GMT+8）**：2025-12-30 19:20（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_backend.md`）

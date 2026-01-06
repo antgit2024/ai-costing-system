@@ -420,7 +420,7 @@ export default function StructureStandardsPage() {
       <Drawer
         open={drawerOpen}
         title={drawerMode === 'create' ? '新增结构标准' : '编辑结构标准'}
-        width={790}
+        width={840}
         onClose={() => setDrawerOpen(false)}
         destroyOnClose
         extra={
@@ -459,6 +459,9 @@ export default function StructureStandardsPage() {
                 </Text>
                 <Text type="secondary">
                   勾选“启用”的 slot 会出现在工艺模块的 slot(s) 下拉里；取消勾选表示“骨架可选位”，仅用于展示/规划，不参与下拉选择。
+                </Text>
+                <Text type="secondary">
+                  新建结构原则：只建立<strong>实物区位</strong>；<strong>虚拟区位</strong>不需要；<strong>重叠区位</strong>不需要（差异请落在工艺模块的粒子/枚举与适用范围规则中）。
                 </Text>
               </Space>
             }

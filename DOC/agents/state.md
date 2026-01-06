@@ -31,6 +31,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend+Backend：版本图片支持删除：新增 `DELETE /api/planner/product-model-versions/{version_id}/images/{image_index}`；标准模型/打样模型“基础信息”Tab 的版本图片缩略图增加删除按钮；验收 `npm -C frontend run build`）
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：修复删除版本图片后出现破图：hydrate `version_images` 时跳过 null 槽位（后端删除会置空以保持 index）；验收 `npm -C frontend run build`）
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：标准模型/打样管理抽屉标题追加“编码:名称”，避免不知道当前正在编辑哪个模型；验收 `npm -C frontend run build`）
+- **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend+Backend：物料“同步宜搭”后即时同步图片：后端 material image proxy 补齐从 raw_form_data 提取图片源并回写 metadata.images；前端同步完成后自动预拉取所有图片以触发本地缓存；验收 `npm -C frontend run build`）
 
 - **最近校对（北京时间 GMT+8）**：2025-12-30 19:20（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_backend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-30 20:27（Frontend：关联引用直达编辑 + 列宽收口）

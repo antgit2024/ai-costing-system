@@ -266,6 +266,20 @@ const getImageUrls = (record: Material): string[] => {
   return []
 }
 
+const prefetchMaterialImages = async (record: Material): Promise<void> => {
+  const urls = getImageUrls(record)
+  if (!urls.length) return
+  // Prefetch sequentially to avoid hammering backend/DingTalk; each hit will cache locally (if enabled).
+  for (const url of urls) {
+    try {
+      // Force GET to trigger backend image proxy download & local persistence.
+      await fetch(url, { method: 'GET' })
+    } catch {
+      // ignore; UI will still attempt to load when user opens the image tab
+    }
+  }
+}
+
 const getFormValue = (record: Material, key: string): string => {
   const metadata = (record.metadata_json ?? {}) as {
     raw_form_data?: Record<string, unknown>
@@ -1849,6 +1863,8 @@ const MaterialMasterPage = () => {
                       const hit = refreshed?.items?.[0]
                       if (hit) {
                         setEditingMaterial(hit)
+                        // After sync completes, eagerly fetch images so operator can view them immediately.
+                        await prefetchMaterialImages(hit)
                       }
                     }
                   } catch (err: any) {

@@ -26,6 +26,8 @@
     - “印染/印花/热转印/刺绣”属于 `body` 的工艺模块（作用在主体面上），不是独立区位
   - 验收命令（必须，1条）：`grep -nF "结构标准（v1）— 抱枕/靠垫（PILLOW_V1）" DOC/costing/blueprints/structure_standards/pillow_structure_standard_v1.md && grep -nF "结构标准（v1）— 桌布/桌旗/桌垫同构（TABLECLOTH_V1）" DOC/costing/blueprints/structure_standards/tablecloth_structure_standard_v1.md`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：工艺模块新建提醒：在“结构适用范围”规则说明区块下方，展示当前所选 slot 的“驱动量/备注”（来自结构标准 slot_defs），用于提醒新建工艺模块的人；验收 `npm -C frontend run build`）
+
 - **最近校对（北京时间 GMT+8）**：2025-12-30 19:20（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_backend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-30 20:27（Frontend：关联引用直达编辑 + 列宽收口）
 - **最近校对（北京时间 GMT+8）**：2025-12-30 21:03（Backend：关联引用过滤已归档/删除记录）

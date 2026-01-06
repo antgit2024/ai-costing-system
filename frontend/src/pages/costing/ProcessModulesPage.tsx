@@ -745,6 +745,32 @@ const ProcessModulesPage = () => {
     return code ? structureStandardByCode.get(code) ?? null : null
   }, [structureStandardByCode, structureStandardCodeValue])
 
+  const selectedStructureSlotHints = useMemo(() => {
+    const mode = String(structureModeValue ?? 'slot_internal') as StructureApplicabilityMode
+    if (mode === 'global') return []
+    if (!selectedStructureStandard) return []
+    const slots = normalizeStringArray(structureSlotsValue ?? [])
+    if (!slots.length) return []
+
+    const labelByCode = selectedStructureStandard.slot_display_names ?? {}
+    const defByCode = new Map<string, any>()
+    for (const d of (selectedStructureStandard.slot_defs ?? []) as any[]) {
+      const c = String(d?.code ?? '').trim()
+      if (c) defByCode.set(c, d)
+    }
+
+    return slots.map((s) => {
+      const d = defByCode.get(s) ?? {}
+      const cn = String((labelByCode as any)?.[s] ?? '').trim()
+      return {
+        slot: s,
+        label: cn ? `${cn}（${s}）` : s,
+        driver_quantity: String(d?.driver_quantity ?? '').trim() || null,
+        remark: String(d?.remark ?? '').trim() || null,
+      }
+    })
+  }, [selectedStructureStandard, structureModeValue, structureSlotsValue])
+
   // Auto-maintain structure_tags based on structure standard + mode + slots
   useEffect(() => {
     if (!drawerOpen) return
@@ -2574,6 +2600,35 @@ const ProcessModulesPage = () => {
                   <br />
                   规则（建议）：不依赖结构部位且跨品类通用的工艺 → 选 <Text code>global</Text>；只作用在单个部位/位置（拉链位/包边位/装饰位等） → 选 <Text code>slot_internal</Text> 并选 1 个 slot；需要把 ≥2 个部位拼接/装配在一起 → 选 <Text code>assembly</Text> 并选多个 slots。
                 </Text>
+                {selectedStructureSlotHints.length ? (
+                  <div style={{ marginTop: 10 }}>
+                    <Alert
+                      type="info"
+                      showIcon
+                      message="当前 slot 提示（来自结构标准的配置）"
+                      description={
+                        <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                          {selectedStructureSlotHints.map((it) => (
+                            <div key={it.slot}>
+                              <Tag style={{ marginInlineEnd: 0 }}>{it.label}</Tag>
+                              <div style={{ marginTop: 4 }}>
+                                <Text type="secondary">
+                                  驱动量：{it.driver_quantity ? <Text code>{it.driver_quantity}</Text> : '-'}
+                                  {it.remark ? (
+                                    <>
+                                      <span style={{ margin: '0 6px' }}>；</span>
+                                      备注：{it.remark}
+                                    </>
+                                  ) : null}
+                                </Text>
+                              </div>
+                            </div>
+                          ))}
+                        </Space>
+                      }
+                    />
+                  </div>
+                ) : null}
               </Col>
             </Row>
           </Card>

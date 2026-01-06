@@ -1106,6 +1106,11 @@ export const uploadProductModelVersionImage = async (versionId: string, file: Fi
   return response.data
 }
 
+export const deleteProductModelVersionImage = async (versionId: string, imageIndex: number): Promise<ModelVersionImagesResponse> => {
+  const response = await plannerClient.delete(`/product-model-versions/${versionId}/images/${imageIndex}`)
+  return response.data
+}
+
 export const updateProductModelVersionLines = async (
   versionId: string,
   payload: ProductModelLinesUpdateRequest,

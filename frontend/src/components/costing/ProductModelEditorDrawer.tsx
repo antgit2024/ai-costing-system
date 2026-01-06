@@ -55,6 +55,7 @@ import {
   createLineVariant,
   createProductModelVersion,
   deleteProductModelVersion,
+  deleteProductModelVersionImage,
   deriveStandardFromSampleVersion,
   fetchMaterial,
   fetchProductModel,
@@ -395,6 +396,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   const [versionImages, setVersionImages] = useState<ModelVersionImageRead[]>([])
   const [versionImageCursor, setVersionImageCursor] = useState(0)
   const [uploadingVersionImage, setUploadingVersionImage] = useState(false)
+  const [deletingVersionImage, setDeletingVersionImage] = useState(false)
 
   // 工序描述：用于“计量方式”右侧提示（从工序库拉取）
   const processIdsForDesc = useMemo(() => {
@@ -2765,20 +2767,68 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                       <Image.PreviewGroup>
                         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                           {versionImages.map((img, idx) => (
-                            <Image
-                              key={img.url}
-                              src={img.url}
-                              width={84}
-                              height={84}
-                              style={{
-                                objectFit: 'cover',
-                                borderRadius: 6,
-                                border: idx === versionImageCursor ? '2px solid #1677ff' : '1px solid #f0f0f0',
-                                cursor: 'pointer',
-                              }}
-                              preview={{ mask: '预览' }}
-                              onClick={() => setVersionImageCursor(idx)}
-                            />
+                            <div key={img.url} style={{ position: 'relative' }}>
+                              <Image
+                                src={img.url}
+                                width={84}
+                                height={84}
+                                style={{
+                                  objectFit: 'cover',
+                                  borderRadius: 6,
+                                  border: idx === versionImageCursor ? '2px solid #1677ff' : '1px solid #f0f0f0',
+                                  cursor: 'pointer',
+                                }}
+                                preview={{ mask: '预览' }}
+                                onClick={() => setVersionImageCursor(idx)}
+                              />
+                              {selectedVersionId && canEditSelectedVersion ? (
+                                <Button
+                                  size="small"
+                                  type="primary"
+                                  danger
+                                  icon={<DeleteOutlined />}
+                                  loading={deletingVersionImage}
+                                  style={{
+                                    position: 'absolute',
+                                    top: 4,
+                                    right: 4,
+                                    width: 22,
+                                    height: 22,
+                                    padding: 0,
+                                    borderRadius: 6,
+                                  }}
+                                  onClick={() => {
+                                    const vid = String(selectedVersionId ?? '').trim()
+                                    if (!vid) return
+                                    Modal.confirm({
+                                      title: '删除版本图片',
+                                      content: '确认删除该图片？删除后不可恢复。',
+                                      okText: '删除',
+                                      okButtonProps: { danger: true },
+                                      cancelText: '取消',
+                                      onOk: async () => {
+                                        try {
+                                          setDeletingVersionImage(true)
+                                          const res = await deleteProductModelVersionImage(vid, img.index)
+                                          setVersionImages(res.images ?? [])
+                                          setVersionImageCursor((cur) => {
+                                            const nextLen = (res.images ?? []).length
+                                            if (nextLen <= 0) return 0
+                                            return Math.min(cur, nextLen - 1)
+                                          })
+                                          await versionsQuery.refetch()
+                                          message.success('已删除图片')
+                                        } catch (err: any) {
+                                          message.error(err?.response?.data?.detail ?? err?.message ?? '删除失败')
+                                        } finally {
+                                          setDeletingVersionImage(false)
+                                        }
+                                      },
+                                    })
+                                  }}
+                                />
+                              ) : null}
+                            </div>
                           ))}
                         </div>
                       </Image.PreviewGroup>

@@ -99,3 +99,38 @@ def persist_bytes(
     return LocalImageRef(path=rel_path, content_type=content_type, filename=filename)
 
 
+def remove_local_image_ref(metadata: dict, image_index: int) -> Optional[LocalImageRef]:
+    """
+    Remove image ref from metadata.version_images by setting the slot to None (keeps indices stable).
+    Returns the previous ref if existed.
+    """
+    images = metadata.get("version_images") or []
+    if not isinstance(images, list):
+        return None
+    if image_index < 0 or image_index >= len(images):
+        return None
+    ref = get_local_image_ref(metadata, image_index)
+    if ref is None:
+        return None
+    images[image_index] = None
+    metadata["version_images"] = images
+    return ref
+
+
+def delete_local_file(ref: LocalImageRef) -> None:
+    """
+    Best-effort delete local file for a ref.
+    """
+    try:
+        resolve_local_path(ref.path).unlink(missing_ok=True)  # py3.8+: missing_ok
+    except TypeError:
+        # For older python, fallback
+        p = resolve_local_path(ref.path)
+        try:
+            if p.exists():
+                p.unlink()
+        except FileNotFoundError:
+            return
+    except FileNotFoundError:
+        return
+

@@ -46,6 +46,7 @@
 - `backend/src/planner/services/process_module_service.py`（工艺模块服务：删除/归档口径）
 - `backend/src/planner/routers/product_models.py`
 - `backend/src/planner/routers/product_model_versions.py`
+- `backend/src/planner/services/model_version_image_storage.py`（版本图片存储：上传/读取/删除的底层封装）
 - `backend/src/planner/routers/specs.py`（spec/parse：规格解析 tokens）
 - `backend/src/planner/routers/bom.py`（bom/generate：动态 BOM 预演）
 - `backend/src/planner/routers/line_variants.py`（version-scoped 行级变体 CRUD）

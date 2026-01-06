@@ -127,6 +127,39 @@ async def upload_model_version_image(
     return _serialize_version_images(v)
 
 
+@router.delete(
+    "/product-model-versions/{version_id}/images/{image_index}",
+    response_model=schemas.ModelVersionImagesResponse,
+)
+def delete_model_version_image(
+    version_id: str,
+    image_index: int,
+    db: Session = Depends(get_db),
+) -> schemas.ModelVersionImagesResponse:
+    """
+    Delete one image slot for a specific model version.
+    Keep indices stable by setting metadata_json.version_images[image_index] = None.
+    """
+    v = _get_version_or_404(db, version_id)
+    meta0 = dict(v.metadata_json or {})
+    ref = model_version_image_storage.get_local_image_ref(meta0, image_index)
+    if ref is None:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    # Deep-copy to avoid SQLAlchemy JSON change-tracking pitfalls on nested mutables.
+    meta2 = json.loads(json.dumps(v.metadata_json or {}, ensure_ascii=False))
+    removed = model_version_image_storage.remove_local_image_ref(meta2, image_index)
+    if removed is None:
+        raise HTTPException(status_code=404, detail="Image not found")
+    v.metadata_json = meta2
+    db.commit()
+    db.refresh(v)
+
+    # best-effort delete underlying file
+    model_version_image_storage.delete_local_file(removed)
+    return _serialize_version_images(v)
+
+
 @router.get("/product-models/{model_id}/versions", response_model=List[schemas.ProductModelVersionRead])
 def list_product_model_versions(
     model_id: str,

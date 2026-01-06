@@ -166,9 +166,9 @@ def generate_bom_by_spec(
     """
     spec_result = spec_parser_service.parse_spec(spec_text or "")
     tokens = [str(x) for x in (spec_result.get("tokens") or [])]
-    bundle_token = next((t for t in tokens if str(t).upper().startswith("BUNDLE:")), None)
+    bundle_token = next((t for t in tokens if str(t).upper().startswith("B:") or str(t).upper().startswith("BUNDLE:")), None)
     if not bundle_token:
-        raise ValueError("交易规格未包含套装编码（BUNDLE:XXXX）")
+        raise ValueError("交易规格未包含套装编码（B:XXXX 或 BUNDLE:XXXX）")
     code = str(bundle_token).split(":", 1)[1].strip().upper()
     if not code:
         raise ValueError("套装编码非法")
@@ -189,7 +189,8 @@ def generate_bom_by_spec(
         raise ValueError("合并器返回异常")
     trace = merged.get("trace") if isinstance(merged.get("trace"), dict) else {}
     trace = dict(trace)
-    trace["bundle_code"] = f"BUNDLE:{code}"
+    trace["bundle_code"] = f"B:{code}"
+    trace["bundle_code_legacy"] = f"BUNDLE:{code}"
     trace["bundle_template_id"] = tpl.id
     trace["bundle_template_name"] = tpl.name
     trace["parsed"] = spec_result  # overwrite parsed to be the original spec parse result

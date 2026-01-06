@@ -115,9 +115,9 @@ export default function ProductListingPage() {
 
   const bundleTokenInSpec = useMemo(() => {
     const t = String(draft.spec_text || '')
-    const m = t.match(/BUNDLE:([A-Z0-9]{4,16})/i)
+    const m = t.match(/(?:BUNDLE:|B:)([A-Z0-9]{4,16})/i)
     if (!m) return null
-    return `BUNDLE:${String(m[1]).toUpperCase()}`
+    return `B:${String(m[1]).toUpperCase()}`
   }, [draft.spec_text])
 
   const parseMutation = useMutation({
@@ -208,7 +208,7 @@ export default function ProductListingPage() {
       return res
     },
     onSuccess: (res: any) => {
-      const token = `BUNDLE:${String(res?.code ?? '').toUpperCase()}`
+      const token = `B:${String(res?.code ?? '').toUpperCase()}`
       setBundleTokenHint(token)
       message.success(`已生成套装编码：${token}`)
     },

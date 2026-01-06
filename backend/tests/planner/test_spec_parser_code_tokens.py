@@ -40,5 +40,6 @@ def test_parse_spec_extracts_bundle_code_tokens(client):
     r = client.post("/api/planner/spec/parse", json={"spec_text": spec_text})
     assert r.status_code == 200, r.text
     tokens = r.json().get("tokens") or []
+    assert "B:K8F3J2" in tokens
     assert "BUNDLE:K8F3J2" in tokens
 

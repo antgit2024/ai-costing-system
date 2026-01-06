@@ -326,11 +326,19 @@ def download_material_image(
         raise HTTPException(status_code=404, detail="Image not found")
 
     # Best-effort: persist normalized images list back (overwrite, not merge) so indices align with UI.
+    # IMPORTANT: if the image list changed, clear local_images cache so stale cached files won't "occupy" indices.
     try:
-        metadata2 = json.loads(json.dumps(material.metadata_json or {}, ensure_ascii=False))
-        metadata2["images"] = image_sources
-        material.metadata_json = metadata2
-        db.commit()
+        existing_images = metadata.get("images")
+        if not isinstance(existing_images, list):
+            existing_images = []
+        if existing_images != image_sources:
+            metadata2 = json.loads(json.dumps(material.metadata_json or {}, ensure_ascii=False))
+            metadata2["images"] = image_sources
+            # reset local cache to avoid mismatched indices (duplicate/wrong images)
+            metadata2["local_images"] = []
+            material.metadata_json = metadata2
+            db.commit()
+            metadata = metadata2
     except Exception:  # noqa: BLE001
         db.rollback()
         # don't fail image serving

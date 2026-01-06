@@ -36,6 +36,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Backend：进一步修复“宜搭有3张但系统只显示1张”：MaterialRead 图片源提取不再对 metadata.images 早返回，改为合并 metadata.images + raw_form_data 扫描结果并去重保序；已重启后端生效）
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Backend：修复“多图空位/追加成4张”：图片源以 raw_form_data 的 imageField_* 为准（有则覆盖 metadata.images），base-config 图片代理每次按该规则重算并覆盖 metadata.images，确保索引与 UI 一致；已重启后端生效）
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Backend：进一步修复“多图重复/缺图”：解析 raw_form_data 同时兼容 attachmentField_* 与嵌套 value/fileList，补齐 mediaId，并对 ossFileHandle/URL 进行去重归一化（去掉签名/过期参数）；已重启后端生效）
+- **最近校对（北京时间 GMT+8）**：2026-01-06（Backend：兜底修复“图片位占着没替换”：当根据 raw_form_data 重算并覆盖 metadata.images 时，同步清空 metadata.local_images 本地缓存，强制按新索引重新下载/缓存，避免重复/错图；已重启后端生效）
 
 - **最近校对（北京时间 GMT+8）**：2025-12-30 19:20（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_backend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-30 20:27（Frontend：关联引用直达编辑 + 列宽收口）

@@ -39,6 +39,14 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Backend：兜底修复“图片位占着没替换”：当根据 raw_form_data 重算并覆盖 metadata.images 时，同步清空 metadata.local_images 本地缓存，强制按新索引重新下载/缓存，避免重复/错图；已重启后端生效）
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Backend+Frontend：强制刷新物料图片：material image proxy 支持 `force_refresh=1` 跳过本地缓存并重新下载覆盖；物料详情“同步宜搭”后预拉取图片时带 force_refresh，避免缓存占位导致重复/缺图；已重启后端并发布前端）
 
+### 关键口径备忘（避免回滚/重构改坏）
+
+- **物料图片（YiDa→本地落盘）链路**：
+  - **图片源以 `metadata_json.raw_form_data` 为准**：后端 `MaterialRead._extract_image_sources` 会从 `imageField_* / attachmentField_*` 及其嵌套结构提取 `ossFileHandle/fileUrl/mediaId/...`，并生成 `MaterialRead.images[]`（对外为 `/base-config/materials/{id}/images/{idx}` 代理 URL）。
+  - **不要依赖旧的 `metadata_json.images`**：历史数据可能只有 1 张，会导致“3 张变 1 张 / 空位 / 重复”。现在口径是：raw_form_data 有图则**覆盖** images，保持索引一致。
+  - **本地缓存与落盘**：`GET /base-config/materials/{id}/images/{idx}` 会在 `PLANNER_PERSIST_MATERIAL_IMAGES=true` 时把图片落到 `PLANNER_MEDIA_DIR/material_images/{material_id}/...` 并写入 `metadata_json.local_images`，后续优先读本地。
+  - **强制刷新**：支持 `force_refresh=1` 跳过 `local_images` 直接从钉钉重新下载覆盖；前端物料详情抽屉“同步宜搭”完成后预拉取图片默认带该参数，用于避免缓存占位导致错图/重复/缺图。
+
 - **最近校对（北京时间 GMT+8）**：2025-12-30 19:20（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_backend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-30 20:27（Frontend：关联引用直达编辑 + 列宽收口）
 - **最近校对（北京时间 GMT+8）**：2025-12-30 21:03（Backend：关联引用过滤已归档/删除记录）

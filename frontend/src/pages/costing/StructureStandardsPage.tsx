@@ -420,7 +420,7 @@ export default function StructureStandardsPage() {
       <Drawer
         open={drawerOpen}
         title={drawerMode === 'create' ? '新增结构标准' : '编辑结构标准'}
-        width={720}
+        width={770}
         onClose={() => setDrawerOpen(false)}
         destroyOnClose
         extra={
@@ -468,57 +468,59 @@ export default function StructureStandardsPage() {
                 <Space direction="vertical" style={{ width: '100%' }} size={8}>
                   {fields.map((field) => (
                     <div key={field.key} style={{ padding: 10, border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                      <Space style={{ display: 'flex', width: '100%', justifyContent: 'space-between' }} align="baseline" wrap>
-                        <Space align="baseline" wrap>
-                          <Form.Item
-                            {...field}
-                            name={[field.name, 'cn']}
-                            style={{ marginBottom: 0, width: 260 }}
-                            rules={[{ required: true, message: '请输入中文名' }]}
-                          >
-                            <Input
-                              placeholder="中文名，例如：主体面 / 边缘处理"
-                              onChange={(e) => {
-                                const cn = String(e.target.value ?? '')
-                                const currentRows: SlotRow[] = editorForm.getFieldValue('slot_rows') ?? []
-                                const idx = Number(field.name)
-                                const curCode = String(currentRows?.[idx]?.code ?? '').trim()
-                                // only auto-fill when code is empty
-                                if (!curCode) {
-                                  const next = toPinyinCode(cn)
-                                  editorForm.setFieldValue(['slot_rows', idx, 'code'], next)
-                                }
-                              }}
-                            />
-                          </Form.Item>
-                          <Form.Item {...field} name={[field.name, 'code']} style={{ marginBottom: 0, width: 260 }}>
-                            <Input placeholder="拼音短码（自动生成，可手改），例如：body / edge_finish" />
-                          </Form.Item>
-                          <Form.Item {...field} name={[field.name, 'enabled']} valuePropName="checked" style={{ marginBottom: 0 }}>
-                            <Switch checkedChildren="启用" unCheckedChildren="不启用" defaultChecked />
-                          </Form.Item>
-                        </Space>
+                      <Space style={{ display: 'flex', width: '100%' }} align="baseline" wrap>
+                        {/* 中文名（缩到原来的 ~2/3 宽度） */}
+                        <Form.Item
+                          {...field}
+                          name={[field.name, 'cn']}
+                          style={{ marginBottom: 0, width: 180 }}
+                          rules={[{ required: true, message: '请输入中文名' }]}
+                        >
+                          <Input
+                            placeholder="中文名，例如：主体面"
+                            onChange={(e) => {
+                              const cn = String(e.target.value ?? '')
+                              const currentRows: SlotRow[] = editorForm.getFieldValue('slot_rows') ?? []
+                              const idx = Number(field.name)
+                              const curCode = String(currentRows?.[idx]?.code ?? '').trim()
+                              // only auto-fill when code is empty
+                              if (!curCode) {
+                                const next = toPinyinCode(cn)
+                                editorForm.setFieldValue(['slot_rows', idx, 'code'], next)
+                              }
+                            }}
+                          />
+                        </Form.Item>
+
+                        {/* 拼音短码（缩到原来的 ~2/3 宽度） */}
+                        <Form.Item {...field} name={[field.name, 'code']} style={{ marginBottom: 0, width: 180 }}>
+                          <Input placeholder="短码，例如：body" />
+                        </Form.Item>
+
+                        {/* 驱动量 */}
+                        <Form.Item {...field} name={[field.name, 'driver_quantity']} style={{ marginBottom: 0, width: 170 }}>
+                          <Input placeholder="驱动量：area_m2" />
+                        </Form.Item>
+
+                        {/* 备注（自适应占满剩余空间） */}
+                        <Form.Item {...field} name={[field.name, 'remark']} style={{ marginBottom: 0, flex: 1, minWidth: 260 }}>
+                          <Input placeholder="备注：口径/余量/缝耗说明" />
+                        </Form.Item>
+
+                        <Form.Item {...field} name={[field.name, 'enabled']} valuePropName="checked" style={{ marginBottom: 0 }}>
+                          <Switch checkedChildren="启用" unCheckedChildren="不启用" defaultChecked />
+                        </Form.Item>
+
                         <Button danger onClick={() => remove(field.name)}>
                           删除
                         </Button>
                       </Space>
-
-                      <div style={{ marginTop: 8 }}>
-                        <Space style={{ display: 'flex', width: '100%' }} align="baseline" wrap>
-                          <Form.Item {...field} name={[field.name, 'driver_quantity']} label="驱动量" style={{ marginBottom: 0, width: 220 }}>
-                            <Input placeholder="例如：area_m2 / perimeter_m / count" />
-                          </Form.Item>
-                          <Form.Item {...field} name={[field.name, 'remark']} label="备注" style={{ marginBottom: 0, flex: 1, minWidth: 260 }}>
-                            <Input placeholder="例如：主体面=面积×片数；边缘处理=周长+工艺余量" />
-                          </Form.Item>
-                        </Space>
-                      </div>
                     </div>
                   ))}
                   <Button
                     type="dashed"
                     onClick={() => add({ cn: '', code: '', enabled: true, remark: '', driver_quantity: '' })}
-                    style={{ width: 540 }}
+                    style={{ width: '100%' }}
                   >
                     新增 slot
                   </Button>

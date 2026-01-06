@@ -1958,9 +1958,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   const applyPickedProcessToRow = (proc: ProcessDetail) => {
     // 新增模式：append 一行
     if (pickerMode === 'add' || pickerRowIndex === null) {
+      const procMeta = ((proc as any)?.metadata_json ?? {}) as any
       const pricing = (() => {
         const v = String((proc as any)?.charging_mode ?? (proc as any)?.pricing_method ?? 'count')
-        const allowed = new Set(['count', 'area', 'perimeter', 'width', 'height', 'fixed'])
+        const allowed = new Set(['count', 'area', 'perimeter', 'width', 'height', 'fixed', 'long_side', 'short_side'])
         return (allowed.has(v) ? v : 'count') as any
       })()
       const measureUnit = normalizeUnit((proc as any)?.unit_of_measure) || String((proc as any)?.unit_of_measure ?? '').trim()
@@ -1970,8 +1971,25 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
         if (pricing === 'fixed') return pricing
         return (allowed.includes(pricing as any) ? pricing : (allowed[0] ?? 'count')) as any
       })()
-      const base = 0
-      const unit = 0
+      const costTypeRaw = String(procMeta?.cost_type ?? '').trim()
+      const costType = costTypeRaw === 'piece' ? 'piece' : 'time'
+
+      // Defaults (what user expects from process master):
+      // - base_minutes default: 0
+      // - unit_minutes default: 1 (so "计量(分)" shows 1.00 by default)
+      // - rate_per_minute / piece_rate: from process.standard_rate when possible
+      const base = procMeta?.base_minutes != null ? Number(procMeta.base_minutes) : 0
+      const unit = procMeta?.unit_minutes != null ? Number(procMeta.unit_minutes) : 1
+      const stdRate = proc.standard_rate != null ? Number(proc.standard_rate) : NaN
+      const ratePerMinute =
+        costType === 'time'
+          ? (Number.isFinite(stdRate) ? stdRate : procMeta?.rate_per_minute != null ? Number(procMeta.rate_per_minute) : undefined)
+          : undefined
+      const pieceRate =
+        costType === 'piece'
+          ? (Number.isFinite(stdRate) ? stdRate : procMeta?.piece_rate != null ? Number(procMeta.piece_rate) : undefined)
+          : undefined
+
       const method = pricingByUnit === 'fixed' ? 'count' : pricingByUnit
       const mqSample = Math.max(0, measureQty(method as any, sampleSpec, {}))
       const stdMq = Math.max(0, measureQty(method as any, standardSpec, {}))
@@ -1985,9 +2003,9 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
         pricing_method: pricingByUnit,
         base_minutes: base,
         unit_minutes: unit,
-        rate_per_minute: (proc as any)?.rate_per_minute ?? undefined,
-        piece_rate: (proc as any)?.piece_rate ?? undefined,
-        cost_type: (proc as any)?.cost_type ?? undefined,
+        rate_per_minute: ratePerMinute,
+        piece_rate: pieceRate,
+        cost_type: costType,
         notes: '',
         sample_minutes: base + unit * mqSample,
         standard_minutes: base + unit * stdMq,
@@ -1995,8 +2013,11 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
           pricing_method: pricingByUnit,
           // 快照：用于按单位限制工序组“计量方式”候选（与物料组同口径）
           measure_unit: measureUnit || undefined,
+          cost_type: costType,
           base_minutes: base,
           unit_minutes: unit,
+          ...(ratePerMinute != null ? { rate_per_minute: ratePerMinute } : {}),
+          ...(pieceRate != null ? { piece_rate: pieceRate } : {}),
           team_name: (proc as any)?.team_name ?? undefined,
           sample_minutes: base + unit * mqSample,
           standard_minutes: base + unit * stdMq,

@@ -315,30 +315,26 @@ def download_material_image(
     if not material or material.is_archived:
         raise HTTPException(status_code=404, detail="Material not found")
     metadata = dict(material.metadata_json or {})
-    image_sources = metadata.get("images") or []
-    if not isinstance(image_sources, list):
+    # IMPORTANT:
+    # Do NOT trust metadata["images"] alone (it may be incomplete historically).
+    # Always compute from schema helper (raw_form_data is authoritative), and overwrite metadata.images.
+    try:
+        image_sources = schemas.MaterialRead._extract_image_sources(metadata)  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
         image_sources = []
-    # IMPORTANT: YiDa sync stores raw_form_data; images may only exist in raw_form_data/imageField_*,
-    # while metadata.images might be empty. Keep consistent with schemas.MaterialRead._extract_image_sources.
-    if not image_sources:
-        try:
-            image_sources = schemas.MaterialRead._extract_image_sources(metadata)  # type: ignore[attr-defined]
-        except Exception:  # noqa: BLE001
-            image_sources = []
     if image_index < 0 or image_index >= len(image_sources):
         raise HTTPException(status_code=404, detail="Image not found")
 
-    # Best-effort: persist normalized images list back so future requests don't depend on schema-side derivation.
-    if image_sources and (metadata.get("images") != image_sources):
-        try:
-            metadata2 = json.loads(json.dumps(material.metadata_json or {}, ensure_ascii=False))
-            metadata2["images"] = image_sources
-            material.metadata_json = metadata2
-            db.commit()
-        except Exception:  # noqa: BLE001
-            db.rollback()
-            # don't fail image serving
-            pass
+    # Best-effort: persist normalized images list back (overwrite, not merge) so indices align with UI.
+    try:
+        metadata2 = json.loads(json.dumps(material.metadata_json or {}, ensure_ascii=False))
+        metadata2["images"] = image_sources
+        material.metadata_json = metadata2
+        db.commit()
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        # don't fail image serving
+        pass
 
     # 1) local
     local_ref = material_image_storage.get_local_image_ref(metadata, image_index)

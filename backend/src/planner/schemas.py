@@ -336,6 +336,10 @@ class MaterialRead(BaseModel):
                     url = (
                         item.get("ossFileHandle")
                         or item.get("fileUrl")
+                        or item.get("file_id")
+                        or item.get("fileId")
+                        or item.get("filePath")
+                        or item.get("path")
                         or item.get("downloadUrl")
                         or item.get("url")
                         or item.get("previewUrl")
@@ -344,30 +348,31 @@ class MaterialRead(BaseModel):
                         out.append(url.strip())
             return out
 
-        normalized: list[str] = []
-        # 1) canonical (may be incomplete historically; do NOT early-return)
-        images0 = metadata.get("images")
-        normalized.extend(_normalize_one(images0))
-
+        # Prefer raw_form_data when present (it reflects the latest YiDa form state).
         raw_form = metadata.get("raw_form_data") or {}
+        raw_sources: list[str] = []
         if isinstance(raw_form, dict):
-            # 2) search all YiDa image fields (more robust than hard-coding a single field id)
-            # We intentionally keep the scan lightweight: only consider keys that look like image controls.
             for k, v in raw_form.items():
                 key = str(k)
-                if not (key.startswith("imageField_") or key.lower().endswith("image") or "image" in key.lower()):
+                # YiDa image control field ids typically start with imageField_.
+                if not key.startswith("imageField_"):
                     continue
-                normalized.extend(_normalize_one(v))
+                raw_sources.extend(_normalize_one(v))
 
-        # 3) legacy field id fallback (historical deployments)
+        # legacy fallback (historical field id used in docs)
         legacy = metadata.get("imageField_lbef2r0b") or (
             raw_form.get("imageField_lbef2r0b") if isinstance(raw_form, dict) else None
         )
-        normalized.extend(_normalize_one(legacy))
+        raw_sources.extend(_normalize_one(legacy))
+
+        meta_sources = _normalize_one(metadata.get("images"))
+
+        # If raw has any images, use it as authoritative; otherwise fallback to metadata.images.
+        merged = raw_sources if raw_sources else meta_sources
 
         # de-dup preserve order
-        seen2: set[str] = set()
-        return [x for x in normalized if not (x in seen2 or seen2.add(x))]
+        seen: set[str] = set()
+        return [x for x in merged if not (x in seen or seen.add(x))]
 
     @root_validator(pre=True)
     def _populate_images(cls, values):

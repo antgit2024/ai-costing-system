@@ -473,7 +473,7 @@ export default function StructureStandardsPage() {
                         <Form.Item
                           {...field}
                           name={[field.name, 'cn']}
-                          style={{ marginBottom: 0, width: 180 }}
+                          style={{ marginBottom: 0, width: 90 }}
                           rules={[{ required: true, message: '请输入中文名' }]}
                         >
                           <Input
@@ -493,7 +493,7 @@ export default function StructureStandardsPage() {
                         </Form.Item>
 
                         {/* 拼音短码（缩到原来的 ~2/3 宽度） */}
-                        <Form.Item {...field} name={[field.name, 'code']} style={{ marginBottom: 0, width: 180 }}>
+                        <Form.Item {...field} name={[field.name, 'code']} style={{ marginBottom: 0, width: 90 }}>
                           <Input placeholder="短码，例如：body" />
                         </Form.Item>
 

@@ -420,7 +420,7 @@ export default function StructureStandardsPage() {
       <Drawer
         open={drawerOpen}
         title={drawerMode === 'create' ? '新增结构标准' : '编辑结构标准'}
-        width={770}
+        width={790}
         onClose={() => setDrawerOpen(false)}
         destroyOnClose
         extra={

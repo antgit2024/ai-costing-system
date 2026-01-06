@@ -1005,7 +1005,10 @@ def _build_inventory_lines(db: Session, final_lines: List[Dict[str, Any]]) -> Di
         if qty <= 0:
             continue
 
-        if kind.startswith("real"):
+        # NOTE:
+        # - kind=real => deduct directly
+        # - kind=bom  => treat as real for inventory deduction (some legacy/module lines use bom)
+        if kind.startswith("real") or kind == "bom":
             out_lines.append(
                 {
                     "source": "real_line",
@@ -1020,7 +1023,11 @@ def _build_inventory_lines(db: Session, final_lines: List[Dict[str, Any]]) -> Di
             continue
 
         if not kind.startswith("virtual"):
-            # Unknown kinds are not inventory objects
+            # Unknown kinds are not inventory objects (but warn for diagnostics)
+            code = str(line.get("material_code") or "").strip()
+            name = str(line.get("material_name") or "").strip()
+            if code or name:
+                warnings.append(f"扣库跳过：未知 material_kind={kind}（{code or name}）")
             continue
 
         vid = str(line.get("material_ref_id") or "")

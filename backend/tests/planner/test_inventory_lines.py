@@ -63,3 +63,23 @@ def test_inventory_lines_accepts_real_kind_prefix(db_session):
     assert inv["inventory_lines"][0]["material_code"] == "WB02335"
 
 
+def test_inventory_lines_includes_bom_kind(db_session):
+    from src.planner.services.bom_generation_service import _build_inventory_lines
+
+    final_lines = [
+        {
+            "line_index": 1,
+            "material_kind": "bom",
+            "material_ref_id": "MAT-4",
+            "material_code": "WB02335",
+            "material_name": "布料300-01白色黄金绒",
+            "unit_of_measure": "m2",
+            "computed_quantity": Decimal("0.5"),
+            "loss_rate": Decimal("0"),
+        }
+    ]
+    inv = _build_inventory_lines(db_session, final_lines)
+    assert inv["inventory_line_count"] == 1
+    assert inv["inventory_lines"][0]["material_code"] == "WB02335"
+
+

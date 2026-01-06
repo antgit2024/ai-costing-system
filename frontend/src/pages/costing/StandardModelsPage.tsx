@@ -18,6 +18,53 @@ import ProductModelEditorDrawer from '@/components/costing/ProductModelEditorDra
 
 const { Title, Text } = Typography
 
+const KEYWORD_COLOR_PALETTE = [
+  '#1677ff', // blue
+  '#52c41a', // green
+  '#faad14', // gold
+  '#722ed1', // purple
+  '#eb2f96', // magenta
+  '#13c2c2', // cyan
+  '#fa541c', // volcano
+  '#2f54eb', // geekblue
+  '#a0d911', // lime
+  '#f5222d', // red
+] as const
+
+const hashToIndex = (s: string, mod: number) => {
+  let h = 0
+  for (let i = 0; i < s.length; i += 1) h = (h * 31 + s.charCodeAt(i)) >>> 0
+  return mod === 0 ? 0 : h % mod
+}
+
+const getKeywordColor = (keyword?: string | null) => {
+  const key = String(keyword ?? '').trim() || 'keyword'
+  const idx = hashToIndex(key, KEYWORD_COLOR_PALETTE.length)
+  return KEYWORD_COLOR_PALETTE[idx]
+}
+
+const KeywordPill = ({ keyword }: { keyword: string }) => {
+  const k = String(keyword ?? '').trim()
+  const color = getKeywordColor(k)
+  return (
+    <span
+      style={{
+        display: 'inline-block',
+        padding: '1px 8px',
+        borderRadius: 999,
+        border: `1px solid ${color}55`,
+        background: `${color}22`,
+        color,
+        fontSize: 12,
+        lineHeight: '18px',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {k}
+    </span>
+  )
+}
+
 export default function StandardModelsPage() {
   const location = useLocation() as any
   const navigate = useNavigate()
@@ -182,6 +229,53 @@ export default function StandardModelsPage() {
   const columns: ColumnsType<ProductModel> = [
     { title: '总编码', dataIndex: 'model_code', width: 120 },
     { title: '模型名称', dataIndex: 'model_name' },
+    {
+      title: '匹配模块',
+      width: 260,
+      render: (_: any, r: any) => {
+        const meta: any = (r as any)?.metadata_json ?? {}
+        const raw = Array.isArray(meta?.recognition_keywords) ? meta.recognition_keywords : []
+        const keywords = raw
+          .map((x: any) => String(x ?? '').trim())
+          .filter((x: string) => x)
+        // de-dup preserve order
+        const seen = new Set<string>()
+        const uniq: string[] = []
+        for (const k of keywords) {
+          if (seen.has(k)) continue
+          seen.add(k)
+          uniq.push(k)
+        }
+        if (!uniq.length) return <Text type="secondary">-</Text>
+
+        const show = uniq.slice(0, 3)
+        const rest = uniq.length - show.length
+        const content = (
+          <Space size={6} wrap>
+            {show.map((k) => (
+              <KeywordPill key={k} keyword={k} />
+            ))}
+            {rest > 0 ? <Tag style={{ borderRadius: 999 }}>+{rest}</Tag> : null}
+          </Space>
+        )
+
+        if (rest <= 0) return content
+        return (
+          <Tooltip
+            getPopupContainer={() => document.body}
+            title={
+              <Space size={6} wrap>
+                {uniq.map((k) => (
+                  <KeywordPill key={k} keyword={k} />
+                ))}
+              </Space>
+            }
+          >
+            {content}
+          </Tooltip>
+        )
+      },
+    },
     { title: '品类', dataIndex: 'category', width: 140, render: (v: any) => String(v ?? '').trim() || '-' },
     { title: '状态', dataIndex: 'status', width: 110, render: (v: string) => <Tag>{v}</Tag> },
     {

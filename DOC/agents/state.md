@@ -42,6 +42,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Backend：修复 Product Listing 里工序告警误报：当版本工序行缺失 `metadata_json.cost_type` 时，BOM 核算默认按计时(time)兼容处理（若存在 piece_rate 则推断为计件），不再提示“未配置工序计价类型”；已重启后端生效）
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：修复标准模型管理“复制版本”未复制行级变体（Overlay）：补齐 createLineVariant 必需的 `version_id`，并按后端 LineVariantCreateRequest 契约修正字段/去除无效字段，复制时即可连同清单一起复制变体；验收 `npm -C frontend run build`）
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：修复标准模型管理“新增工序”未从工序库带入默认计价字段：以工序库 `standard_rate` 作为分钟单价（计时）/计件单价（计件），并从 `process.metadata_json` 读取 cost_type/base_minutes/unit_minutes（缺省 base=0, unit=1），写回版本清单行；验收 `npm -C frontend run build` 并已发布静态资源）
+- **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：标准模型列表新增“匹配模块”列：展示 `metadata_json.recognition_keywords`（关键词维护-列表式）的关键词，用彩色胶囊展示，超出3个以 Tooltip 展开；验收 `npm -C frontend run build` 并已发布静态资源）
 
 ### 关键口径备忘（避免回滚/重构改坏）
 

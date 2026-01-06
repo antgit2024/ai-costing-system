@@ -46,7 +46,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：标准模型列表 UI 优化：品类列缩窄并移到模型名前；模型名列缩窄；“匹配模块”改名“货品映射”并加宽；隐藏状态/入口列；“当前发布标准”改为更小的带边框标签显示；验收 `npm -C frontend run build` 并已发布静态资源）
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：标准模型列表增加“货品映射（关键词）”筛选框：在当前列表数据中按 `metadata_json.recognition_keywords` 进行过滤（支持空格/逗号分隔的任意命中）；验收 `npm -C frontend run build` 并已发布静态资源）
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Backend+Frontend：套装壳（方案A）MVP：新增后端 `/api/planner/bom/generate-bundle`（组件尺寸/数量显式输入，不从交易规格解析；支持 tokens 触发行级变体；输出单件结果+合并BOM/成本/扣库）；前端“产品上架（测试台）”新增套装模式组件录入与“套装：预演BOM（合并器）”按钮；验收 `npm -C frontend run build`，已发布静态并重启后端）
-- **最近校对（北京时间 GMT+8）**：2026-01-06（Backend+Frontend：交易规格编码闭环（Bundle Code）MVP：将对客 token 前缀收敛为短码 `B:XXXXXX`（新生成），同时兼容解析历史 `BUNDLE:XXXXXX`；`spec/parse` 会同时输出 `B:` 与 `BUNDLE:` 两种 token；`/api/planner/bom/generate-by-spec` 支持两种前缀并以 `B:` 为 trace 主展示；前端测试台生成/识别均改为 `B:`；验收：pytest + 后端重启 + `npm -C frontend run build` + 静态发布）
+- **最近校对（北京时间 GMT+8）**：2026-01-06（Backend+Docs：新增 `M:PI5` 规范闭环：`spec/parse` 在输出 `MODEL:PI5` 的同时输出短别名 `M:PI5`；新增 token 规范文档 `DOC/costing/ui_specs/spec_tokens.md`（定义 B:/M:/V: 语义与优先级）；验收：pytest + 后端重启 + `npm -C frontend run build` + 静态发布）
 
 ### 关键口径备忘（避免回滚/重构改坏）
 

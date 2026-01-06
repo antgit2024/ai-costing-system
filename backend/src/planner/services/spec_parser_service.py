@@ -181,6 +181,9 @@ def parse_spec(spec_text: str) -> Dict[str, Any]:
             code = m.upper()
             extra_tokens.append(f"MODEL:{code}")
             explanations.append({"token": f"MODEL:{code}", "source": token, "rule": "extract_model_code_3"})
+            # Short alias for customer-facing spec token convention
+            extra_tokens.append(f"M:{code}")
+            explanations.append({"token": f"M:{code}", "source": token, "rule": "extract_model_code_3_alias"})
 
         # Extract bundle template codes so BOM can be generated without parsing sizes.
         # Emit BOTH tokens for backward compatibility:

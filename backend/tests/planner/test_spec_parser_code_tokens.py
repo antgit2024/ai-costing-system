@@ -14,6 +14,8 @@ def test_parse_spec_extracts_code_tokens_from_mixed_text(client):
     assert "1003433256386" in tokens
     # Optional fallback: 3-char model code as a namespaced token
     assert "MODEL:PI5" in tokens
+    # Short alias for convention
+    assert "M:PI5" in tokens
 
 
 def test_parse_spec_extracts_material_code_tokens(client):

@@ -414,6 +414,16 @@ def _compute_process_costing(
         rate = _to_decimal(rate_per_minute, Decimal("0")) if rate_per_minute not in (None, "") else None
         piece = _to_decimal(piece_rate, Decimal("0")) if piece_rate not in (None, "") else None
 
+        # Backward compatibility:
+        # Older versions (or module sync) may have pricing_method/base_minutes/unit_minutes filled,
+        # but miss meta.cost_type. In UI this effectively means "计时(time)".
+        if cost_type not in ("time", "piece"):
+            # If piece rate exists, assume piece; otherwise default to time.
+            if piece is not None and piece > 0:
+                cost_type = "piece"
+            else:
+                cost_type = "time"
+
         total_minutes: Optional[Decimal] = None
         total_cost: Optional[Decimal] = None
         warnings: List[str] = []
@@ -435,6 +445,7 @@ def _compute_process_costing(
                 if proc and proc.process_code:
                     missing_price_process_codes.append(str(proc.process_code))
         else:
+            # Should not happen due to normalization above, but keep a safe fallback.
             warnings.append("未配置工序计价类型（cost_type=time/piece）")
             missing_price_process_lines += 1
             if proc and proc.process_code:

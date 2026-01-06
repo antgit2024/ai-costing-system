@@ -39,6 +39,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Backend：兜底修复“图片位占着没替换”：当根据 raw_form_data 重算并覆盖 metadata.images 时，同步清空 metadata.local_images 本地缓存，强制按新索引重新下载/缓存，避免重复/错图；已重启后端生效）
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Backend+Frontend：强制刷新物料图片：material image proxy 支持 `force_refresh=1` 跳过本地缓存并重新下载覆盖；物料详情“同步宜搭”后预拉取图片时带 force_refresh，避免缓存占位导致重复/缺图；已重启后端并发布前端）
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：发布/归档标准版本的“清单编辑→工艺模块”禁用：添加/同步/删除/勾选同步均禁止（避免触发 sync-from-modules 导致右侧清单重置/自动保存）；验收 `npm -C frontend run build`）
+- **最近校对（北京时间 GMT+8）**：2026-01-06（Backend：修复 Product Listing 里工序告警误报：当版本工序行缺失 `metadata_json.cost_type` 时，BOM 核算默认按计时(time)兼容处理（若存在 piece_rate 则推断为计件），不再提示“未配置工序计价类型”；已重启后端生效）
 
 ### 关键口径备忘（避免回滚/重构改坏）
 

@@ -64,6 +64,8 @@
 - `DOC/costing/manuals/standard_model_variants_ops_rules.md`（标准模型行级变体：运营/实施规范）
 - `DOC/costing/reviews/shipment_time_parse_review_phase0_phase1_20251222.md`（方案评审稿：发货时再解析 + SKU→已发布标准版本绑定，含 Phase0/Phase1 优先级）
 - `DOC/costing/reviews/erp_guardrails_addendum_20251222.md`（ERP口径补强清单：版本为最小核算单元、重跑语义、编码定位、解析版本化、异常工作台、成本口径）
+- `DOC/costing/blueprints/structure_standards/pillow_structure_standard_v1.md`（结构标准口径：抱枕/靠垫 slots 去歧义 + 驱动量建议）
+- `DOC/costing/blueprints/structure_standards/tablecloth_structure_standard_v1.md`（结构标准口径：桌布/桌旗/桌垫同构 slots + 驱动量建议）
 - `DOC/index/extracted/variants_discussion_extracted_20251221T200250+0800.md`（变体讨论提炼件：禁止直读导出全文）
 - `DOC/agents/task_log.md`（最新变更/决策记录）
 

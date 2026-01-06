@@ -2,6 +2,7 @@
 
 | 日期 | 模块 | 角色 | 任务/问题 | 结论 | 待办 |
 | --- | --- | --- | --- | --- | --- |
+| 2026-01-06 | 结构标准（口径沉淀：抱枕/桌布） | Planner-Optimization | 用户确认“slot 只做实物区位，不做虚拟/重叠区位”，并给出抱枕现有 slots 与桌布拆分（BODY/EDGE_FINISH 等）希望优化成可直接建模的标准。 | ✅ 新增结构标准口径文档：`DOC/costing/blueprints/structure_standards/pillow_structure_standard_v1.md`（抱枕 slots 去歧义/保留现有拼音短码映射）与 `DOC/costing/blueprints/structure_standards/tablecloth_structure_standard_v1.md`（桌布/桌旗/桌垫同构 5 个一级 slot + 驱动量口径）。 | 下一步：如需“同一 slot 默认只允许绑定 1 个模块”的硬护栏，可单开闭环补前端限制或后端校验。 |
 | 2026-01-03 | 标准模型（结构骨架预览） | Hub Agent（Planner） | 用户希望在标准模型里能看到所选结构标准的“完整骨架”（含可选位），便于新人理解产品结构。 | ✅ 在 `ProductModelEditorDrawer` 版本区块展示“结构骨架”只读预览：启用位（绿色）+ 可选位（灰色提示不参与工艺下拉）。 | 无 |
 | 2026-01-03 | 结构标准（slots 启用/可选位） | Hub Agent（Planner） | 用户希望结构“骨架完整”，但某些位（如印染位）不想出现在工艺模块下拉里误用；需求：slots 默认勾选，可取消勾选仅作为骨架展示。 | ✅ 结构标准 slots 改为逐行“中文名/拼音短码/启用开关”；启用的 slots 写入 `metadata.slots`（参与工艺模块下拉），全部定义写入 `metadata.slot_defs`（用于骨架展示与新人理解）。列表上显示启用 slots，并标注“可选位 N”。 | 无 |
 | 2026-01-03 | 结构标准（slots 说明文案补强） | Hub Agent（Planner） | 用户要求在“编辑结构标准”抽屉补一段规则说明：slots 只表达结构位置，工艺模块表达生产工艺；通用工艺不必建立“通用位”。 | ✅ `StructureStandardsPage` 在 slots 区块补充说明文案，明确“结构=位置、工艺=生产工艺，结合=在某位置使用某工艺；通用工艺用 GLOBAL 表达无需额外建位”。 | 无 |

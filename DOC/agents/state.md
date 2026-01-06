@@ -16,6 +16,16 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-05（Frontend：结构标准 slots 编辑体验优化：抽屉宽度加宽（890），并优化 slot 行布局（不换行 + 备注最小宽度下调）保证“删除”按钮停留在第一行；验收 `npm -C frontend run build`）
 - **最近校对（北京时间 GMT+8）**：2026-01-05（Backend：修复 `GET /api/planner/process-modules?structure_code=...` 500（兼容性：结构筛选改为 Python 过滤，避免 Postgres JSONPath 不兼容）；验证：`curl -sS "http://127.0.0.1:8800/api/planner/process-modules?page=1&page_size=10&structure_code=baozhen"`；验收：`./backend/venv/bin/python -m pytest backend/tests/planner/test_structure_tag_filters_mvp.py -q`）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-06（Planner-Optimization：结构标准口径沉淀：抱枕/桌布）
+  - 产物：
+    - `DOC/costing/blueprints/structure_standards/pillow_structure_standard_v1.md`
+    - `DOC/costing/blueprints/structure_standards/tablecloth_structure_standard_v1.md`
+  - 口径要点：
+    - slot 只做“实物区位”，不做虚拟区位、不做重叠区位
+    - “折边/包边/锁边/滚边”属于 `edge_finish` 的不同工艺模块实现，不在结构标准里做二级
+    - “印染/印花/热转印/刺绣”属于 `body` 的工艺模块（作用在主体面上），不是独立区位
+  - 验收命令（必须，1条）：`grep -nF "结构标准（v1）— 抱枕/靠垫（PILLOW_V1）" DOC/costing/blueprints/structure_standards/pillow_structure_standard_v1.md && grep -nF "结构标准（v1）— 桌布/桌旗/桌垫同构（TABLECLOTH_V1）" DOC/costing/blueprints/structure_standards/tablecloth_structure_standard_v1.md`
+
 - **最近校对（北京时间 GMT+8）**：2025-12-30 19:20（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_backend.md`）
 - **最近校对（北京时间 GMT+8）**：2025-12-30 20:27（Frontend：关联引用直达编辑 + 列宽收口）
 - **最近校对（北京时间 GMT+8）**：2025-12-30 21:03（Backend：关联引用过滤已归档/删除记录）

@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import json
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from pydantic import BaseModel, Field, root_validator, validator
 from src.config import settings
@@ -330,6 +331,10 @@ class MaterialRead(BaseModel):
                         out.append(s)
                     continue
                 if isinstance(item, dict):
+                    # Some YiDa controls wrap the actual file list inside nested keys.
+                    for nested_key in ("value", "fileList", "files", "list", "items"):
+                        if nested_key in item and item.get(nested_key) not in (None, "", []):
+                            out.extend(_normalize_one(item.get(nested_key)))
                     # YiDa attachment objects may contain:
                     # - ossFileHandle / fileUrl (for DingTalk temporary url API)
                     # - downloadUrl / url / previewUrl (sometimes present)
@@ -338,6 +343,8 @@ class MaterialRead(BaseModel):
                         or item.get("fileUrl")
                         or item.get("file_id")
                         or item.get("fileId")
+                        or item.get("mediaId")
+                        or item.get("media_id")
                         or item.get("filePath")
                         or item.get("path")
                         or item.get("downloadUrl")
@@ -355,7 +362,7 @@ class MaterialRead(BaseModel):
             for k, v in raw_form.items():
                 key = str(k)
                 # YiDa image control field ids typically start with imageField_.
-                if not key.startswith("imageField_"):
+                if not (key.startswith("imageField_") or key.startswith("attachmentField_")):
                     continue
                 raw_sources.extend(_normalize_one(v))
 
@@ -370,9 +377,43 @@ class MaterialRead(BaseModel):
         # If raw has any images, use it as authoritative; otherwise fallback to metadata.images.
         merged = raw_sources if raw_sources else meta_sources
 
-        # de-dup preserve order
+        def _dedup_key(s: str) -> str:
+            raw = (s or "").strip()
+            if not raw:
+                return ""
+            # Normalize query params for both http(s) urls and /ossFileHandle?... handles.
+            # Remove volatile params so the same file won't appear duplicated with different signatures.
+            volatile = {
+                "token",
+                "access_token",
+                "signature",
+                "sign",
+                "expires",
+                "expire",
+                "timestamp",
+                "ts",
+            }
+            try:
+                # For non-http handles, prepend a dummy host to leverage urlparse.
+                p = urlparse(raw if raw.startswith("http") else f"http://x{raw}")
+                q = [(k, v) for (k, v) in parse_qsl(p.query, keep_blank_values=True) if k.lower() not in volatile]
+                q.sort(key=lambda kv: kv[0])
+                p2 = p._replace(query=urlencode(q, doseq=True))
+                rebuilt = urlunparse(p2)
+                return rebuilt.replace("http://x", "") if not raw.startswith("http") else rebuilt
+            except Exception:
+                return raw
+
+        # de-dup preserve order (by normalized key)
         seen: set[str] = set()
-        return [x for x in merged if not (x in seen or seen.add(x))]
+        out: list[str] = []
+        for x in merged:
+            k = _dedup_key(x)
+            if not k or k in seen:
+                continue
+            seen.add(k)
+            out.append(x)
+        return out
 
     @root_validator(pre=True)
     def _populate_images(cls, values):

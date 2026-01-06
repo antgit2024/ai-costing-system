@@ -2,7 +2,17 @@ import { useMemo, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { Alert, Button, Card, Col, Descriptions, Divider, Input, Row, Select, Space, Table, Tabs, Tag, Typography, message } from 'antd'
 
-import { fetchProductModelVersionLines, fetchProductModels, fetchProductModelVersions, generateBom, generateBomBundle, listLineVariants, parseSpec } from '@/services/planner'
+import {
+  fetchProductModelVersionLines,
+  fetchProductModels,
+  fetchProductModelVersions,
+  fetchProductModelVersionsPaged,
+  generateBom,
+  generateBomBundle,
+  generateBomMultiBundle,
+  listLineVariants,
+  parseSpec,
+} from '@/services/planner'
 import type { BomGenerateResponse, LineVariantCondition, LineVariantDetailRead, ProductModel, ProductModelLinesResponse, ProductModelVersionRead, SpecParseResponse } from '@/types/planner'
 
 const { Text } = Typography
@@ -37,6 +47,7 @@ type ProductListingDraft = {
 }
 
 export default function ProductListingPage() {
+  const [mode, setMode] = useState<'single' | 'multi'>('single')
   const [draft, setDraft] = useState<ProductListingDraft>({
     sku_code: '',
     model_id: null,
@@ -50,6 +61,10 @@ export default function ProductListingPage() {
     Array<{ width_cm: number; height_cm: number; quantity: number; tokens: string }>
   >([{ width_cm: 45, height_cm: 45, quantity: 1, tokens: '' }])
   const [bundleDetail, setBundleDetail] = useState<any[] | null>(null)
+  const [multiComponents, setMultiComponents] = useState<
+    Array<{ model_version_id: string | null; width_cm: number; height_cm: number; quantity: number; spec_text: string }>
+  >([{ model_version_id: null, width_cm: 45, height_cm: 45, quantity: 1, spec_text: '' }])
+  const [multiDetail, setMultiDetail] = useState<any[] | null>(null)
   const [lastError, setLastError] = useState<string | null>(null)
 
   const modelsQuery = useQuery({
@@ -76,6 +91,23 @@ export default function ProductListingPage() {
     if (showAllStandardVersions) return standardVersions
     return standardVersions.filter((v) => String(v.version_status) === 'published')
   }, [showAllStandardVersions, standardVersions])
+
+  const multiVersionPickerQuery = useQuery({
+    queryKey: ['product-model-versions-paged', 'bundle-multi', 'standard', 'active'],
+    queryFn: () =>
+      fetchProductModelVersionsPaged({
+        version_kind: 'standard',
+        page: 1,
+        page_size: 200,
+      }),
+  })
+  const multiVersionOptions = useMemo(() => {
+    const items = ((multiVersionPickerQuery.data as any)?.items ?? []) as any[]
+    return items.map((x) => ({
+      value: x.version_id,
+      label: `${x.model_code}:${x.model_name} / ${x.version_label || x.version_id.slice(0, 8)} (${x.version_status})`,
+    }))
+  }, [multiVersionPickerQuery.data])
 
   const selectedModel = useMemo(() => models.find((m) => m.id === draft.model_id) ?? null, [models, draft.model_id])
   const selectedVersion = useMemo(
@@ -158,6 +190,34 @@ export default function ProductListingPage() {
     onError: (e: any) => setLastError(String(e?.message ?? e)),
   })
 
+  const multiBundlePreviewMutation = useMutation({
+    mutationFn: async () => {
+      const comps = (multiComponents ?? [])
+        .map((c) => ({
+          model_version_id: String(c.model_version_id ?? '').trim(),
+          width_mm: Number(c.width_cm) * 10,
+          height_mm: Number(c.height_cm) * 10,
+          quantity: Number(c.quantity),
+          spec_text: String(c.spec_text || '').trim() || undefined,
+        }))
+        .filter((c) => c.model_version_id && c.width_mm > 0 && c.height_mm > 0 && c.quantity > 0)
+      if (!comps.length) throw new Error('请先填写多模型组件（模型版本/宽/高/数量）')
+      setLastError(null)
+      const res = await generateBomMultiBundle({
+        sku_code: draft.sku_code || undefined,
+        components: comps as any,
+      } as any)
+      setMultiDetail((res as any)?.components ?? [])
+      setBom(((res as any)?.merged ?? null) as any)
+      setParsed(null)
+      // disable single-version diagnostics queries
+      setBundleDetail(null)
+      return res
+    },
+    onSuccess: () => message.success('多模型套装预演完成'),
+    onError: (e: any) => setLastError(String(e?.message ?? e)),
+  })
+
   const matchedVariants = useMemo(() => {
     const traceAny = (bom?.trace ?? {}) as any
     const arr = traceAny?.matched_variants
@@ -176,7 +236,7 @@ export default function ProductListingPage() {
   const versionLinesQuery = useQuery({
     queryKey: ['product-listing', 'version-lines', draft.model_version_id],
     queryFn: () => fetchProductModelVersionLines(String(draft.model_version_id)),
-    enabled: !!draft.model_version_id && !!bom,
+    enabled: mode === 'single' && !!draft.model_version_id && !!bom,
   })
 
   const variantsByBaseLineQuery = useQuery({
@@ -191,7 +251,7 @@ export default function ProductListingPage() {
       )
       return res
     },
-    enabled: !!draft.model_version_id && !!bom && matchedBaseLineIds.length > 0,
+    enabled: mode === 'single' && !!draft.model_version_id && !!bom && matchedBaseLineIds.length > 0,
   })
 
   const baseLineMaterialMap = useMemo(() => {
@@ -336,47 +396,66 @@ export default function ProductListingPage() {
             extra={<Text type="secondary">输入交易规格 → 解析 → 预演最终 BOM（用于运营自测命中与口径）</Text>}
           >
             <Space direction="vertical" style={{ width: '100%' }} size={12}>
+              <Tabs
+                activeKey={mode}
+                onChange={(k) => {
+                  setMode(k as any)
+                  setLastError(null)
+                  setParsed(null)
+                  setBom(null)
+                  setBundleDetail(null)
+                  setMultiDetail(null)
+                }}
+                items={[
+                  { key: 'single', label: '单模型测试' },
+                  { key: 'multi', label: '多模型测试' },
+                ]}
+              />
+
               <Input
                 placeholder="货品编码（可选，仅用于标记/复制）"
                 value={draft.sku_code}
                 onChange={(e) => setDraft((d) => ({ ...d, sku_code: e.target.value }))}
               />
 
-              <Select
-                showSearch
-                allowClear
-                placeholder="选择标准模型（按编码/名称搜索）"
-                options={modelOptions as any}
-                value={draft.model_id ?? undefined}
-                loading={modelsQuery.isLoading}
-                filterOption={(input, option: any) => {
-                  const raw = option?.raw as ProductModel | undefined
-                  const q = String(input ?? '').trim().toLowerCase()
-                  if (!raw) return false
-                  return (
-                    String(raw.model_code ?? '').toLowerCase().includes(q) ||
-                    String(raw.model_name ?? '').toLowerCase().includes(q)
-                  )
-                }}
-                onChange={(v) => {
-                  setDraft((d) => ({ ...d, model_id: (v as string) ?? null, model_version_id: null }))
-                  setBom(null)
-                }}
-              />
+              {mode === 'single' ? (
+                <>
+                  <Select
+                    showSearch
+                    allowClear
+                    placeholder="选择标准模型（按编码/名称搜索）"
+                    options={modelOptions as any}
+                    value={draft.model_id ?? undefined}
+                    loading={modelsQuery.isLoading}
+                    filterOption={(input, option: any) => {
+                      const raw = option?.raw as ProductModel | undefined
+                      const q = String(input ?? '').trim().toLowerCase()
+                      if (!raw) return false
+                      return String(raw.model_code ?? '').toLowerCase().includes(q) || String(raw.model_name ?? '').toLowerCase().includes(q)
+                    }}
+                    onChange={(v) => {
+                      setDraft((d) => ({ ...d, model_id: (v as string) ?? null, model_version_id: null }))
+                      setBom(null)
+                    }}
+                  />
 
-              <Select
-                showSearch
-                allowClear
-                placeholder="选择已发布标准版本（published standard）"
-                options={versionOptions as any}
-                value={draft.model_version_id ?? undefined}
-                loading={versionsQuery.isLoading}
-                disabled={!draft.model_id}
-                onChange={(v) => {
-                  setDraft((d) => ({ ...d, model_version_id: (v as string) ?? null }))
-                  setBom(null)
-                }}
-              />
+                  <Select
+                    showSearch
+                    allowClear
+                    placeholder="选择已发布标准版本（published standard）"
+                    options={versionOptions as any}
+                    value={draft.model_version_id ?? undefined}
+                    loading={versionsQuery.isLoading}
+                    disabled={!draft.model_id}
+                    onChange={(v) => {
+                      setDraft((d) => ({ ...d, model_version_id: (v as string) ?? null }))
+                      setBom(null)
+                    }}
+                  />
+                </>
+              ) : (
+                <Alert type="info" showIcon message="多模型测试：每一行单独选择模型版本（可来自同一交易规格拆分后人工录入）。" />
+              )}
 
               {!draft.model_id ? (
                 <Alert type="info" showIcon message="提示：先选择一个标准模型，再选择“已发布标准版本”用于预演。" />
@@ -412,12 +491,14 @@ export default function ProductListingPage() {
                 />
               ) : null}
 
-              <Input.TextArea
-                rows={4}
-                placeholder="粘贴运营的交易规格（spec_text）"
-                value={draft.spec_text}
-                onChange={(e) => setDraft((d) => ({ ...d, spec_text: e.target.value }))}
-              />
+              {mode === 'single' ? (
+                <Input.TextArea
+                  rows={4}
+                  placeholder="粘贴运营的交易规格（spec_text）"
+                  value={draft.spec_text}
+                  onChange={(e) => setDraft((d) => ({ ...d, spec_text: e.target.value }))}
+                />
+              ) : null}
 
               <Divider style={{ margin: '8px 0' }} />
               <Alert
@@ -521,25 +602,126 @@ export default function ProductListingPage() {
                     setParsed(null)
                     setBom(null)
                     setBundleDetail(null)
+                    setMultiDetail(null)
                     setLastError(null)
                   }}
                 >
                   清空结果
                 </Button>
-                <Button loading={parseMutation.isPending} onClick={() => parseMutation.mutate()}>
-                  仅解析（spec/parse）
-                </Button>
-                <Button
-                  type="primary"
-                  loading={previewMutation.isPending}
-                  onClick={() => previewMutation.mutate()}
-                >
-                  解析 + 预演 BOM（bom/generate）
-                </Button>
-                <Button type="primary" ghost loading={bundlePreviewMutation.isPending} onClick={() => bundlePreviewMutation.mutate()}>
-                  套装：预演 BOM（合并器）
-                </Button>
+                {mode === 'single' ? (
+                  <>
+                    <Button loading={parseMutation.isPending} onClick={() => parseMutation.mutate()}>
+                      仅解析（spec/parse）
+                    </Button>
+                    <Button type="primary" loading={previewMutation.isPending} onClick={() => previewMutation.mutate()}>
+                      解析 + 预演 BOM（bom/generate）
+                    </Button>
+                    <Button type="primary" ghost loading={bundlePreviewMutation.isPending} onClick={() => bundlePreviewMutation.mutate()}>
+                      套装：预演 BOM（合并器）
+                    </Button>
+                  </>
+                ) : (
+                  <Button type="primary" loading={multiBundlePreviewMutation.isPending} onClick={() => multiBundlePreviewMutation.mutate()}>
+                    多模型：预演 BOM（合并器）
+                  </Button>
+                )}
               </Space>
+
+              {mode === 'multi' ? (
+                <>
+                  <Divider style={{ margin: '8px 0' }} />
+                  <Table
+                    size="small"
+                    pagination={false}
+                    rowKey={(_, idx) => `multi-${idx}`}
+                    dataSource={multiComponents}
+                    columns={[
+                      {
+                        title: '模型版本',
+                        width: 280,
+                        render: (_: any, r: any, idx: number) => (
+                          <Select
+                            showSearch
+                            allowClear
+                            placeholder="选择标准版本"
+                            style={{ width: '100%' }}
+                            loading={multiVersionPickerQuery.isLoading}
+                            options={multiVersionOptions as any}
+                            value={r.model_version_id ?? undefined}
+                            onChange={(v) =>
+                              setMultiComponents((prev) => prev.map((x, i) => (i === idx ? { ...x, model_version_id: (v as any) ?? null } : x)))
+                            }
+                          />
+                        ),
+                      },
+                      {
+                        title: '宽(cm)',
+                        width: 90,
+                        render: (_: any, r: any, idx: number) => (
+                          <Input
+                            value={String(r.width_cm)}
+                            onChange={(e) => {
+                              const v = Number(e.target.value)
+                              setMultiComponents((prev) => prev.map((x, i) => (i === idx ? { ...x, width_cm: Number.isFinite(v) ? v : 0 } : x)))
+                            }}
+                          />
+                        ),
+                      },
+                      {
+                        title: '高(cm)',
+                        width: 90,
+                        render: (_: any, r: any, idx: number) => (
+                          <Input
+                            value={String(r.height_cm)}
+                            onChange={(e) => {
+                              const v = Number(e.target.value)
+                              setMultiComponents((prev) => prev.map((x, i) => (i === idx ? { ...x, height_cm: Number.isFinite(v) ? v : 0 } : x)))
+                            }}
+                          />
+                        ),
+                      },
+                      {
+                        title: '数量',
+                        width: 80,
+                        render: (_: any, r: any, idx: number) => (
+                          <Input
+                            value={String(r.quantity)}
+                            onChange={(e) => {
+                              const v = Number(e.target.value)
+                              setMultiComponents((prev) => prev.map((x, i) => (i === idx ? { ...x, quantity: Number.isFinite(v) ? v : 1 } : x)))
+                            }}
+                          />
+                        ),
+                      },
+                      {
+                        title: '交易规格（特征串）',
+                        render: (_: any, r: any, idx: number) => (
+                          <Input value={String(r.spec_text ?? '')} onChange={(e) => setMultiComponents((prev) => prev.map((x, i) => (i === idx ? { ...x, spec_text: e.target.value } : x)))} />
+                        ),
+                      },
+                      {
+                        title: '操作',
+                        width: 140,
+                        render: (_: any, __: any, idx: number) => (
+                          <Space>
+                            <Button
+                              size="small"
+                              onClick={() =>
+                                setMultiComponents((prev) => [...prev, { model_version_id: null, width_cm: 45, height_cm: 45, quantity: 1, spec_text: '' }])
+                              }
+                            >
+                              +行
+                            </Button>
+                            <Button size="small" danger disabled={multiComponents.length <= 1} onClick={() => setMultiComponents((prev) => prev.filter((_, i) => i !== idx))}>
+                              删除
+                            </Button>
+                          </Space>
+                        ),
+                      },
+                    ]}
+                  />
+                </>
+              ) : null}
 
               {lastError ? <Alert type="error" showIcon message="执行失败" description={lastError} /> : null}
 
@@ -602,7 +784,9 @@ export default function ProductListingPage() {
                 {
                   key: 'matched',
                   label: '命中情况',
-                  children: bom ? (
+                  children: mode === 'multi' ? (
+                    <Alert type="info" showIcon message="多模型测试：命中情况属于“每个组件各自版本”的结果。" description="请切换到“套装明细/多模型明细”查看每个组件的命中与 trace。" />
+                  ) : bom ? (
                     <>
                       <Space wrap style={{ marginBottom: 8 }}>
                         {variantsByBaseLineQuery.isLoading ? <Tag>加载规则详情中…</Tag> : null}
@@ -822,6 +1006,48 @@ export default function ProductListingPage() {
                     />
                   ) : (
                     <Text type="secondary">暂无（先点“套装：预演 BOM（合并器）”）</Text>
+                  ),
+                },
+                {
+                  key: 'multi',
+                  label: '多模型明细',
+                  children: multiDetail ? (
+                    <Table
+                      size="small"
+                      pagination={false}
+                      rowKey={(r: any) => String(r?.component_index ?? Math.random()) + '-' + String((r?.trace ?? {})?.model_version_id ?? '')}
+                      dataSource={multiDetail}
+                      columns={[
+                        {
+                          title: '版本',
+                          width: 120,
+                          render: (_: any, r: any) => <Text code>{String((r?.trace ?? {})?.model_version_id ?? '-')}</Text>,
+                        },
+                        { title: '组件', width: 70, render: (_: any, r: any) => `#${Number(r?.component_index ?? 0) + 1}` },
+                        {
+                          title: '尺寸/数量',
+                          render: (_: any, r: any) => {
+                            const m = (r?.trace ?? {})?.measurement_mm ?? {}
+                            const w = toNumberOrNull((m as any)?.width_mm) ?? 0
+                            const h = toNumberOrNull((m as any)?.height_mm) ?? 0
+                            const q = toNumberOrNull((m as any)?.quantity) ?? 0
+                            return `${(w / 10).toFixed(0)}×${(h / 10).toFixed(0)}cm ×${q}`
+                          },
+                        },
+                        {
+                          title: '成本',
+                          width: 110,
+                          render: (_: any, r: any) => formatMoney2(((r?.trace ?? {})?.costing ?? {})?.total_cost),
+                        },
+                        {
+                          title: '命中变体',
+                          width: 90,
+                          render: (_: any, r: any) => (((r?.trace ?? {})?.matched_variants ?? []) as any[]).length,
+                        },
+                      ]}
+                    />
+                  ) : (
+                    <Text type="secondary">暂无（先点“多模型：预演 BOM（合并器）”）</Text>
                   ),
                 },
               ]}

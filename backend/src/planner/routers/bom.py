@@ -59,3 +59,29 @@ def generate_bom_bundle(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return schemas.BomGenerateBundleResponse(**result)
 
+
+@router.post(
+    "/generate-multi-bundle",
+    response_model=schemas.BomGenerateMultiBundleResponse,
+    status_code=status.HTTP_200_OK,
+)
+def generate_bom_multi_bundle(
+    payload: schemas.BomGenerateMultiBundleRequest,
+    db: Session = Depends(get_db),
+) -> schemas.BomGenerateMultiBundleResponse:
+    """
+    Generate BOM for a multi-model bundle/set:
+    - each component can choose its own model_version_id.
+    - sizes are explicit, not parsed from spec_text.
+    """
+    try:
+        result = bom_generation_service.generate_bom_multi_bundle(
+            db,
+            sku_code=payload.sku_code,
+            components=[c.dict() for c in payload.components],
+            include_disabled_variants=bool(payload.include_disabled_variants),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return schemas.BomGenerateMultiBundleResponse(**result)
+

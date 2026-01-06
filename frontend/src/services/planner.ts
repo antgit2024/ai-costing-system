@@ -1274,6 +1274,34 @@ export const generateBomBundle = async (payload: BomGenerateBundleRequest): Prom
   return response.data
 }
 
+export type BomMultiBundleComponent = {
+  model_version_id: string
+  width_mm: number
+  height_mm: number
+  quantity: number
+  spec_text?: string
+  tokens?: string[]
+  notes?: string
+}
+
+export type BomGenerateMultiBundleRequest = {
+  sku_code?: string
+  components: BomMultiBundleComponent[]
+  include_disabled_variants?: boolean
+}
+
+export type BomGenerateMultiBundleResponse = {
+  merged: BomGenerateResponse
+  components: any[]
+}
+
+export const generateBomMultiBundle = async (
+  payload: BomGenerateMultiBundleRequest,
+): Promise<BomGenerateMultiBundleResponse> => {
+  const response = await plannerClient.post(`/bom/generate-multi-bundle`, payload)
+  return response.data
+}
+
 export const fetchProductModelMaterials = async (
   modelId: string,
 ): Promise<Array<Record<string, any>>> => {

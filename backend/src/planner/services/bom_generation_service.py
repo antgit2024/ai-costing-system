@@ -416,6 +416,145 @@ def generate_bom_bundle(
     return {"merged": merged, "components": component_results}
 
 
+def generate_bom_multi_bundle(
+    db: Session,
+    *,
+    sku_code: Optional[str],
+    components: List[Dict[str, Any]],
+    include_disabled_variants: bool = False,
+) -> Dict[str, Any]:
+    """
+    Multi-model bundle wrapper:
+    - components[i].model_version_id specifies which version to use for that component.
+    - We group by model_version_id, run generate_bom_bundle per group, then merge group-level merged BOMs.
+    """
+    if not components:
+        raise ValueError("components 不能为空")
+
+    # group by version
+    groups: Dict[str, List[Dict[str, Any]]] = {}
+    for idx, c in enumerate(components):
+        vid = str(c.get("model_version_id") or "").strip()
+        if not vid:
+            raise ValueError(f"components[{idx}] 缺少 model_version_id")
+        groups.setdefault(vid, []).append(c)
+
+    group_results: List[Dict[str, Any]] = []
+    all_component_results: List[Dict[str, Any]] = []
+
+    def _d(v: Any) -> Decimal:
+        if v in (None, ""):
+            return Decimal("0")
+        if isinstance(v, Decimal):
+            return v
+        try:
+            return Decimal(str(v))
+        except Exception:
+            return Decimal("0")
+
+    # merged aggregations across groups
+    merged_material_lines: List[Dict[str, Any]] = []
+    merged_inventory_lines: List[Dict[str, Any]] = []
+    material_cost_total = Decimal("0")
+    process_cost_total = Decimal("0")
+    overhead_rate = Decimal("0.3")
+
+    def _merge_material_lines(existing: List[Dict[str, Any]], incoming: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        agg: Dict[str, Dict[str, Any]] = {}
+        for r in (existing or []) + (incoming or []):
+            kind = str(r.get("material_kind") or "real")
+            ref = str(r.get("material_ref_id") or "")
+            code = str(r.get("material_code") or "")
+            name = str(r.get("material_name") or "")
+            uom = str(r.get("unit_of_measure") or "")
+            method = str(r.get("calculation_method") or "count")
+            key = "|".join([kind, ref or code or name, method, uom])
+            cur = agg.get(key)
+            if not cur:
+                cur = dict(r)
+                cur["computed_quantity"] = _d(r.get("computed_quantity"))
+                cur["line_cost"] = _d(r.get("line_cost"))
+                agg[key] = cur
+            else:
+                cur["computed_quantity"] = _d(cur.get("computed_quantity")) + _d(r.get("computed_quantity"))
+                cur["line_cost"] = _d(cur.get("line_cost")) + _d(r.get("line_cost"))
+        out = list(agg.values())
+        out.sort(key=lambda x: str(x.get("material_code") or x.get("material_name") or ""))
+        for i, r in enumerate(out, 1):
+            r["line_index"] = i
+        return out
+
+    def _merge_inventory_lines(existing: List[Dict[str, Any]], incoming: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        agg: Dict[str, Dict[str, Any]] = {}
+        for r in (existing or []) + (incoming or []):
+            code = str(r.get("material_code") or r.get("virtual_code") or "")
+            mid = str(r.get("material_id") or "")
+            unit = str(r.get("unit") or "")
+            key = "|".join([mid or code, unit])
+            cur = agg.get(key)
+            if not cur:
+                cur = dict(r)
+                cur["quantity"] = _d(r.get("quantity"))
+                agg[key] = cur
+            else:
+                cur["quantity"] = _d(cur.get("quantity")) + _d(r.get("quantity"))
+        out = list(agg.values())
+        out.sort(key=lambda x: str(x.get("material_code") or x.get("virtual_code") or ""))
+        return out
+
+    for vid, comps in groups.items():
+        # strip model_version_id before passing into single-version bundle generator
+        comps2 = []
+        for c in comps:
+            c2 = dict(c)
+            c2.pop("model_version_id", None)
+            comps2.append(c2)
+        res = generate_bom_bundle(
+            db,
+            model_version_id=vid,
+            sku_code=sku_code,
+            components=comps2,
+            include_disabled_variants=include_disabled_variants,
+        )
+        merged = res.get("merged") or {}
+        if not isinstance(merged, dict):
+            merged = {}
+        group_results.append({"model_version_id": vid, "merged": merged})
+        all_component_results.extend(list(res.get("components") or []))
+
+        # sum totals
+        costing = ((merged.get("trace") or {}).get("costing") or {}) if isinstance(merged.get("trace"), dict) else {}
+        material_cost_total += _d(costing.get("material_cost_total"))
+        process_cost_total += _d(costing.get("process_cost_total"))
+        overhead_rate = _d(costing.get("overhead_rate") or overhead_rate)
+
+        merged_material_lines = _merge_material_lines(merged_material_lines, list(merged.get("final_material_lines") or []))
+        inv_lines = (((merged.get("trace") or {}).get("inventory") or {}).get("inventory_lines") or []) if isinstance(merged.get("trace"), dict) else []
+        merged_inventory_lines = _merge_inventory_lines(merged_inventory_lines, list(inv_lines))
+
+    overhead_cost = (material_cost_total + process_cost_total) * overhead_rate
+    total_cost = material_cost_total + process_cost_total + overhead_cost
+
+    merged_out = {
+        "final_material_lines": merged_material_lines,
+        "trace": {
+            "sku_code": sku_code,
+            "bundle_groups": [{"model_version_id": x.get("model_version_id")} for x in group_results],
+            "costing": {
+                "currency": "CNY",
+                "material_cost_total": material_cost_total,
+                "process_cost_total": process_cost_total,
+                "overhead_rate": overhead_rate,
+                "overhead_cost": overhead_cost,
+                "total_cost": total_cost,
+                "unit_cost": total_cost,
+            },
+            "inventory": {"inventory_lines": merged_inventory_lines, "inventory_line_count": len(merged_inventory_lines), "warnings": []},
+        },
+    }
+    return {"merged": merged_out, "components": all_component_results}
+
+
 def _fill_missing_units(db: Session, final_lines: List[Dict[str, Any]]) -> None:
     missing_ids: List[str] = []
     missing_codes: List[str] = []

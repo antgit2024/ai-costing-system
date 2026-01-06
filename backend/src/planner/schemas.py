@@ -2071,6 +2071,22 @@ class BomGenerateBundleResponse(BaseModel):
     components: List[Dict[str, Any]] = Field(default_factory=list)
 
 
+class BomGenerateMultiBundleComponent(BomBundleComponent):
+    model_version_id: str = Field(..., max_length=36, description="该组件使用的标准版本ID（允许与其它组件不同）")
+
+
+class BomGenerateMultiBundleRequest(BaseModel):
+    sku_code: Optional[str] = Field(None, max_length=128)
+    components: List[BomGenerateMultiBundleComponent] = Field(default_factory=list, min_items=1)
+    include_disabled_variants: bool = False
+    operator_id: Optional[str] = Field("system", max_length=64)
+
+
+class BomGenerateMultiBundleResponse(BaseModel):
+    merged: Dict[str, Any] = Field(default_factory=dict)
+    components: List[Dict[str, Any]] = Field(default_factory=list)
+
+
 
 class ModelVersionImageRead(BaseModel):
     index: int

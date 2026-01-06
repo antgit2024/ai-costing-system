@@ -23,3 +23,23 @@ def test_inventory_lines_keeps_real_lines_even_without_material_code(db_session)
     assert inv["inventory_lines"][0]["quantity"] == Decimal("2")
 
 
+def test_inventory_lines_accepts_real_kind_case_insensitive(db_session):
+    from src.planner.services.bom_generation_service import _build_inventory_lines
+
+    final_lines = [
+        {
+            "line_index": 1,
+            "material_kind": "REAL",  # legacy/dirty data
+            "material_ref_id": "MAT-2",
+            "material_code": "WB02335",
+            "material_name": "布料300-01白色黄金绒",
+            "unit_of_measure": "m2",
+            "computed_quantity": Decimal("0.5"),
+            "loss_rate": Decimal("10"),
+        }
+    ]
+    inv = _build_inventory_lines(db_session, final_lines)
+    assert inv["inventory_line_count"] == 1
+    assert inv["inventory_lines"][0]["material_code"] == "WB02335"
+
+

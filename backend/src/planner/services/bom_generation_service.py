@@ -959,13 +959,13 @@ def _build_inventory_lines(db: Session, final_lines: List[Dict[str, Any]]) -> Di
     warnings: List[str] = []
 
     # Preload bindings and materials for virtual lines
+    def _kind(v: Any) -> str:
+        return str(v or "").strip().lower()
+
     v_ids = [
         str(l.get("material_ref_id"))
         for l in final_lines
-        if (
-            str(l.get("material_kind") or "").strip().lower() == "virtual"
-            and l.get("material_ref_id")
-        )
+        if (_kind(l.get("material_kind")).startswith("virtual") and l.get("material_ref_id"))
     ]
     v_ids = list({*v_ids})
     bindings_by_virtual: Dict[str, List[models.VirtualMaterialBinding]] = {}
@@ -995,7 +995,7 @@ def _build_inventory_lines(db: Session, final_lines: List[Dict[str, Any]]) -> Di
             return default
 
     for line in final_lines:
-        kind = str(line.get("material_kind") or "real").strip().lower()
+        kind = _kind(line.get("material_kind") or "real")
         qty = _d(line.get("computed_quantity"), Decimal("0"))
         # Apply line-level loss_rate (0-100%) for inventory deduction.
         # 口径：computed_quantity 为“净用量”；扣库应按“含损耗用量”扣。
@@ -1005,7 +1005,7 @@ def _build_inventory_lines(db: Session, final_lines: List[Dict[str, Any]]) -> Di
         if qty <= 0:
             continue
 
-        if kind == "real":
+        if kind.startswith("real"):
             out_lines.append(
                 {
                     "source": "real_line",
@@ -1019,7 +1019,7 @@ def _build_inventory_lines(db: Session, final_lines: List[Dict[str, Any]]) -> Di
             )
             continue
 
-        if kind != "virtual":
+        if not kind.startswith("virtual"):
             # Unknown kinds are not inventory objects
             continue
 

@@ -228,10 +228,11 @@ export default function StandardModelsPage() {
 
   const columns: ColumnsType<ProductModel> = [
     { title: '总编码', dataIndex: 'model_code', width: 120 },
-    { title: '模型名称', dataIndex: 'model_name' },
+    { title: '品类', dataIndex: 'category', width: 70, render: (v: any) => String(v ?? '').trim() || '-' },
+    { title: '模型名称', dataIndex: 'model_name', width: 160 },
     {
-      title: '匹配模块',
-      width: 260,
+      title: '货品映射',
+      width: 420,
       render: (_: any, r: any) => {
         const meta: any = (r as any)?.metadata_json ?? {}
         const raw = Array.isArray(meta?.recognition_keywords) ? meta.recognition_keywords : []
@@ -276,20 +277,33 @@ export default function StandardModelsPage() {
         )
       },
     },
-    { title: '品类', dataIndex: 'category', width: 140, render: (v: any) => String(v ?? '').trim() || '-' },
-    { title: '状态', dataIndex: 'status', width: 110, render: (v: string) => <Tag>{v}</Tag> },
-    {
-      title: '入口',
-      width: 90,
-      render: (_: any, r: any) => {
-        const meta: any = (r as any)?.metadata_json ?? {}
-        const entry = String(meta?.entry_context ?? '').trim() || '-'
-        return <Tag>{entry}</Tag>
-      },
-    },
     { title: '打样版本数', width: 110, render: (_: any, r: any) => (r.sample_version_count ?? '-') },
     { title: '标准版本数', width: 110, render: (_, r) => (r.standard_version_count ?? '-') },
-    { title: '当前发布标准', width: 180, render: (_, r) => r.current_published_standard_version_label ?? '-' },
+    {
+      title: '当前发布标准',
+      width: 140,
+      render: (_: any, r: any) => {
+        const v = String(r.current_published_standard_version_label ?? '').trim()
+        if (!v) return <Text type="secondary">-</Text>
+        return (
+          <span
+            style={{
+              display: 'inline-block',
+              padding: '0px 6px',
+              borderRadius: 6,
+              border: '1px solid #d9d9d9',
+              background: '#fafafa',
+              fontSize: 11,
+              lineHeight: '18px',
+              color: '#595959',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {v}
+          </span>
+        )
+      },
+    },
     {
       title: '核价偏差',
       width: 140,

@@ -2604,7 +2604,12 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       // 打样管理：抽屉略加宽，让右侧清单更好扫读（左侧工艺模块栏保持固定宽度）
       width={entryContext === 'sample' ? 1370 : 1320}
       destroyOnClose
-      title={entryContext === 'sample' ? '打样管理' : '标准模型管理'}
+      title={(() => {
+        const code = String((modelQuery.data as any)?.model_code ?? '').trim()
+        const name = String((modelQuery.data as any)?.model_name ?? '').trim()
+        const suffix = code || name ? `（${[code, name].filter(Boolean).join(':')}）` : ''
+        return (entryContext === 'sample' ? '打样管理' : '标准模型管理') + suffix
+      })()}
       extra={
         <Space>
           {activeTab === 'basic' ? (

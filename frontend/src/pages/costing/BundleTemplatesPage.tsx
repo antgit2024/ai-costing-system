@@ -328,7 +328,21 @@ export default function BundleTemplatesPage() {
     enabled: moduleIdsInSelectedVersions.length > 0,
   })
 
-  // NOTE: 旧组件清单已移除，因此不再需要 baseLineMapByVersion。
+  const baseLineMapByVersion = useMemo(() => {
+    const m = new Map<string, Map<string, any>>()
+    const rows = (versionLinesSummaryQuery.data ?? []) as Array<{ version_id: string; data: any }>
+    for (const r of rows) {
+      const mats = (r?.data?.materials ?? []) as any[]
+      const inner = new Map<string, any>()
+      for (const it of mats) {
+        const id = String(it?.id ?? '').trim()
+        if (!id) continue
+        inner.set(id, it)
+      }
+      m.set(String(r.version_id), inner)
+    }
+    return m
+  }, [versionLinesSummaryQuery.data])
 
   const moduleStructureByVersion = useMemo(() => {
     const mapByVersion = new Map<string, Map<string, { whole: boolean; slots: string[] }>>()
@@ -980,6 +994,57 @@ export default function BundleTemplatesPage() {
                       showHeader={false}
                       rowKey={(_, mi) => `ppc-${idx}-${mi}`}
                       dataSource={rows}
+                      expandable={{
+                        expandedRowKeys: (rows ?? []).map((_: any, mi: number) => `ppc-${idx}-${mi}`),
+                        showExpandColumn: false,
+                        expandedRowRender: (rr: any, mi: number) => {
+                          const versionId = String(rr?.model_version_id ?? '').trim()
+                          const k = `${idx}:${mi}`
+                          const sel = (presetSelectedByIdx[k] ?? {}) as Record<string, string | null>
+                          const selectedEntries = Object.entries(sel).filter(([, v]) => !!v)
+                          if (!versionId || !selectedEntries.length) return null
+
+                          const variantsForVersion = ((variantsSummaryQuery.data ?? []) as any[]).find(
+                            (x: any) => String(x?.version_id ?? '') === versionId,
+                          )?.items as any[]
+                          const variants = Array.isArray(variantsForVersion) ? variantsForVersion : []
+                          const variantsById = new Map<string, any>()
+                          for (const v of variants) {
+                            if (v?.id) variantsById.set(String(v.id), v)
+                          }
+
+                          const baseMap = baseLineMapByVersion.get(versionId) ?? new Map<string, any>()
+
+                          return (
+                            <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                              {selectedEntries.map(([baseLineId, variantId]) => {
+                                const v = variantsById.get(String(variantId))
+                                const base = baseMap.get(String(baseLineId))
+                                const slot = getLineStructureLabel(base, versionId)
+                                const baseName = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
+                                const baseLabel = slot ? `${slot}：${baseName}` : baseName
+                                const effect =
+                                  v?.action === 'remove_self' ? '移除' : v?.action === 'add_siblings' ? '新增物料' : '替换物料'
+                                const produced = Array.isArray(v?.items) ? v.items : []
+                                const producedOne = produced[0]
+                                const producedLabel = String(
+                                  producedOne?.material_name ?? producedOne?.material_code ?? producedOne?.material_ref_id ?? '',
+                                ).trim()
+
+                                return (
+                                  <div key={`${k}:${baseLineId}:${variantId}`}>
+                                    <Space wrap size={8}>
+                                      <Text strong>{baseLabel}</Text>
+                                      <Text type="secondary">{effect}</Text>
+                                      <Tag color="green">{producedLabel || '-'}</Tag>
+                                    </Space>
+                                  </div>
+                                )
+                              })}
+                            </Space>
+                          )
+                        },
+                      }}
                       locale={{ emptyText: '暂无组件行：点击右侧“+行”添加第一条' }}
                       columns={[
                         {

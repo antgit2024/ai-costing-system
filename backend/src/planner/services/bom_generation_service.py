@@ -224,6 +224,14 @@ def generate_bom_by_spec(
     if not components:
         raise ValueError(f"套装模板无组件：{code}")
 
+    # Optional bundle suffix: (B:CODE:A) / (BUNDLE:CODE:A)
+    # - A/B/C... means selecting the 1st/2nd/3rd... phrase preset row directly (NOT "Auto").
+    #   This allows operators to keep customer-facing text unchanged, while mapping is driven by template presets.
+    import re
+
+    _mode_match = re.search(rf"(?:BUNDLE:|B:){re.escape(code)}(?::([A-Za-z]))?", str(spec_text or ""), flags=re.IGNORECASE)
+    bundle_selector = (str(_mode_match.group(1) or "").strip().upper() if _mode_match else "") or None
+
     def _parse_qty_from_phrase(text: str) -> Optional[int]:
         import re
 
@@ -237,11 +245,16 @@ def generate_bom_by_spec(
         except Exception:
             return None
 
+    forced_preset_index: Optional[int] = None
+    if bundle_selector and len(bundle_selector) == 1 and "A" <= bundle_selector <= "Z":
+        forced_preset_index = ord(bundle_selector) - ord("A")
+
     def _apply_phrase_presets(
         *,
         tpl_meta: Dict[str, Any],
         spec_text: str,
         components: List[Dict[str, Any]],
+        forced_index: Optional[int] = None,
     ) -> tuple[List[Dict[str, Any]], List[str], List[Dict[str, Any]], bool]:
         """
         Phrase presets (短语预设):
@@ -306,7 +319,7 @@ def generate_bom_by_spec(
                 }
             )
 
-        # longer phrase first
+        # longer phrase first (only for contains-match mode)
         items.sort(key=lambda x: len(str(x.get("phrase") or "")), reverse=True)
         matched_any = False
         # index -> {tokens:set, best_phrase_len:int, qty:int|None}
@@ -315,55 +328,104 @@ def generate_bom_by_spec(
         remove_tokens: List[str] = []
         s = str(spec_text or "")
 
-        for it in items:
+        # Forced selection mode: choose Nth preset row directly (A=0,B=1,...),
+        # and apply its mappings without checking contains-match.
+        if isinstance(forced_index, int):
+            if forced_index < 0 or forced_index >= len(items):
+                trace_entries = [{"selector": forced_index, "matched": False, "reason": "forced_index_out_of_range"}]
+                return [], [], trace_entries, False
+            it = items[forced_index]
             phrase = str(it["phrase"])
-            if phrase and phrase in s:
-                matched_any = True
-                mappings = it.get("mappings") or []
-                affected: List[int] = []
-                uniq_targets: set[int] = set()
-                injected_tokens_this_phrase: List[str] = []
+            matched_any = True
+            mappings = it.get("mappings") or []
+            uniq_targets: set[int] = set()
+            injected_tokens_this_phrase: List[str] = []
+            for m in mappings:
+                try:
+                    idx = int(m.get("target_component_index"))
+                except Exception:
+                    continue
+                if idx < 0 or idx >= len(components):
+                    continue
+                uniq_targets.add(idx)
+                mk = str(m.get("match_key") or "").strip()
+                mv = str(m.get("match_value") or "").strip()
+                if not mv:
+                    continue
+                token_kv = f"{mk}:{mv}" if mk else mv
+                toks = [token_kv, mv]
+                injected_tokens_this_phrase.extend(toks)
+                remove_tokens.extend(toks)
+                rec = per_index.get(idx) or {"tokens": set(), "best_phrase_len": 0, "quantity": None}
+                for t in toks:
+                    rec["tokens"].add(t)
+                rec["best_phrase_len"] = len(phrase) if phrase else 0
+                rec["quantity"] = it.get("quantity")
+                per_index[idx] = rec
 
-                for m in mappings:
-                    try:
-                        idx = int(m.get("target_component_index"))
-                    except Exception:
-                        continue
-                    if idx < 0 or idx >= len(components):
-                        continue
-                    uniq_targets.add(idx)
-                    mk = str(m.get("match_key") or "").strip()
-                    mv = str(m.get("match_value") or "").strip()
-                    if not mv:
-                        continue
-                    token_kv = f"{mk}:{mv}" if mk else mv
-                    toks = [token_kv, mv]
-                    injected_tokens_this_phrase.extend(toks)
-                    remove_tokens.extend(toks)
-                    rec = per_index.get(idx) or {"tokens": set(), "best_phrase_len": 0, "quantity": None}
-                    for t in toks:
-                        rec["tokens"].add(t)
-                    # keep longer phrase's qty (longer first)
-                    if len(phrase) >= int(rec.get("best_phrase_len") or 0):
-                        rec["best_phrase_len"] = len(phrase)
-                        rec["quantity"] = it.get("quantity")
-                    per_index[idx] = rec
-                    affected.append(idx)
+            qty_applies = (it.get("quantity") if len(uniq_targets) == 1 else None)
+            trace_entries.append(
+                {
+                    "selector": forced_index,
+                    "phrase": phrase,
+                    "matched": True,
+                    "forced": True,
+                    "mappings_count": len(mappings),
+                    "affected_components": sorted(list(uniq_targets)),
+                    "quantity": qty_applies,
+                    "tokens": list(dict.fromkeys([t for t in injected_tokens_this_phrase if t])),
+                }
+            )
+        else:
+            for it in items:
+                phrase = str(it["phrase"])
+                if phrase and phrase in s:
+                    matched_any = True
+                    mappings = it.get("mappings") or []
+                    affected: List[int] = []
+                    uniq_targets: set[int] = set()
+                    injected_tokens_this_phrase: List[str] = []
 
-                # If this phrase maps to exactly one component, allow qty override
-                qty_applies = (it.get("quantity") if len(uniq_targets) == 1 else None)
-                trace_entries.append(
-                    {
-                        "phrase": phrase,
-                        "matched": True,
-                        "mappings_count": len(mappings),
-                        "affected_components": sorted(list(uniq_targets)),
-                        "quantity": qty_applies,
-                        "tokens": list(dict.fromkeys([t for t in injected_tokens_this_phrase if t])),
-                    }
-                )
-            else:
-                trace_entries.append({"phrase": str(it.get("phrase") or ""), "matched": False})
+                    for m in mappings:
+                        try:
+                            idx = int(m.get("target_component_index"))
+                        except Exception:
+                            continue
+                        if idx < 0 or idx >= len(components):
+                            continue
+                        uniq_targets.add(idx)
+                        mk = str(m.get("match_key") or "").strip()
+                        mv = str(m.get("match_value") or "").strip()
+                        if not mv:
+                            continue
+                        token_kv = f"{mk}:{mv}" if mk else mv
+                        toks = [token_kv, mv]
+                        injected_tokens_this_phrase.extend(toks)
+                        remove_tokens.extend(toks)
+                        rec = per_index.get(idx) or {"tokens": set(), "best_phrase_len": 0, "quantity": None}
+                        for t in toks:
+                            rec["tokens"].add(t)
+                        # keep longer phrase's qty (longer first)
+                        if len(phrase) >= int(rec.get("best_phrase_len") or 0):
+                            rec["best_phrase_len"] = len(phrase)
+                            rec["quantity"] = it.get("quantity")
+                        per_index[idx] = rec
+                        affected.append(idx)
+
+                    # If this phrase maps to exactly one component, allow qty override
+                    qty_applies = (it.get("quantity") if len(uniq_targets) == 1 else None)
+                    trace_entries.append(
+                        {
+                            "phrase": phrase,
+                            "matched": True,
+                            "mappings_count": len(mappings),
+                            "affected_components": sorted(list(uniq_targets)),
+                            "quantity": qty_applies,
+                            "tokens": list(dict.fromkeys([t for t in injected_tokens_this_phrase if t])),
+                        }
+                    )
+                else:
+                    trace_entries.append({"phrase": str(it.get("phrase") or ""), "matched": False})
 
         scoped_by_index: List[Dict[str, Any]] = []
         for idx, rec in per_index.items():
@@ -404,6 +466,7 @@ def generate_bom_by_spec(
         tpl_meta=tpl_meta,
         spec_text=spec_text,
         components=components,
+        forced_index=forced_preset_index,
     )
     if phrase_remove_tokens:
         rm2 = {str(x).strip().lower() for x in phrase_remove_tokens if str(x).strip()}

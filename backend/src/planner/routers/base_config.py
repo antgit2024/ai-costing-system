@@ -345,20 +345,19 @@ def download_material_image(
         # don't fail image serving
         pass
 
-    # 1) local (unless force_refresh)
-    if not force_refresh:
-        local_ref = material_image_storage.get_local_image_ref(metadata, image_index)
-        if local_ref is not None:
-            try:
-                content = material_image_storage.read_local_bytes(local_ref)
-                media_type = local_ref.content_type or "application/octet-stream"
-                # NOTE: we currently ignore thumbnail resize (no Pillow dependency); return original.
-                return StreamingResponse(io.BytesIO(content), media_type=media_type)
-            except FileNotFoundError:
-                # fallthrough to dingtalk download
-                pass
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Failed to read local material image (material=%s idx=%s): %s", material_id, image_index, exc)
+    # 1) local cache (unless force_refresh)
+    local_ref = None if force_refresh else material_image_storage.get_local_image_ref(metadata, image_index)
+    if local_ref is not None:
+        try:
+            content = material_image_storage.read_local_bytes(local_ref)
+            media_type = local_ref.content_type or "application/octet-stream"
+            # NOTE: we currently ignore thumbnail resize (no Pillow dependency); return original.
+            return StreamingResponse(io.BytesIO(content), media_type=media_type)
+        except FileNotFoundError:
+            # fallthrough to dingtalk download
+            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to read local material image (material=%s idx=%s): %s", material_id, image_index, exc)
 
     # 2) DingTalk download
     try:

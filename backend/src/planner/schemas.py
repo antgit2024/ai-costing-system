@@ -307,6 +307,7 @@ class MaterialRead(BaseModel):
         def _normalize_one(value: Any) -> list[str]:
             if value in (None, "", []):
                 return []
+
             data: list[Any]
             if isinstance(value, str):
                 s = value.strip()
@@ -335,6 +336,7 @@ class MaterialRead(BaseModel):
                     for nested_key in ("value", "fileList", "files", "list", "items"):
                         if nested_key in item and item.get(nested_key) not in (None, "", []):
                             out.extend(_normalize_one(item.get(nested_key)))
+
                     # YiDa attachment objects may contain:
                     # - ossFileHandle / fileUrl (for DingTalk temporary url API)
                     # - downloadUrl / url / previewUrl (sometimes present)
@@ -353,6 +355,7 @@ class MaterialRead(BaseModel):
                     )
                     if isinstance(url, str) and url.strip():
                         out.append(url.strip())
+
             return out
 
         # Prefer raw_form_data when present (it reflects the latest YiDa form state).

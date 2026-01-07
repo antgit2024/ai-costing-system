@@ -108,34 +108,6 @@ const splitTokenCandidates = (raw: string): string[] => {
     .filter(Boolean)
 }
 
-const copyToClipboard = async (text: string) => {
-  const v = String(text ?? '')
-  if (!v.trim()) return
-  try {
-    await navigator.clipboard.writeText(v)
-    message.success('已复制')
-    return
-  } catch {
-    // fallback for older browsers
-    const ta = document.createElement('textarea')
-    ta.value = v
-    ta.style.position = 'fixed'
-    ta.style.left = '-9999px'
-    ta.style.top = '0'
-    document.body.appendChild(ta)
-    ta.focus()
-    ta.select()
-    try {
-      document.execCommand('copy')
-      message.success('已复制')
-    } catch {
-      message.error('复制失败：请手动复制')
-    } finally {
-      document.body.removeChild(ta)
-    }
-  }
-}
-
 const SLOT_CN_FALLBACK: Record<string, string> = {
   front: '前片位',
   back: '背片位',
@@ -166,7 +138,6 @@ export default function BundleTemplatesPage() {
   const [components, setComponents] = useState<ComponentRow[]>([
     { model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' },
   ])
-  const [lexiconRules, setLexiconRules] = useState<LexiconRuleRow[]>([])
   const [phrasePresets, setPhrasePresets] = useState<PhrasePresetRow[]>([])
 
   // 预设变体筛选：每个组件 idx -> { base_line_id -> selected_variant_id }
@@ -550,7 +521,6 @@ export default function BundleTemplatesPage() {
     form.setFieldsValue({ name: '', category: '', tags: [], shared_trigger_text: '' })
     setComponents([{ model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' }])
     setPresetSelectedByIdx({})
-    setLexiconRules([])
     setPhrasePresets([])
     setDrawerOpen(true)
   }
@@ -588,25 +558,7 @@ export default function BundleTemplatesPage() {
     } else {
       setPresetSelectedByIdx({})
     }
-    const lr = (row?.metadata ?? {})?.lexicon_rules
-    if (Array.isArray(lr)) {
-      setLexiconRules(
-        lr
-          .map((x: any) => ({
-            match_key: String(x?.match_key ?? x?.key ?? '').trim() || '材质',
-            match_value: String(x?.match_value ?? x?.value ?? '').trim(),
-            target_component_index:
-              typeof x?.target_component_index === 'number'
-                ? x.target_component_index
-                : legacyLabelToIndex.has(String(x?.target_label ?? '').trim())
-                  ? (legacyLabelToIndex.get(String(x?.target_label ?? '').trim()) as number)
-                  : null,
-          }))
-          .filter((x: any) => x.match_value && x.target_component_index != null),
-      )
-    } else {
-      setLexiconRules([])
-    }
+    // NOTE: legacy metadata.lexicon_rules is preserved on save, but UI is intentionally hidden to avoid confusion.
 
     const pp = (row?.metadata ?? {})?.phrase_presets
     if (Array.isArray(pp)) {
@@ -672,16 +624,8 @@ export default function BundleTemplatesPage() {
         category: String(values.category ?? '').trim() || undefined,
         tags: Array.isArray(values.tags) ? values.tags.map((x: any) => String(x)).filter(Boolean) : [],
         variant_presets: presetSelectedByIdx,
-        lexicon_rules: lexiconRules
-          .map((r) => ({
-            match_key: String(r.match_key ?? '').trim() || undefined,
-            match_value: String(r.match_value ?? '').trim(),
-            target_component_index:
-              typeof r.target_component_index === 'number' && Number.isFinite(r.target_component_index)
-                ? r.target_component_index
-                : undefined,
-          }))
-          .filter((r) => r.match_value && typeof (r as any).target_component_index === 'number'),
+        // Preserve legacy lexicon_rules (global fallback mapping) if exists, but do not expose to operators.
+        lexicon_rules: Array.isArray((editing?.metadata ?? {})?.lexicon_rules) ? (editing?.metadata ?? {})?.lexicon_rules : [],
         phrase_presets: phrasePresets
           .map((p) => ({
             phrase: String(p.phrase ?? '').trim(),
@@ -1058,142 +1002,7 @@ export default function BundleTemplatesPage() {
             </Form.Item>
           </Form>
 
-          <Alert
-            type="info"
-            showIcon
-            message="套装字符映射（可选，用于“材质:雪尼尔2个(30*30)+…”这种对客规格）"
-            description="用于把对客交易规格里的“材质:雪尼尔2个”等片段，映射到指定组件（组件行），并按数量拆分为多行组件，避免雪尼尔+棉麻混搭时 token 广播冲突。"
-          />
-          <Alert
-            type="warning"
-            showIcon
-            message="全局字段映射（兜底）"
-            description="仅当“短语预设”没有命中时才会使用；一旦短语命中，系统将只执行短语下的映射组（避免规则越来越活）。"
-          />
-          <Table
-            size="small"
-            pagination={false}
-            rowKey={(_, idx) => `lex-${idx}`}
-            dataSource={lexiconRules}
-            locale={{ emptyText: '暂无规则：在“操作”列点 +行 添加第一条' }}
-            columns={[
-              {
-                title: '字段',
-                width: 110,
-                render: (_: any, r: any, idx: number) => (
-                  <Select
-                    style={{ width: '100%' }}
-                    value={String(r.match_key ?? '材质')}
-                    options={[
-                      { value: '材质', label: '材质' },
-                      { value: '枕芯', label: '枕芯' },
-                    ]}
-                    onChange={(v) =>
-                      setLexiconRules((prev) => prev.map((x, i) => (i === idx ? { ...x, match_key: String(v) } : x)))
-                    }
-                  />
-                ),
-              },
-              {
-                title: '词（严格选择）',
-                width: 420,
-                render: (_: any, r: any, idx: number) => (
-                  <Select
-                    showSearch
-                    allowClear
-                    placeholder={variableTokenCandidates.length ? '从候选中选择（不可手输）' : '暂无候选词：请先选择模型版本'}
-                    style={{ width: '100%' }}
-                    value={String(r.match_value ?? '').trim() || undefined}
-                    options={variableTokenCandidates.map((t) => ({ value: t, label: t }))}
-                    onChange={(v) => setLexiconRules((prev) => prev.map((x, i) => (i === idx ? { ...x, match_value: String(v ?? '') } : x)))}
-                    disabled={!variableTokenCandidates.length}
-                  />
-                ),
-              },
-              {
-                title: '目标组件',
-                width: 160,
-                render: (_: any, r: any, idx: number) => (
-                  <Select
-                    showSearch
-                    allowClear
-                    placeholder="选择组件（按模型）"
-                    style={{ width: '100%' }}
-                    value={typeof r.target_component_index === 'number' ? r.target_component_index : undefined}
-                    options={(components ?? []).map((c, i) => ({
-                      value: i,
-                      label: getComponentDisplay(i, c),
-                    }))}
-                    onChange={(v) =>
-                      setLexiconRules((prev) =>
-                        prev.map((x, i) =>
-                          i === idx ? { ...x, target_component_index: v == null ? null : Number(v) } : x,
-                        ),
-                      )
-                    }
-                  />
-                ),
-              },
-              {
-                title: '操作',
-                width: 140,
-                render: (_: any, __: any, idx: number) => (
-                  <Space>
-                    <Button
-                      size="small"
-                      onClick={() => setLexiconRules((prev) => [...prev, { match_key: '材质', match_value: '', target_component_index: null }])}
-                    >
-                      +行
-                    </Button>
-                    <Button
-                      size="small"
-                      danger
-                      disabled={lexiconRules.length <= 0}
-                      onClick={() => setLexiconRules((prev) => prev.filter((_, i) => i !== idx))}
-                    >
-                      删除
-                    </Button>
-                  </Space>
-                ),
-              },
-            ]}
-          />
-
-          <Alert
-            type="success"
-            showIcon
-            message="该套装模板可变词列表（可复制）"
-            description={
-              <div>
-                <div style={{ marginBottom: 8 }}>
-                  <Space wrap>
-                    <Text type="secondary">
-                      来源：当前模板所选模型版本的“启用变体规则”里 TOKEN(any/all) 关键词（可用于触发变体；不含运行时 token）。
-                    </Text>
-                    <Button size="small" disabled={!variableTokenCandidates.length} onClick={() => copyToClipboard(variableTokenCandidates.join('，'))}>
-                      复制全部
-                    </Button>
-                  </Space>
-                </div>
-                {variableTokenCandidates.length ? (
-                  <Space wrap size={6}>
-                    {variableTokenCandidates.slice(0, 80).map((t) => (
-                      <Tag
-                        key={t}
-                        style={{ borderRadius: 999, padding: '0 8px', lineHeight: '20px', fontSize: 12, cursor: 'pointer' }}
-                        onClick={() => copyToClipboard(t)}
-                      >
-                        {t}
-                      </Tag>
-                    ))}
-                    {variableTokenCandidates.length > 80 ? <Tag>+{variableTokenCandidates.length - 80}</Tag> : null}
-                  </Space>
-                ) : (
-                  <Text type="secondary">暂无候选词：请先在组件清单选择模型版本，并确保该版本存在启用的 TOKEN(any/all) 变体规则。</Text>
-                )}
-              </div>
-            }
-          />
+          {/* 已按运营心智收口：不再展示“全局字段映射/可变词列表”，避免误会与绕圈。 */}
 
           <Alert
             type="info"

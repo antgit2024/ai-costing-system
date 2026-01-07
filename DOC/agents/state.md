@@ -46,7 +46,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：标准模型列表 UI 优化：品类列缩窄并移到模型名前；模型名列缩窄；“匹配模块”改名“货品映射”并加宽；隐藏状态/入口列；“当前发布标准”改为更小的带边框标签显示；验收 `npm -C frontend run build` 并已发布静态资源）
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：标准模型列表增加“货品映射（关键词）”筛选框：在当前列表数据中按 `metadata_json.recognition_keywords` 进行过滤（支持空格/逗号分隔的任意命中）；验收 `npm -C frontend run build` 并已发布静态资源）
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Backend+Frontend：套装壳（方案A）MVP：新增后端 `/api/planner/bom/generate-bundle`（组件尺寸/数量显式输入，不从交易规格解析；支持 tokens 触发行级变体；输出单件结果+合并BOM/成本/扣库）；前端“产品上架（测试台）”新增套装模式组件录入与“套装：预演BOM（合并器）”按钮；验收 `npm -C frontend run build`，已发布静态并重启后端）
-- **最近校对（北京时间 GMT+8）**：2026-01-06（Backend+Frontend：套装“字符映射/词典（按组件label作用域）”MVP：1) 套装模板组件新增 `label` 字段；2) 模板新增 `metadata_json.lexicon_rules`（match_key/ match_value/ target_label）；3) `bom/generate-by-spec` 解析对客规格如 `材质:雪尼尔2个(30*30)`，按规则将 token 仅注入目标组件并按数量拆分组件行，同时从共享tokens移除这些词以避免全组件广播冲突；4) 测试台套装测试会自动去掉输入里重复的 B:CODE。验收：前端 `npm -C frontend run build` + 静态发布；后端 `systemctl --user restart planner-costing.service`）
+- **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：套装字符映射编辑器可用性修复：当规则表为空时也能通过“新增规则”按钮创建第一条规则，并给出空态提示；便于运营配置 lexicon_rules。验收：`npm -C frontend run build`、静态发布）
 
 ### 关键口径备忘（避免回滚/重构改坏）
 

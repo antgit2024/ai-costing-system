@@ -897,11 +897,18 @@ export default function BundleTemplatesPage() {
             message="套装字符映射（可选，用于“材质:雪尼尔2个(30*30)+…”这种对客规格）"
             description="用于把对客交易规格里的“材质:雪尼尔2个”等片段，映射到指定组件 label，并按数量拆分为多行组件，避免雪尼尔+棉麻混搭时 token 广播冲突。"
           />
+          <Space style={{ justifyContent: 'space-between', width: '100%' }}>
+            <Text type="secondary">提示：先在组件清单里填写组件 label，这里才能下拉选择目标组件。</Text>
+            <Button size="small" onClick={() => setLexiconRules((prev) => [...prev, { match_key: '材质', match_value: '', target_label: '' }])}>
+              新增规则
+            </Button>
+          </Space>
           <Table
             size="small"
             pagination={false}
             rowKey={(_, idx) => `lex-${idx}`}
             dataSource={lexiconRules}
+            locale={{ emptyText: '暂无规则：点右上角“新增规则”添加第一条' }}
             columns={[
               {
                 title: '字段',
@@ -955,12 +962,6 @@ export default function BundleTemplatesPage() {
                 width: 140,
                 render: (_: any, __: any, idx: number) => (
                   <Space>
-                    <Button
-                      size="small"
-                      onClick={() => setLexiconRules((prev) => [...prev, { match_key: '材质', match_value: '', target_label: '' }])}
-                    >
-                      +行
-                    </Button>
                     <Button size="small" danger disabled={lexiconRules.length <= 0} onClick={() => setLexiconRules((prev) => prev.filter((_, i) => i !== idx))}>
                       删除
                     </Button>

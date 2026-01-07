@@ -2115,6 +2115,30 @@ class BundleTemplateRead(BaseModel):
     components: List[BundleTemplateComponent] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
     is_archived: bool = False
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class BundleTemplateUpdateRequest(BaseModel):
+    name: Optional[str] = Field(None, max_length=128)
+    components: Optional[List[BundleTemplateComponent]] = None
+    metadata: Optional[Dict[str, Any]] = None
+    operator_id: Optional[str] = Field("system", max_length=64)
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class BundleTemplateCloneRequest(BaseModel):
+    name: Optional[str] = Field(None, max_length=128)
+    operator_id: Optional[str] = Field("system", max_length=64)
+
+
+class PaginatedBundleTemplateResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: List[BundleTemplateRead]
 
 
 class BomGenerateBySpecRequest(BaseModel):

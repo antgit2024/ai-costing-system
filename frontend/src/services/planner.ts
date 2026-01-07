@@ -1324,6 +1324,8 @@ export type BundleTemplateRead = {
   components: BundleTemplateComponent[]
   metadata: Record<string, any>
   is_archived: boolean
+  created_at?: string
+  updated_at?: string
 }
 
 export const createBundleTemplate = async (payload: BundleTemplateCreateRequest): Promise<BundleTemplateRead> => {
@@ -1334,6 +1336,45 @@ export const createBundleTemplate = async (payload: BundleTemplateCreateRequest)
 export const fetchBundleTemplateByCode = async (code: string): Promise<BundleTemplateRead> => {
   const response = await plannerClient.get(`/bundle-templates/by-code/${encodeURIComponent(code)}`)
   return response.data
+}
+
+export type PaginatedBundleTemplateResponse = {
+  total: number
+  page: number
+  page_size: number
+  items: BundleTemplateRead[]
+}
+
+export const fetchBundleTemplates = async (
+  params: { search?: string; category?: string; tag?: string; include_archived?: boolean; page?: number; page_size?: number } = {},
+): Promise<PaginatedBundleTemplateResponse> => {
+  const response = await plannerClient.get(`/bundle-templates`, { params: sanitizeParams(params) })
+  return response.data
+}
+
+export const fetchBundleTemplate = async (templateId: string): Promise<BundleTemplateRead> => {
+  const response = await plannerClient.get(`/bundle-templates/${templateId}`)
+  return response.data
+}
+
+export const updateBundleTemplate = async (
+  templateId: string,
+  payload: { name?: string; components?: BundleTemplateComponent[]; metadata?: Record<string, any> },
+): Promise<BundleTemplateRead> => {
+  const response = await plannerClient.patch(`/bundle-templates/${templateId}`, payload)
+  return response.data
+}
+
+export const cloneBundleTemplate = async (
+  templateId: string,
+  payload: { name?: string } = {},
+): Promise<BundleTemplateRead> => {
+  const response = await plannerClient.post(`/bundle-templates/${templateId}/clone`, payload)
+  return response.data
+}
+
+export const archiveBundleTemplate = async (templateId: string): Promise<void> => {
+  await plannerClient.delete(`/bundle-templates/${templateId}`)
 }
 
 export type BomGenerateBySpecRequest = {

@@ -49,6 +49,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：套装模板组件清单增强：在组件 `label` 列增加“命中”按钮，可基于当前 `lexicon_rules` 对该组件做命中测试（输入片段→判断是否会分配到该 label，并展示将注入的 tokens），防止 label 填错/未被规则引用。验收：`npm -C frontend run build`、静态发布）
 - **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：套装模板组件清单“操作”列补齐“命中”按钮（与 +行/删除 同列），复用 label 命中测试逻辑；已硬验收 `npm -C frontend run build` 并原子发布 `PLANNER_STATIC_DIR=/var/www/html/ai-costing/dist ./scripts/deploy_static.sh`）
 - **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：套装模板“命中”测试打通到模型变体：命中字符映射后自动调用 `/bom/generate-multi-bundle`（仅传 tokens，不传 spec_text）并弹窗展示 matched=true 的变体列表，便于验证新增 TOKEN(any): 棉麻 等规则是否真正生效；已硬验收 `npm -C frontend run build` 并原子发布）
+- **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend+Backend：去掉套装模板组件清单的 label 输入（避免被误解为触发词）；套装字符映射“目标组件”改为选择组件行（下拉展示 `PI5:印花抱枕` 等模型名）；后端 lexicon 支持 `target_component_index` 按组件索引分配并兼容旧 `target_label`；已硬验收 `npm -C frontend run build` 并原子发布）
 
 ### 关键口径备忘（避免回滚/重构改坏）
 

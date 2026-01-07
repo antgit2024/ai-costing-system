@@ -41,7 +41,6 @@ const { Text } = Typography
 
 type ComponentRow = {
   model_version_id: string | null
-  label: string
   width_cm: number
   height_cm: number
   quantity: number
@@ -51,7 +50,7 @@ type ComponentRow = {
 type LexiconRuleRow = {
   match_key: string
   match_value: string
-  target_label: string
+  target_component_index: number | null
 }
 
 const parseTags = (meta: any): string[] => {
@@ -141,7 +140,7 @@ export default function BundleTemplatesPage() {
 
   const [form] = Form.useForm()
   const [components, setComponents] = useState<ComponentRow[]>([
-    { model_version_id: null, label: '', width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' },
+    { model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' },
   ])
   const [lexiconRules, setLexiconRules] = useState<LexiconRuleRow[]>([])
 
@@ -183,6 +182,27 @@ export default function BundleTemplatesPage() {
       label: `${x.model_code}:${x.model_name} / ${x.version_label || x.version_id.slice(0, 8)} (${x.version_status})`,
     }))
   }, [versionPickerQuery.data])
+
+  const versionIdToModelLabel = useMemo(() => {
+    const m = new Map<string, string>()
+    const items = (versionPickerQuery.data?.items ?? []) as any[]
+    for (const it of items) {
+      const vid = String(it?.version_id ?? '').trim()
+      const mc = String(it?.model_code ?? '').trim()
+      const mn = String(it?.model_name ?? '').trim()
+      if (!vid) continue
+      const label = mc && mn ? `${mc}:${mn}` : mc || mn || vid.slice(0, 8)
+      m.set(vid, label)
+    }
+    return m
+  }, [versionPickerQuery.data])
+
+  const getComponentDisplay = (idx: number, comp?: any): string => {
+    const c = comp ?? (components ?? [])[idx]
+    const vid = String(c?.model_version_id ?? '').trim()
+    const base = vid ? versionIdToModelLabel.get(vid) || vid.slice(0, 8) : '未选模型'
+    return `组件${idx + 1}：${base}`
+  }
 
   const versionIdToModelId = useMemo(() => {
     const m = new Map<string, string>()
@@ -473,143 +493,87 @@ export default function BundleTemplatesPage() {
     setPresetModalOpen(false)
   }
 
-  const openComponentLabelHitTest = (idx: number) => {
-    const label = String((components?.[idx] as any)?.label ?? '').trim()
-    if (!label) {
-      message.warning('请先填写该组件的 label')
+  const previewVariantsByComponentIndex = async (componentIndex: number, tokens: string[], title: string) => {
+    const comp = (components ?? [])[componentIndex] as any
+    const modelVersionId = String(comp?.model_version_id ?? '').trim()
+    if (!modelVersionId) {
+      message.info('未选择该组件的模型版本：已完成字符映射命中测试（未跑模型变体预演）')
       return
     }
-    const related = (lexiconRules ?? []).filter((x) => String(x?.target_label ?? '').trim() === label)
-    if (!related.length) {
-      message.warning(`该 label 未被任何字符映射规则引用：${label}`)
-      return
-    }
-    let sample = `${String(related[0]?.match_key || '').trim() ? `${String(related[0]?.match_key).trim()}:` : ''}${String(
-      related[0]?.match_value ?? '',
-    ).trim()}2个(30*30)`
-    Modal.confirm({
-      title: `命中测试（组件：${label}）`,
-      content: (
-        <div>
-          <div style={{ marginBottom: 8 }}>
-            <Text type="secondary">输入一个片段，例如：材质:雪尼尔2个(30*30) 或 雪尼尔2个(30*30)</Text>
-          </div>
-          <Input
-            defaultValue={sample}
-            onChange={(e) => {
-              sample = e.target.value
-            }}
-          />
-          <div style={{ marginTop: 8 }}>
-            <Text type="secondary">
-              该组件关联规则：
-              {related.map((x) => `${String(x.match_key || '').trim() ? `${String(x.match_key).trim()}:` : ''}${String(x.match_value)}`).join('；')}
-            </Text>
-          </div>
-        </div>
-      ),
-      okText: '测试',
-      cancelText: '关闭',
-      onOk: async () => {
-        const hitRules = related.filter((rr) => matchLexiconSample(sample, rr))
-        if (!hitRules.length) {
-          message.warning('未命中：请检查测试片段是否包含该规则的“词”')
-          return
-        }
-        const tokens = Array.from(
-          new Set(
-            hitRules
-              .flatMap((rr) => explainLexiconInjection(rr))
-              .map((t) => String(t).trim())
-              .filter(Boolean),
-          ),
-        )
-        message.success(`命中：将分配到 ${label}，注入tokens：${tokens.join('、')}`)
+    try {
+      const widthMm = Math.round(Number(comp?.width_cm ?? 0) * 10)
+      const heightMm = Math.round(Number(comp?.height_cm ?? 0) * 10)
+      const qty = Number(comp?.quantity ?? 1)
 
-        const comp = (components ?? [])[idx] as any
-        const modelVersionId = String(comp?.model_version_id ?? '').trim()
-        if (!modelVersionId) {
-          message.info('未选择该组件的模型版本：已完成字符映射命中测试（未跑模型变体预演）')
-          return
-        }
+      const res: any = await generateBomMultiBundle({
+        sku_code: null,
+        include_disabled_variants: true,
+        components: [
+          {
+            model_version_id: modelVersionId,
+            width_mm: String(Number.isFinite(widthMm) && widthMm > 0 ? widthMm : 400),
+            height_mm: String(Number.isFinite(heightMm) && heightMm > 0 ? heightMm : 500),
+            quantity: String(Number.isFinite(qty) && qty > 0 ? qty : 1),
+            spec_text: '',
+            tokens,
+          },
+        ],
+      } as any)
 
-        // Run a real variant preview by calling bom/generate-multi-bundle with explicit tokens.
-        // IMPORTANT: do NOT pass sample as spec_text (may contain dimensions and pollute metrics).
-        try {
-          const widthMm = Math.round(Number(comp?.width_cm ?? 0) * 10)
-          const heightMm = Math.round(Number(comp?.height_cm ?? 0) * 10)
-          const qty = Number(comp?.quantity ?? 1)
+      const comp0 = Array.isArray(res?.components) ? res.components[0] : null
+      const hits = ((comp0?.trace ?? {}) as any)?.matched_variants
+      const hitList = Array.isArray(hits) ? hits.filter((x: any) => x?.matched) : []
 
-          const res: any = await generateBomMultiBundle({
-            sku_code: null,
-            include_disabled_variants: true,
-            components: [
-              {
-                model_version_id: modelVersionId,
-                width_mm: String(Number.isFinite(widthMm) && widthMm > 0 ? widthMm : 400),
-                height_mm: String(Number.isFinite(heightMm) && heightMm > 0 ? heightMm : 500),
-                quantity: String(Number.isFinite(qty) && qty > 0 ? qty : 1),
-                spec_text: '',
-                tokens,
-              },
-            ],
-          } as any)
-
-          const comp0 = Array.isArray(res?.components) ? res.components[0] : null
-          const hits = ((comp0?.trace ?? {}) as any)?.matched_variants
-          const hitList = Array.isArray(hits) ? hits.filter((x: any) => x?.matched) : []
-
-          Modal.info({
-            title: `模型变体预演结果（组件：${label}）`,
-            content: (
-              <div>
-                <div style={{ marginBottom: 8 }}>
-                  <Text type="secondary">model_version_id：{modelVersionId}</Text>
-                </div>
-                <div style={{ marginBottom: 8 }}>
-                  <Text type="secondary">tokens：{tokens.join('、') || '-'}</Text>
-                </div>
-                <div style={{ marginBottom: 8 }}>
-                  <Text>
-                    命中变体：{hitList.length} 条（matched=true）
-                  </Text>
-                </div>
-                {hitList.length ? (
-                  <div style={{ maxHeight: 260, overflow: 'auto', paddingRight: 8 }}>
-                    <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                      {hitList.slice(0, 20).map((h: any) => (
-                        <div key={String(h?.variant_id ?? '')} style={{ border: '1px solid #f0f0f0', padding: 8, borderRadius: 6 }}>
-                          <Space wrap>
-                            <Tag color="green">matched</Tag>
-                            <Text type="secondary">variant_id: {String(h?.variant_id ?? '-')}</Text>
-                            <Text type="secondary">base_line_id: {String(h?.base_line_id ?? '-')}</Text>
-                            <Text type="secondary">action: {String(h?.action ?? '-')}</Text>
-                            <Text type="secondary">effect: {String(h?.effect ?? '-')}</Text>
-                          </Space>
-                        </div>
-                      ))}
-                      {hitList.length > 20 ? <Text type="secondary">（仅展示前 20 条）</Text> : null}
-                    </Space>
-                  </div>
-                ) : (
-                  <Text type="secondary">未命中任何变体：请检查该版本的变体条件是否包含这些 tokens（TOKEN any/all）。</Text>
-                )}
+      Modal.info({
+        title,
+        content: (
+          <div>
+            <div style={{ marginBottom: 8 }}>
+              <Text type="secondary">{getComponentDisplay(componentIndex)}</Text>
+            </div>
+            <div style={{ marginBottom: 8 }}>
+              <Text type="secondary">model_version_id：{modelVersionId}</Text>
+            </div>
+            <div style={{ marginBottom: 8 }}>
+              <Text type="secondary">tokens：{tokens.join('、') || '-'}</Text>
+            </div>
+            <div style={{ marginBottom: 8 }}>
+              <Text>命中变体：{hitList.length} 条（matched=true）</Text>
+            </div>
+            {hitList.length ? (
+              <div style={{ maxHeight: 260, overflow: 'auto', paddingRight: 8 }}>
+                <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                  {hitList.slice(0, 20).map((h: any) => (
+                    <div key={String(h?.variant_id ?? '')} style={{ border: '1px solid #f0f0f0', padding: 8, borderRadius: 6 }}>
+                      <Space wrap>
+                        <Tag color="green">matched</Tag>
+                        <Text type="secondary">variant_id: {String(h?.variant_id ?? '-')}</Text>
+                        <Text type="secondary">base_line_id: {String(h?.base_line_id ?? '-')}</Text>
+                        <Text type="secondary">action: {String(h?.action ?? '-')}</Text>
+                        <Text type="secondary">effect: {String(h?.effect ?? '-')}</Text>
+                      </Space>
+                    </div>
+                  ))}
+                  {hitList.length > 20 ? <Text type="secondary">（仅展示前 20 条）</Text> : null}
+                </Space>
               </div>
-            ),
-            okText: '关闭',
-          })
-        } catch (e: any) {
-          message.error(`模型变体预演失败：${String(e?.response?.data?.detail ?? e?.message ?? e)}`)
-        }
-      },
-    })
+            ) : (
+              <Text type="secondary">未命中任何变体：请检查该版本的变体条件是否包含这些 tokens（TOKEN any/all）。</Text>
+            )}
+          </div>
+        ),
+        okText: '关闭',
+      })
+    } catch (e: any) {
+      message.error(`模型变体预演失败：${String(e?.response?.data?.detail ?? e?.message ?? e)}`)
+    }
   }
 
   const openCreate = () => {
     setEditing(null)
     setCreatedTokenHint(null)
     form.setFieldsValue({ name: '', category: '', tags: [], shared_trigger_text: '' })
-    setComponents([{ model_version_id: null, label: '', width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' }])
+    setComponents([{ model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' }])
     setPresetSelectedByIdx({})
     setLexiconRules([])
     setDrawerOpen(true)
@@ -626,17 +590,21 @@ export default function BundleTemplatesPage() {
       shared_trigger_text: String(row?.shared_trigger_text ?? meta?.shared_trigger_text ?? '') || '',
     })
     const rows = (row?.components ?? []) as any[]
+    const legacyLabelToIndex = new Map<string, number>()
+    rows.forEach((c: any, idx: number) => {
+      const lab = String(c?.label ?? '').trim()
+      if (lab && !legacyLabelToIndex.has(lab)) legacyLabelToIndex.set(lab, idx)
+    })
     setComponents(
       rows.length
         ? rows.map((c: any) => ({
             model_version_id: String(c.model_version_id ?? '') || null,
-            label: String(c.label ?? ''),
             width_cm: Number(c.width_mm ?? 0) / 10,
             height_cm: Number(c.height_mm ?? 0) / 10,
             quantity: Number(c.quantity ?? 1),
             spec_text: String(c.spec_text ?? ''),
           }))
-        : [{ model_version_id: null, label: '', width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' }],
+        : [{ model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' }],
     )
     const vp = (row?.metadata ?? {})?.variant_presets
     if (vp && typeof vp === 'object') {
@@ -651,9 +619,14 @@ export default function BundleTemplatesPage() {
           .map((x: any) => ({
             match_key: String(x?.match_key ?? x?.key ?? '').trim() || '材质',
             match_value: String(x?.match_value ?? x?.value ?? '').trim(),
-            target_label: String(x?.target_label ?? '').trim(),
+            target_component_index:
+              typeof x?.target_component_index === 'number'
+                ? x.target_component_index
+                : legacyLabelToIndex.has(String(x?.target_label ?? '').trim())
+                  ? (legacyLabelToIndex.get(String(x?.target_label ?? '').trim()) as number)
+                  : null,
           }))
-          .filter((x: any) => x.match_value && x.target_label),
+          .filter((x: any) => x.match_value && x.target_component_index != null),
       )
     } else {
       setLexiconRules([])
@@ -667,7 +640,6 @@ export default function BundleTemplatesPage() {
       const comps = (components ?? [])
         .map((c) => ({
           model_version_id: String(c.model_version_id ?? '').trim(),
-          label: String(c.label ?? '').trim() || undefined,
           width_mm: Number(c.width_cm) * 10,
           height_mm: Number(c.height_cm) * 10,
           quantity: Number(c.quantity),
@@ -685,9 +657,12 @@ export default function BundleTemplatesPage() {
           .map((r) => ({
             match_key: String(r.match_key ?? '').trim() || undefined,
             match_value: String(r.match_value ?? '').trim(),
-            target_label: String(r.target_label ?? '').trim(),
+            target_component_index:
+              typeof r.target_component_index === 'number' && Number.isFinite(r.target_component_index)
+                ? r.target_component_index
+                : undefined,
           }))
-          .filter((r) => r.match_value && r.target_label),
+          .filter((r) => r.match_value && typeof (r as any).target_component_index === 'number'),
       }
       const sharedText = String(values.shared_trigger_text ?? '').trim() || undefined
 
@@ -1053,9 +1028,8 @@ export default function BundleTemplatesPage() {
             type="info"
             showIcon
             message="套装字符映射（可选，用于“材质:雪尼尔2个(30*30)+…”这种对客规格）"
-            description="用于把对客交易规格里的“材质:雪尼尔2个”等片段，映射到指定组件 label，并按数量拆分为多行组件，避免雪尼尔+棉麻混搭时 token 广播冲突。"
+            description="用于把对客交易规格里的“材质:雪尼尔2个”等片段，映射到指定组件（组件行），并按数量拆分为多行组件，避免雪尼尔+棉麻混搭时 token 广播冲突。"
           />
-          <Text type="secondary">提示：先在组件清单里填写组件 label，这里才能下拉选择目标组件。</Text>
           <Table
             size="small"
             pagination={false}
@@ -1092,20 +1066,20 @@ export default function BundleTemplatesPage() {
                 ),
               },
               {
-                title: '目标组件label',
+                title: '目标组件',
                 render: (_: any, r: any, idx: number) => (
                   <Select
                     showSearch
                     allowClear
-                    placeholder="选择组件label（需要在组件行填写label）"
+                    placeholder="选择组件（按模型）"
                     style={{ width: '100%' }}
-                    value={r.target_label || undefined}
-                    options={Array.from(new Set((components ?? []).map((c) => String(c.label ?? '').trim()).filter(Boolean))).map((x) => ({
-                      value: x,
-                      label: x,
+                    value={typeof r.target_component_index === 'number' ? r.target_component_index : undefined}
+                    options={(components ?? []).map((c, i) => ({
+                      value: i,
+                      label: getComponentDisplay(i, c),
                     }))}
                     onChange={(v) =>
-                      setLexiconRules((prev) => prev.map((x, i) => (i === idx ? { ...x, target_label: String(v ?? '') } : x)))
+                      setLexiconRules((prev) => prev.map((x, i) => (i === idx ? { ...x, target_component_index: v == null ? null : Number(v) } : x)))
                     }
                   />
                 ),
@@ -1117,7 +1091,7 @@ export default function BundleTemplatesPage() {
                   <Space>
                     <Button
                       size="small"
-                      onClick={() => setLexiconRules((prev) => [...prev, { match_key: '材质', match_value: '', target_label: '' }])}
+                      onClick={() => setLexiconRules((prev) => [...prev, { match_key: '材质', match_value: '', target_component_index: null }])}
                     >
                       +行
                     </Button>
@@ -1131,18 +1105,18 @@ export default function BundleTemplatesPage() {
                           message.warning('请先填写“词”')
                           return
                         }
-                        if (!String(row.target_label ?? '').trim()) {
-                          message.warning('请先选择“目标组件label”')
+                        if (typeof row.target_component_index !== 'number') {
+                          message.warning('请先选择“目标组件”')
                           return
                         }
-                        const labels = Array.from(new Set((components ?? []).map((c) => String(c.label ?? '').trim()).filter(Boolean)))
-                        if (!labels.includes(String(row.target_label).trim())) {
-                          message.error(`目标组件label 不存在于组件清单：${String(row.target_label)}`)
+                        const targetIdx = Number(row.target_component_index)
+                        if (!Number.isFinite(targetIdx) || targetIdx < 0 || targetIdx >= (components ?? []).length) {
+                          message.error('目标组件索引非法（请重新选择）')
                           return
                         }
                         let sample = `${String(row.match_key || '').trim() ? `${String(row.match_key).trim()}:` : ''}${String(row.match_value).trim()}2个(30*30)`
                         Modal.confirm({
-                          title: '命中测试（仅验证字符映射规则）',
+                          title: '命中测试（字符映射 + 模型变体预演）',
                           content: (
                             <div>
                               <div style={{ marginBottom: 8 }}>
@@ -1162,8 +1136,15 @@ export default function BundleTemplatesPage() {
                           cancelText: '关闭',
                           onOk: async () => {
                             const hit = matchLexiconSample(sample, row)
-                            if (hit) message.success(`命中：将分配到组件 label = ${String(row.target_label)}`)
-                            else message.warning('未命中：请检查字段/词与测试片段是否一致')
+                            if (!hit) {
+                              message.warning('未命中：请检查字段/词与测试片段是否一致')
+                              return
+                            }
+                            const tokens = explainLexiconInjection(row)
+                              .map((t) => String(t).trim())
+                              .filter(Boolean)
+                            message.success(`命中：将分配到 ${getComponentDisplay(targetIdx)}；注入tokens：${tokens.join('、') || '-'}`)
+                            await previewVariantsByComponentIndex(targetIdx, tokens, `模型变体预演结果（${getComponentDisplay(targetIdx)}）`)
                           },
                         })
                       }}
@@ -1286,24 +1267,6 @@ export default function BundleTemplatesPage() {
                 ),
               },
               {
-                title: 'label',
-                width: 220,
-                render: (_: any, r: any, idx: number) => (
-                  <Space.Compact style={{ width: '100%' }}>
-                    <Input
-                      placeholder="例如：雪尼尔/棉麻/枕芯"
-                      value={String(r.label ?? '')}
-                      onChange={(e) => setComponents((prev) => prev.map((x, i) => (i === idx ? { ...x, label: e.target.value } : x)))}
-                    />
-                    <Button
-                      onClick={() => openComponentLabelHitTest(idx)}
-                    >
-                      命中
-                    </Button>
-                  </Space.Compact>
-                ),
-              },
-              {
                 title: '宽(cm)',
                 width: 90,
                 render: (_: any, r: any, idx: number) => (
@@ -1350,13 +1313,10 @@ export default function BundleTemplatesPage() {
                     <Button
                       size="small"
                       onClick={() =>
-                        setComponents((prev) => [...prev, { model_version_id: null, label: '', width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' }])
+                        setComponents((prev) => [...prev, { model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' }])
                       }
                     >
                       +行
-                    </Button>
-                    <Button size="small" onClick={() => openComponentLabelHitTest(idx)}>
-                      命中
                     </Button>
                     <Button
                       size="small"

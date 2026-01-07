@@ -244,17 +244,29 @@ def generate_bom_by_spec(
     lex_rules = tpl_meta.get("lexicon_rules")
     scoped_phrases = _parse_bundle_scoped_phrases(spec_text)
     lex_rules = lex_rules if isinstance(lex_rules, list) else []
-    # index rules by (key,value,target_label)
+    # index rules by (key,value,target_component_index / target_label)
     indexed_rules: List[Dict[str, Any]] = []
     for r in lex_rules:
         if not isinstance(r, dict):
             continue
         key = str(r.get("match_key") or r.get("key") or "").strip() or None
         value = str(r.get("match_value") or r.get("value") or "").strip()
-        target_label = str(r.get("target_label") or "").strip()
-        if not value or not target_label:
+        target_label = str(r.get("target_label") or "").strip() or None
+        target_component_index = r.get("target_component_index")
+        try:
+            target_component_index = int(target_component_index) if target_component_index is not None else None
+        except Exception:
+            target_component_index = None
+        if not value or (target_component_index is None and not target_label):
             continue
-        indexed_rules.append({"match_key": key, "match_value": value, "target_label": target_label})
+        indexed_rules.append(
+            {
+                "match_key": key,
+                "match_value": value,
+                "target_label": target_label,
+                "target_component_index": target_component_index,
+            }
+        )
 
     # Determine which labels can be scoped; enforce uniqueness to avoid ambiguous splits
     label_to_components: Dict[str, List[Dict[str, Any]]] = {}
@@ -267,6 +279,7 @@ def generate_bom_by_spec(
         label_to_components.setdefault(lab, []).append(c)
 
     scoped_components_by_label: Dict[str, List[Dict[str, Any]]] = {}
+    scoped_components_by_index: Dict[int, List[Dict[str, Any]]] = {}
     scoped_remove_tokens: List[str] = []
 
     if indexed_rules and scoped_phrases:
@@ -284,13 +297,29 @@ def generate_bom_by_spec(
                 if rule["match_key"] is not None and ph_key is None:
                     # rule expects key but phrase lacks it
                     continue
-                target_label = rule["target_label"]
-                base_defs = label_to_components.get(target_label) or []
-                if not base_defs:
-                    raise ValueError(f"套装字符映射未找到目标组件 label：{target_label}")
-                if len(base_defs) != 1:
-                    raise ValueError(f"套装组件 label 必须唯一（{target_label} 出现 {len(base_defs)} 次），否则无法按 label 分配/拆分")
-                base_def = dict(base_defs[0])
+                target_idx = rule.get("target_component_index")
+                target_label = rule.get("target_label")
+
+                # New mode: target_component_index (recommended)
+                if isinstance(target_idx, int):
+                    if target_idx < 0 or target_idx >= len(components):
+                        raise ValueError(f"套装字符映射目标组件索引非法：{target_idx}")
+                    base_raw = components[target_idx]
+                    if not isinstance(base_raw, dict):
+                        raise ValueError(f"套装模板组件非法：components[{target_idx}]")
+                    base_def = dict(base_raw)
+                    target_key = ("idx", target_idx)
+                else:
+                    # Legacy mode: target_label (must be unique)
+                    base_defs = label_to_components.get(str(target_label or "")) or []
+                    if not base_defs:
+                        raise ValueError(f"套装字符映射未找到目标组件 label：{str(target_label or '')}")
+                    if len(base_defs) != 1:
+                        raise ValueError(
+                            f"套装组件 label 必须唯一（{str(target_label or '')} 出现 {len(base_defs)} 次），否则无法按 label 分配/拆分"
+                        )
+                    base_def = dict(base_defs[0])
+                    target_key = ("label", str(target_label or ""))
 
                 # Inject tokens for this scoped phrase:
                 # - prefer key:value token (e.g., 材质:雪尼尔)
@@ -301,13 +330,14 @@ def generate_bom_by_spec(
                 scoped_remove_tokens.extend(scoped_tokens)
 
                 base_def["quantity"] = ph_qty
-                # Keep original label but add hint for UI/debug
-                base_def["label"] = f"{target_label}({token_kv})"
                 base_tokens = []
                 if isinstance(base_def.get("tokens"), list):
                     base_tokens = [str(x).strip() for x in base_def.get("tokens") if str(x).strip()]
                 base_def["tokens"] = base_tokens + scoped_tokens
-                scoped_components_by_label.setdefault(target_label, []).append(base_def)
+                if target_key[0] == "idx":
+                    scoped_components_by_index.setdefault(int(target_key[1]), []).append(base_def)
+                else:
+                    scoped_components_by_label.setdefault(str(target_key[1]), []).append(base_def)
 
     # Remove scoped tokens from shared tokens to avoid global broadcast conflicts
     if scoped_remove_tokens:
@@ -320,6 +350,12 @@ def generate_bom_by_spec(
         if not isinstance(c, dict):
             raise ValueError(f"套装模板组件非法：components[{i}]")
         c2 = dict(c)
+
+        # If lexicon produced scoped components for this index, replace this row by scoped ones
+        if i in scoped_components_by_index:
+            for sc in scoped_components_by_index[i]:
+                comps2.append(sc)
+            continue
 
         # If lexicon produced scoped components for this label, replace originals by scoped ones
         label = str(c2.get("label") or "").strip()

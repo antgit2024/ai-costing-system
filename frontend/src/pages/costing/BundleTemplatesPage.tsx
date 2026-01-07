@@ -432,9 +432,9 @@ export default function BundleTemplatesPage() {
             <Form.Item
               name="shared_trigger_text"
               label="公共触发词（作用于所有组件，可选）"
-              extra="建议填对客交易规格里一定会出现/需要的关键词；不要写 40*50 这类尺寸。"
+              extra="建议填对客交易规格里一定会出现/需要的关键词。运营写尺寸也没问题，但这里不会用于解析尺寸/不会改变模板尺寸（仅用于触发变体）。"
             >
-              <Input.TextArea rows={2} placeholder="例如：背面纯色，雪尼尔" />
+              <Input.TextArea rows={2} placeholder="例如：背面纯色，雪尼尔（写尺寸也不会影响模板尺寸）" />
             </Form.Item>
           </Form>
 
@@ -544,8 +544,8 @@ export default function BundleTemplatesPage() {
                 title: '附加触发词（可选）',
                 render: (_: any, r: any, idx: number) => (
                   <Select
-                    mode="tags"
-                    placeholder="下拉选择变体触发词，或手动输入（不要写 40*50 这类尺寸）"
+                    mode="multiple"
+                    placeholder="从该版本变体触发词中多选（不支持自由输入）"
                     style={{ width: '100%' }}
                     value={parseTokenText(r.spec_text)}
                     options={

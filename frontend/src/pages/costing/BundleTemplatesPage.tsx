@@ -5,10 +5,13 @@ import {
   Button,
   Card,
   Col,
+  Collapse,
   Drawer,
+  Empty,
   Form,
   Input,
   Modal,
+  Radio,
   Row,
   Select,
   Space,
@@ -24,6 +27,7 @@ import {
   cloneBundleTemplate,
   createBundleTemplate,
   fetchBundleTemplates,
+  fetchProductModelVersionLines,
   fetchProductModelVersionsPaged,
   listLineVariants,
   updateBundleTemplate,
@@ -53,6 +57,35 @@ const parseTokenText = (text: any): string[] => {
     .filter(Boolean)
 }
 
+const formatBetween = (pair: any, unit: string) => {
+  if (!Array.isArray(pair) || pair.length < 2) return null
+  const [a, b] = pair
+  const hasA = a != null && a !== ''
+  const hasB = b != null && b !== ''
+  if (!hasA && !hasB) return null
+  if (hasA && hasB) return `${a}~${b}${unit}`
+  if (hasA) return `>=${a}${unit}`
+  return `<=${b}${unit}`
+}
+
+const formatTrigger = (condRaw: any): string => {
+  const cond = (condRaw ?? {}) as any
+  const any = Array.isArray(cond.spec_contains_any) ? cond.spec_contains_any.filter(Boolean) : []
+  const all = Array.isArray(cond.spec_contains_all) ? cond.spec_contains_all.filter(Boolean) : []
+  const parts: string[] = []
+  if (any.length) parts.push(`TOKEN(any): ${any.join('、')}`)
+  if (all.length) parts.push(`TOKEN(all): ${all.join('、')}`)
+  const w = formatBetween(cond.width_between, 'cm')
+  const h = formatBetween(cond.height_between, 'cm')
+  const a = formatBetween(cond.area_between, 'm²')
+  const p = formatBetween(cond.perimeter_between, 'm')
+  if (w) parts.push(`宽: ${w}`)
+  if (h) parts.push(`高: ${h}`)
+  if (a) parts.push(`面积: ${a}`)
+  if (p) parts.push(`周长: ${p}`)
+  return parts.join('；') || '-'
+}
+
 export default function BundleTemplatesPage() {
   const qc = useQueryClient()
   const [search, setSearch] = useState<string>('')
@@ -70,6 +103,11 @@ export default function BundleTemplatesPage() {
   const [components, setComponents] = useState<ComponentRow[]>([
     { model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' },
   ])
+
+  // 预设变体筛选：每个组件 idx -> { base_line_id -> selected_variant_id }
+  const [presetSelectedByIdx, setPresetSelectedByIdx] = useState<Record<number, Record<string, string | null>>>({})
+  const [presetModalOpen, setPresetModalOpen] = useState(false)
+  const [presetModalIdx, setPresetModalIdx] = useState<number | null>(null)
 
   const selectedVersionIds = useMemo(() => {
     const ids = new Set<string>()
@@ -144,6 +182,91 @@ export default function BundleTemplatesPage() {
     }
     return m
   }, [variantsSummaryQuery.data])
+
+  const presetVersionId = useMemo(() => {
+    if (!presetModalOpen) return null
+    if (presetModalIdx == null) return null
+    const r = (components ?? [])[presetModalIdx]
+    const vid = String(r?.model_version_id ?? '').trim()
+    return vid || null
+  }, [presetModalOpen, presetModalIdx, components])
+
+  const presetVersionLinesQuery = useQuery({
+    queryKey: ['bundle-template-center', 'preset-version-lines', presetVersionId],
+    queryFn: () => fetchProductModelVersionLines(String(presetVersionId)),
+    enabled: !!presetVersionId,
+  })
+
+  const presetBaseLineMap = useMemo(() => {
+    const data = presetVersionLinesQuery.data as any
+    const mats = (data?.materials ?? []) as any[]
+    const m = new Map<string, any>()
+    for (const r of mats) {
+      const id = String(r?.id ?? '').trim()
+      if (!id) continue
+      m.set(id, r)
+    }
+    return m
+  }, [presetVersionLinesQuery.data])
+
+  const presetVariantsForVersion = useMemo(() => {
+    if (!presetVersionId) return []
+    const rows = (variantsSummaryQuery.data ?? []) as Array<{ version_id: string; items: any[] }>
+    const hit = rows.find((x) => String(x?.version_id) === String(presetVersionId))
+    return Array.isArray(hit?.items) ? hit.items : []
+  }, [presetVersionId, variantsSummaryQuery.data])
+
+  const presetVariantsByBaseLine = useMemo(() => {
+    const m = new Map<string, any[]>()
+    for (const v of presetVariantsForVersion) {
+      const baseId = String(v?.base_line_id ?? '').trim()
+      if (!baseId) continue
+      m.set(baseId, [...(m.get(baseId) ?? []), v])
+    }
+    for (const [k, arr] of m.entries()) {
+      arr.sort((a: any, b: any) => Number(b?.priority ?? 0) - Number(a?.priority ?? 0))
+      m.set(k, arr)
+    }
+    return m
+  }, [presetVariantsForVersion])
+
+  const openPresetModal = (idx: number) => {
+    const r = (components ?? [])[idx]
+    const vid = String(r?.model_version_id ?? '').trim()
+    if (!vid) {
+      message.warning('请先选择该组件的模型版本')
+      return
+    }
+    setPresetModalIdx(idx)
+    setPresetModalOpen(true)
+  }
+
+  const applyPresetToComponent = () => {
+    if (presetModalIdx == null) return
+    const selectedMap = presetSelectedByIdx[presetModalIdx] ?? {}
+    const tokenSet = new Set<string>()
+    for (const [baseLineId, variantId] of Object.entries(selectedMap)) {
+      if (!variantId) continue
+      const variants = presetVariantsByBaseLine.get(baseLineId) ?? []
+      const v = variants.find((x: any) => String(x?.id) === String(variantId))
+      if (!v) continue
+      const cond = (v?.conditions ?? {}) as any
+      const anyTokens = Array.isArray(cond?.spec_contains_any) ? cond.spec_contains_any : []
+      const allTokens = Array.isArray(cond?.spec_contains_all) ? cond.spec_contains_all : []
+      for (const t of [...anyTokens, ...allTokens]) {
+        const s = String(t ?? '').trim()
+        if (!s) continue
+        const up = s.toUpperCase()
+        if (up.startsWith('MODEL:') || up.startsWith('M:') || up.startsWith('BOUND_VERSION:') || up.startsWith('SKU:')) continue
+        tokenSet.add(s)
+      }
+    }
+    const tokens = Array.from(tokenSet)
+    const nextText = tokens.join('，')
+    setComponents((prev) => prev.map((x, i) => (i === presetModalIdx ? { ...x, spec_text: nextText } : x)))
+    message.success(tokens.length ? `已填充触发词：${tokens.join('、')}` : '所选变体不依赖 TOKEN 触发词（仅尺寸/面积/周长条件等）')
+    setPresetModalOpen(false)
+  }
 
   const hasTokenVariantRisk = useMemo(() => {
     for (const vid of selectedVersionIds) {
@@ -254,6 +377,106 @@ export default function BundleTemplatesPage() {
 
   return (
     <div style={{ padding: 16 }}>
+      <Modal
+        open={presetModalOpen}
+        title="预设变体筛选（按物料行选择变体规则 → 一键填充触发词）"
+        width={980}
+        onCancel={() => setPresetModalOpen(false)}
+        onOk={applyPresetToComponent}
+        okText="按勾选填充触发词"
+        destroyOnClose
+      >
+        {!presetVersionId ? (
+          <Empty description="请先选择组件的模型版本" />
+        ) : presetVariantsForVersion.length === 0 ? (
+          <Empty description="该版本没有行级变体规则" />
+        ) : (
+          <Space direction="vertical" style={{ width: '100%' }} size={12}>
+            <Alert
+              type="info"
+              showIcon
+              message="说明"
+              description={
+                <div>
+                  <div>这里按 base_line（物料行）分组列出该版本所有变体规则，你可以为每条物料行选择 0/1 条“希望触发的规则”。</div>
+                  <div>
+                    点击“按勾选填充触发词”会把所选规则的 TOKEN(any/all) 关键词自动填充到该组件的触发词里（便于运营写对词）。
+                  </div>
+                  <div>注意：最终命中仍受 priority + stop_on_hit 影响，建议用测试台预演确认。</div>
+                </div>
+              }
+            />
+
+            <Collapse
+              items={Array.from(presetVariantsByBaseLine.entries()).map(([baseLineId, arr]) => {
+                const base = presetBaseLineMap.get(baseLineId)
+                const baseLabel = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
+                const selected = (presetSelectedByIdx[presetModalIdx ?? -1] ?? {})[baseLineId] ?? null
+
+                return {
+                  key: baseLineId,
+                  label: (
+                    <Space size={8}>
+                      <Text strong>{baseLabel}</Text>
+                      <Tag color="blue">{arr.length} 条规则</Tag>
+                      {selected ? <Tag color="green">已选 1 条</Tag> : <Tag>未选</Tag>}
+                    </Space>
+                  ),
+                  children: (
+                    <Radio.Group
+                      value={selected ?? ''}
+                      onChange={(e) => {
+                        const vid = String(e?.target?.value ?? '')
+                        setPresetSelectedByIdx((prev) => ({
+                          ...prev,
+                          [presetModalIdx ?? 0]: {
+                            ...(prev[presetModalIdx ?? 0] ?? {}),
+                            [baseLineId]: vid ? vid : null,
+                          },
+                        }))
+                      }}
+                    >
+                      <Space direction="vertical" style={{ width: '100%' }} size={10}>
+                        <Radio value="">不选择（该物料行用默认/其它规则）</Radio>
+                        {arr.map((v: any) => {
+                          const trigger = formatTrigger(v?.conditions)
+                          const produced = Array.isArray(v?.items) ? v.items : []
+                          const producedLabels: string[] = produced
+                            .map((it: any) => String(it?.material_name ?? it?.material_code ?? '').trim())
+                            .filter(Boolean)
+                            .slice(0, 8)
+                          return (
+                            <Radio key={String(v?.id)} value={String(v?.id)}>
+                              <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                                <Space size={8} wrap>
+                                  <Tag color={v?.enabled ? 'green' : 'default'}>{v?.enabled ? 'enabled' : 'disabled'}</Tag>
+                                  <Tag>priority: {String(v?.priority ?? '-')}</Tag>
+                                  <Tag>stop_on_hit: {String(!!v?.stop_on_hit)}</Tag>
+                                  <Tag>action: {String(v?.action ?? '-')}</Tag>
+                                </Space>
+                                <Text type="secondary">{trigger}</Text>
+                                {producedLabels.length ? (
+                                  <Space size={6} wrap>
+                                    <Text type="secondary">替换/新增物料：</Text>
+                                    {producedLabels.map((x: string) => (
+                                      <Tag key={x}>{x}</Tag>
+                                    ))}
+                                  </Space>
+                                ) : null}
+                              </Space>
+                            </Radio>
+                          )
+                        })}
+                      </Space>
+                    </Radio.Group>
+                  ),
+                }
+              })}
+            />
+          </Space>
+        )}
+      </Modal>
+
       <Row gutter={[16, 16]}>
         <Col span={24}>
           <Card
@@ -442,7 +665,7 @@ export default function BundleTemplatesPage() {
             type="info"
             showIcon
             message="组件清单（结构化）"
-            description="每行：标准版本 + 宽(cm) + 高(cm) + 数量 + 附加触发词（可选，仅补充变体触发；不要写尺寸）。"
+            description="每行：标准版本 + 宽(cm) + 高(cm) + 数量 + 预设变体筛选/触发词（可选，仅用于命中变体；不会解析尺寸/不会改变模板尺寸）。"
           />
 
           {hasTokenVariantRisk ? (
@@ -541,24 +764,32 @@ export default function BundleTemplatesPage() {
                 ),
               },
               {
-                title: '附加触发词（可选）',
+                title: '预设变体筛选 / 触发词（可选）',
                 render: (_: any, r: any, idx: number) => (
-                  <Select
-                    mode="multiple"
-                    placeholder="从该版本变体触发词中多选（不支持自由输入）"
-                    style={{ width: '100%' }}
-                    value={parseTokenText(r.spec_text)}
-                    options={
-                      r.model_version_id
-                        ? (variantsHintByVersion.get(String(r.model_version_id))?.token_hints ?? []).map((t) => ({ value: t, label: t }))
-                        : []
-                    }
-                    onChange={(vals) => {
-                      const merged = Array.isArray(vals) ? vals.map((x) => String(x)).filter(Boolean) : []
-                      const nextText = merged.join('，')
-                      setComponents((prev) => prev.map((x, i) => (i === idx ? { ...x, spec_text: nextText } : x)))
-                    }}
-                  />
+                  <Space direction="vertical" style={{ width: '100%' }} size={8}>
+                    <Space>
+                      <Button size="small" onClick={() => openPresetModal(idx)} disabled={!r.model_version_id}>
+                        预设变体筛选…
+                      </Button>
+                      <Text type="secondary">（按物料行挑变体 → 一键填充触发词）</Text>
+                    </Space>
+                    <Select
+                      mode="multiple"
+                      placeholder="也可直接从候选触发词中多选（不支持自由输入）"
+                      style={{ width: '100%' }}
+                      value={parseTokenText(r.spec_text)}
+                      options={
+                        r.model_version_id
+                          ? (variantsHintByVersion.get(String(r.model_version_id))?.token_hints ?? []).map((t) => ({ value: t, label: t }))
+                          : []
+                      }
+                      onChange={(vals) => {
+                        const merged = Array.isArray(vals) ? vals.map((x) => String(x)).filter(Boolean) : []
+                        const nextText = merged.join('，')
+                        setComponents((prev) => prev.map((x, i) => (i === idx ? { ...x, spec_text: nextText } : x)))
+                      }}
+                    />
+                  </Space>
                 ),
               },
               {

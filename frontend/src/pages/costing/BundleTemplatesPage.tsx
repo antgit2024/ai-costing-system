@@ -1060,7 +1060,7 @@ export default function BundleTemplatesPage() {
               },
               {
                 title: '词',
-                width: 260,
+                width: 420,
                 render: (_: any, r: any, idx: number) => (
                   <Space.Compact style={{ width: '100%' }}>
                     <Input
@@ -1140,12 +1140,39 @@ export default function BundleTemplatesPage() {
                     >
                       命中
                     </Button>
-                    {r?.validated === 'ok' ? <Tag color="green">已验证</Tag> : r?.validated === 'fail' ? <Tag color="red">未通过</Tag> : null}
+                    {r?.validated === 'ok' ? (
+                      <Tag
+                        color="success"
+                        style={{
+                          borderRadius: 999,
+                          padding: '0 8px',
+                          lineHeight: '20px',
+                          fontSize: 12,
+                          marginInlineStart: 6,
+                        }}
+                      >
+                        已验证
+                      </Tag>
+                    ) : r?.validated === 'fail' ? (
+                      <Tag
+                        color="error"
+                        style={{
+                          borderRadius: 999,
+                          padding: '0 8px',
+                          lineHeight: '20px',
+                          fontSize: 12,
+                          marginInlineStart: 6,
+                        }}
+                      >
+                        未通过
+                      </Tag>
+                    ) : null}
                   </Space.Compact>
                 ),
               },
               {
                 title: '目标组件',
+                width: 160,
                 render: (_: any, r: any, idx: number) => (
                   <Select
                     showSearch

@@ -410,16 +410,44 @@ export default function BundleTemplatesPage() {
             <Collapse
               items={Array.from(presetVariantsByBaseLine.entries()).map(([baseLineId, arr]) => {
                 const base = presetBaseLineMap.get(baseLineId)
-                const baseLabel = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
                 const selected = (presetSelectedByIdx[presetModalIdx ?? -1] ?? {})[baseLineId] ?? null
+                const meta = (base?.metadata_json ?? {}) as any
+                const slot = String(meta?.structure_slot ?? '').trim()
+                const baseLabelRaw = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
+                const baseLabel = slot ? `${slot}：${baseLabelRaw}` : baseLabelRaw
+
+                const selectedVariant = selected ? (arr ?? []).find((x: any) => String(x?.id) === String(selected)) : null
+                const selectedProduced = Array.isArray(selectedVariant?.items) ? selectedVariant.items : []
+                const selectedProducedLabels: string[] = selectedProduced
+                  .map((it: any) => String(it?.material_name ?? it?.material_code ?? '').trim())
+                  .filter(Boolean)
+                  .slice(0, 2)
+                const selectedEffect =
+                  selectedVariant?.action === 'remove_self'
+                    ? '移除'
+                    : selectedVariant?.action === 'add_siblings'
+                      ? '新增物料'
+                      : '替换物料'
 
                 return {
                   key: baseLineId,
                   label: (
                     <Space size={8}>
                       <Text strong>{baseLabel}</Text>
-                      <Tag color="blue">{arr.length} 条规则</Tag>
-                      {selected ? <Tag color="green">已选 1 条</Tag> : <Tag>未选</Tag>}
+                      <Text type="secondary">{arr.length}条规则</Text>
+                      {selected ? (
+                        <Space size={6}>
+                          <Text type="secondary">{selectedEffect}</Text>
+                          {selectedProducedLabels.length ? (
+                            <Tag color="green">{selectedProducedLabels.join('、')}</Tag>
+                          ) : (
+                            <Tag color="green">-</Tag>
+                          )}
+                          <Tag color="green">已选1条</Tag>
+                        </Space>
+                      ) : (
+                        <Tag>未选</Tag>
+                      )}
                     </Space>
                   ),
                   children: (

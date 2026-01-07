@@ -25,6 +25,7 @@ import {
   createBundleTemplate,
   fetchBundleTemplates,
   fetchProductModelVersionsPaged,
+  listLineVariants,
   updateBundleTemplate,
 } from '@/services/planner'
 
@@ -61,6 +62,15 @@ export default function BundleTemplatesPage() {
     { model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' },
   ])
 
+  const selectedVersionIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const r of components ?? []) {
+      const vid = String(r.model_version_id ?? '').trim()
+      if (vid) ids.add(vid)
+    }
+    return Array.from(ids)
+  }, [components])
+
   const listQuery = useQuery({
     queryKey: ['bundle-templates', { search, category, tag, includeArchived, page, pageSize }],
     queryFn: () =>
@@ -85,6 +95,54 @@ export default function BundleTemplatesPage() {
       label: `${x.model_code}:${x.model_name} / ${x.version_label || x.version_id.slice(0, 8)} (${x.version_status})`,
     }))
   }, [versionPickerQuery.data])
+
+  const variantsSummaryQuery = useQuery({
+    queryKey: ['bundle-template-center', 'variants-summary', selectedVersionIds.join(',')],
+    queryFn: async () => {
+      const rows = await Promise.all(
+        selectedVersionIds.map(async (version_id) => {
+          const items = await listLineVariants({ version_id })
+          return { version_id, items }
+        }),
+      )
+      return rows
+    },
+    enabled: selectedVersionIds.length > 0,
+  })
+
+  const variantsHintByVersion = useMemo(() => {
+    const m = new Map<string, { has_enabled: boolean; token_hints: string[]; total: number }>()
+    const rows = (variantsSummaryQuery.data ?? []) as Array<{ version_id: string; items: any[] }>
+    for (const r of rows) {
+      const items = Array.isArray(r.items) ? r.items : []
+      const enabledItems = items.filter((x) => !!x?.enabled)
+      const tokenSet = new Set<string>()
+      for (const v of enabledItems) {
+        const cond = (v?.conditions ?? {}) as any
+        const anyTokens = Array.isArray(cond?.spec_contains_any) ? cond.spec_contains_any : []
+        const allTokens = Array.isArray(cond?.spec_contains_all) ? cond.spec_contains_all : []
+        for (const t of [...anyTokens, ...allTokens]) {
+          const s = String(t ?? '').trim()
+          if (!s) continue
+          // hide system guardrail tokens from operator hints
+          const up = s.toUpperCase()
+          if (up.startsWith('MODEL:') || up.startsWith('M:') || up.startsWith('BOUND_VERSION:') || up.startsWith('SKU:')) continue
+          tokenSet.add(s)
+        }
+      }
+      const token_hints = Array.from(tokenSet).slice(0, 12)
+      m.set(String(r.version_id), { has_enabled: enabledItems.length > 0, token_hints, total: items.length })
+    }
+    return m
+  }, [variantsSummaryQuery.data])
+
+  const hasTokenVariantRisk = useMemo(() => {
+    for (const vid of selectedVersionIds) {
+      const info = variantsHintByVersion.get(vid)
+      if (info?.has_enabled && (info.token_hints ?? []).length > 0) return true
+    }
+    return false
+  }, [selectedVersionIds, variantsHintByVersion])
 
   const openCreate = () => {
     setEditing(null)
@@ -367,6 +425,15 @@ export default function BundleTemplatesPage() {
             description="每行：标准版本 + 宽(cm) + 高(cm) + 数量 + 附加触发词（可选，仅补充变体触发；不要写尺寸）。"
           />
 
+          {hasTokenVariantRisk ? (
+            <Alert
+              type="warning"
+              showIcon
+              message="提示：当前模板所选版本包含“依赖触发词(Token)”的变体规则"
+              description="如果对客交易规格没有写到这些关键词，则可能命不中变体而落到兜底物料/默认逻辑。你也可以在某个组件行用“附加触发词”补充特定关键词。"
+            />
+          ) : null}
+
           <Table
             size="small"
             pagination={false}
@@ -377,18 +444,41 @@ export default function BundleTemplatesPage() {
                 title: '模型版本',
                 width: 320,
                 render: (_: any, r: any, idx: number) => (
-                  <Select
-                    showSearch
-                    allowClear
-                    placeholder="选择标准版本"
-                    style={{ width: '100%' }}
-                    loading={versionPickerQuery.isLoading}
-                    options={versionOptions as any}
-                    value={r.model_version_id ?? undefined}
-                    onChange={(v) =>
-                      setComponents((prev) => prev.map((x, i) => (i === idx ? { ...x, model_version_id: (v as any) ?? null } : x)))
-                    }
-                  />
+                  <Space direction="vertical" style={{ width: '100%' }} size={4}>
+                    <Select
+                      showSearch
+                      allowClear
+                      placeholder="选择标准版本"
+                      style={{ width: '100%' }}
+                      loading={versionPickerQuery.isLoading}
+                      options={versionOptions as any}
+                      value={r.model_version_id ?? undefined}
+                      onChange={(v) =>
+                        setComponents((prev) => prev.map((x, i) => (i === idx ? { ...x, model_version_id: (v as any) ?? null } : x)))
+                      }
+                    />
+                    {r.model_version_id ? (
+                      (() => {
+                        const info = variantsHintByVersion.get(String(r.model_version_id))
+                        if (!info) return <Text type="secondary">变体：加载中…</Text>
+                        if (!info.has_enabled) return <Text type="secondary">变体：无</Text>
+                        if ((info.token_hints ?? []).length) {
+                          return (
+                            <Space size={6} wrap>
+                              <Tag color="orange">变体：可能需要触发词</Tag>
+                              <Text type="secondary" style={{ fontSize: 12 }}>
+                                示例：{info.token_hints.slice(0, 6).join('、')}
+                                {info.token_hints.length > 6 ? '…' : ''}
+                              </Text>
+                            </Space>
+                          )
+                        }
+                        return <Tag color="blue">变体：不依赖触发词</Tag>
+                      })()
+                    ) : (
+                      <Text type="secondary">变体：-</Text>
+                    )}
+                  </Space>
                 ),
               },
               {

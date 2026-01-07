@@ -88,6 +88,39 @@ const formatTrigger = (condRaw: any): string => {
   return parts.join('；') || '-'
 }
 
+const isRuntimeToken = (t: string): boolean => {
+  const up = String(t ?? '').trim().toUpperCase()
+  return up.startsWith('MODEL:') || up.startsWith('M:') || up.startsWith('BOUND_VERSION:') || up.startsWith('SKU:')
+}
+
+const copyToClipboard = async (text: string) => {
+  const v = String(text ?? '')
+  if (!v.trim()) return
+  try {
+    await navigator.clipboard.writeText(v)
+    message.success('已复制')
+    return
+  } catch {
+    // fallback for older browsers
+    const ta = document.createElement('textarea')
+    ta.value = v
+    ta.style.position = 'fixed'
+    ta.style.left = '-9999px'
+    ta.style.top = '0'
+    document.body.appendChild(ta)
+    ta.focus()
+    ta.select()
+    try {
+      document.execCommand('copy')
+      message.success('已复制')
+    } catch {
+      message.error('复制失败：请手动复制')
+    } finally {
+      document.body.removeChild(ta)
+    }
+  }
+}
+
 const SLOT_CN_FALLBACK: Record<string, string> = {
   front: '前片位',
   back: '背片位',
@@ -229,6 +262,28 @@ export default function BundleTemplatesPage() {
     },
     enabled: selectedVersionIds.length > 0,
   })
+
+  const variableTokenCandidates = useMemo(() => {
+    // 从所选版本的“启用变体规则”里提取 TOKEN(any/all) 关键词，供运营复制拼接交易规格。
+    const rows = (variantsSummaryQuery.data ?? []) as any[]
+    const tokenSet = new Set<string>()
+    for (const row of rows) {
+      const items = Array.isArray(row?.items) ? row.items : []
+      for (const v of items) {
+        if (!v?.enabled) continue
+        const cond = (v?.conditions ?? {}) as any
+        const anyTokens = Array.isArray(cond?.spec_contains_any) ? cond.spec_contains_any : []
+        const allTokens = Array.isArray(cond?.spec_contains_all) ? cond.spec_contains_all : []
+        for (const raw of [...anyTokens, ...allTokens]) {
+          const s = String(raw ?? '').trim()
+          if (!s) continue
+          if (isRuntimeToken(s)) continue
+          tokenSet.add(s)
+        }
+      }
+    }
+    return Array.from(tokenSet).sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
+  }, [variantsSummaryQuery.data])
 
   const structureStandardsQuery = useQuery({
     queryKey: ['bundle-template-center', 'structure-standards'],
@@ -1217,6 +1272,42 @@ export default function BundleTemplatesPage() {
                 ),
               },
             ]}
+          />
+
+          <Alert
+            type="success"
+            showIcon
+            message="该套装模板可变词列表（可复制）"
+            description={
+              <div>
+                <div style={{ marginBottom: 8 }}>
+                  <Space wrap>
+                    <Text type="secondary">
+                      来源：当前模板所选模型版本的“启用变体规则”里 TOKEN(any/all) 关键词（可用于触发变体；不含运行时 token）。
+                    </Text>
+                    <Button size="small" disabled={!variableTokenCandidates.length} onClick={() => copyToClipboard(variableTokenCandidates.join('，'))}>
+                      复制全部
+                    </Button>
+                  </Space>
+                </div>
+                {variableTokenCandidates.length ? (
+                  <Space wrap size={6}>
+                    {variableTokenCandidates.slice(0, 80).map((t) => (
+                      <Tag
+                        key={t}
+                        style={{ borderRadius: 999, padding: '0 8px', lineHeight: '20px', fontSize: 12, cursor: 'pointer' }}
+                        onClick={() => copyToClipboard(t)}
+                      >
+                        {t}
+                      </Tag>
+                    ))}
+                    {variableTokenCandidates.length > 80 ? <Tag>+{variableTokenCandidates.length - 80}</Tag> : null}
+                  </Space>
+                ) : (
+                  <Text type="secondary">暂无候选词：请先在组件清单选择模型版本，并确保该版本存在启用的 TOKEN(any/all) 变体规则。</Text>
+                )}
+              </div>
+            }
           />
 
           <Alert

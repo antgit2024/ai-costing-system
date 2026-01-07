@@ -116,6 +116,15 @@ const matchLexiconSample = (sample: string, rule: LexiconRuleRow): boolean => {
   return s.includes(keyPrefix1) || s.includes(keyPrefix2) || hasVal
 }
 
+const explainLexiconInjection = (rule: LexiconRuleRow): string[] => {
+  const key = String(rule.match_key ?? '').trim()
+  const val = String(rule.match_value ?? '').trim()
+  if (!val) return []
+  const kv = key ? `${key}:${val}` : val
+  // backend injects both kv and raw value for compatibility
+  return [kv, val]
+}
+
 export default function BundleTemplatesPage() {
   const qc = useQueryClient()
   const [search, setSearch] = useState<string>('')
@@ -1145,13 +1154,73 @@ export default function BundleTemplatesPage() {
               },
               {
                 title: 'label',
-                width: 120,
+                width: 220,
                 render: (_: any, r: any, idx: number) => (
-                  <Input
-                    placeholder="例如：抱枕A/枕芯"
-                    value={String(r.label ?? '')}
-                    onChange={(e) => setComponents((prev) => prev.map((x, i) => (i === idx ? { ...x, label: e.target.value } : x)))}
-                  />
+                  <Space.Compact style={{ width: '100%' }}>
+                    <Input
+                      placeholder="例如：雪尼尔/棉麻/枕芯"
+                      value={String(r.label ?? '')}
+                      onChange={(e) => setComponents((prev) => prev.map((x, i) => (i === idx ? { ...x, label: e.target.value } : x)))}
+                    />
+                    <Button
+                      onClick={() => {
+                        const label = String((components?.[idx] as any)?.label ?? '').trim()
+                        if (!label) {
+                          message.warning('请先填写该组件的 label')
+                          return
+                        }
+                        const related = (lexiconRules ?? []).filter((x) => String(x?.target_label ?? '').trim() === label)
+                        if (!related.length) {
+                          message.warning(`该 label 未被任何字符映射规则引用：${label}`)
+                          return
+                        }
+                        let sample = `${String(related[0]?.match_key || '').trim() ? `${String(related[0]?.match_key).trim()}:` : ''}${String(
+                          related[0]?.match_value ?? '',
+                        ).trim()}2个(30*30)`
+                        Modal.confirm({
+                          title: `命中测试（组件：${label}）`,
+                          content: (
+                            <div>
+                              <div style={{ marginBottom: 8 }}>
+                                <Text type="secondary">输入一个片段，例如：材质:雪尼尔2个(30*30) 或 雪尼尔2个(30*30)</Text>
+                              </div>
+                              <Input
+                                defaultValue={sample}
+                                onChange={(e) => {
+                                  sample = e.target.value
+                                }}
+                              />
+                              <div style={{ marginTop: 8 }}>
+                                <Text type="secondary">
+                                  该组件关联规则：{related.map((x) => `${String(x.match_key || '').trim() ? `${String(x.match_key).trim()}:` : ''}${String(x.match_value)}`).join('；')}
+                                </Text>
+                              </div>
+                            </div>
+                          ),
+                          okText: '测试',
+                          cancelText: '关闭',
+                          onOk: async () => {
+                            const hitRules = related.filter((rr) => matchLexiconSample(sample, rr))
+                            if (!hitRules.length) {
+                              message.warning('未命中：请检查测试片段是否包含该规则的“词”')
+                              return
+                            }
+                            const tokens = Array.from(
+                              new Set(
+                                hitRules
+                                  .flatMap((rr) => explainLexiconInjection(rr))
+                                  .map((t) => String(t).trim())
+                                  .filter(Boolean),
+                              ),
+                            )
+                            message.success(`命中：将分配到 ${label}，注入tokens：${tokens.join('、')}`)
+                          },
+                        })
+                      }}
+                    >
+                      命中
+                    </Button>
+                  </Space.Compact>
                 ),
               },
               {

@@ -28,6 +28,8 @@ import {
   createBundleTemplate,
   fetchBundleTemplates,
   fetchProductModelVersionLines,
+  fetchProductModelVersions,
+  fetchStructureStandards,
   fetchProductModelVersionsPaged,
   listLineVariants,
   updateBundleTemplate,
@@ -152,6 +154,17 @@ export default function BundleTemplatesPage() {
     }))
   }, [versionPickerQuery.data])
 
+  const versionIdToModelId = useMemo(() => {
+    const m = new Map<string, string>()
+    const items = (versionPickerQuery.data?.items ?? []) as any[]
+    for (const it of items) {
+      const vid = String(it?.version_id ?? '').trim()
+      const mid = String(it?.model_id ?? '').trim()
+      if (vid && mid) m.set(vid, mid)
+    }
+    return m
+  }, [versionPickerQuery.data])
+
   const variantsSummaryQuery = useQuery({
     queryKey: ['bundle-template-center', 'variants-summary', selectedVersionIds.join(',')],
     queryFn: async () => {
@@ -165,6 +178,76 @@ export default function BundleTemplatesPage() {
     },
     enabled: selectedVersionIds.length > 0,
   })
+
+  const structureStandardsQuery = useQuery({
+    queryKey: ['bundle-template-center', 'structure-standards'],
+    queryFn: () => fetchStructureStandards({ status: 'all', page: 1, page_size: 2000 } as any),
+  })
+
+  const structureStandardByCode = useMemo(() => {
+    const m = new Map<string, any>()
+    const items = (structureStandardsQuery.data?.items ?? []) as any[]
+    for (const it of items) {
+      const code = String(it?.code ?? it?.name ?? '').trim()
+      if (code) m.set(code, it)
+    }
+    return m
+  }, [structureStandardsQuery.data])
+
+  const versionStructureCodeQuery = useQuery({
+    queryKey: ['bundle-template-center', 'version-structure-code', selectedVersionIds.join(',')],
+    queryFn: async () => {
+      const modelIds = Array.from(
+        new Set(selectedVersionIds.map((vid) => String(versionIdToModelId.get(vid) ?? '').trim()).filter(Boolean)),
+      )
+      const rows = await Promise.all(
+        modelIds.map(async (model_id) => {
+          const versions = await fetchProductModelVersions(model_id, { include_archived: true })
+          return { model_id, versions }
+        }),
+      )
+      const m: Record<string, string> = {}
+      for (const r of rows) {
+        const versions = (r.versions ?? []) as any[]
+        for (const v of versions) {
+          const vid = String(v?.id ?? '').trim()
+          if (!vid) continue
+          const meta = (v?.metadata_json ?? {}) as any
+          const code = String(meta?.structure_standard_code ?? '').trim()
+          if (code) m[vid] = code
+        }
+      }
+      return m
+    },
+    enabled: selectedVersionIds.length > 0 && versionIdToModelId.size > 0,
+  })
+
+  const slotDisplayNameByVersionId = useMemo(() => {
+    const m = new Map<string, Record<string, string>>()
+    const mapping = (versionStructureCodeQuery.data ?? {}) as Record<string, string>
+    for (const [vid, code] of Object.entries(mapping)) {
+      const std = structureStandardByCode.get(String(code))
+      const names = (std?.slot_display_names ?? {}) as Record<string, any>
+      const out: Record<string, string> = {}
+      for (const [k, v] of Object.entries(names ?? {})) {
+        const kk = String(k ?? '').trim()
+        const vv = String(v ?? '').trim()
+        if (kk && vv) out[kk] = vv
+      }
+      if (Object.keys(out).length) m.set(String(vid), out)
+    }
+    return m
+  }, [versionStructureCodeQuery.data, structureStandardByCode])
+
+  const toSlotCn = (slot: string, versionId: string | null): string => {
+    const s = String(slot ?? '').trim()
+    if (!s) return ''
+    // already CN (or user-entered), keep as-is
+    if (/[\u4e00-\u9fff]/.test(s)) return s
+    const names = versionId ? slotDisplayNameByVersionId.get(String(versionId)) : undefined
+    const hit = names ? String(names[s] ?? '').trim() : ''
+    return hit || s
+  }
 
   const versionLinesSummaryQuery = useQuery({
     queryKey: ['bundle-template-center', 'version-lines-summary', selectedVersionIds.join(',')],
@@ -195,32 +278,6 @@ export default function BundleTemplatesPage() {
     }
     return m
   }, [versionLinesSummaryQuery.data])
-
-  const variantsHintByVersion = useMemo(() => {
-    const m = new Map<string, { has_enabled: boolean; token_hints: string[]; total: number }>()
-    const rows = (variantsSummaryQuery.data ?? []) as Array<{ version_id: string; items: any[] }>
-    for (const r of rows) {
-      const items = Array.isArray(r.items) ? r.items : []
-      const enabledItems = items.filter((x) => !!x?.enabled)
-      const tokenSet = new Set<string>()
-      for (const v of enabledItems) {
-        const cond = (v?.conditions ?? {}) as any
-        const anyTokens = Array.isArray(cond?.spec_contains_any) ? cond.spec_contains_any : []
-        const allTokens = Array.isArray(cond?.spec_contains_all) ? cond.spec_contains_all : []
-        for (const t of [...anyTokens, ...allTokens]) {
-          const s = String(t ?? '').trim()
-          if (!s) continue
-          // hide system guardrail tokens from operator hints
-          const up = s.toUpperCase()
-          if (up.startsWith('MODEL:') || up.startsWith('M:') || up.startsWith('BOUND_VERSION:') || up.startsWith('SKU:')) continue
-          tokenSet.add(s)
-        }
-      }
-      const token_hints = Array.from(tokenSet).slice(0, 12)
-      m.set(String(r.version_id), { has_enabled: enabledItems.length > 0, token_hints, total: items.length })
-    }
-    return m
-  }, [variantsSummaryQuery.data])
 
   const presetVersionId = useMemo(() => {
     if (!presetModalOpen) return null
@@ -306,14 +363,6 @@ export default function BundleTemplatesPage() {
     message.success(tokens.length ? `已填充触发词：${tokens.join('、')}` : '所选变体不依赖 TOKEN 触发词（仅尺寸/面积/周长条件等）')
     setPresetModalOpen(false)
   }
-
-  const hasTokenVariantRisk = useMemo(() => {
-    for (const vid of selectedVersionIds) {
-      const info = variantsHintByVersion.get(vid)
-      if (info?.has_enabled && (info.token_hints ?? []).length > 0) return true
-    }
-    return false
-  }, [selectedVersionIds, variantsHintByVersion])
 
   const openCreate = () => {
     setEditing(null)
@@ -450,7 +499,7 @@ export default function BundleTemplatesPage() {
               items={Array.from(presetVariantsByBaseLine.entries()).map(([baseLineId, arr]) => {
                 const base = presetBaseLineMap.get(baseLineId)
                 const selected = (presetSelectedByIdx[presetModalIdx ?? -1] ?? {})[baseLineId] ?? null
-                const slot = getStructureSlotLabel(base)
+                const slot = toSlotCn(getStructureSlotLabel(base), presetVersionId)
                 const baseLabelRaw = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
                 const baseLabel = slot ? `${slot}：${baseLabelRaw}` : baseLabelRaw
 
@@ -734,15 +783,6 @@ export default function BundleTemplatesPage() {
             description="每行：标准版本 + 宽(cm) + 高(cm) + 数量 + 预设变体筛选/触发词（可选，仅用于命中变体；不会解析尺寸/不会改变模板尺寸）。"
           />
 
-          {hasTokenVariantRisk ? (
-            <Alert
-              type="warning"
-              showIcon
-              message="提示：当前模板所选版本包含“依赖触发词(Token)”的变体规则"
-              description="如果对客交易规格没有写到这些关键词，则可能命不中变体而落到兜底物料/默认逻辑。你也可以在某个组件行用“附加触发词”补充特定关键词。"
-            />
-          ) : null}
-
           <Table
             size="small"
             pagination={false}
@@ -785,7 +825,7 @@ export default function BundleTemplatesPage() {
                           {selectedEntries.map(([baseLineId, variantId]) => {
                             const v = variantsById.get(String(variantId))
                             const base = baseMap.get(String(baseLineId))
-                            const slot = getStructureSlotLabel(base)
+                            const slot = toSlotCn(getStructureSlotLabel(base), versionId)
                             const baseName = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
                             const baseLabel = slot ? `${slot}：${baseName}` : baseName
 
@@ -839,27 +879,6 @@ export default function BundleTemplatesPage() {
                         setComponents((prev) => prev.map((x, i) => (i === idx ? { ...x, model_version_id: (v as any) ?? null } : x)))
                       }
                     />
-                    {r.model_version_id ? (
-                      (() => {
-                        const info = variantsHintByVersion.get(String(r.model_version_id))
-                        if (!info) return <Text type="secondary">变体：加载中…</Text>
-                        if (!info.has_enabled) return <Text type="secondary">变体：无</Text>
-                        if ((info.token_hints ?? []).length) {
-                          return (
-                            <Space size={6} wrap>
-                              <Tag color="orange">变体：可能需要触发词</Tag>
-                              <Text type="secondary" style={{ fontSize: 12 }}>
-                                示例：{info.token_hints.slice(0, 6).join('、')}
-                                {info.token_hints.length > 6 ? '…' : ''}
-                              </Text>
-                            </Space>
-                          )
-                        }
-                        return <Tag color="blue">变体：不依赖触发词</Tag>
-                      })()
-                    ) : (
-                      <Text type="secondary">变体：-</Text>
-                    )}
                   </Space>
                 ),
               },

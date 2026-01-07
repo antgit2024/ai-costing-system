@@ -1200,7 +1200,12 @@ export default function BundleTemplatesPage() {
                   const phrase = String(r?.phrase ?? '').trim()
                   if (!phrase) return <Text type="secondary">-</Text>
                   if (!currentBundleToken) return <Text type="secondary">（保存后生成 B: 编码）</Text>
-                  const spec = `${phrase}(${currentBundleToken})`
+                  const up = phrase.toUpperCase()
+                  // 如果运营已经手动写了 B:，就不再重复拼接
+                  if (up.includes('B:') || up.includes('BUNDLE:')) return <Text copyable={{ text: phrase }}>{phrase}</Text>
+                  const trimmed = phrase.replace(/\s+$/g, '')
+                  const needSep = /[；;]$/.test(trimmed) ? '' : '；'
+                  const spec = `${trimmed}${needSep}(${currentBundleToken})`
                   return <Text copyable={{ text: spec }}>{spec}</Text>
                 },
               },
@@ -1237,15 +1242,6 @@ export default function BundleTemplatesPage() {
                 const versionId = String(r?.model_version_id ?? '').trim()
                 return (
                   <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                    <div>
-                      <Button size="small" onClick={() => openPresetModal(idx)} disabled={!versionId}>
-                        预设变体筛选…
-                      </Button>
-                      <Text type="secondary" style={{ marginLeft: 8 }}>
-                        {versionId ? '（按物料行挑变体 → 只看结果 → 一键填充触发词）' : '（请先选择模型版本）'}
-                      </Text>
-                    </div>
-
                     {(() => {
                       const sel = (presetSelectedByIdx[idx] ?? {}) as Record<string, string | null>
                       const selectedEntries = Object.entries(sel).filter(([, v]) => !!v)
@@ -1375,6 +1371,13 @@ export default function BundleTemplatesPage() {
                       }
                     >
                       +行
+                    </Button>
+                    <Button
+                      size="small"
+                      disabled={!String((components ?? [])[idx]?.model_version_id ?? '').trim()}
+                      onClick={() => openPresetModal(idx)}
+                    >
+                      筛选
                     </Button>
                     <Button
                       size="small"

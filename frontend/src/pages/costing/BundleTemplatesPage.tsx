@@ -40,10 +40,17 @@ const { Text } = Typography
 
 type ComponentRow = {
   model_version_id: string | null
+  label: string
   width_cm: number
   height_cm: number
   quantity: number
   spec_text: string
+}
+
+type LexiconRuleRow = {
+  match_key: string
+  match_value: string
+  target_label: string
 }
 
 const parseTags = (meta: any): string[] => {
@@ -108,8 +115,9 @@ export default function BundleTemplatesPage() {
 
   const [form] = Form.useForm()
   const [components, setComponents] = useState<ComponentRow[]>([
-    { model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' },
+    { model_version_id: null, label: '', width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' },
   ])
+  const [lexiconRules, setLexiconRules] = useState<LexiconRuleRow[]>([])
 
   // 预设变体筛选：每个组件 idx -> { base_line_id -> selected_variant_id }
   const [presetSelectedByIdx, setPresetSelectedByIdx] = useState<Record<number, Record<string, string | null>>>({})
@@ -443,8 +451,9 @@ export default function BundleTemplatesPage() {
     setEditing(null)
     setCreatedTokenHint(null)
     form.setFieldsValue({ name: '', category: '', tags: [], shared_trigger_text: '' })
-    setComponents([{ model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' }])
+    setComponents([{ model_version_id: null, label: '', width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' }])
     setPresetSelectedByIdx({})
+    setLexiconRules([])
     setDrawerOpen(true)
   }
 
@@ -463,18 +472,33 @@ export default function BundleTemplatesPage() {
       rows.length
         ? rows.map((c: any) => ({
             model_version_id: String(c.model_version_id ?? '') || null,
+            label: String(c.label ?? ''),
             width_cm: Number(c.width_mm ?? 0) / 10,
             height_cm: Number(c.height_mm ?? 0) / 10,
             quantity: Number(c.quantity ?? 1),
             spec_text: String(c.spec_text ?? ''),
           }))
-        : [{ model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' }],
+        : [{ model_version_id: null, label: '', width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' }],
     )
     const vp = (row?.metadata ?? {})?.variant_presets
     if (vp && typeof vp === 'object') {
       setPresetSelectedByIdx(vp as any)
     } else {
       setPresetSelectedByIdx({})
+    }
+    const lr = (row?.metadata ?? {})?.lexicon_rules
+    if (Array.isArray(lr)) {
+      setLexiconRules(
+        lr
+          .map((x: any) => ({
+            match_key: String(x?.match_key ?? x?.key ?? '').trim() || '材质',
+            match_value: String(x?.match_value ?? x?.value ?? '').trim(),
+            target_label: String(x?.target_label ?? '').trim(),
+          }))
+          .filter((x: any) => x.match_value && x.target_label),
+      )
+    } else {
+      setLexiconRules([])
     }
     setDrawerOpen(true)
   }
@@ -485,6 +509,7 @@ export default function BundleTemplatesPage() {
       const comps = (components ?? [])
         .map((c) => ({
           model_version_id: String(c.model_version_id ?? '').trim(),
+          label: String(c.label ?? '').trim() || undefined,
           width_mm: Number(c.width_cm) * 10,
           height_mm: Number(c.height_cm) * 10,
           quantity: Number(c.quantity),
@@ -498,6 +523,13 @@ export default function BundleTemplatesPage() {
         category: String(values.category ?? '').trim() || undefined,
         tags: Array.isArray(values.tags) ? values.tags.map((x: any) => String(x)).filter(Boolean) : [],
         variant_presets: presetSelectedByIdx,
+        lexicon_rules: lexiconRules
+          .map((r) => ({
+            match_key: String(r.match_key ?? '').trim() || undefined,
+            match_value: String(r.match_value ?? '').trim(),
+            target_label: String(r.target_label ?? '').trim(),
+          }))
+          .filter((r) => r.match_value && r.target_label),
       }
       const sharedText = String(values.shared_trigger_text ?? '').trim() || undefined
 
@@ -862,6 +894,85 @@ export default function BundleTemplatesPage() {
           <Alert
             type="info"
             showIcon
+            message="套装字符映射（可选，用于“材质:雪尼尔2个(30*30)+…”这种对客规格）"
+            description="用于把对客交易规格里的“材质:雪尼尔2个”等片段，映射到指定组件 label，并按数量拆分为多行组件，避免雪尼尔+棉麻混搭时 token 广播冲突。"
+          />
+          <Table
+            size="small"
+            pagination={false}
+            rowKey={(_, idx) => `lex-${idx}`}
+            dataSource={lexiconRules}
+            columns={[
+              {
+                title: '字段',
+                width: 110,
+                render: (_: any, r: any, idx: number) => (
+                  <Select
+                    style={{ width: '100%' }}
+                    value={String(r.match_key ?? '材质')}
+                    options={[
+                      { value: '材质', label: '材质' },
+                      { value: '枕芯', label: '枕芯' },
+                    ]}
+                    onChange={(v) => setLexiconRules((prev) => prev.map((x, i) => (i === idx ? { ...x, match_key: String(v) } : x)))}
+                  />
+                ),
+              },
+              {
+                title: '词',
+                width: 160,
+                render: (_: any, r: any, idx: number) => (
+                  <Input
+                    placeholder="例如：雪尼尔 / 棉麻 / PP棉"
+                    value={String(r.match_value ?? '')}
+                    onChange={(e) =>
+                      setLexiconRules((prev) => prev.map((x, i) => (i === idx ? { ...x, match_value: e.target.value } : x)))
+                    }
+                  />
+                ),
+              },
+              {
+                title: '目标组件label',
+                render: (_: any, r: any, idx: number) => (
+                  <Select
+                    showSearch
+                    allowClear
+                    placeholder="选择组件label（需要在组件行填写label）"
+                    style={{ width: '100%' }}
+                    value={r.target_label || undefined}
+                    options={Array.from(new Set((components ?? []).map((c) => String(c.label ?? '').trim()).filter(Boolean))).map((x) => ({
+                      value: x,
+                      label: x,
+                    }))}
+                    onChange={(v) =>
+                      setLexiconRules((prev) => prev.map((x, i) => (i === idx ? { ...x, target_label: String(v ?? '') } : x)))
+                    }
+                  />
+                ),
+              },
+              {
+                title: '操作',
+                width: 140,
+                render: (_: any, __: any, idx: number) => (
+                  <Space>
+                    <Button
+                      size="small"
+                      onClick={() => setLexiconRules((prev) => [...prev, { match_key: '材质', match_value: '', target_label: '' }])}
+                    >
+                      +行
+                    </Button>
+                    <Button size="small" danger disabled={lexiconRules.length <= 0} onClick={() => setLexiconRules((prev) => prev.filter((_, i) => i !== idx))}>
+                      删除
+                    </Button>
+                  </Space>
+                ),
+              },
+            ]}
+          />
+
+          <Alert
+            type="info"
+            showIcon
             message="组件清单（结构化）"
             description="每行：标准版本 + 宽(cm) + 高(cm) + 数量 + 预设变体筛选/触发词（可选，仅用于命中变体；不会解析尺寸/不会改变模板尺寸）。"
           />
@@ -966,6 +1077,17 @@ export default function BundleTemplatesPage() {
                 ),
               },
               {
+                title: 'label',
+                width: 120,
+                render: (_: any, r: any, idx: number) => (
+                  <Input
+                    placeholder="例如：抱枕A/枕芯"
+                    value={String(r.label ?? '')}
+                    onChange={(e) => setComponents((prev) => prev.map((x, i) => (i === idx ? { ...x, label: e.target.value } : x)))}
+                  />
+                ),
+              },
+              {
                 title: '宽(cm)',
                 width: 90,
                 render: (_: any, r: any, idx: number) => (
@@ -1012,7 +1134,7 @@ export default function BundleTemplatesPage() {
                     <Button
                       size="small"
                       onClick={() =>
-                        setComponents((prev) => [...prev, { model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' }])
+                        setComponents((prev) => [...prev, { model_version_id: null, label: '', width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' }])
                       }
                     >
                       +行

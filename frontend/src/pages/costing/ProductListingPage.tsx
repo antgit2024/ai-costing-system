@@ -166,7 +166,10 @@ export default function ProductListingPage() {
       setLastError(null)
       const code = String(bundleDraft.bundle_code ?? '').trim()
       if (!code) throw new Error('请先选择套装（B:XXXXXX）')
-      const extra = String(bundleDraft.spec_text ?? '').trim()
+      // UI 已选择套装编码，这里去掉用户输入里可能重复的 B:XXXXXX，避免歧义
+      const extra = String(bundleDraft.spec_text ?? '')
+        .replace(/(?:BUNDLE:|B:)[A-Z0-9]{4,16}/gi, '')
+        .trim()
       const spec_text = extra ? `B:${code} ${extra}` : `B:${code}`
       const bomRes = await generateBomBySpec({
         spec_text,

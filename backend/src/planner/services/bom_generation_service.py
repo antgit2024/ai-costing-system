@@ -9,6 +9,52 @@ from .. import models
 from . import bundle_template_service, line_variant_service, product_model_service, spec_parser_service
 
 
+def _parse_bundle_scoped_phrases(spec_text: str) -> List[Dict[str, Any]]:
+    """
+    Parse customer-facing spec_text to extract scoped phrases with counts, e.g.:
+      - 材质:雪尼尔2个(30*30)
+      - 枕芯：PP棉3个
+
+    Returns list of dicts: {key, value, qty}
+    Notes:
+      - Dimensions in parentheses are ignored (template defines size).
+      - Bundle code tokens (B:/BUNDLE:) are ignored.
+    """
+    import re
+
+    text = str(spec_text or "")
+    # remove bundle codes to avoid confusing parsing
+    text = re.sub(r"(?:BUNDLE:|B:)[A-Z0-9]{4,16}", "", text, flags=re.IGNORECASE)
+    # normalize separators
+    text = text.replace("；", ";").replace("，", ",").replace("＋", "+")
+    parts = re.split(r"[+;,/|、\n]+", text)
+
+    out: List[Dict[str, Any]] = []
+    # key:valueN个(...)  or valueN个(...) (key optional)
+    pat = re.compile(
+        r"^\s*(?:(?P<key>材质|枕芯)\s*[:：]\s*)?(?P<value>.+?)(?P<qty>\d+)\s*(?:个|只|条|件|套)?\s*(?:[（(].*[）)])?\s*$"
+    )
+    for raw in parts:
+        s = str(raw or "").strip()
+        if not s:
+            continue
+        m = pat.match(s)
+        if not m:
+            continue
+        key = str(m.group("key") or "").strip() or None
+        value = str(m.group("value") or "").strip()
+        # clean trailing punctuation
+        value = value.strip("：:，,;； ")
+        try:
+            qty = int(m.group("qty"))
+        except Exception:
+            continue
+        if not value or qty <= 0:
+            continue
+        out.append({"key": key, "value": value, "qty": qty})
+    return out
+
+
 def generate_bom(
     db: Session,
     *,
@@ -194,11 +240,98 @@ def generate_bom_by_spec(
         tpl_shared_tokens = [t for t in tpl_shared_tokens if not t.upper().startswith("B:") and not t.upper().startswith("BUNDLE:")]
         shared_tokens = shared_tokens + tpl_shared_tokens
 
+    # --- Bundle lexicon (scoped mapping; avoid global token broadcast conflicts) ---
+    lex_rules = tpl_meta.get("lexicon_rules")
+    scoped_phrases = _parse_bundle_scoped_phrases(spec_text)
+    lex_rules = lex_rules if isinstance(lex_rules, list) else []
+    # index rules by (key,value,target_label)
+    indexed_rules: List[Dict[str, Any]] = []
+    for r in lex_rules:
+        if not isinstance(r, dict):
+            continue
+        key = str(r.get("match_key") or r.get("key") or "").strip() or None
+        value = str(r.get("match_value") or r.get("value") or "").strip()
+        target_label = str(r.get("target_label") or "").strip()
+        if not value or not target_label:
+            continue
+        indexed_rules.append({"match_key": key, "match_value": value, "target_label": target_label})
+
+    # Determine which labels can be scoped; enforce uniqueness to avoid ambiguous splits
+    label_to_components: Dict[str, List[Dict[str, Any]]] = {}
+    for c in components:
+        if not isinstance(c, dict):
+            continue
+        lab = str(c.get("label") or "").strip()
+        if not lab:
+            continue
+        label_to_components.setdefault(lab, []).append(c)
+
+    scoped_components_by_label: Dict[str, List[Dict[str, Any]]] = {}
+    scoped_remove_tokens: List[str] = []
+
+    if indexed_rules and scoped_phrases:
+        for ph in scoped_phrases:
+            ph_key = ph.get("key")
+            ph_value = str(ph.get("value") or "").strip()
+            ph_qty = int(ph.get("qty") or 0)
+            if not ph_value or ph_qty <= 0:
+                continue
+            for rule in indexed_rules:
+                if rule["match_value"] != ph_value:
+                    continue
+                if rule["match_key"] is not None and ph_key is not None and rule["match_key"] != ph_key:
+                    continue
+                if rule["match_key"] is not None and ph_key is None:
+                    # rule expects key but phrase lacks it
+                    continue
+                target_label = rule["target_label"]
+                base_defs = label_to_components.get(target_label) or []
+                if not base_defs:
+                    raise ValueError(f"套装字符映射未找到目标组件 label：{target_label}")
+                if len(base_defs) != 1:
+                    raise ValueError(f"套装组件 label 必须唯一（{target_label} 出现 {len(base_defs)} 次），否则无法按 label 分配/拆分")
+                base_def = dict(base_defs[0])
+
+                # Inject tokens for this scoped phrase:
+                # - prefer key:value token (e.g., 材质:雪尼尔)
+                # - also include raw value for backward compatibility (e.g., 雪尼尔)
+                token_key = ph_key or ""
+                token_kv = f"{token_key}:{ph_value}" if token_key else ph_value
+                scoped_tokens = [token_kv, ph_value]
+                scoped_remove_tokens.extend(scoped_tokens)
+
+                base_def["quantity"] = ph_qty
+                # Keep original label but add hint for UI/debug
+                base_def["label"] = f"{target_label}({token_kv})"
+                base_tokens = []
+                if isinstance(base_def.get("tokens"), list):
+                    base_tokens = [str(x).strip() for x in base_def.get("tokens") if str(x).strip()]
+                base_def["tokens"] = base_tokens + scoped_tokens
+                scoped_components_by_label.setdefault(target_label, []).append(base_def)
+
+    # Remove scoped tokens from shared tokens to avoid global broadcast conflicts
+    if scoped_remove_tokens:
+        rm = {str(x).strip().lower() for x in scoped_remove_tokens if str(x).strip()}
+        shared_tokens = [t for t in shared_tokens if str(t).strip().lower() not in rm]
+
     comps2: List[Dict[str, Any]] = []
+    scoped_labels_done: set[str] = set()
     for i, c in enumerate(components):
         if not isinstance(c, dict):
             raise ValueError(f"套装模板组件非法：components[{i}]")
         c2 = dict(c)
+
+        # If lexicon produced scoped components for this label, replace originals by scoped ones
+        label = str(c2.get("label") or "").strip()
+        if label and label in scoped_components_by_label:
+            # only append once per label (skip other originals with same label)
+            if label in scoped_labels_done:
+                continue
+            for sc in scoped_components_by_label[label]:
+                comps2.append(sc)
+            scoped_labels_done.add(label)
+            continue
+
         # Treat template's per-component spec_text as "extra trigger words" only (no size parsing).
         extra_tokens: List[str] = []
         extra_spec = str(c2.get("spec_text") or "").strip()

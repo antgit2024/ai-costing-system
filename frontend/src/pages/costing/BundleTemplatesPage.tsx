@@ -1201,128 +1201,139 @@ export default function BundleTemplatesPage() {
             message="短语预设（推荐：把常见交易规格片段定死）"
             description="匹配规则：对客交易规格“包含命中”，并按“更长短语优先”。命中后会执行该短语下的“映射组”（字段/词/目标组件）。"
           />
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <Button
+              type="dashed"
+              onClick={() => setPhrasePresets((prev) => [...prev, { phrase: '', mappings: [] }])}
+            >
+              新增短语
+            </Button>
+          </div>
           <Table
             size="small"
             pagination={false}
             rowKey={(_, idx) => `pp-${idx}`}
             dataSource={phrasePresets}
-            locale={{ emptyText: '暂无短语：在“操作”列点 +行 添加第一条' }}
+            locale={{ emptyText: '暂无短语：点击上方“新增短语”添加第一条' }}
             expandable={{
               expandedRowKeys: phrasePresets.map((_, idx) => `pp-${idx}`),
               showExpandColumn: false,
               expandedRowRender: (r: any, idx: number) => {
                 const mappings = Array.isArray(r?.mappings) ? (r.mappings as any[]) : []
                 return (
-                  <Table
-                    size="small"
-                    pagination={false}
-                    rowKey={(_, mi) => `ppm-${idx}-${mi}`}
-                    dataSource={mappings}
-                    locale={{ emptyText: '暂无映射：在“操作”列点 +行 添加第一条' }}
-                    columns={[
-                      {
-                        title: '字段',
-                        width: 110,
-                        render: (_: any, rr: any, mi: number) => (
-                          <Select
-                            style={{ width: '100%' }}
-                            value={String(rr.match_key ?? '材质')}
-                            options={[
-                              { value: '材质', label: '材质' },
-                              { value: '枕芯', label: '枕芯' },
-                            ]}
-                            onChange={(v) =>
-                              setPhrasePresets((prev) =>
-                                prev.map((x, i) =>
-                                  i === idx
-                                    ? {
-                                        ...x,
-                                        mappings: (x.mappings ?? []).map((m, j) => (j === mi ? { ...m, match_key: String(v) } : m)),
-                                      }
-                                    : x,
-                                ),
-                              )
-                            }
-                          />
-                        ),
-                      },
-                      {
-                        title: '词（严格选择）',
-                        width: 420,
-                        render: (_: any, rr: any, mi: number) => (
-                          <Select
-                            showSearch
-                            allowClear
-                            placeholder={variableTokenCandidates.length ? '从候选中选择（不可手输）' : '暂无候选：先选择模型版本'}
-                            style={{ width: '100%' }}
-                            value={String(rr.match_value ?? '').trim() || undefined}
-                            options={variableTokenCandidates.map((t) => ({ value: t, label: t }))}
-                            onChange={(v) =>
-                              setPhrasePresets((prev) =>
-                                prev.map((x, i) =>
-                                  i === idx
-                                    ? {
-                                        ...x,
-                                        mappings: (x.mappings ?? []).map((m, j) => (j === mi ? { ...m, match_value: String(v ?? '') } : m)),
-                                      }
-                                    : x,
-                                ),
-                              )
-                            }
-                            disabled={!variableTokenCandidates.length}
-                          />
-                        ),
-                      },
-                      {
-                        title: '目标组件',
-                        width: 200,
-                        render: (_: any, rr: any, mi: number) => (
-                          <Select
-                            showSearch
-                            allowClear
-                            placeholder="选择组件（按模型）"
-                            style={{ width: '100%' }}
-                            value={typeof rr.target_component_index === 'number' ? rr.target_component_index : undefined}
-                            options={(components ?? []).map((c, i) => ({
-                              value: i,
-                              label: getComponentDisplay(i, c),
-                            }))}
-                            onChange={(v) =>
-                              setPhrasePresets((prev) =>
-                                prev.map((x, i) =>
-                                  i === idx
-                                    ? {
-                                        ...x,
-                                        mappings: (x.mappings ?? []).map((m, j) =>
-                                          j === mi ? { ...m, target_component_index: v == null ? null : Number(v) } : m,
-                                        ),
-                                      }
-                                    : x,
-                                ),
-                              )
-                            }
-                          />
-                        ),
-                      },
-                      {
-                        title: '操作',
-                        width: 140,
-                        render: (_: any, __: any, mi: number) => (
-                          <Space>
-                            <Button
-                              size="small"
-                              onClick={() =>
+                  <Space direction="vertical" style={{ width: '100%' }} size={8}>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                      <Button
+                        size="small"
+                        type="dashed"
+                        onClick={() =>
+                          setPhrasePresets((prev) =>
+                            prev.map((x, i) =>
+                              i === idx
+                                ? { ...x, mappings: [...(x.mappings ?? []), { match_key: '材质', match_value: '', target_component_index: null }] }
+                                : x,
+                            ),
+                          )
+                        }
+                      >
+                        新增映射行
+                      </Button>
+                    </div>
+                    <Table
+                      size="small"
+                      pagination={false}
+                      rowKey={(_, mi) => `ppm-${idx}-${mi}`}
+                      dataSource={mappings}
+                      locale={{ emptyText: '暂无映射：点击上方“新增映射行”添加第一条' }}
+                      columns={[
+                        {
+                          title: '字段',
+                          width: 110,
+                          render: (_: any, rr: any, mi: number) => (
+                            <Select
+                              style={{ width: '100%' }}
+                              value={String(rr.match_key ?? '材质')}
+                              options={[
+                                { value: '材质', label: '材质' },
+                                { value: '枕芯', label: '枕芯' },
+                              ]}
+                              onChange={(v) =>
                                 setPhrasePresets((prev) =>
                                   prev.map((x, i) =>
                                     i === idx
-                                      ? { ...x, mappings: [...(x.mappings ?? []), { match_key: '材质', match_value: '', target_component_index: null }] }
+                                      ? {
+                                          ...x,
+                                          mappings: (x.mappings ?? []).map((m, j) => (j === mi ? { ...m, match_key: String(v) } : m)),
+                                        }
                                       : x,
                                   ),
                                 )
                               }
-                            >
-                              +行
-                            </Button>
+                            />
+                          ),
+                        },
+                        {
+                          title: '词（严格选择）',
+                          width: 420,
+                          render: (_: any, rr: any, mi: number) => (
+                            <Select
+                              showSearch
+                              allowClear
+                              placeholder={variableTokenCandidates.length ? '从候选中选择（不可手输）' : '暂无候选：先选择模型版本'}
+                              style={{ width: '100%' }}
+                              value={String(rr.match_value ?? '').trim() || undefined}
+                              options={variableTokenCandidates.map((t) => ({ value: t, label: t }))}
+                              onChange={(v) =>
+                                setPhrasePresets((prev) =>
+                                  prev.map((x, i) =>
+                                    i === idx
+                                      ? {
+                                          ...x,
+                                          mappings: (x.mappings ?? []).map((m, j) => (j === mi ? { ...m, match_value: String(v ?? '') } : m)),
+                                        }
+                                      : x,
+                                  ),
+                                )
+                              }
+                              disabled={!variableTokenCandidates.length}
+                            />
+                          ),
+                        },
+                        {
+                          title: '目标组件',
+                          width: 200,
+                          render: (_: any, rr: any, mi: number) => (
+                            <Select
+                              showSearch
+                              allowClear
+                              placeholder="选择组件（按模型）"
+                              style={{ width: '100%' }}
+                              value={typeof rr.target_component_index === 'number' ? rr.target_component_index : undefined}
+                              options={(components ?? []).map((c, i) => ({
+                                value: i,
+                                label: getComponentDisplay(i, c),
+                              }))}
+                              onChange={(v) =>
+                                setPhrasePresets((prev) =>
+                                  prev.map((x, i) =>
+                                    i === idx
+                                      ? {
+                                          ...x,
+                                          mappings: (x.mappings ?? []).map((m, j) =>
+                                            j === mi ? { ...m, target_component_index: v == null ? null : Number(v) } : m,
+                                          ),
+                                        }
+                                      : x,
+                                  ),
+                                )
+                              }
+                            />
+                          ),
+                        },
+                        {
+                          title: '操作',
+                          width: 90,
+                          render: (_: any, __: any, mi: number) => (
                             <Button
                               size="small"
                               danger
@@ -1336,11 +1347,11 @@ export default function BundleTemplatesPage() {
                             >
                               删除
                             </Button>
-                          </Space>
-                        ),
-                      },
-                    ]}
-                  />
+                          ),
+                        },
+                      ]}
+                    />
+                  </Space>
                 )
               },
             }}
@@ -1360,9 +1371,6 @@ export default function BundleTemplatesPage() {
                 width: 140,
                 render: (_: any, __: any, idx: number) => (
                   <Space>
-                    <Button size="small" onClick={() => setPhrasePresets((prev) => [...prev, { phrase: '', mappings: [] }])}>
-                      +行
-                    </Button>
                     <Button size="small" danger onClick={() => setPhrasePresets((prev) => prev.filter((_, i) => i !== idx))}>
                       删除
                     </Button>

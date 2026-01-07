@@ -61,6 +61,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：将“公共触发词”以底部“备注/描述框”形式恢复，读写 `metadata.shared_trigger_text`（仅备注，不参与解析）；已硬验收 `npm -C frontend run build` 并原子发布）
 - **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：底部备注框文案调整：“公共触发词（备注，可选）”→“描述备注”；并用 `npm -C frontend run build` 做了干净度校验（无未使用/残留报错）；已原子发布）
 - **最近校对（北京时间 GMT+8）**：2026-01-07（Backend：套装选择器 `(B:CODE:A/B/…)` 支持新结构：当 `metadata.phrase_presets[n].components` 存在时，直接以该组件行清单生成 BOM（支持同模型多尺寸/多数量）；并放开套装模板顶层 components 允许为空（用于“模型池+短语组件行”新流程）；验收 `./backend/venv/bin/python -m pytest backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py -q`）
+- **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：套装模板“照片墙模式”UI落地：新增顶部“模型选择(多选)”作为候选范围；短语预设展开改为“组件行清单（模型/宽/高/数量/触发词/筛选）”，废弃旧“映射组/组件清单”；保存到 `metadata.phrase_presets[n].components`，筛选状态保存到 `metadata.phrase_variant_presets`；验收 `npm -C frontend run build` + 原子发布）
 
 ### 关键口径备忘（避免回滚/重构改坏）
 

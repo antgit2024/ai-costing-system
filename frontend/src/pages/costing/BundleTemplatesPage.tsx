@@ -46,14 +46,9 @@ type ComponentRow = {
   spec_text: string
 }
 
-type LexiconRuleRow = {
-  match_value: string
-  target_component_index: number | null
-}
-
 type PhrasePresetRow = {
   phrase: string
-  mappings: LexiconRuleRow[]
+  components: ComponentRow[]
 }
 
 const parseTags = (meta: any): string[] => {
@@ -88,23 +83,6 @@ const formatTrigger = (condRaw: any): string => {
   if (a) parts.push(`面积: ${a}`)
   if (p) parts.push(`周长: ${p}`)
   return parts.join('；') || '-'
-}
-
-const isRuntimeToken = (t: string): boolean => {
-  const up = String(t ?? '').trim().toUpperCase()
-  return up.startsWith('MODEL:') || up.startsWith('M:') || up.startsWith('BOUND_VERSION:') || up.startsWith('SKU:')
-}
-
-const splitTokenCandidates = (raw: string): string[] => {
-  const s = String(raw ?? '').trim()
-  if (!s) return []
-  // support historical "雪尼尔，WB02339" style
-  return s
-    .replace(/、/g, ',')
-    .replace(/，/g, ',')
-    .split(',')
-    .map((x) => x.trim())
-    .filter(Boolean)
 }
 
 const normalizeBundleToken = (raw: any): string => {
@@ -143,24 +121,31 @@ export default function BundleTemplatesPage() {
   const [createdTokenHint, setCreatedTokenHint] = useState<string | null>(null)
 
   const [form] = Form.useForm()
-  const [components, setComponents] = useState<ComponentRow[]>([
-    { model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' },
-  ])
   const [phrasePresets, setPhrasePresets] = useState<PhrasePresetRow[]>([])
 
-  // 预设变体筛选：每个组件 idx -> { base_line_id -> selected_variant_id }
-  const [presetSelectedByIdx, setPresetSelectedByIdx] = useState<Record<number, Record<string, string | null>>>({})
+  // 模型池（缩小范围）：多选版本
+  const [modelPoolVersionIds, setModelPoolVersionIds] = useState<string[]>([])
+
+  // 预设变体筛选：每个短语行内组件 key(pIdx:cIdx) -> { base_line_id -> selected_variant_id }
+  const [presetSelectedByIdx, setPresetSelectedByIdx] = useState<Record<string, Record<string, string | null>>>({})
   const [presetModalOpen, setPresetModalOpen] = useState(false)
-  const [presetModalIdx, setPresetModalIdx] = useState<number | null>(null)
+  const [presetModalKey, setPresetModalKey] = useState<{ pIdx: number; cIdx: number } | null>(null)
 
   const selectedVersionIds = useMemo(() => {
     const ids = new Set<string>()
-    for (const r of components ?? []) {
-      const vid = String(r.model_version_id ?? '').trim()
-      if (vid) ids.add(vid)
+    for (const vid of modelPoolVersionIds ?? []) {
+      const s = String(vid ?? '').trim()
+      if (s) ids.add(s)
+    }
+    for (const p of phrasePresets ?? []) {
+      const rows = Array.isArray(p?.components) ? p.components : []
+      for (const r of rows) {
+        const vid = String(r?.model_version_id ?? '').trim()
+        if (vid) ids.add(vid)
+      }
     }
     return Array.from(ids)
-  }, [components])
+  }, [modelPoolVersionIds, phrasePresets])
 
   const currentBundleToken = useMemo(() => {
     const code = String(editing?.code ?? '').trim()
@@ -195,26 +180,7 @@ export default function BundleTemplatesPage() {
     }))
   }, [versionPickerQuery.data])
 
-  const versionIdToModelLabel = useMemo(() => {
-    const m = new Map<string, string>()
-    const items = (versionPickerQuery.data?.items ?? []) as any[]
-    for (const it of items) {
-      const vid = String(it?.version_id ?? '').trim()
-      const mc = String(it?.model_code ?? '').trim()
-      const mn = String(it?.model_name ?? '').trim()
-      if (!vid) continue
-      const label = mc && mn ? `${mc}:${mn}` : mc || mn || vid.slice(0, 8)
-      m.set(vid, label)
-    }
-    return m
-  }, [versionPickerQuery.data])
-
-  const getComponentDisplay = (idx: number, comp?: any): string => {
-    const c = comp ?? (components ?? [])[idx]
-    const vid = String(c?.model_version_id ?? '').trim()
-    const base = vid ? versionIdToModelLabel.get(vid) || vid.slice(0, 8) : '未选模型'
-    return `组件${idx + 1}：${base}`
-  }
+  // NOTE: versionIdToModelLabel 仅在旧“组件清单”展示中使用；照片墙模式不再需要该映射。
 
   const versionIdToModelId = useMemo(() => {
     const m = new Map<string, string>()
@@ -241,33 +207,7 @@ export default function BundleTemplatesPage() {
     enabled: selectedVersionIds.length > 0,
   })
 
-  const tokenCandidatesByVersionId = useMemo(() => {
-    // 每个版本单独提取 TOKEN(any/all) 关键词，供“按目标模型筛选”的下拉使用
-    const rows = (variantsSummaryQuery.data ?? []) as any[]
-    const m = new Map<string, string[]>()
-    for (const row of rows) {
-      const versionId = String(row?.version_id ?? '').trim()
-      if (!versionId) continue
-      const tokenSet = new Set<string>()
-      const items = Array.isArray(row?.items) ? row.items : []
-      for (const v of items) {
-        if (!v?.enabled) continue
-        const cond = (v?.conditions ?? {}) as any
-        const anyTokens = Array.isArray(cond?.spec_contains_any) ? cond.spec_contains_any : []
-        const allTokens = Array.isArray(cond?.spec_contains_all) ? cond.spec_contains_all : []
-        for (const raw of [...anyTokens, ...allTokens]) {
-          const s0 = String(raw ?? '').trim()
-          if (!s0) continue
-          if (isRuntimeToken(s0)) continue
-          for (const s of splitTokenCandidates(s0)) {
-            if (s && !isRuntimeToken(s)) tokenSet.add(s)
-          }
-        }
-      }
-      m.set(versionId, Array.from(tokenSet).sort((a, b) => a.localeCompare(b, 'zh-Hans-CN')))
-    }
-    return m
-  }, [variantsSummaryQuery.data])
+  // NOTE: 旧“映射组(目标模型+变体映射)”已废弃，不再需要按版本提取候选词。
 
   const structureStandardsQuery = useQuery({
     queryKey: ['bundle-template-center', 'structure-standards'],
@@ -388,21 +328,7 @@ export default function BundleTemplatesPage() {
     enabled: moduleIdsInSelectedVersions.length > 0,
   })
 
-  const baseLineMapByVersion = useMemo(() => {
-    const m = new Map<string, Map<string, any>>()
-    const rows = (versionLinesSummaryQuery.data ?? []) as Array<{ version_id: string; data: any }>
-    for (const r of rows) {
-      const mats = (r?.data?.materials ?? []) as any[]
-      const inner = new Map<string, any>()
-      for (const it of mats) {
-        const id = String(it?.id ?? '').trim()
-        if (!id) continue
-        inner.set(id, it)
-      }
-      m.set(String(r.version_id), inner)
-    }
-    return m
-  }, [versionLinesSummaryQuery.data])
+  // NOTE: 旧组件清单已移除，因此不再需要 baseLineMapByVersion。
 
   const moduleStructureByVersion = useMemo(() => {
     const mapByVersion = new Map<string, Map<string, { whole: boolean; slots: string[] }>>()
@@ -450,11 +376,12 @@ export default function BundleTemplatesPage() {
 
   const presetVersionId = useMemo(() => {
     if (!presetModalOpen) return null
-    if (presetModalIdx == null) return null
-    const r = (components ?? [])[presetModalIdx]
+    if (!presetModalKey) return null
+    const p = phrasePresets[presetModalKey.pIdx]
+    const r = (p?.components ?? [])[presetModalKey.cIdx]
     const vid = String(r?.model_version_id ?? '').trim()
     return vid || null
-  }, [presetModalOpen, presetModalIdx, components])
+  }, [presetModalOpen, presetModalKey, phrasePresets])
 
   const presetVersionLinesQuery = useQuery({
     queryKey: ['bundle-template-center', 'preset-version-lines', presetVersionId],
@@ -495,20 +422,21 @@ export default function BundleTemplatesPage() {
     return m
   }, [presetVariantsForVersion])
 
-  const openPresetModal = (idx: number) => {
-    const r = (components ?? [])[idx]
+  const openPresetModal = (pIdx: number, cIdx: number) => {
+    const r = (phrasePresets[pIdx]?.components ?? [])[cIdx]
     const vid = String(r?.model_version_id ?? '').trim()
     if (!vid) {
       message.warning('请先选择该组件的模型版本')
       return
     }
-    setPresetModalIdx(idx)
+    setPresetModalKey({ pIdx, cIdx })
     setPresetModalOpen(true)
   }
 
   const applyPresetToComponent = () => {
-    if (presetModalIdx == null) return
-    const selectedMap = presetSelectedByIdx[presetModalIdx] ?? {}
+    if (!presetModalKey) return
+    const k = `${presetModalKey.pIdx}:${presetModalKey.cIdx}`
+    const selectedMap = presetSelectedByIdx[k] ?? {}
     const tokenSet = new Set<string>()
     for (const [baseLineId, variantId] of Object.entries(selectedMap)) {
       if (!variantId) continue
@@ -528,7 +456,16 @@ export default function BundleTemplatesPage() {
     }
     const tokens = Array.from(tokenSet)
     const nextText = tokens.join('，')
-    setComponents((prev) => prev.map((x, i) => (i === presetModalIdx ? { ...x, spec_text: nextText } : x)))
+    setPhrasePresets((prev) =>
+      prev.map((pp, pi) =>
+        pi !== presetModalKey.pIdx
+          ? pp
+          : {
+              ...pp,
+              components: (pp.components ?? []).map((cc, ci) => (ci === presetModalKey.cIdx ? { ...cc, spec_text: nextText } : cc)),
+            },
+      ),
+    )
     message.success(tokens.length ? `已填充触发词：${tokens.join('、')}` : '所选变体不依赖 TOKEN 触发词（仅尺寸/面积/周长条件等）')
     setPresetModalOpen(false)
   }
@@ -539,7 +476,7 @@ export default function BundleTemplatesPage() {
     setEditing(null)
     setCreatedTokenHint(null)
     form.setFieldsValue({ name: '', category: '', tags: [], shared_trigger_text: '' })
-    setComponents([{ model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' }])
+    setModelPoolVersionIds([])
     setPresetSelectedByIdx({})
     setPhrasePresets([])
     setDrawerOpen(true)
@@ -555,29 +492,11 @@ export default function BundleTemplatesPage() {
       tags: parseTags(meta),
       shared_trigger_text: String(meta?.shared_trigger_text ?? row?.shared_trigger_text ?? '') || '',
     })
-    const rows = (row?.components ?? []) as any[]
-    const legacyLabelToIndex = new Map<string, number>()
-    rows.forEach((c: any, idx: number) => {
-      const lab = String(c?.label ?? '').trim()
-      if (lab && !legacyLabelToIndex.has(lab)) legacyLabelToIndex.set(lab, idx)
-    })
-    setComponents(
-      rows.length
-        ? rows.map((c: any) => ({
-            model_version_id: String(c.model_version_id ?? '') || null,
-            width_cm: Number(c.width_mm ?? 0) / 10,
-            height_cm: Number(c.height_mm ?? 0) / 10,
-            quantity: Number(c.quantity ?? 1),
-            spec_text: String(c.spec_text ?? ''),
-          }))
-        : [{ model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' }],
-    )
-    const vp = (row?.metadata ?? {})?.variant_presets
-    if (vp && typeof vp === 'object') {
-      setPresetSelectedByIdx(vp as any)
-    } else {
-      setPresetSelectedByIdx({})
-    }
+    const pool = (meta?.model_pool_version_ids ?? meta?.model_pool ?? meta?.model_versions) as any
+    setModelPoolVersionIds(Array.isArray(pool) ? pool.map((x) => String(x)).filter(Boolean) : [])
+    const vp = (row?.metadata ?? {})?.phrase_variant_presets
+    if (vp && typeof vp === 'object') setPresetSelectedByIdx(vp as any)
+    else setPresetSelectedByIdx({})
     // NOTE: legacy metadata.lexicon_rules is preserved on save, but UI is intentionally hidden to avoid confusion.
 
     const pp = (row?.metadata ?? {})?.phrase_presets
@@ -586,38 +505,43 @@ export default function BundleTemplatesPage() {
         pp
           .map((x: any) => ({
             phrase: String(x?.phrase ?? '').trim(),
-            mappings: Array.isArray(x?.mappings)
-              ? x.mappings
-                  .map((m: any) => ({
-                    match_value: String(m?.match_value ?? m?.value ?? '').trim(),
-                    target_component_index:
-                      typeof m?.target_component_index === 'number'
-                        ? m.target_component_index
-                        : typeof x?.target_component_index === 'number'
-                          ? x.target_component_index
-                          : null,
+            components: Array.isArray(x?.components)
+              ? (x.components as any[])
+                  .map((c: any) => ({
+                    model_version_id: String(c?.model_version_id ?? '').trim() || null,
+                    width_cm: Number(c?.width_mm ?? 0) / 10,
+                    height_cm: Number(c?.height_mm ?? 0) / 10,
+                    quantity: Number(c?.quantity ?? 1),
+                    spec_text: String(c?.spec_text ?? ''),
                   }))
-                  .filter((m: any) => typeof m.target_component_index === 'number')
-              : // backward compatibility: old format {target_component_index,tokens[]}
-                Array.isArray(x?.tokens)
-                ? (x.tokens as any[])
-                    .map((t: any) => {
-                      const s = String(t ?? '').trim()
-                      if (!s) return null
-                      const parts = s.split(':')
-                      const mv = parts.length >= 2 ? String(parts.slice(1).join(':')).trim() : s
-                      return {
-                        match_value: mv,
-                        target_component_index: typeof x?.target_component_index === 'number' ? x.target_component_index : null,
-                      }
-                    })
-                    .filter((m: any) => m && typeof m.target_component_index === 'number')
-                : [],
+                  .filter((c: any) => !!c.model_version_id)
+              : [],
           }))
-          .filter((x: any) => x.phrase && Array.isArray(x.mappings)),
+          .filter((x: any) => x.phrase && Array.isArray(x.components)),
       )
     } else {
       setPhrasePresets([])
+    }
+
+    // Migration: if old template has top-level components but no preset components, map them to preset A.
+    const topRows = (row?.components ?? []) as any[]
+    if ((!Array.isArray(pp) || !pp.length) && Array.isArray(topRows) && topRows.length) {
+      const converted = topRows
+        .map((c: any) => ({
+          model_version_id: String(c.model_version_id ?? '').trim() || null,
+          width_cm: Number(c.width_mm ?? 0) / 10,
+          height_cm: Number(c.height_mm ?? 0) / 10,
+          quantity: Number(c.quantity ?? 1),
+          spec_text: String(c.spec_text ?? ''),
+        }))
+        .filter((c: any) => !!c.model_version_id)
+      if (converted.length) {
+        setPhrasePresets([{ phrase: 'A组', components: converted }])
+        // seed pool with those versions if pool empty
+        if (!Array.isArray(pool) || !pool.length) {
+          setModelPoolVersionIds(Array.from(new Set(converted.map((x: any) => String(x.model_version_id)))))
+        }
+      }
     }
     setDrawerOpen(true)
   }
@@ -625,39 +549,33 @@ export default function BundleTemplatesPage() {
   const saveMutation = useMutation({
     mutationFn: async () => {
       const values = await form.validateFields()
-      const comps = (components ?? [])
-        .map((c) => ({
-          model_version_id: String(c.model_version_id ?? '').trim(),
-          width_mm: Number(c.width_cm) * 10,
-          height_mm: Number(c.height_cm) * 10,
-          quantity: Number(c.quantity),
-          spec_text: String(c.spec_text || '').trim() || undefined,
-        }))
-        .filter((c) => c.model_version_id && c.width_mm > 0 && c.height_mm > 0 && c.quantity > 0)
-      if (!comps.length) throw new Error('请先填写至少 1 行组件（版本/宽/高/数量）')
+      const comps: any[] = []
 
       const meta = {
         ...(editing?.metadata ?? {}),
         category: String(values.category ?? '').trim() || undefined,
         tags: Array.isArray(values.tags) ? values.tags.map((x: any) => String(x)).filter(Boolean) : [],
         shared_trigger_text: String(values.shared_trigger_text ?? '').trim() || undefined,
-        variant_presets: presetSelectedByIdx,
+        model_pool_version_ids: modelPoolVersionIds,
+        phrase_variant_presets: presetSelectedByIdx,
         // Preserve legacy lexicon_rules (global fallback mapping) if exists, but do not expose to operators.
         lexicon_rules: Array.isArray((editing?.metadata ?? {})?.lexicon_rules) ? (editing?.metadata ?? {})?.lexicon_rules : [],
         phrase_presets: phrasePresets
           .map((p) => ({
             phrase: String(p.phrase ?? '').trim(),
-            mappings: Array.isArray(p.mappings)
-              ? p.mappings
-                  .map((m) => ({
-                    match_value: String(m.match_value ?? '').trim(),
-                    target_component_index:
-                      typeof m.target_component_index === 'number' && Number.isFinite(m.target_component_index) ? m.target_component_index : undefined,
+            components: Array.isArray(p.components)
+              ? p.components
+                  .map((c) => ({
+                    model_version_id: String(c.model_version_id ?? '').trim(),
+                    width_mm: Number(c.width_cm) * 10,
+                    height_mm: Number(c.height_cm) * 10,
+                    quantity: Number(c.quantity),
+                    spec_text: String(c.spec_text || '').trim() || undefined,
                   }))
-                  .filter((m) => typeof (m as any).target_component_index === 'number')
+                  .filter((c) => c.model_version_id && c.width_mm > 0 && c.height_mm > 0 && c.quantity > 0)
               : [],
           }))
-          .filter((p) => p.phrase && Array.isArray((p as any).mappings)),
+          .filter((p: any) => p.phrase && Array.isArray(p.components) && p.components.length > 0),
       }
       if (editing?.id) {
         return await updateBundleTemplate(editing.id, {
@@ -737,7 +655,8 @@ export default function BundleTemplatesPage() {
             <Collapse
               items={Array.from(presetVariantsByBaseLine.entries()).map(([baseLineId, arr]) => {
                 const base = presetBaseLineMap.get(baseLineId)
-                const selected = (presetSelectedByIdx[presetModalIdx ?? -1] ?? {})[baseLineId] ?? null
+                const selKey = presetModalKey ? `${presetModalKey.pIdx}:${presetModalKey.cIdx}` : ''
+                const selected = (selKey ? (presetSelectedByIdx[selKey] ?? {}) : {})[baseLineId] ?? null
                 const slot = getLineStructureLabel(base, presetVersionId)
                 const baseLabelRaw = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
                 const baseLabel = slot ? `${slot}：${baseLabelRaw}` : baseLabelRaw
@@ -781,10 +700,12 @@ export default function BundleTemplatesPage() {
                       value={selected ?? ''}
                       onChange={(e) => {
                         const vid = String(e?.target?.value ?? '')
+                        const k = presetModalKey ? `${presetModalKey.pIdx}:${presetModalKey.cIdx}` : ''
+                        if (!k) return
                         setPresetSelectedByIdx((prev) => ({
                           ...prev,
-                          [presetModalIdx ?? 0]: {
-                            ...(prev[presetModalIdx ?? 0] ?? {}),
+                          [k]: {
+                            ...(prev[k] ?? {}),
                             [baseLineId]: vid ? vid : null,
                           },
                         }))
@@ -1006,6 +927,19 @@ export default function BundleTemplatesPage() {
                 </Form.Item>
               </Col>
             </Row>
+
+            <Form.Item label="模型选择（缩小范围，多选）">
+              <Select
+                mode="multiple"
+                showSearch
+                allowClear
+                placeholder="先选本模板可能用到的模型版本（用于缩小下方下拉范围）"
+                loading={versionPickerQuery.isLoading}
+                options={versionOptions as any}
+                value={modelPoolVersionIds}
+                onChange={(v) => setModelPoolVersionIds(Array.isArray(v) ? (v as any[]).map((x) => String(x)).filter(Boolean) : [])}
+              />
+            </Form.Item>
           </Form>
 
           {/* 已按运营心智收口：不再展示“全局字段映射/可变词列表”，避免误会与绕圈。 */}
@@ -1016,7 +950,7 @@ export default function BundleTemplatesPage() {
               onClick={() =>
                 setPhrasePresets((prev) => [
                   ...prev,
-                  { phrase: '', mappings: [{ match_value: '', target_component_index: null }] },
+                  { phrase: '', components: [{ model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' }] },
                 ])
               }
             >
@@ -1033,53 +967,43 @@ export default function BundleTemplatesPage() {
               expandedRowKeys: phrasePresets.map((_, idx) => `pp-${idx}`),
               showExpandColumn: false,
               expandedRowRender: (r: any, idx: number) => {
-                const mappings = Array.isArray(r?.mappings) ? (r.mappings as any[]) : []
+                const rows = Array.isArray(r?.components) ? (r.components as any[]) : []
+                const allowed = modelPoolVersionIds.length ? new Set(modelPoolVersionIds.map((x) => String(x))) : null
+                const options = allowed
+                  ? (versionOptions as any[]).filter((o: any) => allowed.has(String(o?.value)))
+                  : (versionOptions as any[])
                 return (
                   <Space direction="vertical" style={{ width: '100%' }} size={8}>
                     <Table
                       size="small"
                       pagination={false}
                       showHeader={false}
-                      rowKey={(_, mi) => `ppm-${idx}-${mi}`}
-                      dataSource={mappings}
-                      locale={{ emptyText: '暂无映射：点击右侧“+行”添加第一条' }}
+                      rowKey={(_, mi) => `ppc-${idx}-${mi}`}
+                      dataSource={rows}
+                      locale={{ emptyText: '暂无组件行：点击右侧“+行”添加第一条' }}
                       columns={[
                         {
-                          width: 200,
+                          width: 320,
                           render: (_: any, rr: any, mi: number) => (
                             <Select
                               showSearch
                               allowClear
-                              placeholder="选择组件（按模型）"
+                              placeholder="选择模型版本"
                               style={{ width: '100%' }}
-                              value={typeof rr.target_component_index === 'number' ? rr.target_component_index : undefined}
-                              options={(components ?? []).map((c, i) => ({
-                                value: i,
-                                label: getComponentDisplay(i, c),
-                              }))}
+                              loading={versionPickerQuery.isLoading}
+                              options={options as any}
+                              value={rr.model_version_id ?? undefined}
                               onChange={(v) =>
                                 setPhrasePresets((prev) =>
-                                  prev.map((x, i) =>
-                                    i === idx
-                                      ? {
-                                          ...x,
-                                          mappings: (x.mappings ?? []).map((m, j) =>
-                                            j === mi
-                                              ? (() => {
-                                                  const newIdx = v == null ? null : Number(v)
-                                                  const newVid =
-                                                    typeof newIdx === 'number'
-                                                      ? String((components ?? [])[newIdx]?.model_version_id ?? '').trim()
-                                                      : ''
-                                                  const opts = newVid ? tokenCandidatesByVersionId.get(newVid) ?? [] : []
-                                                  const mv0 = String((m as any)?.match_value ?? '').trim()
-                                                  const mv = mv0 && opts.includes(mv0) ? mv0 : ''
-                                                  return { ...m, target_component_index: newIdx, match_value: mv }
-                                                })()
-                                              : m,
+                                  prev.map((pp, pi) =>
+                                    pi !== idx
+                                      ? pp
+                                      : {
+                                          ...pp,
+                                          components: (pp.components ?? []).map((c, ci) =>
+                                            ci === mi ? { ...c, model_version_id: (v as any) ?? null } : c,
                                           ),
-                                        }
-                                      : x,
+                                        },
                                   ),
                                 )
                               }
@@ -1087,57 +1011,115 @@ export default function BundleTemplatesPage() {
                           ),
                         },
                         {
-                          width: 420,
+                          width: 90,
                           render: (_: any, rr: any, mi: number) => (
-                            (() => {
-                              const tIdx =
-                                typeof rr?.target_component_index === 'number' ? Number(rr.target_component_index) : null
-                              const vid =
-                                typeof tIdx === 'number'
-                                  ? String((components ?? [])[tIdx]?.model_version_id ?? '').trim()
-                                  : ''
-                              const opts = vid ? tokenCandidatesByVersionId.get(vid) ?? [] : []
-                              const disabled = !vid || !opts.length
-                              const placeholder = !vid ? '先选目标模型' : opts.length ? '选择变体映射（不可手输）' : '该模型暂无候选'
-                              return (
-                            <Select
-                              showSearch
-                              allowClear
-                              placeholder={placeholder}
-                              style={{ width: '100%' }}
-                              value={String(rr.match_value ?? '').trim() || undefined}
-                              options={opts.map((t) => ({ value: t, label: t }))}
-                              onChange={(v) =>
+                            <Input
+                              value={String(rr.width_cm ?? '')}
+                              onChange={(e) => {
+                                const v = Number(e.target.value)
                                 setPhrasePresets((prev) =>
-                                  prev.map((x, i) =>
-                                    i === idx
-                                      ? {
-                                          ...x,
-                                          mappings: (x.mappings ?? []).map((m, j) => (j === mi ? { ...m, match_value: String(v ?? '') } : m)),
-                                        }
-                                      : x,
+                                  prev.map((pp, pi) =>
+                                    pi !== idx
+                                      ? pp
+                                      : {
+                                          ...pp,
+                                          components: (pp.components ?? []).map((c, ci) =>
+                                            ci === mi ? { ...c, width_cm: Number.isFinite(v) ? v : 0 } : c,
+                                          ),
+                                        },
                                   ),
                                 )
-                              }
-                              disabled={disabled}
+                              }}
                             />
-                              )
-                            })()
                           ),
                         },
                         {
-                          title: '操作',
+                          width: 90,
+                          render: (_: any, rr: any, mi: number) => (
+                            <Input
+                              value={String(rr.height_cm ?? '')}
+                              onChange={(e) => {
+                                const v = Number(e.target.value)
+                                setPhrasePresets((prev) =>
+                                  prev.map((pp, pi) =>
+                                    pi !== idx
+                                      ? pp
+                                      : {
+                                          ...pp,
+                                          components: (pp.components ?? []).map((c, ci) =>
+                                            ci === mi ? { ...c, height_cm: Number.isFinite(v) ? v : 0 } : c,
+                                          ),
+                                        },
+                                  ),
+                                )
+                              }}
+                            />
+                          ),
+                        },
+                        {
+                          width: 80,
+                          render: (_: any, rr: any, mi: number) => (
+                            <Input
+                              value={String(rr.quantity ?? '')}
+                              onChange={(e) => {
+                                const v = Number(e.target.value)
+                                setPhrasePresets((prev) =>
+                                  prev.map((pp, pi) =>
+                                    pi !== idx
+                                      ? pp
+                                      : {
+                                          ...pp,
+                                          components: (pp.components ?? []).map((c, ci) =>
+                                            ci === mi ? { ...c, quantity: Number.isFinite(v) ? v : 1 } : c,
+                                          ),
+                                        },
+                                  ),
+                                )
+                              }}
+                            />
+                          ),
+                        },
+                        {
                           width: 140,
-                          render: (_: any, __: any, mi: number) => (
+                          render: (_: any, rr: any, mi: number) => (
+                            <Input
+                              value={String(rr.spec_text ?? '')}
+                              placeholder="触发词（由筛选填充）"
+                              onChange={(e) =>
+                                setPhrasePresets((prev) =>
+                                  prev.map((pp, pi) =>
+                                    pi !== idx
+                                      ? pp
+                                      : {
+                                          ...pp,
+                                          components: (pp.components ?? []).map((c, ci) =>
+                                            ci === mi ? { ...c, spec_text: e.target.value } : c,
+                                          ),
+                                        },
+                                  ),
+                                )
+                              }
+                            />
+                          ),
+                        },
+                        {
+                          width: 220,
+                          render: (_: any, rr: any, mi: number) => (
                             <Space>
                               <Button
                                 size="small"
                                 onClick={() =>
                                   setPhrasePresets((prev) =>
-                                    prev.map((x, i) =>
-                                      i === idx
-                                        ? { ...x, mappings: [...(x.mappings ?? []), { match_value: '', target_component_index: null }] }
-                                        : x,
+                                    prev.map((pp, pi) =>
+                                      pi !== idx
+                                        ? pp
+                                        : {
+                                            ...pp,
+                                            components: [
+                                              ...(pp.components ?? []),
+                                              { model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' },
+                                            ],
+                                          },
                                     ),
                                   )
                                 }
@@ -1146,11 +1128,18 @@ export default function BundleTemplatesPage() {
                               </Button>
                               <Button
                                 size="small"
+                                disabled={!String(rr?.model_version_id ?? '').trim()}
+                                onClick={() => openPresetModal(idx, mi)}
+                              >
+                                筛选
+                              </Button>
+                              <Button
+                                size="small"
                                 danger
                                 onClick={() =>
                                   setPhrasePresets((prev) =>
-                                    prev.map((x, i) =>
-                                      i === idx ? { ...x, mappings: (x.mappings ?? []).filter((_, j) => j !== mi) } : x,
+                                    prev.map((pp, pi) =>
+                                      pi !== idx ? pp : { ...pp, components: (pp.components ?? []).filter((_, j) => j !== mi) },
                                     ),
                                   )
                                 }
@@ -1209,180 +1198,7 @@ export default function BundleTemplatesPage() {
             ]}
           />
 
-          <Table
-            size="small"
-            pagination={false}
-            rowKey={(_, idx) => `c-${idx}`}
-            dataSource={components}
-            expandable={{
-              expandedRowKeys: (components ?? []).map((_, idx) => `c-${idx}`),
-              showExpandColumn: false,
-              expandedRowRender: (r: any, idx: number) => {
-                const versionId = String(r?.model_version_id ?? '').trim()
-                return (
-                  <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                    {(() => {
-                      const sel = (presetSelectedByIdx[idx] ?? {}) as Record<string, string | null>
-                      const selectedEntries = Object.entries(sel).filter(([, v]) => !!v)
-                      if (!versionId || !selectedEntries.length) return null
-
-                      const variantsForVersion = ((variantsSummaryQuery.data ?? []) as any[]).find(
-                        (x: any) => String(x?.version_id ?? '') === versionId,
-                      )?.items as any[]
-                      const variants = Array.isArray(variantsForVersion) ? variantsForVersion : []
-                      const variantsById = new Map<string, any>()
-                      for (const v of variants) {
-                        if (v?.id) variantsById.set(String(v.id), v)
-                      }
-
-                      const baseMap = baseLineMapByVersion.get(versionId) ?? new Map<string, any>()
-
-                      return (
-                        <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                          {selectedEntries.map(([baseLineId, variantId]) => {
-                            const v = variantsById.get(String(variantId))
-                            const base = baseMap.get(String(baseLineId))
-                            const slot = getLineStructureLabel(base, versionId)
-                            const baseName = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
-                            const baseLabel = slot ? `${slot}：${baseName}` : baseName
-
-                            const effect =
-                              v?.action === 'remove_self' ? '移除' : v?.action === 'add_siblings' ? '新增物料' : '替换物料'
-                            const produced = Array.isArray(v?.items) ? v.items : []
-                            const producedLabels = produced
-                              .map((it: any) => String(it?.material_name ?? it?.material_code ?? '').trim())
-                              .filter(Boolean)
-                              .slice(0, 6)
-                            const trigger = formatTrigger(v?.conditions)
-
-                            return (
-                              <div key={`${baseLineId}:${variantId}`}>
-                                <Space wrap size={6}>
-                                  <Text strong>{baseLabel}</Text>
-                                  <Text type="secondary">变体表达式：</Text>
-                                  <Text type="secondary">{trigger}</Text>
-                                  <Text type="secondary">{effect}：</Text>
-                                  {producedLabels.length ? (
-                                    <Tag color="green">{producedLabels.join('、')}</Tag>
-                                  ) : (
-                                    <Tag color="green">-</Tag>
-                                  )}
-                                </Space>
-                              </div>
-                            )
-                          })}
-                        </Space>
-                      )
-                    })()}
-                  </Space>
-                )
-              },
-            }}
-            columns={[
-              {
-                title: '模型版本',
-                width: 320,
-                render: (_: any, r: any, idx: number) => (
-                  <Space direction="vertical" style={{ width: '100%' }} size={4}>
-                    <Select
-                      showSearch
-                      allowClear
-                      placeholder="选择标准版本"
-                      style={{ width: '100%' }}
-                      loading={versionPickerQuery.isLoading}
-                      options={versionOptions as any}
-                      value={r.model_version_id ?? undefined}
-                      onChange={(v) =>
-                        setComponents((prev) => prev.map((x, i) => (i === idx ? { ...x, model_version_id: (v as any) ?? null } : x)))
-                      }
-                    />
-                  </Space>
-                ),
-              },
-              {
-                title: '宽(cm)',
-                width: 90,
-                render: (_: any, r: any, idx: number) => (
-                  <Input
-                    value={String(r.width_cm)}
-                    onChange={(e) => {
-                      const v = Number(e.target.value)
-                      setComponents((prev) => prev.map((x, i) => (i === idx ? { ...x, width_cm: Number.isFinite(v) ? v : 0 } : x)))
-                    }}
-                  />
-                ),
-              },
-              {
-                title: '高(cm)',
-                width: 90,
-                render: (_: any, r: any, idx: number) => (
-                  <Input
-                    value={String(r.height_cm)}
-                    onChange={(e) => {
-                      const v = Number(e.target.value)
-                      setComponents((prev) => prev.map((x, i) => (i === idx ? { ...x, height_cm: Number.isFinite(v) ? v : 0 } : x)))
-                    }}
-                  />
-                ),
-              },
-              {
-                title: '数量',
-                width: 80,
-                render: (_: any, r: any, idx: number) => (
-                  <Input
-                    value={String(r.quantity)}
-                    onChange={(e) => {
-                      const v = Number(e.target.value)
-                      setComponents((prev) => prev.map((x, i) => (i === idx ? { ...x, quantity: Number.isFinite(v) ? v : 1 } : x)))
-                    }}
-                  />
-                ),
-              },
-              {
-                title: '操作',
-                width: 160,
-                render: (_: any, __: any, idx: number) => (
-                  <Space>
-                    <Button
-                      size="small"
-                      onClick={() =>
-                        setComponents((prev) => [...prev, { model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' }])
-                      }
-                    >
-                      +行
-                    </Button>
-                    <Button
-                      size="small"
-                      disabled={!String((components ?? [])[idx]?.model_version_id ?? '').trim()}
-                      onClick={() => openPresetModal(idx)}
-                    >
-                      筛选
-                    </Button>
-                    <Button
-                      size="small"
-                      danger
-                      disabled={components.length <= 1}
-                      onClick={() => {
-                        setComponents((prev) => prev.filter((_, i) => i !== idx))
-                        setPresetSelectedByIdx((prev) => {
-                          const next: Record<number, Record<string, string | null>> = {}
-                          for (const [k, v] of Object.entries(prev ?? {})) {
-                            const i = Number(k)
-                            if (!Number.isFinite(i)) continue
-                            if (i === idx) continue
-                            next[i > idx ? i - 1 : i] = v as any
-                          }
-                          return next
-                        })
-                      }}
-                    >
-                      删除
-                    </Button>
-                  </Space>
-                ),
-              },
-            ]}
-          />
+          {/* 旧的“组件清单（结构化）”已废弃：统一在短语预设内维护组件行清单（支持同模型多尺寸/多数量/筛选变体）。 */}
 
           <Form layout="vertical" form={form}>
             <Form.Item name="shared_trigger_text" label="描述备注">

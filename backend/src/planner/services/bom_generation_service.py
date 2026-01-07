@@ -178,10 +178,45 @@ def generate_bom_by_spec(
     if not components:
         raise ValueError(f"套装模板无组件：{code}")
 
+    # Apply shared tokens from the (single) customer-facing spec_text to ALL components.
+    # IMPORTANT: do NOT let spec_text dimensions override component measurement_mm.
+    # So we inject shared tokens via component.tokens, and set component.spec_text empty for per-component parsing.
+    shared_tokens = [str(x) for x in (spec_result.get("tokens") or []) if str(x).strip()]
+    # remove bundle code tokens themselves from shared tokens (avoid accidental rule matching)
+    shared_tokens = [t for t in shared_tokens if not t.upper().startswith("B:") and not t.upper().startswith("BUNDLE:")]
+
+    comps2: List[Dict[str, Any]] = []
+    for i, c in enumerate(components):
+        if not isinstance(c, dict):
+            raise ValueError(f"套装模板组件非法：components[{i}]")
+        c2 = dict(c)
+        # Treat template's per-component spec_text as "extra trigger words" only (no size parsing).
+        extra_tokens: List[str] = []
+        extra_spec = str(c2.get("spec_text") or "").strip()
+        if extra_spec:
+            extra_parsed = spec_parser_service.parse_spec(extra_spec)
+            extra_tokens = [str(x) for x in (extra_parsed.get("tokens") or []) if str(x).strip()]
+        tokens = []
+        if isinstance(c2.get("tokens"), list):
+            tokens = [str(x).strip() for x in c2.get("tokens") if str(x).strip()]
+        # dedup keep order
+        seen = set()
+        merged_tokens: List[str] = []
+        for t in (shared_tokens + extra_tokens + tokens):
+            k = t.lower()
+            if k in seen:
+                continue
+            merged_tokens.append(t)
+            seen.add(k)
+        c2["tokens"] = merged_tokens
+        # Clear spec_text for component-level parsing to avoid dimension contamination.
+        c2["spec_text"] = ""
+        comps2.append(c2)
+
     res = generate_bom_multi_bundle(
         db,
         sku_code=sku_code,
-        components=components,
+        components=comps2,
         include_disabled_variants=include_disabled_variants,
     )
     merged = res.get("merged") or {}

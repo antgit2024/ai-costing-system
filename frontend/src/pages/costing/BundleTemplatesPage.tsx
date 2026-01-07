@@ -364,7 +364,7 @@ export default function BundleTemplatesPage() {
             type="info"
             showIcon
             message="组件清单（结构化）"
-            description="每行：标准版本 + 宽(cm) + 高(cm) + 数量 + spec_text（可选，仅用于触发变体）。"
+            description="每行：标准版本 + 宽(cm) + 高(cm) + 数量 + 附加触发词（可选，仅补充变体触发；不要写尺寸）。"
           />
 
           <Table
@@ -431,9 +431,13 @@ export default function BundleTemplatesPage() {
                 ),
               },
               {
-                title: 'spec_text（可选）',
+                title: '附加触发词（可选）',
                 render: (_: any, r: any, idx: number) => (
-                  <Input value={String(r.spec_text ?? '')} onChange={(e) => setComponents((prev) => prev.map((x, i) => (i === idx ? { ...x, spec_text: e.target.value } : x)))} />
+                  <Input
+                    placeholder="例如：背面纯色 / 雪尼尔（不要写 40*50 这类尺寸）"
+                    value={String(r.spec_text ?? '')}
+                    onChange={(e) => setComponents((prev) => prev.map((x, i) => (i === idx ? { ...x, spec_text: e.target.value } : x)))}
+                  />
                 ),
               },
               {

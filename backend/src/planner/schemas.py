@@ -2092,7 +2092,7 @@ class BundleTemplateComponent(BaseModel):
     width_mm: Decimal = Field(..., ge=0)
     height_mm: Decimal = Field(..., ge=0)
     quantity: Decimal = Field(Decimal("1"), gt=0)
-    spec_text: Optional[str] = Field(None, max_length=512, description="组件交易规格（可选，仅用于触发变体）")
+    spec_text: Optional[str] = Field(None, max_length=512, description="组件附加触发词（可选，仅用于补充变体触发；不要写尺寸）")
     label: Optional[str] = Field(None, max_length=128)
 
     class Config:

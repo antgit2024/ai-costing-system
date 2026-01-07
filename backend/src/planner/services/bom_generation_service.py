@@ -220,9 +220,8 @@ def generate_bom_by_spec(
         raise ValueError("套装编码非法")
 
     tpl = bundle_template_service.get_by_code(db, code)
+    tpl_meta = tpl.metadata_json or {}
     components = list(tpl.components_json or [])
-    if not components:
-        raise ValueError(f"套装模板无组件：{code}")
 
     # Optional bundle suffix: (B:CODE:A) / (BUNDLE:CODE:A)
     # - A/B/C... means selecting the 1st/2nd/3rd... phrase preset row directly (NOT "Auto").
@@ -248,6 +247,42 @@ def generate_bom_by_spec(
     forced_preset_index: Optional[int] = None
     if bundle_selector and len(bundle_selector) == 1 and "A" <= bundle_selector <= "Z":
         forced_preset_index = ord(bundle_selector) - ord("A")
+
+    # New mode: when selector is present, allow phrase preset row to carry a full component list.
+    # This supports "同模型多尺寸/多数量" (e.g. 照片墙) without relying on customer-facing text parsing.
+    if isinstance(forced_preset_index, int):
+        raw_presets = tpl_meta.get("phrase_presets")
+        presets = raw_presets if isinstance(raw_presets, list) else []
+        if 0 <= forced_preset_index < len(presets):
+            preset = presets[forced_preset_index]
+            if isinstance(preset, dict) and isinstance(preset.get("components"), list):
+                comps_raw = preset.get("components") or []
+                comps_new: List[Dict[str, Any]] = []
+                for i, c in enumerate(comps_raw):
+                    if not isinstance(c, dict):
+                        continue
+                    vid = str(c.get("model_version_id") or "").strip()
+                    if not vid:
+                        raise ValueError(f"短语预设组件缺少 model_version_id：preset={forced_preset_index} idx={i}")
+                    # Keep only fields used by generate_bom_multi_bundle / downstream generate_bom.
+                    # width_mm/height_mm/quantity are required for actual generation.
+                    comps_new.append(
+                        {
+                            "model_version_id": vid,
+                            "width_mm": c.get("width_mm") or c.get("width") or 0,
+                            "height_mm": c.get("height_mm") or c.get("height") or 0,
+                            "quantity": c.get("quantity") or 1,
+                            "spec_text": c.get("spec_text") or "",
+                            "tokens": c.get("tokens") or [],
+                        }
+                    )
+                if not comps_new:
+                    raise ValueError(f"短语预设未配置组件行：{code}:{bundle_selector}")
+                # Use these components as the generation source for selector mode.
+                components = comps_new
+
+    if not components:
+        raise ValueError(f"套装模板无组件：{code}")
 
     def _apply_phrase_presets(
         *,
@@ -453,7 +488,6 @@ def generate_bom_by_spec(
     shared_tokens = [t for t in shared_tokens if not t.upper().startswith("B:") and not t.upper().startswith("BUNDLE:")]
 
     # Merge template-level shared trigger text (applies to all components)
-    tpl_meta = tpl.metadata_json or {}
     tpl_shared = str(tpl_meta.get("shared_trigger_text") or "").strip()
     if tpl_shared:
         tpl_shared_parsed = spec_parser_service.parse_spec(tpl_shared)

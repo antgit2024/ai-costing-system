@@ -23,8 +23,9 @@ def create_template(
     components: List[Dict[str, Any]],
     metadata: Dict[str, Any],
 ) -> models.BundleTemplate:
-    if not components:
-        raise ValueError("components 不能为空")
+    # components can be empty in the new workflow:
+    # actual generation rows may live under metadata.phrase_presets[*].components (selected by B:CODE:A/B/...)
+    components = list(components or [])
 
     # try a few times to avoid rare collisions
     for _ in range(20):
@@ -139,9 +140,7 @@ def update_template(
     if name is not None:
         t.name = name
     if components is not None:
-        if not components:
-            raise ValueError("components 不能为空")
-        t.components_json = components
+        t.components_json = list(components or [])
     if metadata is not None:
         t.metadata_json = metadata
     db.add(t)

@@ -2104,7 +2104,8 @@ class BundleTemplateComponent(BaseModel):
 
 class BundleTemplateCreateRequest(BaseModel):
     name: Optional[str] = Field(None, max_length=128)
-    components: List[BundleTemplateComponent] = Field(default_factory=list, min_items=1)
+    # Allow empty: new workflow stores per-preset component rows under metadata.phrase_presets[*].components.
+    components: List[BundleTemplateComponent] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
     shared_trigger_text: Optional[str] = Field(
         None, max_length=512, description="公共触发词（作用于该套装所有组件；不要写尺寸）"

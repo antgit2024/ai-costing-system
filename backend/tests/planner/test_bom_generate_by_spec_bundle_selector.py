@@ -141,3 +141,68 @@ def test_generate_by_spec_bundle_selector_A_forces_first_phrase_preset(client, d
     assert any((p.get("forced") is True) for p in presets if isinstance(p, dict))
 
 
+def test_generate_by_spec_bundle_selector_prefers_preset_components_list(client, db_session):
+    # Arrange: 2 versions. v1 has a variant requiring token "雪尼尔".
+    v1, base_line_v1 = _create_version_with_one_line(db_session, model_code="PI5X")
+    v2, _base_line_v2 = _create_version_with_one_line(db_session, model_code="OZUX")
+
+    repl = _create_material(db_session, code="PI5X-CHENILLE", name="雪尼尔替换料")
+    create_resp = client.post(
+        f"{API_PREFIX}/product-model-versions/{v1.id}/line-variants",
+        json={
+            "version_id": v1.id,
+            "base_line_id": base_line_v1.id,
+            "priority": 200,
+            "enabled": True,
+            "action": "replace_self",
+            "stop_on_hit": True,
+            "conditions": {"spec_contains_any": ["雪尼尔"]},
+            "metadata_json": {},
+            "items": [
+                {
+                    "material_kind": "real",
+                    "material_ref_id": repl.id,
+                    "material_code": repl.material_code,
+                    "material_name": repl.material_name,
+                    "unit_of_measure": "m",
+                    "calculation_method": "count",
+                    "base_quantity": "1",
+                }
+            ],
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+
+    # Template top-level components can be empty in new workflow; selector should use preset.components.
+    tpl_payload = {
+        "name": "照片墙",
+        "components": [],
+        "metadata": {
+            "phrase_presets": [
+                {
+                    "phrase": "A组",
+                    "components": [
+                        {"model_version_id": v1.id, "width_mm": "500", "height_mm": "500", "quantity": "2", "spec_text": "雪尼尔"},
+                        {"model_version_id": v2.id, "width_mm": "1200", "height_mm": "800", "quantity": "1"},
+                    ],
+                }
+            ]
+        },
+    }
+    r_tpl = client.post(f"{API_PREFIX}/bundle-templates", json=tpl_payload)
+    assert r_tpl.status_code == 201, r_tpl.text
+    code = r_tpl.json()["code"]
+    assert code
+
+    # Act: spec_text does not contain "雪尼尔", selector should still trigger via preset component spec_text.
+    spec_text = f"运营随便写；(B:{code}:A)"
+    r = client.post(f"{API_PREFIX}/bom/generate-by-spec", json={"spec_text": spec_text, "sku_code": None})
+    assert r.status_code == 200, r.text
+    body = r.json()
+
+    # Assert: variant should be triggered.
+    final_lines = body.get("final_material_lines") or []
+    codes = [str(x.get("material_code") or "") for x in final_lines]
+    assert "PI5X-CHENILLE" in codes
+
+

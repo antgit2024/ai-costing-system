@@ -1385,7 +1385,7 @@ export default function BundleTemplatesPage() {
           />
 
           <Form layout="vertical" form={form}>
-            <Form.Item name="shared_trigger_text" label="公共触发词（备注，可选）">
+            <Form.Item name="shared_trigger_text" label="描述备注">
               <Input.TextArea rows={2} placeholder="例如：雪尼尔印花，背面纯色（仅备注，不参与解析）" />
             </Form.Item>
           </Form>

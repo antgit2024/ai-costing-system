@@ -32,6 +32,7 @@ import {
   fetchProductModelVersions,
   fetchStructureStandards,
   fetchProductModelVersionsPaged,
+  generateBomMultiBundle,
   listLineVariants,
   updateBundleTemplate,
 } from '@/services/planner'
@@ -524,6 +525,82 @@ export default function BundleTemplatesPage() {
           ),
         )
         message.success(`命中：将分配到 ${label}，注入tokens：${tokens.join('、')}`)
+
+        const comp = (components ?? [])[idx] as any
+        const modelVersionId = String(comp?.model_version_id ?? '').trim()
+        if (!modelVersionId) {
+          message.info('未选择该组件的模型版本：已完成字符映射命中测试（未跑模型变体预演）')
+          return
+        }
+
+        // Run a real variant preview by calling bom/generate-multi-bundle with explicit tokens.
+        // IMPORTANT: do NOT pass sample as spec_text (may contain dimensions and pollute metrics).
+        try {
+          const widthMm = Math.round(Number(comp?.width_cm ?? 0) * 10)
+          const heightMm = Math.round(Number(comp?.height_cm ?? 0) * 10)
+          const qty = Number(comp?.quantity ?? 1)
+
+          const res: any = await generateBomMultiBundle({
+            sku_code: null,
+            include_disabled_variants: true,
+            components: [
+              {
+                model_version_id: modelVersionId,
+                width_mm: String(Number.isFinite(widthMm) && widthMm > 0 ? widthMm : 400),
+                height_mm: String(Number.isFinite(heightMm) && heightMm > 0 ? heightMm : 500),
+                quantity: String(Number.isFinite(qty) && qty > 0 ? qty : 1),
+                spec_text: '',
+                tokens,
+              },
+            ],
+          } as any)
+
+          const comp0 = Array.isArray(res?.components) ? res.components[0] : null
+          const hits = ((comp0?.trace ?? {}) as any)?.matched_variants
+          const hitList = Array.isArray(hits) ? hits.filter((x: any) => x?.matched) : []
+
+          Modal.info({
+            title: `模型变体预演结果（组件：${label}）`,
+            content: (
+              <div>
+                <div style={{ marginBottom: 8 }}>
+                  <Text type="secondary">model_version_id：{modelVersionId}</Text>
+                </div>
+                <div style={{ marginBottom: 8 }}>
+                  <Text type="secondary">tokens：{tokens.join('、') || '-'}</Text>
+                </div>
+                <div style={{ marginBottom: 8 }}>
+                  <Text>
+                    命中变体：{hitList.length} 条（matched=true）
+                  </Text>
+                </div>
+                {hitList.length ? (
+                  <div style={{ maxHeight: 260, overflow: 'auto', paddingRight: 8 }}>
+                    <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                      {hitList.slice(0, 20).map((h: any) => (
+                        <div key={String(h?.variant_id ?? '')} style={{ border: '1px solid #f0f0f0', padding: 8, borderRadius: 6 }}>
+                          <Space wrap>
+                            <Tag color="green">matched</Tag>
+                            <Text type="secondary">variant_id: {String(h?.variant_id ?? '-')}</Text>
+                            <Text type="secondary">base_line_id: {String(h?.base_line_id ?? '-')}</Text>
+                            <Text type="secondary">action: {String(h?.action ?? '-')}</Text>
+                            <Text type="secondary">effect: {String(h?.effect ?? '-')}</Text>
+                          </Space>
+                        </div>
+                      ))}
+                      {hitList.length > 20 ? <Text type="secondary">（仅展示前 20 条）</Text> : null}
+                    </Space>
+                  </div>
+                ) : (
+                  <Text type="secondary">未命中任何变体：请检查该版本的变体条件是否包含这些 tokens（TOKEN any/all）。</Text>
+                )}
+              </div>
+            ),
+            okText: '关闭',
+          })
+        } catch (e: any) {
+          message.error(`模型变体预演失败：${String(e?.response?.data?.detail ?? e?.message ?? e)}`)
+        }
       },
     })
   }

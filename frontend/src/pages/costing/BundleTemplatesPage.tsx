@@ -44,6 +44,15 @@ const parseTags = (meta: any): string[] => {
   return Array.isArray(raw) ? raw.map((x) => String(x)).filter(Boolean) : []
 }
 
+const parseTokenText = (text: any): string[] => {
+  const s = String(text ?? '').trim()
+  if (!s) return []
+  return s
+    .split(/[\s,，;；/|、]+/g)
+    .map((x) => x.trim())
+    .filter(Boolean)
+}
+
 export default function BundleTemplatesPage() {
   const qc = useQueryClient()
   const [search, setSearch] = useState<string>('')
@@ -534,10 +543,21 @@ export default function BundleTemplatesPage() {
               {
                 title: '附加触发词（可选）',
                 render: (_: any, r: any, idx: number) => (
-                  <Input
-                    placeholder="例如：背面纯色 / 雪尼尔（不要写 40*50 这类尺寸）"
-                    value={String(r.spec_text ?? '')}
-                    onChange={(e) => setComponents((prev) => prev.map((x, i) => (i === idx ? { ...x, spec_text: e.target.value } : x)))}
+                  <Select
+                    mode="tags"
+                    placeholder="下拉选择变体触发词，或手动输入（不要写 40*50 这类尺寸）"
+                    style={{ width: '100%' }}
+                    value={parseTokenText(r.spec_text)}
+                    options={
+                      r.model_version_id
+                        ? (variantsHintByVersion.get(String(r.model_version_id))?.token_hints ?? []).map((t) => ({ value: t, label: t }))
+                        : []
+                    }
+                    onChange={(vals) => {
+                      const merged = Array.isArray(vals) ? vals.map((x) => String(x)).filter(Boolean) : []
+                      const nextText = merged.join('，')
+                      setComponents((prev) => prev.map((x, i) => (i === idx ? { ...x, spec_text: nextText } : x)))
+                    }}
                   />
                 ),
               },

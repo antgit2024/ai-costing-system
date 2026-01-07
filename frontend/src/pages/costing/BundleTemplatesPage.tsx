@@ -597,7 +597,7 @@ export default function BundleTemplatesPage() {
                           ? x.target_component_index
                           : null,
                   }))
-                  .filter((m: any) => m.match_value && typeof m.target_component_index === 'number')
+                  .filter((m: any) => typeof m.target_component_index === 'number')
               : // backward compatibility: old format {target_component_index,tokens[]}
                 Array.isArray(x?.tokens)
                 ? (x.tokens as any[])
@@ -611,10 +611,10 @@ export default function BundleTemplatesPage() {
                         target_component_index: typeof x?.target_component_index === 'number' ? x.target_component_index : null,
                       }
                     })
-                    .filter((m: any) => m && m.match_value && typeof m.target_component_index === 'number')
+                    .filter((m: any) => m && typeof m.target_component_index === 'number')
                 : [],
           }))
-          .filter((x: any) => x.phrase && Array.isArray(x.mappings) && x.mappings.length > 0),
+          .filter((x: any) => x.phrase && Array.isArray(x.mappings)),
       )
     } else {
       setPhrasePresets([])
@@ -653,10 +653,10 @@ export default function BundleTemplatesPage() {
                     target_component_index:
                       typeof m.target_component_index === 'number' && Number.isFinite(m.target_component_index) ? m.target_component_index : undefined,
                   }))
-                  .filter((m) => m.match_value && typeof (m as any).target_component_index === 'number')
+                  .filter((m) => typeof (m as any).target_component_index === 'number')
               : [],
           }))
-          .filter((p) => p.phrase && Array.isArray((p as any).mappings) && (p as any).mappings.length > 0),
+          .filter((p) => p.phrase && Array.isArray((p as any).mappings)),
       }
       const sharedText = String(values.shared_trigger_text ?? '').trim() || undefined
 
@@ -1196,7 +1196,7 @@ export default function BundleTemplatesPage() {
               },
               {
                 title: '示例规格（自动）',
-                render: (_: any, r: any) => {
+                render: (_: any, r: any, idx: number) => {
                   const phrase = String(r?.phrase ?? '').trim()
                   if (!phrase) return <Text type="secondary">-</Text>
                   if (!currentBundleToken) return <Text type="secondary">（保存后生成 B: 编码）</Text>
@@ -1205,7 +1205,9 @@ export default function BundleTemplatesPage() {
                   if (up.includes('B:') || up.includes('BUNDLE:')) return <Text copyable={{ text: phrase }}>{phrase}</Text>
                   const trimmed = phrase.replace(/\s+$/g, '')
                   const needSep = /[；;]$/.test(trimmed) ? '' : '；'
-                  const spec = `${trimmed}${needSep}(${currentBundleToken})`
+                  const sel = idx >= 0 && idx < 26 ? String.fromCharCode('A'.charCodeAt(0) + idx) : ''
+                  const suffix = sel ? `${currentBundleToken}:${sel}` : currentBundleToken
+                  const spec = `${trimmed}${needSep}(${suffix})`
                   return <Text copyable={{ text: spec }}>{spec}</Text>
                 },
               },

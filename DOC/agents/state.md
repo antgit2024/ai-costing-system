@@ -57,7 +57,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend+Backend：新增“短语预设（推荐）”：按“包含命中+更长优先”把常见对客片段直接映射到组件并注入 tokens，可覆盖组件数量（短语中含“2个/3个”会自动解析，亦可手填覆盖）；并在 `/bom/generate-by-spec` trace 中回传 `phrase_presets` 命中信息用于排错；已硬验收 `npm -C frontend run build`、后端 pytest `test_bundle_templates_center.py`、已原子发布并重启 `planner-costing.service`）
 - **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend+Backend：短语预设升级为二级结构：一级为运营短语；二级为该短语的“字段映射组”（字段/词（严格选择）/目标组件），命中短语后仅执行该短语映射组（全局字段映射仅在无短语命中时兜底），避免规则越配越活；已硬验收 `npm -C frontend run build`、后端 pytest `test_bundle_templates_center.py`、已原子发布并重启 `planner-costing.service`）
 - **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：短语预设交互防迷路：新增明显的“新增短语”按钮；每条短语展开的映射组新增“新增映射行”按钮；并优化空态文案指引；已硬验收 `npm -C frontend run build` 并原子发布）
-- **最近校对（北京时间 GMT+8）**：2026-01-07（Backend：支持套装编码选择器 `(B:CODE:A/B/C...)`：A=第1条短语预设、B=第2条…（不再依赖包含命中）；已补测试 `backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py` 并通过；同时修复后端 import 级缩进错误：`schemas.py` 与 `routers/base_config.py` 可编译）
+- **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：示例规格自动补选择器 `:A/:B/...`（按短语预设行号，最多 26 条到 Z），输出 `短语；(B:CODE:<SEL>)`；短语映射组允许“仅选目标模型、无候选词也可保存/回显”（不再因为“该模型暂无候选”而丢行）；已硬验收 `npm -C frontend run build` 并原子发布）
 
 ### 关键口径备忘（避免回滚/重构改坏）
 

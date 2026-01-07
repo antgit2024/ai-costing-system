@@ -242,12 +242,12 @@ def generate_bom_by_spec(
         tpl_meta: Dict[str, Any],
         spec_text: str,
         components: List[Dict[str, Any]],
-    ) -> tuple[List[Dict[str, Any]], List[str], List[Dict[str, Any]]]:
+    ) -> tuple[List[Dict[str, Any]], List[str], List[Dict[str, Any]], bool]:
         """
         Phrase presets (短语预设):
         - contains match, longer phrase first
-        - apply to target_component_index by injecting tokens and optional quantity override
-        Returns: (components_override_by_index, remove_tokens, trace_entries)
+        - apply mappings group (字段/词/目标组件) when phrase hits
+        Returns: (components_override_by_index, remove_tokens, trace_entries, matched_any)
         """
         raw = tpl_meta.get("phrase_presets")
         presets = raw if isinstance(raw, list) else []
@@ -258,35 +258,59 @@ def generate_bom_by_spec(
             phrase = str(p.get("phrase") or "").strip()
             if not phrase:
                 continue
-            tci = p.get("target_component_index")
-            try:
-                tci = int(tci) if tci is not None else None
-            except Exception:
-                tci = None
-            if tci is None:
+            mappings = p.get("mappings")
+            mappings = mappings if isinstance(mappings, list) else []
+
+            # Backward compatibility: old format uses tokens + target_component_index
+            if not mappings:
+                tci = p.get("target_component_index")
+                try:
+                    tci = int(tci) if tci is not None else None
+                except Exception:
+                    tci = None
+                tokens = p.get("tokens") or p.get("inject_tokens") or []
+                tok_list = [str(x).strip() for x in tokens] if isinstance(tokens, list) else []
+                tok_list = [x for x in tok_list if x]
+                if tci is not None and tok_list:
+                    for t in tok_list:
+                        if ":" in t:
+                            k, v = t.split(":", 1)
+                            mappings.append({"match_key": k.strip() or None, "match_value": v.strip(), "target_component_index": tci})
+                        else:
+                            mappings.append({"match_key": None, "match_value": t, "target_component_index": tci})
+
+            clean_mappings: List[Dict[str, Any]] = []
+            for m in mappings:
+                if not isinstance(m, dict):
+                    continue
+                mk = str(m.get("match_key") or m.get("key") or "").strip() or None
+                mv = str(m.get("match_value") or m.get("value") or "").strip()
+                tci = m.get("target_component_index")
+                try:
+                    tci = int(tci) if tci is not None else None
+                except Exception:
+                    tci = None
+                if not mv or tci is None:
+                    continue
+                clean_mappings.append({"match_key": mk, "match_value": mv, "target_component_index": tci})
+
+            if not clean_mappings:
                 continue
-            tokens = p.get("tokens") or p.get("inject_tokens") or []
-            tok_list = [str(x).strip() for x in tokens] if isinstance(tokens, list) else []
-            tok_list = [x for x in tok_list if x]
-            qty = p.get("quantity")
-            try:
-                qty = int(qty) if qty is not None else None
-            except Exception:
-                qty = None
-            if qty is None:
-                qty = _parse_qty_from_phrase(phrase)
+
+            qty = _parse_qty_from_phrase(phrase)
             items.append(
                 {
                     "phrase": phrase,
-                    "target_component_index": tci,
-                    "tokens": tok_list,
                     "quantity": qty,
+                    "mappings": clean_mappings,
                 }
             )
 
         # longer phrase first
         items.sort(key=lambda x: len(str(x.get("phrase") or "")), reverse=True)
-        matched_by_index: Dict[int, Dict[str, Any]] = {}
+        matched_any = False
+        # index -> {tokens:set, best_phrase_len:int, qty:int|None}
+        per_index: Dict[int, Dict[str, Any]] = {}
         trace_entries: List[Dict[str, Any]] = []
         remove_tokens: List[str] = []
         s = str(spec_text or "")
@@ -294,51 +318,70 @@ def generate_bom_by_spec(
         for it in items:
             phrase = str(it["phrase"])
             if phrase and phrase in s:
-                idx = int(it["target_component_index"])
-                if idx < 0 or idx >= len(components):
-                    trace_entries.append({"phrase": phrase, "matched": False, "reason": "bad_index", "target_component_index": idx})
-                    continue
-                prev = matched_by_index.get(idx)
-                conflict = bool(prev)
-                # longer phrase first => keep first match for quantity, merge tokens
-                if not prev:
-                    matched_by_index[idx] = dict(it)
-                else:
-                    # merge tokens
-                    merged = list(dict.fromkeys(list(prev.get("tokens") or []) + list(it.get("tokens") or [])))
-                    prev["tokens"] = merged
-                    matched_by_index[idx] = prev
-                remove_tokens.extend([t for t in (it.get("tokens") or []) if t])
+                matched_any = True
+                mappings = it.get("mappings") or []
+                affected: List[int] = []
+                uniq_targets: set[int] = set()
+                injected_tokens_this_phrase: List[str] = []
+
+                for m in mappings:
+                    try:
+                        idx = int(m.get("target_component_index"))
+                    except Exception:
+                        continue
+                    if idx < 0 or idx >= len(components):
+                        continue
+                    uniq_targets.add(idx)
+                    mk = str(m.get("match_key") or "").strip()
+                    mv = str(m.get("match_value") or "").strip()
+                    if not mv:
+                        continue
+                    token_kv = f"{mk}:{mv}" if mk else mv
+                    toks = [token_kv, mv]
+                    injected_tokens_this_phrase.extend(toks)
+                    remove_tokens.extend(toks)
+                    rec = per_index.get(idx) or {"tokens": set(), "best_phrase_len": 0, "quantity": None}
+                    for t in toks:
+                        rec["tokens"].add(t)
+                    # keep longer phrase's qty (longer first)
+                    if len(phrase) >= int(rec.get("best_phrase_len") or 0):
+                        rec["best_phrase_len"] = len(phrase)
+                        rec["quantity"] = it.get("quantity")
+                    per_index[idx] = rec
+                    affected.append(idx)
+
+                # If this phrase maps to exactly one component, allow qty override
+                qty_applies = (it.get("quantity") if len(uniq_targets) == 1 else None)
                 trace_entries.append(
                     {
                         "phrase": phrase,
                         "matched": True,
-                        "target_component_index": idx,
-                        "quantity": it.get("quantity"),
-                        "tokens": list(it.get("tokens") or []),
-                        "conflict_same_component": conflict,
+                        "mappings_count": len(mappings),
+                        "affected_components": sorted(list(uniq_targets)),
+                        "quantity": qty_applies,
+                        "tokens": list(dict.fromkeys([t for t in injected_tokens_this_phrase if t])),
                     }
                 )
             else:
                 trace_entries.append({"phrase": str(it.get("phrase") or ""), "matched": False})
 
         scoped_by_index: List[Dict[str, Any]] = []
-        for idx, it in matched_by_index.items():
+        for idx, rec in per_index.items():
             base_raw = components[idx]
             if not isinstance(base_raw, dict):
                 continue
             base_def = dict(base_raw)
-            qty = it.get("quantity")
+            qty = rec.get("quantity")
             if isinstance(qty, int) and qty > 0:
                 base_def["quantity"] = qty
             base_tokens = []
             if isinstance(base_def.get("tokens"), list):
                 base_tokens = [str(x).strip() for x in base_def.get("tokens") if str(x).strip()]
-            injected = [str(x).strip() for x in (it.get("tokens") or []) if str(x).strip()]
+            injected = sorted([str(x).strip() for x in (rec.get("tokens") or set()) if str(x).strip()])
             base_def["tokens"] = base_tokens + injected
             scoped_by_index.append({"index": idx, "component": base_def})
 
-        return scoped_by_index, remove_tokens, trace_entries
+        return scoped_by_index, remove_tokens, trace_entries, matched_any
 
     # Apply shared tokens from the (single) customer-facing spec_text to ALL components.
     # IMPORTANT: do NOT let spec_text dimensions override component measurement_mm.
@@ -357,7 +400,7 @@ def generate_bom_by_spec(
         shared_tokens = shared_tokens + tpl_shared_tokens
 
     # --- Phrase presets (recommended): contains match, longer-first ---
-    phrase_scoped, phrase_remove_tokens, phrase_trace = _apply_phrase_presets(
+    phrase_scoped, phrase_remove_tokens, phrase_trace, phrase_matched_any = _apply_phrase_presets(
         tpl_meta=tpl_meta,
         spec_text=spec_text,
         components=components,
@@ -367,7 +410,8 @@ def generate_bom_by_spec(
         shared_tokens = [t for t in shared_tokens if str(t).strip().lower() not in rm2]
 
     # --- Bundle lexicon (scoped mapping; avoid global token broadcast conflicts) ---
-    lex_rules = tpl_meta.get("lexicon_rules")
+    # If any phrase preset matched, we intentionally DO NOT apply global lexicon_rules (avoid "too flexible").
+    lex_rules = [] if phrase_matched_any else tpl_meta.get("lexicon_rules")
     scoped_phrases = _parse_bundle_scoped_phrases(spec_text)
     lex_rules = lex_rules if isinstance(lex_rules, list) else []
     # index rules by (key,value,target_component_index / target_label)

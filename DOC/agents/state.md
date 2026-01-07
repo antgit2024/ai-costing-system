@@ -55,6 +55,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：套装模板在字段映射下新增“可变词列表（可复制）”：自动汇总所选模型版本启用变体规则的 TOKEN(any/all) 候选词，并支持一键复制/点击单词复制，供运营直接拼装交易规格；已硬验收 `npm -C frontend run build` 并原子发布）
 - **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend+Backend：套装字符映射“词”收口为严格下拉（候选来自可变词列表，禁止手输），移除命中/验证绕圈；后端变体匹配兼容历史 token 合并写法（`雪尼尔，WB02339` 按逗号/顿号拆分参与匹配）；已硬验收 `npm -C frontend run build` 并原子发布）
 - **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend+Backend：新增“短语预设（推荐）”：按“包含命中+更长优先”把常见对客片段直接映射到组件并注入 tokens，可覆盖组件数量（短语中含“2个/3个”会自动解析，亦可手填覆盖）；并在 `/bom/generate-by-spec` trace 中回传 `phrase_presets` 命中信息用于排错；已硬验收 `npm -C frontend run build`、后端 pytest `test_bundle_templates_center.py`、已原子发布并重启 `planner-costing.service`）
+- **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend+Backend：短语预设升级为二级结构：一级为运营短语；二级为该短语的“字段映射组”（字段/词（严格选择）/目标组件），命中短语后仅执行该短语映射组（全局字段映射仅在无短语命中时兜底），避免规则越配越活；已硬验收 `npm -C frontend run build`、后端 pytest `test_bundle_templates_center.py`、已原子发布并重启 `planner-costing.service`）
 
 ### 关键口径备忘（避免回滚/重构改坏）
 

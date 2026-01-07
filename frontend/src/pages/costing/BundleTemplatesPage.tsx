@@ -54,9 +54,7 @@ type LexiconRuleRow = {
 
 type PhrasePresetRow = {
   phrase: string
-  target_component_index: number | null
-  tokens: string[]
-  quantity: number | null
+  mappings: LexiconRuleRow[]
 }
 
 const parseTags = (meta: any): string[] => {
@@ -616,11 +614,38 @@ export default function BundleTemplatesPage() {
         pp
           .map((x: any) => ({
             phrase: String(x?.phrase ?? '').trim(),
-            target_component_index: typeof x?.target_component_index === 'number' ? x.target_component_index : null,
-            tokens: Array.isArray(x?.tokens) ? x.tokens.map((t: any) => String(t).trim()).filter(Boolean) : [],
-            quantity: x?.quantity == null ? null : Number(x.quantity),
+            mappings: Array.isArray(x?.mappings)
+              ? x.mappings
+                  .map((m: any) => ({
+                    match_key: String(m?.match_key ?? m?.key ?? '').trim() || '材质',
+                    match_value: String(m?.match_value ?? m?.value ?? '').trim(),
+                    target_component_index:
+                      typeof m?.target_component_index === 'number'
+                        ? m.target_component_index
+                        : typeof x?.target_component_index === 'number'
+                          ? x.target_component_index
+                          : null,
+                  }))
+                  .filter((m: any) => m.match_value && typeof m.target_component_index === 'number')
+              : // backward compatibility: old format {target_component_index,tokens[]}
+                Array.isArray(x?.tokens)
+                ? (x.tokens as any[])
+                    .map((t: any) => {
+                      const s = String(t ?? '').trim()
+                      if (!s) return null
+                      const parts = s.split(':')
+                      const mk = parts.length >= 2 ? String(parts[0]).trim() : '材质'
+                      const mv = parts.length >= 2 ? String(parts.slice(1).join(':')).trim() : s
+                      return {
+                        match_key: mk || '材质',
+                        match_value: mv,
+                        target_component_index: typeof x?.target_component_index === 'number' ? x.target_component_index : null,
+                      }
+                    })
+                    .filter((m: any) => m && m.match_value && typeof m.target_component_index === 'number')
+                : [],
           }))
-          .filter((x: any) => x.phrase && typeof x.target_component_index === 'number'),
+          .filter((x: any) => x.phrase && Array.isArray(x.mappings) && x.mappings.length > 0),
       )
     } else {
       setPhrasePresets([])
@@ -660,12 +685,18 @@ export default function BundleTemplatesPage() {
         phrase_presets: phrasePresets
           .map((p) => ({
             phrase: String(p.phrase ?? '').trim(),
-            target_component_index:
-              typeof p.target_component_index === 'number' && Number.isFinite(p.target_component_index) ? p.target_component_index : undefined,
-            tokens: Array.isArray(p.tokens) ? p.tokens.map((t) => String(t).trim()).filter(Boolean) : [],
-            quantity: p.quantity == null ? undefined : Number(p.quantity),
+            mappings: Array.isArray(p.mappings)
+              ? p.mappings
+                  .map((m) => ({
+                    match_key: String(m.match_key ?? '').trim() || undefined,
+                    match_value: String(m.match_value ?? '').trim(),
+                    target_component_index:
+                      typeof m.target_component_index === 'number' && Number.isFinite(m.target_component_index) ? m.target_component_index : undefined,
+                  }))
+                  .filter((m) => m.match_value && typeof (m as any).target_component_index === 'number')
+              : [],
           }))
-          .filter((p) => p.phrase && typeof (p as any).target_component_index === 'number'),
+          .filter((p) => p.phrase && Array.isArray((p as any).mappings) && (p as any).mappings.length > 0),
       }
       const sharedText = String(values.shared_trigger_text ?? '').trim() || undefined
 
@@ -1033,6 +1064,12 @@ export default function BundleTemplatesPage() {
             message="套装字符映射（可选，用于“材质:雪尼尔2个(30*30)+…”这种对客规格）"
             description="用于把对客交易规格里的“材质:雪尼尔2个”等片段，映射到指定组件（组件行），并按数量拆分为多行组件，避免雪尼尔+棉麻混搭时 token 广播冲突。"
           />
+          <Alert
+            type="warning"
+            showIcon
+            message="全局字段映射（兜底）"
+            description="仅当“短语预设”没有命中时才会使用；一旦短语命中，系统将只执行短语下的映射组（避免规则越来越活）。"
+          />
           <Table
             size="small"
             pagination={false}
@@ -1162,7 +1199,7 @@ export default function BundleTemplatesPage() {
             type="info"
             showIcon
             message="短语预设（推荐：把常见交易规格片段定死）"
-            description="匹配规则：对客交易规格“包含命中”，并按“更长短语优先”。命中后会对目标组件注入 tokens，并可覆盖该组件数量（若短语里包含“2个/3个”，会自动解析；也可手填覆盖）。"
+            description="匹配规则：对客交易规格“包含命中”，并按“更长短语优先”。命中后会执行该短语下的“映射组”（字段/词/目标组件）。"
           />
           <Table
             size="small"
@@ -1170,10 +1207,146 @@ export default function BundleTemplatesPage() {
             rowKey={(_, idx) => `pp-${idx}`}
             dataSource={phrasePresets}
             locale={{ emptyText: '暂无短语：在“操作”列点 +行 添加第一条' }}
+            expandable={{
+              expandedRowKeys: phrasePresets.map((_, idx) => `pp-${idx}`),
+              showExpandColumn: false,
+              expandedRowRender: (r: any, idx: number) => {
+                const mappings = Array.isArray(r?.mappings) ? (r.mappings as any[]) : []
+                return (
+                  <Table
+                    size="small"
+                    pagination={false}
+                    rowKey={(_, mi) => `ppm-${idx}-${mi}`}
+                    dataSource={mappings}
+                    locale={{ emptyText: '暂无映射：在“操作”列点 +行 添加第一条' }}
+                    columns={[
+                      {
+                        title: '字段',
+                        width: 110,
+                        render: (_: any, rr: any, mi: number) => (
+                          <Select
+                            style={{ width: '100%' }}
+                            value={String(rr.match_key ?? '材质')}
+                            options={[
+                              { value: '材质', label: '材质' },
+                              { value: '枕芯', label: '枕芯' },
+                            ]}
+                            onChange={(v) =>
+                              setPhrasePresets((prev) =>
+                                prev.map((x, i) =>
+                                  i === idx
+                                    ? {
+                                        ...x,
+                                        mappings: (x.mappings ?? []).map((m, j) => (j === mi ? { ...m, match_key: String(v) } : m)),
+                                      }
+                                    : x,
+                                ),
+                              )
+                            }
+                          />
+                        ),
+                      },
+                      {
+                        title: '词（严格选择）',
+                        width: 420,
+                        render: (_: any, rr: any, mi: number) => (
+                          <Select
+                            showSearch
+                            allowClear
+                            placeholder={variableTokenCandidates.length ? '从候选中选择（不可手输）' : '暂无候选：先选择模型版本'}
+                            style={{ width: '100%' }}
+                            value={String(rr.match_value ?? '').trim() || undefined}
+                            options={variableTokenCandidates.map((t) => ({ value: t, label: t }))}
+                            onChange={(v) =>
+                              setPhrasePresets((prev) =>
+                                prev.map((x, i) =>
+                                  i === idx
+                                    ? {
+                                        ...x,
+                                        mappings: (x.mappings ?? []).map((m, j) => (j === mi ? { ...m, match_value: String(v ?? '') } : m)),
+                                      }
+                                    : x,
+                                ),
+                              )
+                            }
+                            disabled={!variableTokenCandidates.length}
+                          />
+                        ),
+                      },
+                      {
+                        title: '目标组件',
+                        width: 200,
+                        render: (_: any, rr: any, mi: number) => (
+                          <Select
+                            showSearch
+                            allowClear
+                            placeholder="选择组件（按模型）"
+                            style={{ width: '100%' }}
+                            value={typeof rr.target_component_index === 'number' ? rr.target_component_index : undefined}
+                            options={(components ?? []).map((c, i) => ({
+                              value: i,
+                              label: getComponentDisplay(i, c),
+                            }))}
+                            onChange={(v) =>
+                              setPhrasePresets((prev) =>
+                                prev.map((x, i) =>
+                                  i === idx
+                                    ? {
+                                        ...x,
+                                        mappings: (x.mappings ?? []).map((m, j) =>
+                                          j === mi ? { ...m, target_component_index: v == null ? null : Number(v) } : m,
+                                        ),
+                                      }
+                                    : x,
+                                ),
+                              )
+                            }
+                          />
+                        ),
+                      },
+                      {
+                        title: '操作',
+                        width: 140,
+                        render: (_: any, __: any, mi: number) => (
+                          <Space>
+                            <Button
+                              size="small"
+                              onClick={() =>
+                                setPhrasePresets((prev) =>
+                                  prev.map((x, i) =>
+                                    i === idx
+                                      ? { ...x, mappings: [...(x.mappings ?? []), { match_key: '材质', match_value: '', target_component_index: null }] }
+                                      : x,
+                                  ),
+                                )
+                              }
+                            >
+                              +行
+                            </Button>
+                            <Button
+                              size="small"
+                              danger
+                              onClick={() =>
+                                setPhrasePresets((prev) =>
+                                  prev.map((x, i) =>
+                                    i === idx ? { ...x, mappings: (x.mappings ?? []).filter((_, j) => j !== mi) } : x,
+                                  ),
+                                )
+                              }
+                            >
+                              删除
+                            </Button>
+                          </Space>
+                        ),
+                      },
+                    ]}
+                  />
+                )
+              },
+            }}
             columns={[
               {
-                title: '短语（包含命中）',
-                width: 320,
+                title: '短语（运营用，包含命中）',
                 render: (_: any, r: any, idx: number) => (
                   <Input
                     placeholder="例如：雪尼尔2个，背面纯色"
@@ -1183,70 +1356,11 @@ export default function BundleTemplatesPage() {
                 ),
               },
               {
-                title: '目标组件',
-                width: 200,
-                render: (_: any, r: any, idx: number) => (
-                  <Select
-                    showSearch
-                    allowClear
-                    placeholder="选择组件（按模型）"
-                    style={{ width: '100%' }}
-                    value={typeof r.target_component_index === 'number' ? r.target_component_index : undefined}
-                    options={(components ?? []).map((c, i) => ({
-                      value: i,
-                      label: getComponentDisplay(i, c),
-                    }))}
-                    onChange={(v) =>
-                      setPhrasePresets((prev) => prev.map((x, i) => (i === idx ? { ...x, target_component_index: v == null ? null : Number(v) } : x)))
-                    }
-                  />
-                ),
-              },
-              {
-                title: '注入tokens（严格）',
-                render: (_: any, r: any, idx: number) => (
-                  <Select
-                    mode="multiple"
-                    allowClear
-                    showSearch
-                    placeholder={variableTokenCandidates.length ? '从候选中选择' : '暂无候选：先选择模型版本'}
-                    style={{ width: '100%' }}
-                    value={Array.isArray(r.tokens) ? r.tokens : []}
-                    options={variableTokenCandidates.map((t) => ({ value: t, label: t }))}
-                    onChange={(v) =>
-                      setPhrasePresets((prev) =>
-                        prev.map((x, i) => (i === idx ? { ...x, tokens: Array.isArray(v) ? v.map(String) : [] } : x)),
-                      )
-                    }
-                    disabled={!variableTokenCandidates.length}
-                  />
-                ),
-              },
-              {
-                title: '数量(可选)',
-                width: 120,
-                render: (_: any, r: any, idx: number) => (
-                  <Input
-                    placeholder="自动/手填"
-                    value={r.quantity == null ? '' : String(r.quantity)}
-                    onChange={(e) => {
-                      const v = Number(e.target.value)
-                      setPhrasePresets((prev) =>
-                        prev.map((x, i) => (i === idx ? { ...x, quantity: Number.isFinite(v) && v > 0 ? v : null } : x)),
-                      )
-                    }}
-                  />
-                ),
-              },
-              {
                 title: '操作',
                 width: 140,
                 render: (_: any, __: any, idx: number) => (
                   <Space>
-                    <Button
-                      size="small"
-                      onClick={() => setPhrasePresets((prev) => [...prev, { phrase: '', target_component_index: null, tokens: [], quantity: null }])}
-                    >
+                    <Button size="small" onClick={() => setPhrasePresets((prev) => [...prev, { phrase: '', mappings: [] }])}>
                       +行
                     </Button>
                     <Button size="small" danger onClick={() => setPhrasePresets((prev) => prev.filter((_, i) => i !== idx))}>

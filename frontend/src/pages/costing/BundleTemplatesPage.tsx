@@ -27,6 +27,7 @@ import {
   cloneBundleTemplate,
   createBundleTemplate,
   fetchBundleTemplates,
+  fetchProcessModule,
   fetchProductModelVersionLines,
   fetchProductModelVersions,
   fetchStructureStandards,
@@ -77,24 +78,6 @@ const formatTrigger = (condRaw: any): string => {
   if (a) parts.push(`面积: ${a}`)
   if (p) parts.push(`周长: ${p}`)
   return parts.join('；') || '-'
-}
-
-const getStructureSlotLabel = (row: any): string => {
-  const meta = (row?.metadata_json ?? row?.metadata ?? {}) as any
-  const candidates = [
-    meta?.structure_slot,
-    meta?.structureSlot,
-    meta?.structure_slot_code,
-    meta?.slot,
-    meta?.slot_code,
-    row?.structure_slot,
-    row?.structureSlot,
-  ]
-  for (const c of candidates) {
-    const s = String(c ?? '').trim()
-    if (s) return s
-  }
-  return ''
 }
 
 const SLOT_CN_FALLBACK: Record<string, string> = {
@@ -279,6 +262,38 @@ export default function BundleTemplatesPage() {
     enabled: selectedVersionIds.length > 0,
   })
 
+  const moduleIdsInSelectedVersions = useMemo(() => {
+    const rows = (versionLinesSummaryQuery.data ?? []) as Array<{ version_id: string; data: any }>
+    const ids = new Set<string>()
+    for (const r of rows) {
+      const mats = (r?.data?.materials ?? []) as any[]
+      for (const it of mats) {
+        const meta = (it?.metadata_json ?? it?.metadata ?? {}) as any
+        const mid = String(meta?.source_module_id ?? it?.source_module_id ?? '').trim()
+        if (mid) ids.add(mid)
+      }
+    }
+    return Array.from(ids)
+  }, [versionLinesSummaryQuery.data])
+
+  const moduleMetaByIdQuery = useQuery({
+    queryKey: ['bundle-template-center', 'module-meta-by-id', moduleIdsInSelectedVersions.join(',')],
+    queryFn: async () => {
+      const res = await Promise.all(
+        moduleIdsInSelectedVersions.map(async (id) => {
+          try {
+            const m = await fetchProcessModule(id)
+            return [id, m] as const
+          } catch {
+            return [id, null] as const
+          }
+        }),
+      )
+      return new Map<string, any>(res)
+    },
+    enabled: moduleIdsInSelectedVersions.length > 0,
+  })
+
   const baseLineMapByVersion = useMemo(() => {
     const m = new Map<string, Map<string, any>>()
     const rows = (versionLinesSummaryQuery.data ?? []) as Array<{ version_id: string; data: any }>
@@ -294,6 +309,50 @@ export default function BundleTemplatesPage() {
     }
     return m
   }, [versionLinesSummaryQuery.data])
+
+  const moduleStructureByVersion = useMemo(() => {
+    const mapByVersion = new Map<string, Map<string, { whole: boolean; slots: string[] }>>()
+    const versionToStd = (versionStructureCodeQuery.data ?? {}) as Record<string, string>
+    const moduleMetaById = (moduleMetaByIdQuery.data ?? new Map<string, any>()) as Map<string, any>
+    for (const vid of selectedVersionIds) {
+      const stdCode = String(versionToStd[String(vid)] ?? '').trim()
+      const inner = new Map<string, { whole: boolean; slots: string[] }>()
+      if (!stdCode) {
+        mapByVersion.set(String(vid), inner)
+        continue
+      }
+      for (const mid of moduleIdsInSelectedVersions) {
+        const moduleDetail = moduleMetaById.get(mid)
+        const meta: any = (moduleDetail?.metadata_json ?? moduleDetail?.metadata ?? {}) as any
+        const tags = Array.isArray(meta?.structure_tags) ? meta.structure_tags.map((x: any) => String(x)) : []
+        const whole = tags.includes(stdCode)
+        const slots =
+          tags.length && stdCode
+            ? tags
+                .filter((t: string) => t.startsWith(`${stdCode}:`))
+                .map((t: string) => String(t.split(':')[1] ?? '').trim())
+                .filter(Boolean)
+            : []
+        inner.set(String(mid), { whole, slots })
+      }
+      mapByVersion.set(String(vid), inner)
+    }
+    return mapByVersion
+  }, [selectedVersionIds, versionStructureCodeQuery.data, moduleMetaByIdQuery.data, moduleIdsInSelectedVersions])
+
+  const getLineStructureLabel = (line: any, versionId: string | null): string => {
+    const meta = (line?.metadata_json ?? line?.metadata ?? {}) as any
+    const curSlot = String(meta?.structure_slot ?? '').trim()
+    if (curSlot) return toSlotCn(curSlot, versionId)
+    const moduleId = String(meta?.source_module_id ?? line?.source_module_id ?? '').trim()
+    if (!moduleId || !versionId) return ''
+    const info = moduleStructureByVersion.get(String(versionId))?.get(moduleId)
+    if (!info) return ''
+    if (info.whole) return '整结构'
+    if (Array.isArray(info.slots) && info.slots.length === 1) return toSlotCn(info.slots[0], versionId)
+    if (Array.isArray(info.slots) && info.slots.length > 1) return toSlotCn(info.slots[0], versionId)
+    return ''
+  }
 
   const presetVersionId = useMemo(() => {
     if (!presetModalOpen) return null
@@ -523,7 +582,7 @@ export default function BundleTemplatesPage() {
               items={Array.from(presetVariantsByBaseLine.entries()).map(([baseLineId, arr]) => {
                 const base = presetBaseLineMap.get(baseLineId)
                 const selected = (presetSelectedByIdx[presetModalIdx ?? -1] ?? {})[baseLineId] ?? null
-                const slot = toSlotCn(getStructureSlotLabel(base), presetVersionId)
+                const slot = getLineStructureLabel(base, presetVersionId)
                 const baseLabelRaw = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
                 const baseLabel = slot ? `${slot}：${baseLabelRaw}` : baseLabelRaw
 
@@ -849,7 +908,7 @@ export default function BundleTemplatesPage() {
                           {selectedEntries.map(([baseLineId, variantId]) => {
                             const v = variantsById.get(String(variantId))
                             const base = baseMap.get(String(baseLineId))
-                            const slot = toSlotCn(getStructureSlotLabel(base), versionId)
+                            const slot = getLineStructureLabel(base, versionId)
                             const baseName = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
                             const baseLabel = slot ? `${slot}：${baseName}` : baseName
 

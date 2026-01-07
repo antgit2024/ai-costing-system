@@ -538,7 +538,7 @@ export default function BundleTemplatesPage() {
   const openCreate = () => {
     setEditing(null)
     setCreatedTokenHint(null)
-    form.setFieldsValue({ name: '', category: '', tags: [] })
+    form.setFieldsValue({ name: '', category: '', tags: [], shared_trigger_text: '' })
     setComponents([{ model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' }])
     setPresetSelectedByIdx({})
     setPhrasePresets([])
@@ -553,6 +553,7 @@ export default function BundleTemplatesPage() {
       name: row?.name ?? '',
       category: String(meta?.category ?? '') || '',
       tags: parseTags(meta),
+      shared_trigger_text: String(meta?.shared_trigger_text ?? row?.shared_trigger_text ?? '') || '',
     })
     const rows = (row?.components ?? []) as any[]
     const legacyLabelToIndex = new Map<string, number>()
@@ -639,6 +640,7 @@ export default function BundleTemplatesPage() {
         ...(editing?.metadata ?? {}),
         category: String(values.category ?? '').trim() || undefined,
         tags: Array.isArray(values.tags) ? values.tags.map((x: any) => String(x)).filter(Boolean) : [],
+        shared_trigger_text: String(values.shared_trigger_text ?? '').trim() || undefined,
         variant_presets: presetSelectedByIdx,
         // Preserve legacy lexicon_rules (global fallback mapping) if exists, but do not expose to operators.
         lexicon_rules: Array.isArray((editing?.metadata ?? {})?.lexicon_rules) ? (editing?.metadata ?? {})?.lexicon_rules : [],
@@ -1381,6 +1383,12 @@ export default function BundleTemplatesPage() {
               },
             ]}
           />
+
+          <Form layout="vertical" form={form}>
+            <Form.Item name="shared_trigger_text" label="公共触发词（备注，可选）">
+              <Input.TextArea rows={2} placeholder="例如：雪尼尔印花，背面纯色（仅备注，不参与解析）" />
+            </Form.Item>
+          </Form>
         </Space>
       </Drawer>
     </div>

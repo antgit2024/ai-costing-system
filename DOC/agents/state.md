@@ -58,6 +58,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend+Backend：短语预设升级为二级结构：一级为运营短语；二级为该短语的“字段映射组”（字段/词（严格选择）/目标组件），命中短语后仅执行该短语映射组（全局字段映射仅在无短语命中时兜底），避免规则越配越活；已硬验收 `npm -C frontend run build`、后端 pytest `test_bundle_templates_center.py`、已原子发布并重启 `planner-costing.service`）
 - **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：短语预设交互防迷路：新增明显的“新增短语”按钮；每条短语展开的映射组新增“新增映射行”按钮；并优化空态文案指引；已硬验收 `npm -C frontend run build` 并原子发布）
 - **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：套装模板页面继续去说明化：移除“短语预设/组件清单”两段说明文案；移除“公共触发词(shared_trigger_text)”输入项（保留后端兼容，不影响历史数据）；已硬验收 `npm -C frontend run build` 并原子发布）
+- **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：将“公共触发词”以底部“备注/描述框”形式恢复，读写 `metadata.shared_trigger_text`（仅备注，不参与解析）；已硬验收 `npm -C frontend run build` 并原子发布）
 
 ### 关键口径备忘（避免回滚/重构改坏）
 

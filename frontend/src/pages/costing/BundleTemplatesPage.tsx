@@ -100,6 +100,22 @@ const SLOT_CN_FALLBACK: Record<string, string> = {
   zipper: '拉链位',
 }
 
+const matchLexiconSample = (sample: string, rule: LexiconRuleRow): boolean => {
+  const s = String(sample ?? '').trim()
+  if (!s) return false
+  const key = String(rule.match_key ?? '').trim()
+  const val = String(rule.match_value ?? '').trim()
+  if (!val) return false
+  // allow both "材质:雪尼尔2个" and "雪尼尔2个"
+  const hasVal = s.includes(val)
+  if (!hasVal) return false
+  if (!key) return true
+  // key present: require explicit key prefix OR allow bare value
+  const keyPrefix1 = `${key}:`
+  const keyPrefix2 = `${key}：`
+  return s.includes(keyPrefix1) || s.includes(keyPrefix2) || hasVal
+}
+
 export default function BundleTemplatesPage() {
   const qc = useQueryClient()
   const [search, setSearch] = useState<string>('')
@@ -897,18 +913,13 @@ export default function BundleTemplatesPage() {
             message="套装字符映射（可选，用于“材质:雪尼尔2个(30*30)+…”这种对客规格）"
             description="用于把对客交易规格里的“材质:雪尼尔2个”等片段，映射到指定组件 label，并按数量拆分为多行组件，避免雪尼尔+棉麻混搭时 token 广播冲突。"
           />
-          <Space style={{ justifyContent: 'space-between', width: '100%' }}>
-            <Text type="secondary">提示：先在组件清单里填写组件 label，这里才能下拉选择目标组件。</Text>
-            <Button size="small" onClick={() => setLexiconRules((prev) => [...prev, { match_key: '材质', match_value: '', target_label: '' }])}>
-              新增规则
-            </Button>
-          </Space>
+          <Text type="secondary">提示：先在组件清单里填写组件 label，这里才能下拉选择目标组件。</Text>
           <Table
             size="small"
             pagination={false}
             rowKey={(_, idx) => `lex-${idx}`}
             dataSource={lexiconRules}
-            locale={{ emptyText: '暂无规则：点右上角“新增规则”添加第一条' }}
+            locale={{ emptyText: '暂无规则：在“操作”列点 +行 添加第一条' }}
             columns={[
               {
                 title: '字段',
@@ -962,6 +973,61 @@ export default function BundleTemplatesPage() {
                 width: 140,
                 render: (_: any, __: any, idx: number) => (
                   <Space>
+                    <Button
+                      size="small"
+                      onClick={() => setLexiconRules((prev) => [...prev, { match_key: '材质', match_value: '', target_label: '' }])}
+                    >
+                      +行
+                    </Button>
+                    <Button
+                      size="small"
+                      disabled={!lexiconRules[idx] || !String((lexiconRules[idx] as any)?.match_value ?? '').trim()}
+                      onClick={() => {
+                        const row = lexiconRules[idx]
+                        if (!row) return
+                        if (!String(row.match_value ?? '').trim()) {
+                          message.warning('请先填写“词”')
+                          return
+                        }
+                        if (!String(row.target_label ?? '').trim()) {
+                          message.warning('请先选择“目标组件label”')
+                          return
+                        }
+                        const labels = Array.from(new Set((components ?? []).map((c) => String(c.label ?? '').trim()).filter(Boolean)))
+                        if (!labels.includes(String(row.target_label).trim())) {
+                          message.error(`目标组件label 不存在于组件清单：${String(row.target_label)}`)
+                          return
+                        }
+                        let sample = `${String(row.match_key || '').trim() ? `${String(row.match_key).trim()}:` : ''}${String(row.match_value).trim()}2个(30*30)`
+                        Modal.confirm({
+                          title: '命中测试（仅验证字符映射规则）',
+                          content: (
+                            <div>
+                              <div style={{ marginBottom: 8 }}>
+                                <Text type="secondary">
+                                  输入一个片段，例如：材质:雪尼尔2个(30*30) 或 雪尼尔2个(30*30)
+                                </Text>
+                              </div>
+                              <Input
+                                defaultValue={sample}
+                                onChange={(e) => {
+                                  sample = e.target.value
+                                }}
+                              />
+                            </div>
+                          ),
+                          okText: '测试',
+                          cancelText: '关闭',
+                          onOk: async () => {
+                            const hit = matchLexiconSample(sample, row)
+                            if (hit) message.success(`命中：将分配到组件 label = ${String(row.target_label)}`)
+                            else message.warning('未命中：请检查字段/词与测试片段是否一致')
+                          },
+                        })
+                      }}
+                    >
+                      命中
+                    </Button>
                     <Button size="small" danger disabled={lexiconRules.length <= 0} onClick={() => setLexiconRules((prev) => prev.filter((_, i) => i !== idx))}>
                       删除
                     </Button>

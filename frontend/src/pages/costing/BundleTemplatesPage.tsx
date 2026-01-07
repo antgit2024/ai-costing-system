@@ -97,6 +97,19 @@ const getStructureSlotLabel = (row: any): string => {
   return ''
 }
 
+const SLOT_CN_FALLBACK: Record<string, string> = {
+  front: '前片位',
+  back: '背片位',
+  left: '左侧位',
+  right: '右侧位',
+  top: '顶部位',
+  bottom: '底部位',
+  center: '中心位',
+  edge: '边位',
+  border: '包边位',
+  zipper: '拉链位',
+}
+
 export default function BundleTemplatesPage() {
   const qc = useQueryClient()
   const [search, setSearch] = useState<string>('')
@@ -247,7 +260,9 @@ export default function BundleTemplatesPage() {
     if (/[\u4e00-\u9fff]/.test(s)) return s
     const names = versionId ? slotDisplayNameByVersionId.get(String(versionId)) : undefined
     const hit = names ? String(names[s.toLowerCase()] ?? '').trim() : ''
-    return hit || s
+    if (hit) return hit
+    const fb = SLOT_CN_FALLBACK[s.toLowerCase()]
+    return fb || s
   }
 
   const versionLinesSummaryQuery = useQuery({
@@ -370,6 +385,7 @@ export default function BundleTemplatesPage() {
     setCreatedTokenHint(null)
     form.setFieldsValue({ name: '', category: '', tags: [], shared_trigger_text: '' })
     setComponents([{ model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' }])
+    setPresetSelectedByIdx({})
     setDrawerOpen(true)
   }
 
@@ -395,6 +411,12 @@ export default function BundleTemplatesPage() {
           }))
         : [{ model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' }],
     )
+    const vp = (row?.metadata ?? {})?.variant_presets
+    if (vp && typeof vp === 'object') {
+      setPresetSelectedByIdx(vp as any)
+    } else {
+      setPresetSelectedByIdx({})
+    }
     setDrawerOpen(true)
   }
 
@@ -416,6 +438,7 @@ export default function BundleTemplatesPage() {
         ...(editing?.metadata ?? {}),
         category: String(values.category ?? '').trim() || undefined,
         tags: Array.isArray(values.tags) ? values.tags.map((x: any) => String(x)).filter(Boolean) : [],
+        variant_presets: presetSelectedByIdx,
       }
       const sharedText = String(values.shared_trigger_text ?? '').trim() || undefined
 
@@ -935,7 +958,24 @@ export default function BundleTemplatesPage() {
                     >
                       +行
                     </Button>
-                    <Button size="small" danger disabled={components.length <= 1} onClick={() => setComponents((prev) => prev.filter((_, i) => i !== idx))}>
+                    <Button
+                      size="small"
+                      danger
+                      disabled={components.length <= 1}
+                      onClick={() => {
+                        setComponents((prev) => prev.filter((_, i) => i !== idx))
+                        setPresetSelectedByIdx((prev) => {
+                          const next: Record<number, Record<string, string | null>> = {}
+                          for (const [k, v] of Object.entries(prev ?? {})) {
+                            const i = Number(k)
+                            if (!Number.isFinite(i)) continue
+                            if (i === idx) continue
+                            next[i > idx ? i - 1 : i] = v as any
+                          }
+                          return next
+                        })
+                      }}
+                    >
                       删除
                     </Button>
                   </Space>

@@ -46,7 +46,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：标准模型列表 UI 优化：品类列缩窄并移到模型名前；模型名列缩窄；“匹配模块”改名“货品映射”并加宽；隐藏状态/入口列；“当前发布标准”改为更小的带边框标签显示；验收 `npm -C frontend run build` 并已发布静态资源）
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：标准模型列表增加“货品映射（关键词）”筛选框：在当前列表数据中按 `metadata_json.recognition_keywords` 进行过滤（支持空格/逗号分隔的任意命中）；验收 `npm -C frontend run build` 并已发布静态资源）
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Backend+Frontend：套装壳（方案A）MVP：新增后端 `/api/planner/bom/generate-bundle`（组件尺寸/数量显式输入，不从交易规格解析；支持 tokens 触发行级变体；输出单件结果+合并BOM/成本/扣库）；前端“产品上架（测试台）”新增套装模式组件录入与“套装：预演BOM（合并器）”按钮；验收 `npm -C frontend run build`，已发布静态并重启后端）
-- **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：结构位(slot)中文名映射修复：结构标准 code 与 slot code 均做 trim + 小写归一化，再用结构标准的 slot_display_names/slot_defs.name_cn 做映射；仍无映射则回退原 slot。验收：`npm -C frontend run build`、静态发布）
+- **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：套装模板“预设变体筛选”增强：1) 结构位中文名兜底：除结构标准映射外，增加通用 slot→中文字典（front→前片位等），确保弹窗/摘要可读；2) 变体选择落库：将每个组件的已选 variant 记录写入模板 metadata_json.variant_presets，保存后再打开仍能看到选择结果。验收：`npm -C frontend run build`、静态发布）
 
 ### 关键口径备忘（避免回滚/重构改坏）
 

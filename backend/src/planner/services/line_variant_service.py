@@ -185,13 +185,30 @@ def evaluate_conditions(
     cond = variant.conditions_json or {}
     lowered_tokens = [token.lower() for token in tokens]
 
+    def _split_token_values(values: Any) -> List[str]:
+        """
+        Compatibility: historical data sometimes stores multiple tokens in one string,
+        e.g. "雪尼尔，WB02339". We split by common delimiters.
+        """
+        out: List[str] = []
+        raw_list = values if isinstance(values, list) else []
+        for v in raw_list:
+            s = str(v).strip()
+            if not s:
+                continue
+            for part in s.replace("、", ",").replace("，", ",").split(","):
+                p = part.strip()
+                if p:
+                    out.append(p.lower())
+        return out
+
     if cond.get("spec_contains_any"):
-        any_values = [str(v).lower() for v in cond.get("spec_contains_any") or []]
+        any_values = _split_token_values(cond.get("spec_contains_any") or [])
         if any_values and not any(value for value in any_values if value and value in lowered_tokens):
             return False
 
     if cond.get("spec_contains_all"):
-        all_values = [str(v).lower() for v in cond.get("spec_contains_all") or []]
+        all_values = _split_token_values(cond.get("spec_contains_all") or [])
         if any(value and value not in lowered_tokens for value in all_values):
             return False
 

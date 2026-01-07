@@ -32,7 +32,6 @@ import {
   fetchProductModelVersions,
   fetchStructureStandards,
   fetchProductModelVersionsPaged,
-  generateBomMultiBundle,
   listLineVariants,
   updateBundleTemplate,
 } from '@/services/planner'
@@ -51,7 +50,6 @@ type LexiconRuleRow = {
   match_key: string
   match_value: string
   target_component_index: number | null
-  validated?: 'ok' | 'fail' | null
 }
 
 const parseTags = (meta: any): string[] => {
@@ -93,6 +91,18 @@ const isRuntimeToken = (t: string): boolean => {
   return up.startsWith('MODEL:') || up.startsWith('M:') || up.startsWith('BOUND_VERSION:') || up.startsWith('SKU:')
 }
 
+const splitTokenCandidates = (raw: string): string[] => {
+  const s = String(raw ?? '').trim()
+  if (!s) return []
+  // support historical "雪尼尔，WB02339" style
+  return s
+    .replace(/、/g, ',')
+    .replace(/，/g, ',')
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean)
+}
+
 const copyToClipboard = async (text: string) => {
   const v = String(text ?? '')
   if (!v.trim()) return
@@ -132,31 +142,6 @@ const SLOT_CN_FALLBACK: Record<string, string> = {
   edge: '边位',
   border: '包边位',
   zipper: '拉链位',
-}
-
-const matchLexiconSample = (sample: string, rule: LexiconRuleRow): boolean => {
-  const s = String(sample ?? '').trim()
-  if (!s) return false
-  const key = String(rule.match_key ?? '').trim()
-  const val = String(rule.match_value ?? '').trim()
-  if (!val) return false
-  // allow both "材质:雪尼尔2个" and "雪尼尔2个"
-  const hasVal = s.includes(val)
-  if (!hasVal) return false
-  if (!key) return true
-  // key present: require explicit key prefix OR allow bare value
-  const keyPrefix1 = `${key}:`
-  const keyPrefix2 = `${key}：`
-  return s.includes(keyPrefix1) || s.includes(keyPrefix2) || hasVal
-}
-
-const explainLexiconInjection = (rule: LexiconRuleRow): string[] => {
-  const key = String(rule.match_key ?? '').trim()
-  const val = String(rule.match_value ?? '').trim()
-  if (!val) return []
-  const kv = key ? `${key}:${val}` : val
-  // backend injects both kv and raw value for compatibility
-  return [kv, val]
 }
 
 export default function BundleTemplatesPage() {
@@ -275,10 +260,12 @@ export default function BundleTemplatesPage() {
         const anyTokens = Array.isArray(cond?.spec_contains_any) ? cond.spec_contains_any : []
         const allTokens = Array.isArray(cond?.spec_contains_all) ? cond.spec_contains_all : []
         for (const raw of [...anyTokens, ...allTokens]) {
-          const s = String(raw ?? '').trim()
-          if (!s) continue
-          if (isRuntimeToken(s)) continue
-          tokenSet.add(s)
+          const s0 = String(raw ?? '').trim()
+          if (!s0) continue
+          if (isRuntimeToken(s0)) continue
+          for (const s of splitTokenCandidates(s0)) {
+            if (s && !isRuntimeToken(s)) tokenSet.add(s)
+          }
         }
       }
     }
@@ -549,84 +536,7 @@ export default function BundleTemplatesPage() {
     setPresetModalOpen(false)
   }
 
-  const previewVariantsByComponentIndex = async (componentIndex: number, tokens: string[], title: string) => {
-    const comp = (components ?? [])[componentIndex] as any
-    const modelVersionId = String(comp?.model_version_id ?? '').trim()
-    if (!modelVersionId) {
-      message.info('未选择该组件的模型版本：已完成字符映射命中测试（未跑模型变体预演）')
-      return
-    }
-    try {
-      const widthMm = Math.round(Number(comp?.width_cm ?? 0) * 10)
-      const heightMm = Math.round(Number(comp?.height_cm ?? 0) * 10)
-      const qty = Number(comp?.quantity ?? 1)
-
-      const res: any = await generateBomMultiBundle({
-        sku_code: null,
-        include_disabled_variants: true,
-        components: [
-          {
-            model_version_id: modelVersionId,
-            width_mm: String(Number.isFinite(widthMm) && widthMm > 0 ? widthMm : 400),
-            height_mm: String(Number.isFinite(heightMm) && heightMm > 0 ? heightMm : 500),
-            quantity: String(Number.isFinite(qty) && qty > 0 ? qty : 1),
-            spec_text: '',
-            tokens,
-          },
-        ],
-      } as any)
-
-      const comp0 = Array.isArray(res?.components) ? res.components[0] : null
-      const hits = ((comp0?.trace ?? {}) as any)?.matched_variants
-      const hitList = Array.isArray(hits) ? hits.filter((x: any) => x?.matched) : []
-      const matchedCount = hitList.length
-
-      Modal.info({
-        title,
-        content: (
-          <div>
-            <div style={{ marginBottom: 8 }}>
-              <Text type="secondary">{getComponentDisplay(componentIndex)}</Text>
-            </div>
-            <div style={{ marginBottom: 8 }}>
-              <Text type="secondary">model_version_id：{modelVersionId}</Text>
-            </div>
-            <div style={{ marginBottom: 8 }}>
-              <Text type="secondary">tokens：{tokens.join('、') || '-'}</Text>
-            </div>
-            <div style={{ marginBottom: 8 }}>
-              <Text>命中变体：{hitList.length} 条（matched=true）</Text>
-            </div>
-            {hitList.length ? (
-              <div style={{ maxHeight: 260, overflow: 'auto', paddingRight: 8 }}>
-                <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                  {hitList.slice(0, 20).map((h: any) => (
-                    <div key={String(h?.variant_id ?? '')} style={{ border: '1px solid #f0f0f0', padding: 8, borderRadius: 6 }}>
-                      <Space wrap>
-                        <Tag color="green">matched</Tag>
-                        <Text type="secondary">variant_id: {String(h?.variant_id ?? '-')}</Text>
-                        <Text type="secondary">base_line_id: {String(h?.base_line_id ?? '-')}</Text>
-                        <Text type="secondary">action: {String(h?.action ?? '-')}</Text>
-                        <Text type="secondary">effect: {String(h?.effect ?? '-')}</Text>
-                      </Space>
-                    </div>
-                  ))}
-                  {hitList.length > 20 ? <Text type="secondary">（仅展示前 20 条）</Text> : null}
-                </Space>
-              </div>
-            ) : (
-              <Text type="secondary">未命中任何变体：请检查该版本的变体条件是否包含这些 tokens（TOKEN any/all）。</Text>
-            )}
-          </div>
-        ),
-        okText: '关闭',
-      })
-      return matchedCount
-    } catch (e: any) {
-      message.error(`模型变体预演失败：${String(e?.response?.data?.detail ?? e?.message ?? e)}`)
-      return null
-    }
-  }
+  // NOTE: “字段映射”的“词”已收口为严格候选选择，不再提供“命中/预演”按钮。
 
   const openCreate = () => {
     setEditing(null)
@@ -1108,121 +1018,25 @@ export default function BundleTemplatesPage() {
                       { value: '枕芯', label: '枕芯' },
                     ]}
                     onChange={(v) =>
-                      setLexiconRules((prev) => prev.map((x, i) => (i === idx ? { ...x, match_key: String(v), validated: null } : x)))
+                      setLexiconRules((prev) => prev.map((x, i) => (i === idx ? { ...x, match_key: String(v) } : x)))
                     }
                   />
                 ),
               },
               {
-                title: '词',
+                title: '词（严格选择）',
                 width: 420,
                 render: (_: any, r: any, idx: number) => (
-                  <Space.Compact style={{ width: '100%' }}>
-                    <Input
-                      placeholder="例如：雪尼尔 / 棉麻 / PP棉"
-                      value={String(r.match_value ?? '')}
-                      onChange={(e) =>
-                        setLexiconRules((prev) =>
-                          prev.map((x, i) => (i === idx ? { ...x, match_value: e.target.value, validated: null } : x)),
-                        )
-                      }
-                    />
-                    <Button
-                      disabled={!lexiconRules[idx] || !String((lexiconRules[idx] as any)?.match_value ?? '').trim()}
-                      onClick={() => {
-                        const row = lexiconRules[idx]
-                        if (!row) return
-                        if (!String(row.match_value ?? '').trim()) {
-                          message.warning('请先填写“词”')
-                          return
-                        }
-                        if (typeof row.target_component_index !== 'number') {
-                          message.warning('请先选择“目标组件”')
-                          return
-                        }
-                        const targetIdx = Number(row.target_component_index)
-                        if (!Number.isFinite(targetIdx) || targetIdx < 0 || targetIdx >= (components ?? []).length) {
-                          message.error('目标组件索引非法（请重新选择）')
-                          return
-                        }
-                        let sample = `${String(row.match_key || '').trim() ? `${String(row.match_key).trim()}:` : ''}${String(row.match_value).trim()}2个(30*30)`
-                        Modal.confirm({
-                          title: '命中测试（字符映射 + 模型变体预演）',
-                          content: (
-                            <div>
-                              <div style={{ marginBottom: 8 }}>
-                                <Text type="secondary">输入片段，例如：材质:雪尼尔2个(30*30) 或 雪尼尔2个(30*30)</Text>
-                              </div>
-                              <Input
-                                defaultValue={sample}
-                                onChange={(e) => {
-                                  sample = e.target.value
-                                }}
-                              />
-                            </div>
-                          ),
-                          okText: '测试',
-                          cancelText: '关闭',
-                          onOk: async () => {
-                            const hit = matchLexiconSample(sample, row)
-                            if (!hit) {
-                              message.warning('未命中：请检查字段/词与测试片段是否一致')
-                              setLexiconRules((prev) => prev.map((x, i) => (i === idx ? { ...x, validated: 'fail' } : x)))
-                              return
-                            }
-                            const tokens = explainLexiconInjection(row)
-                              .map((t) => String(t).trim())
-                              .filter(Boolean)
-                            message.success(`命中：将分配到 ${getComponentDisplay(targetIdx)}；注入tokens：${tokens.join('、') || '-'}`)
-                            const matchedCount = await previewVariantsByComponentIndex(
-                              targetIdx,
-                              tokens,
-                              `模型变体预演结果（${getComponentDisplay(targetIdx)}）`,
-                            )
-                            if (matchedCount == null) return
-                            if (matchedCount > 0) {
-                              setLexiconRules((prev) => prev.map((x, i) => (i === idx ? { ...x, validated: 'ok' } : x)))
-                              return
-                            }
-                            // No variant hit: clear word to avoid leaving invalid rules.
-                            setLexiconRules((prev) =>
-                              prev.map((x, i) => (i === idx ? { ...x, match_value: '', validated: 'fail' } : x)),
-                            )
-                            message.warning('模型变体命中=0：已自动清空该“词”，请改为变体规则里真实存在的触发词')
-                          },
-                        })
-                      }}
-                    >
-                      命中
-                    </Button>
-                    {r?.validated === 'ok' ? (
-                      <Tag
-                        color="success"
-                        style={{
-                          borderRadius: 999,
-                          padding: '0 8px',
-                          lineHeight: '20px',
-                          fontSize: 12,
-                          marginInlineStart: 6,
-                        }}
-                      >
-                        已验证
-                      </Tag>
-                    ) : r?.validated === 'fail' ? (
-                      <Tag
-                        color="error"
-                        style={{
-                          borderRadius: 999,
-                          padding: '0 8px',
-                          lineHeight: '20px',
-                          fontSize: 12,
-                          marginInlineStart: 6,
-                        }}
-                      >
-                        未通过
-                      </Tag>
-                    ) : null}
-                  </Space.Compact>
+                  <Select
+                    showSearch
+                    allowClear
+                    placeholder={variableTokenCandidates.length ? '从候选中选择（不可手输）' : '暂无候选词：请先选择模型版本'}
+                    style={{ width: '100%' }}
+                    value={String(r.match_value ?? '').trim() || undefined}
+                    options={variableTokenCandidates.map((t) => ({ value: t, label: t }))}
+                    onChange={(v) => setLexiconRules((prev) => prev.map((x, i) => (i === idx ? { ...x, match_value: String(v ?? '') } : x)))}
+                    disabled={!variableTokenCandidates.length}
+                  />
                 ),
               },
               {
@@ -1242,7 +1056,7 @@ export default function BundleTemplatesPage() {
                     onChange={(v) =>
                       setLexiconRules((prev) =>
                         prev.map((x, i) =>
-                          i === idx ? { ...x, target_component_index: v == null ? null : Number(v), validated: null } : x,
+                          i === idx ? { ...x, target_component_index: v == null ? null : Number(v) } : x,
                         ),
                       )
                     }

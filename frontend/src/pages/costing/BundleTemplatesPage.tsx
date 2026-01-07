@@ -189,7 +189,8 @@ export default function BundleTemplatesPage() {
     const items = (structureStandardsQuery.data?.items ?? []) as any[]
     for (const it of items) {
       const code = String(it?.code ?? it?.name ?? '').trim()
-      if (code) m.set(code, it)
+      const k = code.toLowerCase()
+      if (k) m.set(k, it)
     }
     return m
   }, [structureStandardsQuery.data])
@@ -226,13 +227,13 @@ export default function BundleTemplatesPage() {
     const m = new Map<string, Record<string, string>>()
     const mapping = (versionStructureCodeQuery.data ?? {}) as Record<string, string>
     for (const [vid, code] of Object.entries(mapping)) {
-      const std = structureStandardByCode.get(String(code))
+      const std = structureStandardByCode.get(String(code ?? '').trim().toLowerCase())
       const names = (std?.slot_display_names ?? {}) as Record<string, any>
       const out: Record<string, string> = {}
       for (const [k, v] of Object.entries(names ?? {})) {
         const kk = String(k ?? '').trim()
         const vv = String(v ?? '').trim()
-        if (kk && vv) out[kk] = vv
+        if (kk && vv) out[kk.toLowerCase()] = vv
       }
       if (Object.keys(out).length) m.set(String(vid), out)
     }
@@ -245,7 +246,7 @@ export default function BundleTemplatesPage() {
     // already CN (or user-entered), keep as-is
     if (/[\u4e00-\u9fff]/.test(s)) return s
     const names = versionId ? slotDisplayNameByVersionId.get(String(versionId)) : undefined
-    const hit = names ? String(names[s] ?? '').trim() : ''
+    const hit = names ? String(names[s.toLowerCase()] ?? '').trim() : ''
     return hit || s
   }
 

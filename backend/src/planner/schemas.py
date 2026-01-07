@@ -2103,6 +2103,9 @@ class BundleTemplateCreateRequest(BaseModel):
     name: Optional[str] = Field(None, max_length=128)
     components: List[BundleTemplateComponent] = Field(default_factory=list, min_items=1)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    shared_trigger_text: Optional[str] = Field(
+        None, max_length=512, description="公共触发词（作用于该套装所有组件；不要写尺寸）"
+    )
 
     class Config:
         json_encoders = {Decimal: _decimal_to_str}
@@ -2114,6 +2117,7 @@ class BundleTemplateRead(BaseModel):
     name: Optional[str] = None
     components: List[BundleTemplateComponent] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    shared_trigger_text: Optional[str] = None
     is_archived: bool = False
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -2123,6 +2127,9 @@ class BundleTemplateUpdateRequest(BaseModel):
     name: Optional[str] = Field(None, max_length=128)
     components: Optional[List[BundleTemplateComponent]] = None
     metadata: Optional[Dict[str, Any]] = None
+    shared_trigger_text: Optional[str] = Field(
+        None, max_length=512, description="公共触发词（作用于该套装所有组件；不要写尺寸）"
+    )
     operator_id: Optional[str] = Field("system", max_length=64)
 
     class Config:

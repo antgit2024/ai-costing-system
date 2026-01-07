@@ -147,7 +147,7 @@ export default function BundleTemplatesPage() {
   const openCreate = () => {
     setEditing(null)
     setCreatedTokenHint(null)
-    form.setFieldsValue({ name: '', category: '', tags: [] })
+    form.setFieldsValue({ name: '', category: '', tags: [], shared_trigger_text: '' })
     setComponents([{ model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' }])
     setDrawerOpen(true)
   }
@@ -160,6 +160,7 @@ export default function BundleTemplatesPage() {
       name: row?.name ?? '',
       category: String(meta?.category ?? '') || '',
       tags: parseTags(meta),
+      shared_trigger_text: String(row?.shared_trigger_text ?? meta?.shared_trigger_text ?? '') || '',
     })
     const rows = (row?.components ?? []) as any[]
     setComponents(
@@ -195,18 +196,21 @@ export default function BundleTemplatesPage() {
         category: String(values.category ?? '').trim() || undefined,
         tags: Array.isArray(values.tags) ? values.tags.map((x: any) => String(x)).filter(Boolean) : [],
       }
+      const sharedText = String(values.shared_trigger_text ?? '').trim() || undefined
 
       if (editing?.id) {
         return await updateBundleTemplate(editing.id, {
           name: String(values.name ?? '').trim() || undefined,
           components: comps as any,
           metadata: meta,
+          shared_trigger_text: sharedText,
         })
       }
       return await createBundleTemplate({
         name: String(values.name ?? '').trim() || undefined,
         components: comps as any,
         metadata: meta,
+        shared_trigger_text: sharedText,
       })
     },
     onSuccess: (res: any) => {
@@ -416,6 +420,13 @@ export default function BundleTemplatesPage() {
                 </Form.Item>
               </Col>
             </Row>
+            <Form.Item
+              name="shared_trigger_text"
+              label="公共触发词（作用于所有组件，可选）"
+              extra="建议填对客交易规格里一定会出现/需要的关键词；不要写 40*50 这类尺寸。"
+            >
+              <Input.TextArea rows={2} placeholder="例如：背面纯色，雪尼尔" />
+            </Form.Item>
           </Form>
 
           <Alert

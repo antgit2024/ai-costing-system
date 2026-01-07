@@ -19,12 +19,14 @@ def _components_payload(items: list[schemas.BundleTemplateComponent]) -> list[di
 
 
 def _serialize(t) -> schemas.BundleTemplateRead:
+    meta = t.metadata_json or {}
     return schemas.BundleTemplateRead(
         id=t.id,
         code=t.code,
         name=t.name,
         components=[schemas.BundleTemplateComponent(**x) for x in (t.components_json or [])],
-        metadata=t.metadata_json or {},
+        metadata=meta,
+        shared_trigger_text=str(meta.get("shared_trigger_text") or "").strip() or None,
         is_archived=bool(t.is_archived),
         created_at=getattr(t, "created_at", None),
         updated_at=getattr(t, "updated_at", None),
@@ -37,11 +39,15 @@ def create_bundle_template(
     db: Session = Depends(get_db),
 ) -> schemas.BundleTemplateRead:
     try:
+        meta = dict(payload.metadata or {})
+        if payload.shared_trigger_text is not None:
+            v = str(payload.shared_trigger_text or "").strip()
+            meta["shared_trigger_text"] = v or None
         t = bundle_template_service.create_template(
             db,
             name=payload.name,
             components=_components_payload(payload.components),
-            metadata=payload.metadata or {},
+            metadata=meta,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -100,12 +106,22 @@ def update_bundle_template(
     db: Session = Depends(get_db),
 ) -> schemas.BundleTemplateRead:
     try:
+        # If metadata is provided, update on top; otherwise keep existing.
+        meta = payload.metadata
+        if meta is not None:
+            meta = dict(meta)
+        if payload.shared_trigger_text is not None:
+            if meta is None:
+                existing = bundle_template_service.get_template(db, template_id, include_archived=True)
+                meta = dict((existing.metadata_json or {}) if existing else {})
+            v = str(payload.shared_trigger_text or "").strip()
+            meta["shared_trigger_text"] = v or None
         t = bundle_template_service.update_template(
             db,
             template_id=template_id,
             name=payload.name,
             components=_components_payload(payload.components) if payload.components is not None else None,
-            metadata=payload.metadata,
+            metadata=meta,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

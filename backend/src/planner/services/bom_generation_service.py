@@ -185,6 +185,15 @@ def generate_bom_by_spec(
     # remove bundle code tokens themselves from shared tokens (avoid accidental rule matching)
     shared_tokens = [t for t in shared_tokens if not t.upper().startswith("B:") and not t.upper().startswith("BUNDLE:")]
 
+    # Merge template-level shared trigger text (applies to all components)
+    tpl_meta = tpl.metadata_json or {}
+    tpl_shared = str(tpl_meta.get("shared_trigger_text") or "").strip()
+    if tpl_shared:
+        tpl_shared_parsed = spec_parser_service.parse_spec(tpl_shared)
+        tpl_shared_tokens = [str(x) for x in (tpl_shared_parsed.get("tokens") or []) if str(x).strip()]
+        tpl_shared_tokens = [t for t in tpl_shared_tokens if not t.upper().startswith("B:") and not t.upper().startswith("BUNDLE:")]
+        shared_tokens = shared_tokens + tpl_shared_tokens
+
     comps2: List[Dict[str, Any]] = []
     for i, c in enumerate(components):
         if not isinstance(c, dict):

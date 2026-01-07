@@ -1315,6 +1315,7 @@ export type BundleTemplateCreateRequest = {
   name?: string
   components: BundleTemplateComponent[]
   metadata?: Record<string, any>
+  shared_trigger_text?: string
 }
 
 export type BundleTemplateRead = {
@@ -1323,6 +1324,7 @@ export type BundleTemplateRead = {
   name?: string | null
   components: BundleTemplateComponent[]
   metadata: Record<string, any>
+  shared_trigger_text?: string | null
   is_archived: boolean
   created_at?: string
   updated_at?: string
@@ -1359,7 +1361,7 @@ export const fetchBundleTemplate = async (templateId: string): Promise<BundleTem
 
 export const updateBundleTemplate = async (
   templateId: string,
-  payload: { name?: string; components?: BundleTemplateComponent[]; metadata?: Record<string, any> },
+  payload: { name?: string; components?: BundleTemplateComponent[]; metadata?: Record<string, any>; shared_trigger_text?: string },
 ): Promise<BundleTemplateRead> => {
   const response = await plannerClient.patch(`/bundle-templates/${templateId}`, payload)
   return response.data

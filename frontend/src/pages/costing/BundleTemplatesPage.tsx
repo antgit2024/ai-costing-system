@@ -538,7 +538,7 @@ export default function BundleTemplatesPage() {
   const openCreate = () => {
     setEditing(null)
     setCreatedTokenHint(null)
-    form.setFieldsValue({ name: '', category: '', tags: [], shared_trigger_text: '' })
+    form.setFieldsValue({ name: '', category: '', tags: [] })
     setComponents([{ model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' }])
     setPresetSelectedByIdx({})
     setPhrasePresets([])
@@ -553,7 +553,6 @@ export default function BundleTemplatesPage() {
       name: row?.name ?? '',
       category: String(meta?.category ?? '') || '',
       tags: parseTags(meta),
-      shared_trigger_text: String(row?.shared_trigger_text ?? meta?.shared_trigger_text ?? '') || '',
     })
     const rows = (row?.components ?? []) as any[]
     const legacyLabelToIndex = new Map<string, number>()
@@ -658,21 +657,17 @@ export default function BundleTemplatesPage() {
           }))
           .filter((p) => p.phrase && Array.isArray((p as any).mappings)),
       }
-      const sharedText = String(values.shared_trigger_text ?? '').trim() || undefined
-
       if (editing?.id) {
         return await updateBundleTemplate(editing.id, {
           name: String(values.name ?? '').trim() || undefined,
           components: comps as any,
           metadata: meta,
-          shared_trigger_text: sharedText,
         })
       }
       return await createBundleTemplate({
         name: String(values.name ?? '').trim() || undefined,
         components: comps as any,
         metadata: meta,
-        shared_trigger_text: sharedText,
       })
     },
     onSuccess: (res: any) => {
@@ -1009,23 +1004,10 @@ export default function BundleTemplatesPage() {
                 </Form.Item>
               </Col>
             </Row>
-            <Form.Item
-              name="shared_trigger_text"
-              label="公共触发词（作用于所有组件，可选）"
-              extra="建议填对客交易规格里一定会出现/需要的关键词。运营写尺寸也没问题，但这里不会用于解析尺寸/不会改变模板尺寸（仅用于触发变体）。"
-            >
-              <Input.TextArea rows={2} placeholder="例如：背面纯色，雪尼尔（写尺寸也不会影响模板尺寸）" />
-            </Form.Item>
           </Form>
 
           {/* 已按运营心智收口：不再展示“全局字段映射/可变词列表”，避免误会与绕圈。 */}
 
-          <Alert
-            type="info"
-            showIcon
-            message="短语预设（推荐：把常见交易规格片段定死）"
-            description="匹配规则：对客交易规格“包含命中”，并按“更长短语优先”。命中后会执行该短语下的“映射组”（字段/词/目标组件）。"
-          />
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
             <Button
               type="dashed"
@@ -1223,13 +1205,6 @@ export default function BundleTemplatesPage() {
                 ),
               },
             ]}
-          />
-
-          <Alert
-            type="info"
-            showIcon
-            message="组件清单（结构化）"
-            description="每行：标准版本 + 宽(cm) + 高(cm) + 数量 + 预设变体筛选/触发词（可选，仅用于命中变体；不会解析尺寸/不会改变模板尺寸）。"
           />
 
           <Table

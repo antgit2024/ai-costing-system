@@ -57,7 +57,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend+Backend：新增“短语预设（推荐）”：按“包含命中+更长优先”把常见对客片段直接映射到组件并注入 tokens，可覆盖组件数量（短语中含“2个/3个”会自动解析，亦可手填覆盖）；并在 `/bom/generate-by-spec` trace 中回传 `phrase_presets` 命中信息用于排错；已硬验收 `npm -C frontend run build`、后端 pytest `test_bundle_templates_center.py`、已原子发布并重启 `planner-costing.service`）
 - **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend+Backend：短语预设升级为二级结构：一级为运营短语；二级为该短语的“字段映射组”（字段/词（严格选择）/目标组件），命中短语后仅执行该短语映射组（全局字段映射仅在无短语命中时兜底），避免规则越配越活；已硬验收 `npm -C frontend run build`、后端 pytest `test_bundle_templates_center.py`、已原子发布并重启 `planner-costing.service`）
 - **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：短语预设交互防迷路：新增明显的“新增短语”按钮；每条短语展开的映射组新增“新增映射行”按钮；并优化空态文案指引；已硬验收 `npm -C frontend run build` 并原子发布）
-- **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：映射组表格交互再优化：列顺序改为“目标模型 → 变体映射（严格选择） → 操作”（先选模型再选映射）；并隐藏映射组表头行以压缩高度；已硬验收 `npm -C frontend run build` 并原子发布）
+- **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：短语预设再增强：短语表拆成“运营输入短语/示例规格(自动拼 B:CODE，可复制)”两列；映射组“变体映射”下拉改为按该行目标模型过滤（未选目标模型时禁用并提示；切换目标模型会自动清理不匹配值）；已硬验收 `npm -C frontend run build` 并原子发布）
 
 ### 关键口径备忘（避免回滚/重构改坏）
 

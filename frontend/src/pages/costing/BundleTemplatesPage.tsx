@@ -107,6 +107,15 @@ const splitTokenCandidates = (raw: string): string[] => {
     .filter(Boolean)
 }
 
+const normalizeBundleToken = (raw: any): string => {
+  let s = String(raw ?? '').trim().toUpperCase()
+  if (!s) return ''
+  s = s.replace(/^BUNDLE:/, 'B:')
+  if (!s.startsWith('B:')) s = `B:${s}`
+  while (s.startsWith('B:B:')) s = s.replace(/^B:B:/, 'B:')
+  return s
+}
+
 const SLOT_CN_FALLBACK: Record<string, string> = {
   front: '前片位',
   back: '背片位',
@@ -152,6 +161,14 @@ export default function BundleTemplatesPage() {
     }
     return Array.from(ids)
   }, [components])
+
+  const currentBundleToken = useMemo(() => {
+    const code = String(editing?.code ?? '').trim()
+    if (code) return normalizeBundleToken(code)
+    const hint = String(createdTokenHint ?? '').trim()
+    if (hint) return normalizeBundleToken(hint)
+    return ''
+  }, [editing?.code, createdTokenHint])
 
   const listQuery = useQuery({
     queryKey: ['bundle-templates', { search, category, tag, includeArchived, page, pageSize }],
@@ -224,11 +241,14 @@ export default function BundleTemplatesPage() {
     enabled: selectedVersionIds.length > 0,
   })
 
-  const variableTokenCandidates = useMemo(() => {
-    // 从所选版本的“启用变体规则”里提取 TOKEN(any/all) 关键词，供运营复制拼接交易规格。
+  const tokenCandidatesByVersionId = useMemo(() => {
+    // 每个版本单独提取 TOKEN(any/all) 关键词，供“按目标模型筛选”的下拉使用
     const rows = (variantsSummaryQuery.data ?? []) as any[]
-    const tokenSet = new Set<string>()
+    const m = new Map<string, string[]>()
     for (const row of rows) {
+      const versionId = String(row?.version_id ?? '').trim()
+      if (!versionId) continue
+      const tokenSet = new Set<string>()
       const items = Array.isArray(row?.items) ? row.items : []
       for (const v of items) {
         if (!v?.enabled) continue
@@ -244,8 +264,9 @@ export default function BundleTemplatesPage() {
           }
         }
       }
+      m.set(versionId, Array.from(tokenSet).sort((a, b) => a.localeCompare(b, 'zh-Hans-CN')))
     }
-    return Array.from(tokenSet).sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
+    return m
   }, [variantsSummaryQuery.data])
 
   const structureStandardsQuery = useQuery({
@@ -1059,7 +1080,19 @@ export default function BundleTemplatesPage() {
                                       ? {
                                           ...x,
                                           mappings: (x.mappings ?? []).map((m, j) =>
-                                            j === mi ? { ...m, target_component_index: v == null ? null : Number(v) } : m,
+                                            j === mi
+                                              ? (() => {
+                                                  const newIdx = v == null ? null : Number(v)
+                                                  const newVid =
+                                                    typeof newIdx === 'number'
+                                                      ? String((components ?? [])[newIdx]?.model_version_id ?? '').trim()
+                                                      : ''
+                                                  const opts = newVid ? tokenCandidatesByVersionId.get(newVid) ?? [] : []
+                                                  const mv0 = String((m as any)?.match_value ?? '').trim()
+                                                  const mv = mv0 && opts.includes(mv0) ? mv0 : ''
+                                                  return { ...m, target_component_index: newIdx, match_value: mv }
+                                                })()
+                                              : m,
                                           ),
                                         }
                                       : x,
@@ -1072,13 +1105,24 @@ export default function BundleTemplatesPage() {
                         {
                           width: 420,
                           render: (_: any, rr: any, mi: number) => (
+                            (() => {
+                              const tIdx =
+                                typeof rr?.target_component_index === 'number' ? Number(rr.target_component_index) : null
+                              const vid =
+                                typeof tIdx === 'number'
+                                  ? String((components ?? [])[tIdx]?.model_version_id ?? '').trim()
+                                  : ''
+                              const opts = vid ? tokenCandidatesByVersionId.get(vid) ?? [] : []
+                              const disabled = !vid || !opts.length
+                              const placeholder = !vid ? '先选目标模型' : opts.length ? '选择变体映射（不可手输）' : '该模型暂无候选'
+                              return (
                             <Select
                               showSearch
                               allowClear
-                              placeholder={variableTokenCandidates.length ? '选择变体映射（不可手输）' : '先选目标模型'}
+                              placeholder={placeholder}
                               style={{ width: '100%' }}
                               value={String(rr.match_value ?? '').trim() || undefined}
-                              options={variableTokenCandidates.map((t) => ({ value: t, label: t }))}
+                              options={opts.map((t) => ({ value: t, label: t }))}
                               onChange={(v) =>
                                 setPhrasePresets((prev) =>
                                   prev.map((x, i) =>
@@ -1091,8 +1135,10 @@ export default function BundleTemplatesPage() {
                                   ),
                                 )
                               }
-                              disabled={!variableTokenCandidates.length}
+                              disabled={disabled}
                             />
+                              )
+                            })()
                           ),
                         },
                         {
@@ -1138,14 +1184,25 @@ export default function BundleTemplatesPage() {
             }}
             columns={[
               {
-                title: '短语（运营用，包含命中）',
+                title: '运营短语（包含命中）',
+                width: 360,
                 render: (_: any, r: any, idx: number) => (
                   <Input
-                    placeholder="例如：雪尼尔2个，背面纯色"
+                    placeholder="例如：雪尼尔抱枕背面纯色2个"
                     value={String(r.phrase ?? '')}
                     onChange={(e) => setPhrasePresets((prev) => prev.map((x, i) => (i === idx ? { ...x, phrase: e.target.value } : x)))}
                   />
                 ),
+              },
+              {
+                title: '示例规格（自动）',
+                render: (_: any, r: any) => {
+                  const phrase = String(r?.phrase ?? '').trim()
+                  if (!phrase) return <Text type="secondary">-</Text>
+                  if (!currentBundleToken) return <Text type="secondary">（保存后生成 B: 编码）</Text>
+                  const spec = `${phrase}(${currentBundleToken})`
+                  return <Text copyable={{ text: spec }}>{spec}</Text>
+                },
               },
               {
                 title: '操作',

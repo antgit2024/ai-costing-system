@@ -51,6 +51,7 @@ type LexiconRuleRow = {
   match_key: string
   match_value: string
   target_component_index: number | null
+  validated?: 'ok' | 'fail' | null
 }
 
 const parseTags = (meta: any): string[] => {
@@ -523,6 +524,7 @@ export default function BundleTemplatesPage() {
       const comp0 = Array.isArray(res?.components) ? res.components[0] : null
       const hits = ((comp0?.trace ?? {}) as any)?.matched_variants
       const hitList = Array.isArray(hits) ? hits.filter((x: any) => x?.matched) : []
+      const matchedCount = hitList.length
 
       Modal.info({
         title,
@@ -564,8 +566,10 @@ export default function BundleTemplatesPage() {
         ),
         okText: '关闭',
       })
+      return matchedCount
     } catch (e: any) {
       message.error(`模型变体预演失败：${String(e?.response?.data?.detail ?? e?.message ?? e)}`)
+      return null
     }
   }
 
@@ -1048,55 +1052,27 @@ export default function BundleTemplatesPage() {
                       { value: '材质', label: '材质' },
                       { value: '枕芯', label: '枕芯' },
                     ]}
-                    onChange={(v) => setLexiconRules((prev) => prev.map((x, i) => (i === idx ? { ...x, match_key: String(v) } : x)))}
+                    onChange={(v) =>
+                      setLexiconRules((prev) => prev.map((x, i) => (i === idx ? { ...x, match_key: String(v), validated: null } : x)))
+                    }
                   />
                 ),
               },
               {
                 title: '词',
-                width: 160,
+                width: 260,
                 render: (_: any, r: any, idx: number) => (
-                  <Input
-                    placeholder="例如：雪尼尔 / 棉麻 / PP棉"
-                    value={String(r.match_value ?? '')}
-                    onChange={(e) =>
-                      setLexiconRules((prev) => prev.map((x, i) => (i === idx ? { ...x, match_value: e.target.value } : x)))
-                    }
-                  />
-                ),
-              },
-              {
-                title: '目标组件',
-                render: (_: any, r: any, idx: number) => (
-                  <Select
-                    showSearch
-                    allowClear
-                    placeholder="选择组件（按模型）"
-                    style={{ width: '100%' }}
-                    value={typeof r.target_component_index === 'number' ? r.target_component_index : undefined}
-                    options={(components ?? []).map((c, i) => ({
-                      value: i,
-                      label: getComponentDisplay(i, c),
-                    }))}
-                    onChange={(v) =>
-                      setLexiconRules((prev) => prev.map((x, i) => (i === idx ? { ...x, target_component_index: v == null ? null : Number(v) } : x)))
-                    }
-                  />
-                ),
-              },
-              {
-                title: '操作',
-                width: 140,
-                render: (_: any, __: any, idx: number) => (
-                  <Space>
+                  <Space.Compact style={{ width: '100%' }}>
+                    <Input
+                      placeholder="例如：雪尼尔 / 棉麻 / PP棉"
+                      value={String(r.match_value ?? '')}
+                      onChange={(e) =>
+                        setLexiconRules((prev) =>
+                          prev.map((x, i) => (i === idx ? { ...x, match_value: e.target.value, validated: null } : x)),
+                        )
+                      }
+                    />
                     <Button
-                      size="small"
-                      onClick={() => setLexiconRules((prev) => [...prev, { match_key: '材质', match_value: '', target_component_index: null }])}
-                    >
-                      +行
-                    </Button>
-                    <Button
-                      size="small"
                       disabled={!lexiconRules[idx] || !String((lexiconRules[idx] as any)?.match_value ?? '').trim()}
                       onClick={() => {
                         const row = lexiconRules[idx]
@@ -1120,9 +1096,7 @@ export default function BundleTemplatesPage() {
                           content: (
                             <div>
                               <div style={{ marginBottom: 8 }}>
-                                <Text type="secondary">
-                                  输入一个片段，例如：材质:雪尼尔2个(30*30) 或 雪尼尔2个(30*30)
-                                </Text>
+                                <Text type="secondary">输入片段，例如：材质:雪尼尔2个(30*30) 或 雪尼尔2个(30*30)</Text>
                               </div>
                               <Input
                                 defaultValue={sample}
@@ -1138,20 +1112,78 @@ export default function BundleTemplatesPage() {
                             const hit = matchLexiconSample(sample, row)
                             if (!hit) {
                               message.warning('未命中：请检查字段/词与测试片段是否一致')
+                              setLexiconRules((prev) => prev.map((x, i) => (i === idx ? { ...x, validated: 'fail' } : x)))
                               return
                             }
                             const tokens = explainLexiconInjection(row)
                               .map((t) => String(t).trim())
                               .filter(Boolean)
                             message.success(`命中：将分配到 ${getComponentDisplay(targetIdx)}；注入tokens：${tokens.join('、') || '-'}`)
-                            await previewVariantsByComponentIndex(targetIdx, tokens, `模型变体预演结果（${getComponentDisplay(targetIdx)}）`)
+                            const matchedCount = await previewVariantsByComponentIndex(
+                              targetIdx,
+                              tokens,
+                              `模型变体预演结果（${getComponentDisplay(targetIdx)}）`,
+                            )
+                            if (matchedCount == null) return
+                            if (matchedCount > 0) {
+                              setLexiconRules((prev) => prev.map((x, i) => (i === idx ? { ...x, validated: 'ok' } : x)))
+                              return
+                            }
+                            // No variant hit: clear word to avoid leaving invalid rules.
+                            setLexiconRules((prev) =>
+                              prev.map((x, i) => (i === idx ? { ...x, match_value: '', validated: 'fail' } : x)),
+                            )
+                            message.warning('模型变体命中=0：已自动清空该“词”，请改为变体规则里真实存在的触发词')
                           },
                         })
                       }}
                     >
                       命中
                     </Button>
-                    <Button size="small" danger disabled={lexiconRules.length <= 0} onClick={() => setLexiconRules((prev) => prev.filter((_, i) => i !== idx))}>
+                    {r?.validated === 'ok' ? <Tag color="green">已验证</Tag> : r?.validated === 'fail' ? <Tag color="red">未通过</Tag> : null}
+                  </Space.Compact>
+                ),
+              },
+              {
+                title: '目标组件',
+                render: (_: any, r: any, idx: number) => (
+                  <Select
+                    showSearch
+                    allowClear
+                    placeholder="选择组件（按模型）"
+                    style={{ width: '100%' }}
+                    value={typeof r.target_component_index === 'number' ? r.target_component_index : undefined}
+                    options={(components ?? []).map((c, i) => ({
+                      value: i,
+                      label: getComponentDisplay(i, c),
+                    }))}
+                    onChange={(v) =>
+                      setLexiconRules((prev) =>
+                        prev.map((x, i) =>
+                          i === idx ? { ...x, target_component_index: v == null ? null : Number(v), validated: null } : x,
+                        ),
+                      )
+                    }
+                  />
+                ),
+              },
+              {
+                title: '操作',
+                width: 140,
+                render: (_: any, __: any, idx: number) => (
+                  <Space>
+                    <Button
+                      size="small"
+                      onClick={() => setLexiconRules((prev) => [...prev, { match_key: '材质', match_value: '', target_component_index: null }])}
+                    >
+                      +行
+                    </Button>
+                    <Button
+                      size="small"
+                      danger
+                      disabled={lexiconRules.length <= 0}
+                      onClick={() => setLexiconRules((prev) => prev.filter((_, i) => i !== idx))}
+                    >
                       删除
                     </Button>
                   </Space>

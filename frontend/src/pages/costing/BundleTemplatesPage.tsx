@@ -1034,39 +1034,12 @@ export default function BundleTemplatesPage() {
                     <Table
                       size="small"
                       pagination={false}
+                      showHeader={false}
                       rowKey={(_, mi) => `ppm-${idx}-${mi}`}
                       dataSource={mappings}
                       locale={{ emptyText: '暂无映射：点击右侧“+行”添加第一条' }}
                       columns={[
                         {
-                          title: '变体映射（严格选择）',
-                          width: 420,
-                          render: (_: any, rr: any, mi: number) => (
-                            <Select
-                              showSearch
-                              allowClear
-                              placeholder={variableTokenCandidates.length ? '从候选中选择（不可手输）' : '暂无候选：先选择模型版本'}
-                              style={{ width: '100%' }}
-                              value={String(rr.match_value ?? '').trim() || undefined}
-                              options={variableTokenCandidates.map((t) => ({ value: t, label: t }))}
-                              onChange={(v) =>
-                                setPhrasePresets((prev) =>
-                                  prev.map((x, i) =>
-                                    i === idx
-                                      ? {
-                                          ...x,
-                                          mappings: (x.mappings ?? []).map((m, j) => (j === mi ? { ...m, match_value: String(v ?? '') } : m)),
-                                        }
-                                      : x,
-                                  ),
-                                )
-                              }
-                              disabled={!variableTokenCandidates.length}
-                            />
-                          ),
-                        },
-                        {
-                          title: '目标模型',
                           width: 200,
                           render: (_: any, rr: any, mi: number) => (
                             <Select
@@ -1093,6 +1066,32 @@ export default function BundleTemplatesPage() {
                                   ),
                                 )
                               }
+                            />
+                          ),
+                        },
+                        {
+                          width: 420,
+                          render: (_: any, rr: any, mi: number) => (
+                            <Select
+                              showSearch
+                              allowClear
+                              placeholder={variableTokenCandidates.length ? '选择变体映射（不可手输）' : '先选目标模型'}
+                              style={{ width: '100%' }}
+                              value={String(rr.match_value ?? '').trim() || undefined}
+                              options={variableTokenCandidates.map((t) => ({ value: t, label: t }))}
+                              onChange={(v) =>
+                                setPhrasePresets((prev) =>
+                                  prev.map((x, i) =>
+                                    i === idx
+                                      ? {
+                                          ...x,
+                                          mappings: (x.mappings ?? []).map((m, j) => (j === mi ? { ...m, match_value: String(v ?? '') } : m)),
+                                        }
+                                      : x,
+                                  ),
+                                )
+                              }
+                              disabled={!variableTokenCandidates.length}
                             />
                           ),
                         },

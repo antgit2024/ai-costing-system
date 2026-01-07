@@ -52,6 +52,13 @@ type LexiconRuleRow = {
   target_component_index: number | null
 }
 
+type PhrasePresetRow = {
+  phrase: string
+  target_component_index: number | null
+  tokens: string[]
+  quantity: number | null
+}
+
 const parseTags = (meta: any): string[] => {
   const raw = meta?.tags
   return Array.isArray(raw) ? raw.map((x) => String(x)).filter(Boolean) : []
@@ -162,6 +169,7 @@ export default function BundleTemplatesPage() {
     { model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' },
   ])
   const [lexiconRules, setLexiconRules] = useState<LexiconRuleRow[]>([])
+  const [phrasePresets, setPhrasePresets] = useState<PhrasePresetRow[]>([])
 
   // 预设变体筛选：每个组件 idx -> { base_line_id -> selected_variant_id }
   const [presetSelectedByIdx, setPresetSelectedByIdx] = useState<Record<number, Record<string, string | null>>>({})
@@ -545,6 +553,7 @@ export default function BundleTemplatesPage() {
     setComponents([{ model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' }])
     setPresetSelectedByIdx({})
     setLexiconRules([])
+    setPhrasePresets([])
     setDrawerOpen(true)
   }
 
@@ -600,6 +609,22 @@ export default function BundleTemplatesPage() {
     } else {
       setLexiconRules([])
     }
+
+    const pp = (row?.metadata ?? {})?.phrase_presets
+    if (Array.isArray(pp)) {
+      setPhrasePresets(
+        pp
+          .map((x: any) => ({
+            phrase: String(x?.phrase ?? '').trim(),
+            target_component_index: typeof x?.target_component_index === 'number' ? x.target_component_index : null,
+            tokens: Array.isArray(x?.tokens) ? x.tokens.map((t: any) => String(t).trim()).filter(Boolean) : [],
+            quantity: x?.quantity == null ? null : Number(x.quantity),
+          }))
+          .filter((x: any) => x.phrase && typeof x.target_component_index === 'number'),
+      )
+    } else {
+      setPhrasePresets([])
+    }
     setDrawerOpen(true)
   }
 
@@ -632,6 +657,15 @@ export default function BundleTemplatesPage() {
                 : undefined,
           }))
           .filter((r) => r.match_value && typeof (r as any).target_component_index === 'number'),
+        phrase_presets: phrasePresets
+          .map((p) => ({
+            phrase: String(p.phrase ?? '').trim(),
+            target_component_index:
+              typeof p.target_component_index === 'number' && Number.isFinite(p.target_component_index) ? p.target_component_index : undefined,
+            tokens: Array.isArray(p.tokens) ? p.tokens.map((t) => String(t).trim()).filter(Boolean) : [],
+            quantity: p.quantity == null ? undefined : Number(p.quantity),
+          }))
+          .filter((p) => p.phrase && typeof (p as any).target_component_index === 'number'),
       }
       const sharedText = String(values.shared_trigger_text ?? '').trim() || undefined
 
@@ -1122,6 +1156,106 @@ export default function BundleTemplatesPage() {
                 )}
               </div>
             }
+          />
+
+          <Alert
+            type="info"
+            showIcon
+            message="短语预设（推荐：把常见交易规格片段定死）"
+            description="匹配规则：对客交易规格“包含命中”，并按“更长短语优先”。命中后会对目标组件注入 tokens，并可覆盖该组件数量（若短语里包含“2个/3个”，会自动解析；也可手填覆盖）。"
+          />
+          <Table
+            size="small"
+            pagination={false}
+            rowKey={(_, idx) => `pp-${idx}`}
+            dataSource={phrasePresets}
+            locale={{ emptyText: '暂无短语：在“操作”列点 +行 添加第一条' }}
+            columns={[
+              {
+                title: '短语（包含命中）',
+                width: 320,
+                render: (_: any, r: any, idx: number) => (
+                  <Input
+                    placeholder="例如：雪尼尔2个，背面纯色"
+                    value={String(r.phrase ?? '')}
+                    onChange={(e) => setPhrasePresets((prev) => prev.map((x, i) => (i === idx ? { ...x, phrase: e.target.value } : x)))}
+                  />
+                ),
+              },
+              {
+                title: '目标组件',
+                width: 200,
+                render: (_: any, r: any, idx: number) => (
+                  <Select
+                    showSearch
+                    allowClear
+                    placeholder="选择组件（按模型）"
+                    style={{ width: '100%' }}
+                    value={typeof r.target_component_index === 'number' ? r.target_component_index : undefined}
+                    options={(components ?? []).map((c, i) => ({
+                      value: i,
+                      label: getComponentDisplay(i, c),
+                    }))}
+                    onChange={(v) =>
+                      setPhrasePresets((prev) => prev.map((x, i) => (i === idx ? { ...x, target_component_index: v == null ? null : Number(v) } : x)))
+                    }
+                  />
+                ),
+              },
+              {
+                title: '注入tokens（严格）',
+                render: (_: any, r: any, idx: number) => (
+                  <Select
+                    mode="multiple"
+                    allowClear
+                    showSearch
+                    placeholder={variableTokenCandidates.length ? '从候选中选择' : '暂无候选：先选择模型版本'}
+                    style={{ width: '100%' }}
+                    value={Array.isArray(r.tokens) ? r.tokens : []}
+                    options={variableTokenCandidates.map((t) => ({ value: t, label: t }))}
+                    onChange={(v) =>
+                      setPhrasePresets((prev) =>
+                        prev.map((x, i) => (i === idx ? { ...x, tokens: Array.isArray(v) ? v.map(String) : [] } : x)),
+                      )
+                    }
+                    disabled={!variableTokenCandidates.length}
+                  />
+                ),
+              },
+              {
+                title: '数量(可选)',
+                width: 120,
+                render: (_: any, r: any, idx: number) => (
+                  <Input
+                    placeholder="自动/手填"
+                    value={r.quantity == null ? '' : String(r.quantity)}
+                    onChange={(e) => {
+                      const v = Number(e.target.value)
+                      setPhrasePresets((prev) =>
+                        prev.map((x, i) => (i === idx ? { ...x, quantity: Number.isFinite(v) && v > 0 ? v : null } : x)),
+                      )
+                    }}
+                  />
+                ),
+              },
+              {
+                title: '操作',
+                width: 140,
+                render: (_: any, __: any, idx: number) => (
+                  <Space>
+                    <Button
+                      size="small"
+                      onClick={() => setPhrasePresets((prev) => [...prev, { phrase: '', target_component_index: null, tokens: [], quantity: null }])}
+                    >
+                      +行
+                    </Button>
+                    <Button size="small" danger onClick={() => setPhrasePresets((prev) => prev.filter((_, i) => i !== idx))}>
+                      删除
+                    </Button>
+                  </Space>
+                ),
+              },
+            ]}
           />
 
           <Alert

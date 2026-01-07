@@ -224,6 +224,122 @@ def generate_bom_by_spec(
     if not components:
         raise ValueError(f"套装模板无组件：{code}")
 
+    def _parse_qty_from_phrase(text: str) -> Optional[int]:
+        import re
+
+        s = str(text or "")
+        m = re.search(r"(\d+)\s*(?:个|只|件)?", s)
+        if not m:
+            return None
+        try:
+            v = int(m.group(1))
+            return v if v > 0 else None
+        except Exception:
+            return None
+
+    def _apply_phrase_presets(
+        *,
+        tpl_meta: Dict[str, Any],
+        spec_text: str,
+        components: List[Dict[str, Any]],
+    ) -> tuple[List[Dict[str, Any]], List[str], List[Dict[str, Any]]]:
+        """
+        Phrase presets (短语预设):
+        - contains match, longer phrase first
+        - apply to target_component_index by injecting tokens and optional quantity override
+        Returns: (components_override_by_index, remove_tokens, trace_entries)
+        """
+        raw = tpl_meta.get("phrase_presets")
+        presets = raw if isinstance(raw, list) else []
+        items: List[Dict[str, Any]] = []
+        for p in presets:
+            if not isinstance(p, dict):
+                continue
+            phrase = str(p.get("phrase") or "").strip()
+            if not phrase:
+                continue
+            tci = p.get("target_component_index")
+            try:
+                tci = int(tci) if tci is not None else None
+            except Exception:
+                tci = None
+            if tci is None:
+                continue
+            tokens = p.get("tokens") or p.get("inject_tokens") or []
+            tok_list = [str(x).strip() for x in tokens] if isinstance(tokens, list) else []
+            tok_list = [x for x in tok_list if x]
+            qty = p.get("quantity")
+            try:
+                qty = int(qty) if qty is not None else None
+            except Exception:
+                qty = None
+            if qty is None:
+                qty = _parse_qty_from_phrase(phrase)
+            items.append(
+                {
+                    "phrase": phrase,
+                    "target_component_index": tci,
+                    "tokens": tok_list,
+                    "quantity": qty,
+                }
+            )
+
+        # longer phrase first
+        items.sort(key=lambda x: len(str(x.get("phrase") or "")), reverse=True)
+        matched_by_index: Dict[int, Dict[str, Any]] = {}
+        trace_entries: List[Dict[str, Any]] = []
+        remove_tokens: List[str] = []
+        s = str(spec_text or "")
+
+        for it in items:
+            phrase = str(it["phrase"])
+            if phrase and phrase in s:
+                idx = int(it["target_component_index"])
+                if idx < 0 or idx >= len(components):
+                    trace_entries.append({"phrase": phrase, "matched": False, "reason": "bad_index", "target_component_index": idx})
+                    continue
+                prev = matched_by_index.get(idx)
+                conflict = bool(prev)
+                # longer phrase first => keep first match for quantity, merge tokens
+                if not prev:
+                    matched_by_index[idx] = dict(it)
+                else:
+                    # merge tokens
+                    merged = list(dict.fromkeys(list(prev.get("tokens") or []) + list(it.get("tokens") or [])))
+                    prev["tokens"] = merged
+                    matched_by_index[idx] = prev
+                remove_tokens.extend([t for t in (it.get("tokens") or []) if t])
+                trace_entries.append(
+                    {
+                        "phrase": phrase,
+                        "matched": True,
+                        "target_component_index": idx,
+                        "quantity": it.get("quantity"),
+                        "tokens": list(it.get("tokens") or []),
+                        "conflict_same_component": conflict,
+                    }
+                )
+            else:
+                trace_entries.append({"phrase": str(it.get("phrase") or ""), "matched": False})
+
+        scoped_by_index: List[Dict[str, Any]] = []
+        for idx, it in matched_by_index.items():
+            base_raw = components[idx]
+            if not isinstance(base_raw, dict):
+                continue
+            base_def = dict(base_raw)
+            qty = it.get("quantity")
+            if isinstance(qty, int) and qty > 0:
+                base_def["quantity"] = qty
+            base_tokens = []
+            if isinstance(base_def.get("tokens"), list):
+                base_tokens = [str(x).strip() for x in base_def.get("tokens") if str(x).strip()]
+            injected = [str(x).strip() for x in (it.get("tokens") or []) if str(x).strip()]
+            base_def["tokens"] = base_tokens + injected
+            scoped_by_index.append({"index": idx, "component": base_def})
+
+        return scoped_by_index, remove_tokens, trace_entries
+
     # Apply shared tokens from the (single) customer-facing spec_text to ALL components.
     # IMPORTANT: do NOT let spec_text dimensions override component measurement_mm.
     # So we inject shared tokens via component.tokens, and set component.spec_text empty for per-component parsing.
@@ -239,6 +355,16 @@ def generate_bom_by_spec(
         tpl_shared_tokens = [str(x) for x in (tpl_shared_parsed.get("tokens") or []) if str(x).strip()]
         tpl_shared_tokens = [t for t in tpl_shared_tokens if not t.upper().startswith("B:") and not t.upper().startswith("BUNDLE:")]
         shared_tokens = shared_tokens + tpl_shared_tokens
+
+    # --- Phrase presets (recommended): contains match, longer-first ---
+    phrase_scoped, phrase_remove_tokens, phrase_trace = _apply_phrase_presets(
+        tpl_meta=tpl_meta,
+        spec_text=spec_text,
+        components=components,
+    )
+    if phrase_remove_tokens:
+        rm2 = {str(x).strip().lower() for x in phrase_remove_tokens if str(x).strip()}
+        shared_tokens = [t for t in shared_tokens if str(t).strip().lower() not in rm2]
 
     # --- Bundle lexicon (scoped mapping; avoid global token broadcast conflicts) ---
     lex_rules = tpl_meta.get("lexicon_rules")
@@ -281,6 +407,21 @@ def generate_bom_by_spec(
     scoped_components_by_label: Dict[str, List[Dict[str, Any]]] = {}
     scoped_components_by_index: Dict[int, List[Dict[str, Any]]] = {}
     scoped_remove_tokens: List[str] = []
+
+    # seed phrase-scoped overrides (index-based)
+    if phrase_scoped:
+        for item in phrase_scoped:
+            try:
+                idx = int(item.get("index"))
+            except Exception:
+                continue
+            comp = item.get("component")
+            if isinstance(idx, int) and isinstance(comp, dict):
+                scoped_components_by_index.setdefault(idx, []).append(comp)
+                # also remove tokens from shared broadcast
+                for t in (comp.get("tokens") or []) if isinstance(comp.get("tokens"), list) else []:
+                    if str(t).strip():
+                        scoped_remove_tokens.append(str(t).strip())
 
     if indexed_rules and scoped_phrases:
         for ph in scoped_phrases:
@@ -406,6 +547,8 @@ def generate_bom_by_spec(
     trace["bundle_code_legacy"] = f"BUNDLE:{code}"
     trace["bundle_template_id"] = tpl.id
     trace["bundle_template_name"] = tpl.name
+    if phrase_trace:
+        trace["phrase_presets"] = phrase_trace
     trace["parsed"] = spec_result  # overwrite parsed to be the original spec parse result
     merged["trace"] = trace
     return merged

@@ -47,7 +47,6 @@ type ComponentRow = {
 }
 
 type LexiconRuleRow = {
-  match_key: string
   match_value: string
   target_component_index: number | null
 }
@@ -569,7 +568,6 @@ export default function BundleTemplatesPage() {
             mappings: Array.isArray(x?.mappings)
               ? x.mappings
                   .map((m: any) => ({
-                    match_key: String(m?.match_key ?? m?.key ?? '').trim() || '材质',
                     match_value: String(m?.match_value ?? m?.value ?? '').trim(),
                     target_component_index:
                       typeof m?.target_component_index === 'number'
@@ -586,10 +584,8 @@ export default function BundleTemplatesPage() {
                       const s = String(t ?? '').trim()
                       if (!s) return null
                       const parts = s.split(':')
-                      const mk = parts.length >= 2 ? String(parts[0]).trim() : '材质'
                       const mv = parts.length >= 2 ? String(parts.slice(1).join(':')).trim() : s
                       return {
-                        match_key: mk || '材质',
                         match_value: mv,
                         target_component_index: typeof x?.target_component_index === 'number' ? x.target_component_index : null,
                       }
@@ -632,7 +628,6 @@ export default function BundleTemplatesPage() {
             mappings: Array.isArray(p.mappings)
               ? p.mappings
                   .map((m) => ({
-                    match_key: String(m.match_key ?? '').trim() || undefined,
                     match_value: String(m.match_value ?? '').trim(),
                     target_component_index:
                       typeof m.target_component_index === 'number' && Number.isFinite(m.target_component_index) ? m.target_component_index : undefined,
@@ -1013,7 +1008,12 @@ export default function BundleTemplatesPage() {
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
             <Button
               type="dashed"
-              onClick={() => setPhrasePresets((prev) => [...prev, { phrase: '', mappings: [] }])}
+              onClick={() =>
+                setPhrasePresets((prev) => [
+                  ...prev,
+                  { phrase: '', mappings: [{ match_value: '', target_component_index: null }] },
+                ])
+              }
             >
               新增短语
             </Button>
@@ -1031,58 +1031,15 @@ export default function BundleTemplatesPage() {
                 const mappings = Array.isArray(r?.mappings) ? (r.mappings as any[]) : []
                 return (
                   <Space direction="vertical" style={{ width: '100%' }} size={8}>
-                    <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                      <Button
-                        size="small"
-                        type="dashed"
-                        onClick={() =>
-                          setPhrasePresets((prev) =>
-                            prev.map((x, i) =>
-                              i === idx
-                                ? { ...x, mappings: [...(x.mappings ?? []), { match_key: '材质', match_value: '', target_component_index: null }] }
-                                : x,
-                            ),
-                          )
-                        }
-                      >
-                        新增映射行
-                      </Button>
-                    </div>
                     <Table
                       size="small"
                       pagination={false}
                       rowKey={(_, mi) => `ppm-${idx}-${mi}`}
                       dataSource={mappings}
-                      locale={{ emptyText: '暂无映射：点击上方“新增映射行”添加第一条' }}
+                      locale={{ emptyText: '暂无映射：点击右侧“+行”添加第一条' }}
                       columns={[
                         {
-                          title: '字段',
-                          width: 110,
-                          render: (_: any, rr: any, mi: number) => (
-                            <Select
-                              style={{ width: '100%' }}
-                              value={String(rr.match_key ?? '材质')}
-                              options={[
-                                { value: '材质', label: '材质' },
-                                { value: '枕芯', label: '枕芯' },
-                              ]}
-                              onChange={(v) =>
-                                setPhrasePresets((prev) =>
-                                  prev.map((x, i) =>
-                                    i === idx
-                                      ? {
-                                          ...x,
-                                          mappings: (x.mappings ?? []).map((m, j) => (j === mi ? { ...m, match_key: String(v) } : m)),
-                                        }
-                                      : x,
-                                  ),
-                                )
-                              }
-                            />
-                          ),
-                        },
-                        {
-                          title: '词（严格选择）',
+                          title: '变体映射（严格选择）',
                           width: 420,
                           render: (_: any, rr: any, mi: number) => (
                             <Select
@@ -1109,7 +1066,7 @@ export default function BundleTemplatesPage() {
                           ),
                         },
                         {
-                          title: '目标组件',
+                          title: '目标模型',
                           width: 200,
                           render: (_: any, rr: any, mi: number) => (
                             <Select
@@ -1141,21 +1098,37 @@ export default function BundleTemplatesPage() {
                         },
                         {
                           title: '操作',
-                          width: 90,
+                          width: 140,
                           render: (_: any, __: any, mi: number) => (
-                            <Button
-                              size="small"
-                              danger
-                              onClick={() =>
-                                setPhrasePresets((prev) =>
-                                  prev.map((x, i) =>
-                                    i === idx ? { ...x, mappings: (x.mappings ?? []).filter((_, j) => j !== mi) } : x,
-                                  ),
-                                )
-                              }
-                            >
-                              删除
-                            </Button>
+                            <Space>
+                              <Button
+                                size="small"
+                                onClick={() =>
+                                  setPhrasePresets((prev) =>
+                                    prev.map((x, i) =>
+                                      i === idx
+                                        ? { ...x, mappings: [...(x.mappings ?? []), { match_value: '', target_component_index: null }] }
+                                        : x,
+                                    ),
+                                  )
+                                }
+                              >
+                                +行
+                              </Button>
+                              <Button
+                                size="small"
+                                danger
+                                onClick={() =>
+                                  setPhrasePresets((prev) =>
+                                    prev.map((x, i) =>
+                                      i === idx ? { ...x, mappings: (x.mappings ?? []).filter((_, j) => j !== mi) } : x,
+                                    ),
+                                  )
+                                }
+                              >
+                                删除
+                              </Button>
+                            </Space>
                           ),
                         },
                       ]}

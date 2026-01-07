@@ -1048,7 +1048,7 @@ export default function BundleTemplatesPage() {
                       locale={{ emptyText: '暂无组件行：点击右侧“+行”添加第一条' }}
                       columns={[
                         {
-                          width: 320,
+                          width: 440,
                           render: (_: any, rr: any, mi: number) => (
                             <Select
                               showSearch
@@ -1141,29 +1141,6 @@ export default function BundleTemplatesPage() {
                                   ),
                                 )
                               }}
-                            />
-                          ),
-                        },
-                        {
-                          width: 140,
-                          render: (_: any, rr: any, mi: number) => (
-                            <Input
-                              value={String(rr.spec_text ?? '')}
-                              placeholder="触发词（由筛选填充）"
-                              onChange={(e) =>
-                                setPhrasePresets((prev) =>
-                                  prev.map((pp, pi) =>
-                                    pi !== idx
-                                      ? pp
-                                      : {
-                                          ...pp,
-                                          components: (pp.components ?? []).map((c, ci) =>
-                                            ci === mi ? { ...c, spec_text: e.target.value } : c,
-                                          ),
-                                        },
-                                  ),
-                                )
-                              }
                             />
                           ),
                         },

@@ -63,6 +63,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-07（Backend：套装选择器 `(B:CODE:A/B/…)` 支持新结构：当 `metadata.phrase_presets[n].components` 存在时，直接以该组件行清单生成 BOM（支持同模型多尺寸/多数量）；并放开套装模板顶层 components 允许为空（用于“模型池+短语组件行”新流程）；验收 `./backend/venv/bin/python -m pytest backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py -q`）
 - **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：套装模板“照片墙模式”UI落地：新增顶部“模型选择(多选)”作为候选范围；短语预设展开改为“组件行清单（模型/宽/高/数量/触发词/筛选）”，废弃旧“映射组/组件清单”；保存到 `metadata.phrase_presets[n].components`，筛选状态保存到 `metadata.phrase_variant_presets`；验收 `npm -C frontend run build` + 原子发布）
 - **最近校对（北京时间 GMT+8）**：2026-01-07（修复线上保存失败：前端新流量发送 `components: []`，线上后端仍要求 `components >= 1` 导致 422/前端显示 400。已重启 `planner-costing.service` 使其加载最新代码后恢复正常；复测 `POST /api/planner/bundle-templates` 返回 201）
+- **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：套装模板子项UI优化：移除子项“触发词”输入框（仍由“筛选”自动填充内部数据用于命中变体），并加宽“模型版本”下拉列；验收 `npm -C frontend run build` + 原子发布）
 
 ### 关键口径备忘（避免回滚/重构改坏）
 

@@ -6,11 +6,9 @@ import {
   fetchProductModelVersionLines,
   fetchProductModels,
   fetchProductModelVersions,
-  fetchProductModelVersionsPaged,
-  createBundleTemplate,
+  fetchBundleTemplates,
   generateBom,
   generateBomBySpec,
-  generateBomMultiBundle,
   listLineVariants,
   parseSpec,
 } from '@/services/planner'
@@ -47,6 +45,11 @@ type ProductListingDraft = {
   spec_text: string
 }
 
+type BundleTestDraft = {
+  bundle_code: string | null
+  spec_text: string
+}
+
 export default function ProductListingPage() {
   const [mode, setMode] = useState<'single' | 'multi'>('single')
   const [draft, setDraft] = useState<ProductListingDraft>({
@@ -55,15 +58,11 @@ export default function ProductListingPage() {
     model_version_id: null,
     spec_text: '',
   })
+  const [bundleDraft, setBundleDraft] = useState<BundleTestDraft>({ bundle_code: null, spec_text: '' })
 
   const [parsed, setParsed] = useState<SpecParseResponse | null>(null)
   const [bom, setBom] = useState<BomGenerateResponse | null>(null)
-  const [multiComponents, setMultiComponents] = useState<
-    Array<{ model_version_id: string | null; width_cm: number; height_cm: number; quantity: number; spec_text: string }>
-  >([{ model_version_id: null, width_cm: 45, height_cm: 45, quantity: 1, spec_text: '' }])
-  const [multiDetail, setMultiDetail] = useState<any[] | null>(null)
   const [lastError, setLastError] = useState<string | null>(null)
-  const [bundleTokenHint, setBundleTokenHint] = useState<string | null>(null)
 
   const modelsQuery = useQuery({
     queryKey: ['product-models', 'listing', 'search', draft.sku_code ? '' : ''],
@@ -90,22 +89,22 @@ export default function ProductListingPage() {
     return standardVersions.filter((v) => String(v.version_status) === 'published')
   }, [showAllStandardVersions, standardVersions])
 
-  const multiVersionPickerQuery = useQuery({
-    queryKey: ['product-model-versions-paged', 'bundle-multi', 'standard', 'active'],
+  const bundleTemplatesQuery = useQuery({
+    queryKey: ['product-listing', 'bundle-templates', 'for-test'],
     queryFn: () =>
-      fetchProductModelVersionsPaged({
-        version_kind: 'standard',
+      fetchBundleTemplates({
+        include_archived: true,
         page: 1,
         page_size: 200,
       }),
   })
-  const multiVersionOptions = useMemo(() => {
-    const items = ((multiVersionPickerQuery.data as any)?.items ?? []) as any[]
+  const bundleTemplateOptions = useMemo(() => {
+    const items = (bundleTemplatesQuery.data?.items ?? []) as any[]
     return items.map((x) => ({
-      value: x.version_id,
-      label: `${x.model_code}:${x.model_name} / ${x.version_label || x.version_id.slice(0, 8)} (${x.version_status})`,
+      value: String(x?.code ?? '').trim(),
+      label: `B:${String(x?.code ?? '').trim()} / ${String(x?.name ?? '').trim() || '-'}${x?.is_archived ? ' (archived)' : ''}`,
     }))
-  }, [multiVersionPickerQuery.data])
+  }, [bundleTemplatesQuery.data])
 
   const selectedModel = useMemo(() => models.find((m) => m.id === draft.model_id) ?? null, [models, draft.model_id])
   const selectedVersion = useMemo(
@@ -162,57 +161,23 @@ export default function ProductListingPage() {
     onError: (e: any) => setLastError(String(e?.message ?? e)),
   })
 
-  const multiBundlePreviewMutation = useMutation({
+  const bundlePreviewMutation = useMutation({
     mutationFn: async () => {
-      const comps = (multiComponents ?? [])
-        .map((c) => ({
-          model_version_id: String(c.model_version_id ?? '').trim(),
-          width_mm: Number(c.width_cm) * 10,
-          height_mm: Number(c.height_cm) * 10,
-          quantity: Number(c.quantity),
-          spec_text: String(c.spec_text || '').trim() || undefined,
-        }))
-        .filter((c) => c.model_version_id && c.width_mm > 0 && c.height_mm > 0 && c.quantity > 0)
-      if (!comps.length) throw new Error('请先填写多模型组件（模型版本/宽/高/数量）')
       setLastError(null)
-      const res = await generateBomMultiBundle({
+      const code = String(bundleDraft.bundle_code ?? '').trim()
+      if (!code) throw new Error('请先选择套装（B:XXXXXX）')
+      const extra = String(bundleDraft.spec_text ?? '').trim()
+      const spec_text = extra ? `B:${code} ${extra}` : `B:${code}`
+      const bomRes = await generateBomBySpec({
+        spec_text,
         sku_code: draft.sku_code || undefined,
-        components: comps as any,
-      } as any)
-      setMultiDetail((res as any)?.components ?? [])
-      setBom(((res as any)?.merged ?? null) as any)
-      setParsed(null)
-      return res
+      })
+      setBom(bomRes)
+      setParsed(((bomRes as any)?.trace ?? {})?.parsed ?? null)
+      return bomRes
     },
-    onSuccess: () => message.success('多模型套装预演完成'),
+    onSuccess: () => message.success('套装预演完成'),
     onError: (e: any) => setLastError(String(e?.message ?? e)),
-  })
-
-  const saveBundleTemplateMutation = useMutation({
-    mutationFn: async () => {
-      const comps = (multiComponents ?? [])
-        .map((c) => ({
-          model_version_id: String(c.model_version_id ?? '').trim(),
-          width_mm: Number(c.width_cm) * 10,
-          height_mm: Number(c.height_cm) * 10,
-          quantity: Number(c.quantity),
-          spec_text: String(c.spec_text || '').trim() || undefined,
-        }))
-        .filter((c) => c.model_version_id && c.width_mm > 0 && c.height_mm > 0 && c.quantity > 0)
-      if (!comps.length) throw new Error('请先填写多模型组件（模型版本/宽/高/数量）')
-      const res = await createBundleTemplate({
-        name: draft.sku_code ? `SKU:${draft.sku_code}` : undefined,
-        components: comps as any,
-        metadata: { source: 'product_listing_console' },
-      } as any)
-      return res
-    },
-    onSuccess: (res: any) => {
-      const token = `B:${String(res?.code ?? '').toUpperCase()}`
-      setBundleTokenHint(token)
-      message.success(`已生成套装编码：${token}`)
-    },
-    onError: (e: any) => message.error(String(e?.message ?? e)),
   })
 
   const matchedVariants = useMemo(() => {
@@ -400,12 +365,10 @@ export default function ProductListingPage() {
                   setLastError(null)
                   setParsed(null)
                   setBom(null)
-                  setMultiDetail(null)
-                  setBundleTokenHint(null)
                 }}
                 items={[
-                  { key: 'single', label: '单模型测试' },
-                  { key: 'multi', label: '多模型测试' },
+                  { key: 'single', label: '模型测试' },
+                  { key: 'multi', label: '套装测试' },
                 ]}
               />
 
@@ -451,7 +414,24 @@ export default function ProductListingPage() {
                   />
                 </>
               ) : (
-                <Alert type="info" showIcon message="多模型测试：每一行单独选择模型版本（可来自同一交易规格拆分后人工录入）。" />
+                <>
+                  <Select
+                    showSearch
+                    allowClear
+                    placeholder="选择套装（B:XXXXXX）"
+                    options={bundleTemplateOptions as any}
+                    value={bundleDraft.bundle_code ?? undefined}
+                    loading={bundleTemplatesQuery.isLoading}
+                    onChange={(v) => setBundleDraft((d) => ({ ...d, bundle_code: (v as string) ?? null }))}
+                    style={{ width: '100%' }}
+                  />
+                  <Input.TextArea
+                    rows={4}
+                    placeholder="交易规格（可选）：用于触发词/特征串（不会解析尺寸）"
+                    value={bundleDraft.spec_text}
+                    onChange={(e) => setBundleDraft((d) => ({ ...d, spec_text: e.target.value }))}
+                  />
+                </>
               )}
 
               {mode === 'single' && bundleTokenInSpec ? (
@@ -515,7 +495,6 @@ export default function ProductListingPage() {
                   onClick={() => {
                     setParsed(null)
                     setBom(null)
-                    setMultiDetail(null)
                     setLastError(null)
                   }}
                 >
@@ -531,121 +510,11 @@ export default function ProductListingPage() {
                     </Button>
                   </>
                 ) : (
-                  <>
-                    <Button type="primary" loading={multiBundlePreviewMutation.isPending} onClick={() => multiBundlePreviewMutation.mutate()}>
-                      多模型：预演 BOM（合并器）
-                    </Button>
-                    <Button loading={saveBundleTemplateMutation.isPending} onClick={() => saveBundleTemplateMutation.mutate()}>
-                      保存为套装编码
-                    </Button>
-                  </>
+                  <Button type="primary" loading={bundlePreviewMutation.isPending} onClick={() => bundlePreviewMutation.mutate()}>
+                    套装：预演 BOM（B:编码）
+                  </Button>
                 )}
               </Space>
-
-              {mode === 'multi' && bundleTokenHint ? (
-                <Alert
-                  type="success"
-                  showIcon
-                  message={`套装编码已生成：${bundleTokenHint}`}
-                  description={`把这个编码放进交易规格里即可直接预演合并BOM，例如：组合装 ${bundleTokenHint} 40*50`}
-                />
-              ) : null}
-
-              {mode === 'multi' ? (
-                <>
-                  <Divider style={{ margin: '8px 0' }} />
-                  <Table
-                    size="small"
-                    pagination={false}
-                    rowKey={(_, idx) => `multi-${idx}`}
-                    dataSource={multiComponents}
-                    columns={[
-                      {
-                        title: '模型版本',
-                        width: 280,
-                        render: (_: any, r: any, idx: number) => (
-                          <Select
-                            showSearch
-                            allowClear
-                            placeholder="选择标准版本"
-                            style={{ width: '100%' }}
-                            loading={multiVersionPickerQuery.isLoading}
-                            options={multiVersionOptions as any}
-                            value={r.model_version_id ?? undefined}
-                            onChange={(v) =>
-                              setMultiComponents((prev) => prev.map((x, i) => (i === idx ? { ...x, model_version_id: (v as any) ?? null } : x)))
-                            }
-                          />
-                        ),
-                      },
-                      {
-                        title: '宽(cm)',
-                        width: 90,
-                        render: (_: any, r: any, idx: number) => (
-                          <Input
-                            value={String(r.width_cm)}
-                            onChange={(e) => {
-                              const v = Number(e.target.value)
-                              setMultiComponents((prev) => prev.map((x, i) => (i === idx ? { ...x, width_cm: Number.isFinite(v) ? v : 0 } : x)))
-                            }}
-                          />
-                        ),
-                      },
-                      {
-                        title: '高(cm)',
-                        width: 90,
-                        render: (_: any, r: any, idx: number) => (
-                          <Input
-                            value={String(r.height_cm)}
-                            onChange={(e) => {
-                              const v = Number(e.target.value)
-                              setMultiComponents((prev) => prev.map((x, i) => (i === idx ? { ...x, height_cm: Number.isFinite(v) ? v : 0 } : x)))
-                            }}
-                          />
-                        ),
-                      },
-                      {
-                        title: '数量',
-                        width: 80,
-                        render: (_: any, r: any, idx: number) => (
-                          <Input
-                            value={String(r.quantity)}
-                            onChange={(e) => {
-                              const v = Number(e.target.value)
-                              setMultiComponents((prev) => prev.map((x, i) => (i === idx ? { ...x, quantity: Number.isFinite(v) ? v : 1 } : x)))
-                            }}
-                          />
-                        ),
-                      },
-                      {
-                        title: '交易规格（特征串）',
-                        render: (_: any, r: any, idx: number) => (
-                          <Input value={String(r.spec_text ?? '')} onChange={(e) => setMultiComponents((prev) => prev.map((x, i) => (i === idx ? { ...x, spec_text: e.target.value } : x)))} />
-                        ),
-                      },
-                      {
-                        title: '操作',
-                        width: 140,
-                        render: (_: any, __: any, idx: number) => (
-                          <Space>
-                            <Button
-                              size="small"
-                              onClick={() =>
-                                setMultiComponents((prev) => [...prev, { model_version_id: null, width_cm: 45, height_cm: 45, quantity: 1, spec_text: '' }])
-                              }
-                            >
-                              +行
-                            </Button>
-                            <Button size="small" danger disabled={multiComponents.length <= 1} onClick={() => setMultiComponents((prev) => prev.filter((_, i) => i !== idx))}>
-                              删除
-                            </Button>
-                          </Space>
-                        ),
-                      },
-                    ]}
-                  />
-                </>
-              ) : null}
 
               {lastError ? <Alert type="error" showIcon message="执行失败" description={lastError} /> : null}
 
@@ -680,7 +549,9 @@ export default function ProductListingPage() {
                 </Descriptions>
               ) : (
                 <Descriptions size="small" column={1} bordered>
-                  <Descriptions.Item label="组件行数">{String((multiComponents ?? []).length)}</Descriptions.Item>
+                  <Descriptions.Item label="套装">
+                    {bundleDraft.bundle_code ? <Text code>{`B:${bundleDraft.bundle_code}`}</Text> : <Text type="secondary">未选择</Text>}
+                  </Descriptions.Item>
                 </Descriptions>
               )}
             </Space>
@@ -904,48 +775,6 @@ export default function ProductListingPage() {
                     </Space>
                   ) : (
                     <Text type="secondary">暂无（先点“解析+预演”）</Text>
-                  ),
-                },
-                {
-                  key: 'multi',
-                  label: '多模型明细',
-                  children: multiDetail ? (
-                    <Table
-                      size="small"
-                      pagination={false}
-                      rowKey={(r: any) => String(r?.component_index ?? Math.random()) + '-' + String((r?.trace ?? {})?.model_version_id ?? '')}
-                      dataSource={multiDetail}
-                      columns={[
-                        {
-                          title: '版本',
-                          width: 120,
-                          render: (_: any, r: any) => <Text code>{String((r?.trace ?? {})?.model_version_id ?? '-')}</Text>,
-                        },
-                        { title: '组件', width: 70, render: (_: any, r: any) => `#${Number(r?.component_index ?? 0) + 1}` },
-                        {
-                          title: '尺寸/数量',
-                          render: (_: any, r: any) => {
-                            const m = (r?.trace ?? {})?.measurement_mm ?? {}
-                            const w = toNumberOrNull((m as any)?.width_mm) ?? 0
-                            const h = toNumberOrNull((m as any)?.height_mm) ?? 0
-                            const q = toNumberOrNull((m as any)?.quantity) ?? 0
-                            return `${(w / 10).toFixed(0)}×${(h / 10).toFixed(0)}cm ×${q}`
-                          },
-                        },
-                        {
-                          title: '成本',
-                          width: 110,
-                          render: (_: any, r: any) => formatMoney2(((r?.trace ?? {})?.costing ?? {})?.total_cost),
-                        },
-                        {
-                          title: '命中变体',
-                          width: 90,
-                          render: (_: any, r: any) => (((r?.trace ?? {})?.matched_variants ?? []) as any[]).length,
-                        },
-                      ]}
-                    />
-                  ) : (
-                    <Text type="secondary">暂无（先点“多模型：预演 BOM（合并器）”）</Text>
                   ),
                 },
               ]}

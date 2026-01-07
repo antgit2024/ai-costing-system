@@ -46,7 +46,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：标准模型列表 UI 优化：品类列缩窄并移到模型名前；模型名列缩窄；“匹配模块”改名“货品映射”并加宽；隐藏状态/入口列；“当前发布标准”改为更小的带边框标签显示；验收 `npm -C frontend run build` 并已发布静态资源）
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：标准模型列表增加“货品映射（关键词）”筛选框：在当前列表数据中按 `metadata_json.recognition_keywords` 进行过滤（支持空格/逗号分隔的任意命中）；验收 `npm -C frontend run build` 并已发布静态资源）
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Backend+Frontend：套装壳（方案A）MVP：新增后端 `/api/planner/bom/generate-bundle`（组件尺寸/数量显式输入，不从交易规格解析；支持 tokens 触发行级变体；输出单件结果+合并BOM/成本/扣库）；前端“产品上架（测试台）”新增套装模式组件录入与“套装：预演BOM（合并器）”按钮；验收 `npm -C frontend run build`，已发布静态并重启后端）
-- **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：结构位显示最终修复：对“原物料前缀结构位”采用与标准模型一致的口径——优先使用物料行 `metadata_json.structure_slot`；若为空，则基于物料行 `source_module_id` 拉取工艺模块详情并解析 `metadata_json.structure_tags` 推导 slot（整结构/单slot/多slot），再映射为中文名。验收：`npm -C frontend run build`、静态发布）
+- **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：产品上架测试台 `http://47.99.89.206/costing/product-listing` Tab重构：1) “单模型测试”改名为“模型测试”；2) “多模型测试”改名为“套装测试”，并清理旧多模型表格/保存套装编码/多模型明细等代码，只保留“套装下拉选择 + 交易规格输入框 + 预演BOM（generate-by-spec，自动拼 B:CODE）”。验收：`npm -C frontend run build`、静态发布）
 
 ### 关键口径备忘（避免回滚/重构改坏）
 

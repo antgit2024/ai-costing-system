@@ -116,6 +116,14 @@ const toSelector2 = (idx: number): string => {
   return String.fromCharCode('A'.charCodeAt(0) + a) + String.fromCharCode('A'.charCodeAt(0) + b)
 }
 
+const allocateNextSelector2 = (used: Set<string>): string => {
+  for (let i = 0; i < 26 * 26; i++) {
+    const s = toSelector2(i)
+    if (s && !used.has(s)) return s
+  }
+  return 'ZZ'
+}
+
 const SLOT_CN_FALLBACK: Record<string, string> = {
   front: '前片位',
   back: '背片位',
@@ -479,6 +487,98 @@ export default function BundleTemplatesPage() {
     }
     setPresetModalKey({ pIdx, cIdx })
     setPresetModalOpen(true)
+  }
+
+  const copyPhrasePreset = (pIdx: number) => {
+    const used = new Set((phrasePresets ?? []).map((x) => String(x?.selector ?? '').trim().toUpperCase()).filter(Boolean))
+    const nextSelector = allocateNextSelector2(used)
+    const src = phrasePresets[pIdx]
+    if (!src) return
+    const newIdx = phrasePresets.length
+    const copied: PhrasePresetRow = {
+      selector: nextSelector,
+      phrase: String(src.phrase ?? '').trim() ? `${String(src.phrase ?? '').trim()}（复制）` : '',
+      enabled: src.enabled !== false,
+      components: Array.isArray(src.components) ? src.components.map((c) => ({ ...c })) : [],
+    }
+    setPhrasePresets((prev) => [...(prev ?? []), copied])
+    // copy selected variants (by component index)
+    setPresetSelectedByIdx((prev) => {
+      const out: Record<string, Record<string, string | null>> = { ...(prev ?? {}) }
+      for (const [k, v] of Object.entries(prev ?? {})) {
+        if (!k.startsWith(`${pIdx}:`)) continue
+        const cIdxStr = k.split(':')[1]
+        const cIdx = Number(cIdxStr)
+        if (!Number.isFinite(cIdx)) continue
+        out[`${newIdx}:${cIdx}`] = { ...(v ?? {}) }
+      }
+      return out
+    })
+  }
+
+  const copyComponentRow = (pIdx: number, cIdx: number) => {
+    const src = (phrasePresets[pIdx]?.components ?? [])[cIdx]
+    if (!src) return
+    setPhrasePresets((prev) =>
+      (prev ?? []).map((pp, pi) => {
+        if (pi !== pIdx) return pp
+        const rows = Array.isArray(pp.components) ? pp.components : []
+        const nextRows = rows.slice()
+        nextRows.splice(cIdx + 1, 0, { ...src })
+        return { ...pp, components: nextRows }
+      }),
+    )
+    // shift selections for this preset (index-based keys), and clone selections for the copied row
+    setPresetSelectedByIdx((prev) => {
+      const out: Record<string, Record<string, string | null>> = {}
+      const prefix = `${pIdx}:`
+      for (const [k, v] of Object.entries(prev ?? {})) {
+        if (!k.startsWith(prefix)) {
+          out[k] = v
+          continue
+        }
+        const cIdxStr = k.slice(prefix.length)
+        const oldC = Number(cIdxStr)
+        if (!Number.isFinite(oldC)) {
+          out[k] = v
+          continue
+        }
+        if (oldC <= cIdx) {
+          out[`${pIdx}:${oldC}`] = v
+          continue
+        }
+        out[`${pIdx}:${oldC + 1}`] = v
+      }
+      const srcKey = `${pIdx}:${cIdx}`
+      if ((prev ?? {})[srcKey]) {
+        out[`${pIdx}:${cIdx + 1}`] = { ...((prev ?? {})[srcKey] ?? {}) }
+      }
+      return out
+    })
+  }
+
+  const deleteComponentRow = (pIdx: number, cIdx: number) => {
+    setPhrasePresets((prev) =>
+      (prev ?? []).map((pp, pi) => (pi !== pIdx ? pp : { ...pp, components: (pp.components ?? []).filter((_, j) => j !== cIdx) })),
+    )
+    // shift selections down to avoid "selected variants" misalignment
+    setPresetSelectedByIdx((prev) => {
+      const out: Record<string, Record<string, string | null>> = {}
+      const prefix = `${pIdx}:`
+      for (const [k, v] of Object.entries(prev ?? {})) {
+        if (!k.startsWith(prefix)) {
+          out[k] = v
+          continue
+        }
+        const cIdxStr = k.slice(prefix.length)
+        const oldC = Number(cIdxStr)
+        if (!Number.isFinite(oldC)) continue
+        if (oldC < cIdx) out[`${pIdx}:${oldC}`] = v
+        else if (oldC > cIdx) out[`${pIdx}:${oldC - 1}`] = v
+        // oldC === cIdx => drop
+      }
+      return out
+    })
   }
 
   const applyPresetToComponent = () => {
@@ -1123,11 +1223,7 @@ export default function BundleTemplatesPage() {
                   {
                     selector: (() => {
                       const used = new Set((prev ?? []).map((x: any) => String(x?.selector ?? '').trim().toUpperCase()).filter(Boolean))
-                      for (let i = 0; i < 26 * 26; i++) {
-                        const s = toSelector2(i)
-                        if (s && !used.has(s)) return s
-                      }
-                      return 'ZZ'
+                      return allocateNextSelector2(used)
                     })(),
                     phrase: '',
                     enabled: true,
@@ -1336,6 +1432,9 @@ export default function BundleTemplatesPage() {
                               >
                                 +行
                               </Button>
+                              <Button size="small" onClick={() => copyComponentRow(idx, mi)}>
+                                复制
+                              </Button>
                               <Button
                                 size="small"
                                 disabled={!String(rr?.model_version_id ?? '').trim()}
@@ -1346,13 +1445,7 @@ export default function BundleTemplatesPage() {
                               <Button
                                 size="small"
                                 danger
-                                onClick={() =>
-                                  setPhrasePresets((prev) =>
-                                    prev.map((pp, pi) =>
-                                      pi !== idx ? pp : { ...pp, components: (pp.components ?? []).filter((_, j) => j !== mi) },
-                                    ),
-                                  )
-                                }
+                                onClick={() => deleteComponentRow(idx, mi)}
                               >
                                 删除
                               </Button>
@@ -1408,6 +1501,9 @@ export default function BundleTemplatesPage() {
                 width: 140,
                 render: (_: any, __: any, idx: number) => (
                   <Space>
+                    <Button size="small" onClick={() => copyPhrasePreset(idx)}>
+                      复制
+                    </Button>
                     <Button
                       size="small"
                       danger={phrasePresets[idx]?.enabled !== false}

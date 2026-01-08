@@ -10,6 +10,7 @@ import {
   Empty,
   Form,
   Input,
+  List,
   Modal,
   Radio,
   Row,
@@ -21,6 +22,8 @@ import {
   Typography,
   message,
 } from 'antd'
+
+import { ArrowDownOutlined, ArrowUpOutlined, CopyOutlined, PauseCircleOutlined, PlayCircleOutlined } from '@ant-design/icons'
 
 import {
   archiveBundleTemplate,
@@ -209,6 +212,16 @@ export default function BundleTemplatesPage() {
       value: x.version_id,
       label: `${x.model_code}:${x.model_name} / ${x.version_label || x.version_id.slice(0, 8)} (${x.version_status})`,
     }))
+  }, [versionPickerQuery.data])
+
+  const versionOptionsCompact = useMemo(() => {
+    const items = (versionPickerQuery.data?.items ?? []) as any[]
+    return items.map((x) => {
+      const mc = String(x?.model_code ?? '').trim()
+      const mn = String(x?.model_name ?? '').trim()
+      const label = mc && mn ? `${mc}:${mn}` : mc || mn || String(x?.version_id ?? '').slice(0, 8)
+      return { value: x.version_id, label }
+    })
   }, [versionPickerQuery.data])
 
   const versionIdToModelLabel = useMemo(() => {
@@ -491,19 +504,6 @@ export default function BundleTemplatesPage() {
     setPresetModalOpen(true)
   }
 
-  const sampleSpecForPreset = (r: any, idx: number): string | null => {
-    const phrase = String(r?.phrase ?? '').trim()
-    if (!phrase) return null
-    if (!currentBundleToken) return phrase
-    const up = phrase.toUpperCase()
-    if (up.includes('B:') || up.includes('BUNDLE:') || up.includes('B-')) return phrase
-    const trimmed = phrase.replace(/\s+$/g, '')
-    const sel = String(r?.selector ?? '').trim().toUpperCase() || toSelector2(idx)
-    const codeOnly = String(currentBundleToken || '').toUpperCase().replace(/^B:/, '').replace(/^BUNDLE:/, '')
-    const suffix = toBundleTokenDash(codeOnly, sel || null)
-    return `${trimmed}(${suffix})`
-  }
-
   const copyPhrasePreset = (pIdx: number) => {
     const used = new Set((phrasePresets ?? []).map((x) => String(x?.selector ?? '').trim().toUpperCase()).filter(Boolean))
     const nextSelector = allocateNextSelector2(used)
@@ -530,6 +530,70 @@ export default function BundleTemplatesPage() {
       return out
     })
     setActivePresetIndex(newIdx)
+  }
+
+  const movePhrasePreset = (fromIdx: number, toIdx: number) => {
+    if (fromIdx === toIdx) return
+    setPhrasePresets((prev) => {
+      const arr = [...(prev ?? [])]
+      if (fromIdx < 0 || fromIdx >= arr.length) return arr
+      if (toIdx < 0 || toIdx >= arr.length) return arr
+      const [it] = arr.splice(fromIdx, 1)
+      arr.splice(toIdx, 0, it)
+      return arr
+    })
+    // Remap presetSelectedByIdx keys because they are index-based `${pIdx}:${cIdx}`
+    setPresetSelectedByIdx((prev) => {
+      const out: Record<string, Record<string, string | null>> = {}
+      if (!prev || typeof prev !== 'object') return out
+      const keys = Object.entries(prev)
+      const mapIdx = (i: number): number => {
+        if (i === fromIdx) return toIdx
+        if (fromIdx < toIdx) {
+          // move down: [from+1..to] shift up by 1
+          if (i > fromIdx && i <= toIdx) return i - 1
+          return i
+        }
+        // move up: [to..from-1] shift down by 1
+        if (i >= toIdx && i < fromIdx) return i + 1
+        return i
+      }
+      for (const [k, v] of keys) {
+        const parts = String(k).split(':')
+        const pStr = parts[0]
+        const cStr = parts[1]
+        const p = Number(pStr)
+        const c = Number(cStr)
+        if (!Number.isFinite(p) || !Number.isFinite(c)) {
+          out[k] = v
+          continue
+        }
+        const np = mapIdx(p)
+        out[`${np}:${c}`] = v
+      }
+      return out
+    })
+    setActivePresetIndex((cur) => {
+      if (cur === fromIdx) return toIdx
+      if (fromIdx < toIdx) {
+        if (cur > fromIdx && cur <= toIdx) return cur - 1
+        return cur
+      }
+      if (cur >= toIdx && cur < fromIdx) return cur + 1
+      return cur
+    })
+  }
+
+  const validateActivePreset = (): { ok: boolean; reason?: string } => {
+    const p = phrasePresets?.[activePresetIndex]
+    if (!p) return { ok: false, reason: '请先新建一条短语' }
+    if (p?.enabled === false) return { ok: false, reason: '该短语已停用，请先启用再保存' }
+    const phrase = String(p?.phrase ?? '').trim()
+    if (!phrase) return { ok: false, reason: '请先填写短语文本' }
+    const rows = Array.isArray(p?.components) ? p.components : []
+    const valid = rows.filter((c: any) => String(c?.model_version_id ?? '').trim() && Number(c?.width_cm) > 0 && Number(c?.height_cm) > 0 && Number(c?.quantity) > 0)
+    if (!valid.length) return { ok: false, reason: '请至少填写 1 条完整组件行（模型/宽/高/数量）' }
+    return { ok: true }
   }
 
   const copyComponentRow = (pIdx: number, cIdx: number) => {
@@ -1209,7 +1273,7 @@ export default function BundleTemplatesPage() {
           <Space>
             <Button onClick={() => setDrawerOpen(false)}>关闭</Button>
             <Button type="primary" loading={saveMutation.isPending} onClick={() => saveMutation.mutate()}>
-              保存
+              保存模板
             </Button>
           </Space>
         }
@@ -1275,77 +1339,92 @@ export default function BundleTemplatesPage() {
                   <Button size="small" type="dashed" onClick={addPhrasePreset}>
                     新建
                   </Button>
-                  <Button
-                    size="small"
-                    disabled={(phrasePresets ?? []).length <= 0}
-                    onClick={() => copyPhrasePreset(activePresetIndex)}
-                  >
-                    复制
-                  </Button>
-                  <Button
-                    size="small"
-                    danger={phrasePresets?.[activePresetIndex]?.enabled !== false}
-                    disabled={(phrasePresets ?? []).length <= 0}
-                    onClick={() =>
-                      setPhrasePresets((prev) =>
-                        (prev ?? []).map((p, i) => (i !== activePresetIndex ? p : { ...p, enabled: p.enabled === false ? true : false })),
-                      )
-                    }
-                  >
-                    {phrasePresets?.[activePresetIndex]?.enabled === false ? '启用' : '停用'}
-                  </Button>
                 </Space>
               }
               bodyStyle={{ padding: 8 }}
             >
-              <Table
-                size="small"
-                pagination={false}
-                showHeader={false}
-                rowKey={(r: any, idx) => String(r?.selector ?? '').trim().toUpperCase() || toSelector2(idx ?? 0)}
-                dataSource={phrasePresets}
+              <List
                 locale={{ emptyText: '暂无短语：点击右上角“新建”添加第一条' }}
-                rowSelection={{
-                  type: 'radio',
-                  selectedRowKeys: [
-                    String(phrasePresets?.[activePresetIndex]?.selector ?? '').trim().toUpperCase() || toSelector2(activePresetIndex),
-                  ],
-                  onChange: (keys) => {
-                    const key = String((keys ?? [])[0] ?? '').trim().toUpperCase()
-                    if (!key) return
-                    const nextIdx = (phrasePresets ?? []).findIndex(
-                      (p, i) => (String(p?.selector ?? '').trim().toUpperCase() || toSelector2(i)) === key,
-                    )
-                    if (nextIdx >= 0) setActivePresetIndex(nextIdx)
-                  },
-                }}
-                columns={[
-                  {
-                    render: (_: any, r: any, idx: number) => {
-                      const selector = String(r?.selector ?? '').trim().toUpperCase() || toSelector2(idx)
-                      const spec = sampleSpecForPreset(r, idx)
-                      return (
-                        <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                          <Space wrap size={6}>
-                            <Text code>{selector}</Text>
-                            {r?.enabled === false ? <Tag color="red">已停用</Tag> : <Tag color="green">启用</Tag>}
+                dataSource={phrasePresets}
+                renderItem={(p: any, idx: number) => {
+                  const sel = String(p?.selector ?? '').trim().toUpperCase() || toSelector2(idx)
+                  const codeOnly = String(currentBundleToken || '').toUpperCase().replace(/^B:/, '').replace(/^BUNDLE:/, '')
+                  const tokenDash = codeOnly ? toBundleTokenDash(codeOnly, sel) : `B-????${sel}`
+                  const active = idx === activePresetIndex
+                  const enabled = p?.enabled !== false
+                  return (
+                    <div
+                      style={{
+                        border: active ? '1px solid #1677ff' : '1px solid rgba(0,0,0,0.08)',
+                        borderRadius: 8,
+                        padding: 10,
+                        marginBottom: 8,
+                        background: active ? 'rgba(22,119,255,0.06)' : '#fff',
+                        cursor: 'pointer',
+                      }}
+                      onClick={() => setActivePresetIndex(idx)}
+                    >
+                      <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                        <Space wrap size={8} style={{ width: '100%', justifyContent: 'space-between' }}>
+                          <Space wrap size={8}>
+                            <Tag color={enabled ? 'blue' : 'red'} style={{ fontWeight: 600 }}>
+                              {tokenDash}
+                            </Tag>
+                            <Text ellipsis={{ tooltip: true }} style={{ maxWidth: 150 }}>
+                              {String(p?.phrase ?? '').trim() || '-'}
+                            </Text>
                           </Space>
-                          <Input
-                            placeholder="例如：雪尼尔抱枕背面纯色2个"
-                            value={String(r?.phrase ?? '')}
-                            disabled={r?.enabled === false}
-                            onChange={(e) =>
-                              setPhrasePresets((prev) => (prev ?? []).map((x, i) => (i === idx ? { ...x, phrase: e.target.value } : x)))
-                            }
-                          />
-                          <Text type="secondary" ellipsis={{ tooltip: true }} copyable={spec ? { text: spec } : false}>
-                            {spec ? `示例：${spec}` : currentBundleToken ? '示例：-' : '示例：（保存后生成短码）'}
-                          </Text>
+                          <Space size={6}>
+                            <Button
+                              size="small"
+                              type="text"
+                              icon={<CopyOutlined />}
+                              title="复制"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                copyPhrasePreset(idx)
+                              }}
+                            />
+                            <Button
+                              size="small"
+                              type="text"
+                              icon={<ArrowUpOutlined />}
+                              title="上移"
+                              disabled={idx <= 0}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                movePhrasePreset(idx, idx - 1)
+                              }}
+                            />
+                            <Button
+                              size="small"
+                              type="text"
+                              icon={<ArrowDownOutlined />}
+                              title="下移"
+                              disabled={idx >= (phrasePresets?.length ?? 0) - 1}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                movePhrasePreset(idx, idx + 1)
+                              }}
+                            />
+                            <Button
+                              size="small"
+                              type="text"
+                              icon={enabled ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
+                              title={enabled ? '停用' : '启用'}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setPhrasePresets((prev) =>
+                                  (prev ?? []).map((x, i) => (i !== idx ? x : { ...x, enabled: x.enabled === false ? true : false })),
+                                )
+                              }}
+                            />
+                          </Space>
                         </Space>
-                      )
-                    },
-                  },
-                ]}
+                      </Space>
+                    </div>
+                  )
+                }}
               />
             </Card>
 
@@ -1353,18 +1432,7 @@ export default function BundleTemplatesPage() {
             <Card
               size="small"
               style={{ flex: 1, minWidth: 0 }}
-              title={
-                <Space size={8} wrap>
-                  <Text strong>组件行编辑</Text>
-                  {(phrasePresets ?? []).length > 0 ? (
-                    <>
-                      <Text type="secondary">当前：</Text>
-                      <Text code>{String(phrasePresets?.[activePresetIndex]?.selector ?? '').trim().toUpperCase() || toSelector2(activePresetIndex)}</Text>
-                      {phrasePresets?.[activePresetIndex]?.enabled === false ? <Tag color="red">已停用</Tag> : <Tag color="green">启用</Tag>}
-                    </>
-                  ) : null}
-                </Space>
-              }
+              title={<Text strong>短语编辑</Text>}
               bodyStyle={{ padding: 8 }}
             >
               {(phrasePresets ?? []).length <= 0 ? (
@@ -1383,10 +1451,40 @@ export default function BundleTemplatesPage() {
                   const disabled = r?.enabled === false
                   const allowed = modelPoolVersionIds.length ? new Set(modelPoolVersionIds.map((x) => String(x))) : null
                   const options = allowed
-                    ? (versionOptions as any[]).filter((o: any) => allowed.has(String(o?.value)))
-                    : (versionOptions as any[])
+                    ? (versionOptionsCompact as any[]).filter((o: any) => allowed.has(String(o?.value)))
+                    : (versionOptionsCompact as any[])
+                  const selector = String(r?.selector ?? '').trim().toUpperCase() || toSelector2(idx)
                   return (
                     <Space direction="vertical" style={{ width: '100%' }} size={8}>
+                      <Space wrap size={10} style={{ width: '100%', justifyContent: 'space-between' }}>
+                        <Space wrap size={8}>
+                          <Text type="secondary">当前：</Text>
+                          <Text code>{selector}</Text>
+                          {disabled ? <Tag color="red">已停用</Tag> : <Tag color="green">启用</Tag>}
+                        </Space>
+                        <Button
+                          type="primary"
+                          loading={saveMutation.isPending}
+                          onClick={() => {
+                            const v = validateActivePreset()
+                            if (!v.ok) {
+                              message.warning(v.reason || '请完善当前短语')
+                              return
+                            }
+                            saveMutation.mutate()
+                          }}
+                        >
+                          保存当前短语
+                        </Button>
+                      </Space>
+                      <Input
+                        placeholder="短语，例如：黄金绒双面45X45"
+                        disabled={disabled}
+                        value={String(r?.phrase ?? '')}
+                        onChange={(e) =>
+                          setPhrasePresets((prev) => (prev ?? []).map((x, i) => (i === idx ? { ...x, phrase: e.target.value } : x)))
+                        }
+                      />
                       {disabled ? (
                         <Alert
                           type="warning"

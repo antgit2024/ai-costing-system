@@ -1543,8 +1543,38 @@ export default function BundleTemplatesPage() {
 
                             const baseMap = baseLineMapByVersion.get(versionId) ?? new Map<string, any>()
 
+                            // display tokens (from selected variants) to help operators build spec_text / understand triggers
+                            const tokenSet = new Set<string>()
+                            for (const [, variantId] of selectedEntries) {
+                              const v = variantsById.get(String(variantId))
+                              if (!v) continue
+                              const cond = (v?.conditions ?? {}) as any
+                              const anyTokens = Array.isArray(cond?.spec_contains_any) ? cond.spec_contains_any : []
+                              const allTokens = Array.isArray(cond?.spec_contains_all) ? cond.spec_contains_all : []
+                              for (const t of [...anyTokens, ...allTokens]) {
+                                const s = String(t ?? '').trim()
+                                if (!s) continue
+                                const up = s.toUpperCase()
+                                if (up.startsWith('MODEL:') || up.startsWith('M:') || up.startsWith('BOUND_VERSION:') || up.startsWith('SKU:')) continue
+                                tokenSet.add(s)
+                              }
+                            }
+                            const tokens = Array.from(tokenSet)
+
                             return (
                               <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                                <Space wrap size={6}>
+                                  <Text type="secondary">TOKEN：</Text>
+                                  {tokens.length ? (
+                                    tokens.map((t) => (
+                                      <Tag key={t} color="blue">
+                                        {t}
+                                      </Tag>
+                                    ))
+                                  ) : (
+                                    <Text type="secondary">（无 TOKEN，可能仅尺寸/面积/周长条件）</Text>
+                                  )}
+                                </Space>
                                 {selectedEntries.map(([baseLineId, variantId]) => {
                                   const v = variantsById.get(String(variantId))
                                   const base = baseMap.get(String(baseLineId))
@@ -1562,7 +1592,9 @@ export default function BundleTemplatesPage() {
                                   return (
                                     <div key={`${k}:${baseLineId}:${variantId}`}>
                                       <Space wrap size={8}>
+                                        <Text type="secondary">兜底物料：</Text>
                                         <Text strong>{baseLabel}</Text>
+                                        <Text type="secondary">→</Text>
                                         <Text type="secondary">{effect}</Text>
                                         <Tag color="green">{producedLabel || '-'}</Tag>
                                       </Space>

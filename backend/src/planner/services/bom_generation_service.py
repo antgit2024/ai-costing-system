@@ -212,13 +212,20 @@ def generate_bom_by_spec(
     """
     spec_result = spec_parser_service.parse_spec(spec_text or "")
     tokens = [str(x) for x in (spec_result.get("tokens") or [])]
-    bundle_token = next((t for t in tokens if str(t).upper().startswith("B:") or str(t).upper().startswith("BUNDLE:")), None)
+    bundle_token = next((t for t in tokens if str(t).upper().startswith("B:") or str(t).upper().startswith("BUNDLE:") or str(t).upper().startswith("B-")), None)
     if not bundle_token:
         raise ValueError("交易规格未包含套装编码（B:XXXX 或 BUNDLE:XXXX）")
-    # Accept "B:CODE" or "B:CODE:A" (selector). Only CODE is used to load template;
+    # Accept "B:CODE" / "B:CODE:A" / "B-CODE" / "B-CODE-A" (selector).
+    # Only CODE is used to load template;
     # selector is parsed from spec_text below.
-    rest = str(bundle_token).split(":", 1)[1].strip()
-    code = rest.split(":", 1)[0].strip().upper()
+    raw_bt = str(bundle_token).strip()
+    if raw_bt.upper().startswith("B-"):
+        # B-CODE or B-CODE-A
+        parts = raw_bt.split("-", 2)
+        code = str(parts[1] if len(parts) >= 2 else "").strip().upper()
+    else:
+        rest = raw_bt.split(":", 1)[1].strip()
+        code = rest.split(":", 1)[0].strip().upper()
     if not code:
         raise ValueError("套装编码非法")
 
@@ -226,13 +233,22 @@ def generate_bom_by_spec(
     tpl_meta = tpl.metadata_json or {}
     components = list(tpl.components_json or [])
 
-    # Optional bundle suffix: (B:CODE:A) / (BUNDLE:CODE:A)
+    # Optional bundle suffix:
+    # - (B:CODE:A) / (BUNDLE:CODE:A) / "B:CODE:A"
+    # - (B-CODE-A) / "B-CODE-A"
     # - A/B/C... means selecting the 1st/2nd/3rd... phrase preset row directly (NOT "Auto").
     #   This allows operators to keep customer-facing text unchanged, while mapping is driven by template presets.
     import re
 
-    _mode_match = re.search(rf"(?:BUNDLE:|B:){re.escape(code)}(?::([A-Za-z]))?", str(spec_text or ""), flags=re.IGNORECASE)
+    _mode_match = re.search(
+        rf"(?:BUNDLE:|B:){re.escape(code)}(?::([A-Za-z]))?|(?:\bB-{re.escape(code)}(?:-([A-Za-z]))?\b)",
+        str(spec_text or ""),
+        flags=re.IGNORECASE,
+    )
     bundle_selector = (str(_mode_match.group(1) or "").strip().upper() if _mode_match else "") or None
+    if _mode_match and not bundle_selector:
+        # B-CODE-A selector group
+        bundle_selector = (str(_mode_match.group(2) or "").strip().upper() if _mode_match else "") or None
 
     def _parse_qty_from_phrase(text: str) -> Optional[int]:
         import re

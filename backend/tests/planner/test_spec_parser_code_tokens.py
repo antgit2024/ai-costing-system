@@ -45,3 +45,11 @@ def test_parse_spec_extracts_bundle_code_tokens(client):
     assert "B:K8F3J2" in tokens
     assert "BUNDLE:K8F3J2" in tokens
 
+    # New platform-friendly format: B-K8F3J2-A (selector)
+    spec_text2 = "组合装 B-K8F3J2-A 40X50"
+    r2 = client.post("/api/planner/spec/parse", json={"spec_text": spec_text2})
+    assert r2.status_code == 200, r2.text
+    tokens2 = r2.json().get("tokens") or []
+    assert "B:K8F3J2" in tokens2
+    assert "B:K8F3J2:A" in tokens2
+

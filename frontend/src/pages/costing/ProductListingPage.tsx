@@ -70,6 +70,12 @@ const toLetter = (idx: number): string => {
   return String.fromCharCode('A'.charCodeAt(0) + idx)
 }
 
+const toBundleTokenDash = (code: string, selector?: string | null): string => {
+  const c = String(code ?? '').trim().toUpperCase().replace(/^B:/, '').replace(/^BUNDLE:/, '').replace(/^B-/, '')
+  const sel = String(selector ?? '').trim().toUpperCase()
+  return sel ? `B-${c}-${sel}` : `B-${c}`
+}
+
 export default function ProductListingPage() {
   const [mode, setMode] = useState<'single' | 'multi'>('single')
   const [draft, setDraft] = useState<ProductListingDraft>({
@@ -122,7 +128,7 @@ export default function ProductListingPage() {
     const items = (bundleTemplatesQuery.data?.items ?? []) as any[]
     return items.map((x) => ({
       value: String(x?.code ?? '').trim(),
-      label: `B:${String(x?.code ?? '').trim()} / ${String(x?.name ?? '').trim() || '-'}${x?.is_archived ? ' (archived)' : ''}`,
+      label: `${toBundleTokenDash(String(x?.code ?? '').trim())} / ${String(x?.name ?? '').trim() || '-'}${x?.is_archived ? ' (archived)' : ''}`,
     }))
   }, [bundleTemplatesQuery.data])
 
@@ -180,9 +186,10 @@ export default function ProductListingPage() {
 
   const bundleTokenInSpec = useMemo(() => {
     const t = String(draft.spec_text || '')
-    const m = t.match(/(?:BUNDLE:|B:)([A-Z0-9]{4,16})/i)
+    const m = t.match(/(?:BUNDLE:|B:)([A-Z0-9]{4,16})|(?:\bB-([A-Z0-9]{4,16})(?:-[A-Za-z])?\b)/i)
     if (!m) return null
-    return `B:${String(m[1]).toUpperCase()}`
+    const code = String(m[1] || m[2] || '').toUpperCase()
+    return code ? `B:${code}` : null
   }, [draft.spec_text])
 
   const parseMutation = useMutation({
@@ -235,12 +242,15 @@ export default function ProductListingPage() {
       // UI 已选择套装编码：这里允许用户在输入里直接写 B:CODE:A，
       // 我们会优先从用户输入提取 selector（避免 selector 丢失导致“模板无组件”）。
       const inputSelector =
-        String(bundleDraft.spec_text || '').match(/(?:BUNDLE:|B:)[A-Z0-9]{4,16}:([A-Za-z])/i)?.[1]?.toUpperCase() ?? ''
+        String(bundleDraft.spec_text || '').match(/(?:BUNDLE:|B:)[A-Z0-9]{4,16}:([A-Za-z])|\bB-[A-Z0-9]{4,16}-([A-Za-z])\b/i)?.[1]?.toUpperCase() ??
+        String(bundleDraft.spec_text || '').match(/(?:BUNDLE:|B:)[A-Z0-9]{4,16}:([A-Za-z])|\bB-[A-Z0-9]{4,16}-([A-Za-z])\b/i)?.[2]?.toUpperCase() ??
+        ''
       const extra = String(bundleDraft.spec_text ?? '')
         .replace(/(?:BUNDLE:|B:)[A-Z0-9]{4,16}/gi, '')
+        .replace(/\bB-[A-Z0-9]{4,16}(?:-[A-Za-z])?\b/gi, '')
         .trim()
       const sel = String(bundleDraft.bundle_selector ?? '').trim().toUpperCase() || inputSelector
-      const token = sel && sel.length === 1 ? `B:${code}:${sel}` : `B:${code}`
+      const token = toBundleTokenDash(code, sel && sel.length === 1 ? sel : null)
       // 不强制使用“；”分隔，直接拼接 (B:CODE[:A]) 即可
       const spec_text = extra ? `${extra}(${token})` : `${token}`
       const bomRes = await generateBomBySpec({
@@ -525,7 +535,7 @@ export default function ProductListingPage() {
                               const idx = sel.charCodeAt(0) - 'A'.charCodeAt(0)
                               const phrase = String(pp?.[idx]?.phrase ?? '').trim()
                               const code = String(bundleDraft.bundle_code ?? '').trim()
-                              const token = code ? `B:${code}:${sel}` : ''
+                              const token = code ? toBundleTokenDash(code, sel) : ''
                               const text = phrase && token ? `${phrase}(${token})` : phrase || token
                               setBundleDraft((d) => ({ ...d, spec_text: text }))
                             }}
@@ -537,9 +547,9 @@ export default function ProductListingPage() {
                             <Text code>
                               {bundleDraft.bundle_code
                                 ? bundleDraft.bundle_selector
-                                  ? `B:${bundleDraft.bundle_code}:${bundleDraft.bundle_selector}`
-                                  : `B:${bundleDraft.bundle_code}`
-                                : 'B:XXXXXX'}
+                                  ? toBundleTokenDash(bundleDraft.bundle_code, bundleDraft.bundle_selector)
+                                  : toBundleTokenDash(bundleDraft.bundle_code)
+                                : 'B-XXXXXX'}
                             </Text>
                           </Text>
                         </Space>

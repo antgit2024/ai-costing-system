@@ -37,8 +37,14 @@ LABELED_DIMENSION_PATTERN = re.compile(
 # Examples: "PI5", "A1B"
 MODEL_CODE_3_PATTERN = re.compile(r"\b(?=[A-Z0-9]{3}\b)(?=.*[A-Z])(?=.*\d)[A-Z0-9]{3}\b", re.IGNORECASE)
 # Avoid \b here because ERP/spec_text often glues Chinese text with codes, and \b may not match.
-# Support both legacy "BUNDLE:XXXX" and new short prefix "B:XXXX".
-BUNDLE_CODE_PATTERN = re.compile(r"(?:(BUNDLE:)|(B:))([A-Z0-9]{4,16})", re.IGNORECASE)
+# Support multiple bundle token spellings:
+# - legacy: "BUNDLE:XXXX"
+# - v1: "B:XXXX"
+# - v2 (platform friendly): "B-XXXX" or "B-XXXX-A" (selector)
+BUNDLE_CODE_PATTERN = re.compile(
+    r"(?:(BUNDLE:)|(B:))([A-Z0-9]{4,16})|(?:\bB-([A-Z0-9]{4,16})(?:-([A-Z]))?\b)",
+    re.IGNORECASE,
+)
 
 
 def _to_decimal(value: Any) -> Decimal | None:
@@ -190,13 +196,22 @@ def parse_spec(spec_text: str) -> Dict[str, Any]:
         # - New canonical: "B:XXXX"
         # - Legacy: "BUNDLE:XXXX"
         for m in BUNDLE_CODE_PATTERN.findall(token):
-            code = str(m[2] or "").strip().upper()
+            # group3: BUNDLE: / B:
+            code1 = str(m[2] or "").strip().upper()
+            # group4: B-XXXX
+            code2 = str(m[3] or "").strip().upper()
+            selector = str(m[4] or "").strip().upper()
+            code = code1 or code2
             if not code:
                 continue
+            # Emit canonical tokens for downstream logic
             extra_tokens.append(f"B:{code}")
             explanations.append({"token": f"B:{code}", "source": token, "rule": "extract_bundle_code"})
             extra_tokens.append(f"BUNDLE:{code}")
             explanations.append({"token": f"BUNDLE:{code}", "source": token, "rule": "extract_bundle_code_legacy"})
+            if selector:
+                extra_tokens.append(f"B:{code}:{selector}")
+                explanations.append({"token": f"B:{code}:{selector}", "source": token, "rule": "extract_bundle_selector"})
 
         # Extract whitelist phrase tokens from within a segment
         for phrase in PHRASE_TOKEN_WHITELIST:

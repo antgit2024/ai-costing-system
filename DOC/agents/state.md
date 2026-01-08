@@ -67,6 +67,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：套装模板列表与口径优化：示例规格去掉分隔符“；”（变为 `短语(B:CODE:A)`）；列表列调整为“编码/名称/分类/解析短码/运营短语/标签/模型/更新时间/状态/操作”，并将解析短码与运营短语按 A/B/C… 打散展示；搜索支持“短码/名称/运营短语”；验收 `npm -C frontend run build` + 原子发布）
 - **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：测试台 `/costing/product-listing` 的“套装测试”优化：新增短语选择器(A/B/…)与“一键生成 spec_text（无；）”，并展示所选短语的组件行预览（模型/宽高/数量）；预演时按选择器拼接 `B:CODE:A` 调用 `bom/generate-by-spec`；验收 `npm -C frontend run build` + 原子发布）
 - **最近校对（北京时间 GMT+8）**：2026-01-08（修复套装测试 400：后端 `bom/generate-by-spec` 支持输入直接为 `B:CODE:A` 时正确识别 CODE（不再按 `CODE:A` 查模板）；前端套装测试在文本框里直接写 `B:CODE:A` 时会保留 selector，并把后端 `detail` 直接显示出来；验收：后端 pytest + 前端 build + 原子发布）
+- **最近校对（北京时间 GMT+8）**：2026-01-08（套装编码升级为平台友好格式：默认对外生成/展示 `B-CODE-A`；后端解析兼容 `B:CODE:A` / `BUNDLE:CODE:A` / `B-CODE-A`，并在 `spec/parse` 里同时产出规范 token `B:CODE` + `B:CODE:A` 供内部使用；前端“套装模板/测试台”均支持两种格式输入且默认输出新格式；验收：后端 pytest + 前端 build + 原子发布 + 后端重启）
 
 ### 关键口径备忘（避免回滚/重构改坏）
 

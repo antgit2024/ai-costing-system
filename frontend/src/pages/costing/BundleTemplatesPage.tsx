@@ -94,6 +94,12 @@ const normalizeBundleToken = (raw: any): string => {
   return s
 }
 
+const toBundleTokenDash = (code: string, selector?: string | null): string => {
+  const c = String(code ?? '').trim().toUpperCase().replace(/^B:/, '').replace(/^BUNDLE:/, '').replace(/^B-/, '')
+  const sel = String(selector ?? '').trim().toUpperCase()
+  return sel ? `B-${c}-${sel}` : `B-${c}`
+}
+
 const toLetter = (idx: number): string => {
   if (idx < 0 || idx >= 26) return ''
   return String.fromCharCode('A'.charCodeAt(0) + idx)
@@ -875,14 +881,14 @@ export default function BundleTemplatesPage() {
                   render: (_: any, r: any) => {
                     const codeRaw = String(r?.code ?? '').trim()
                     if (!codeRaw) return <Text type="secondary">-</Text>
-                    const token = normalizeBundleToken(codeRaw)
+                    const token = toBundleTokenDash(codeRaw)
                     const pp = Array.isArray(r?.metadata?.phrase_presets) ? r.metadata.phrase_presets : []
                     if (!pp.length) return <Text code>{token}</Text>
                     return (
                       <Space direction="vertical" size={2}>
                         {pp.slice(0, 8).map((_: any, idx: number) => {
                           const letter = toLetter(idx)
-                          const t = letter ? `${token}:${letter}` : token
+                          const t = letter ? toBundleTokenDash(codeRaw, letter) : token
                           return (
                             <Text key={t} code copyable={{ text: t }}>
                               {t}
@@ -1326,10 +1332,11 @@ export default function BundleTemplatesPage() {
                   if (!currentBundleToken) return <Text type="secondary">（保存后生成 B: 编码）</Text>
                   const up = phrase.toUpperCase()
                   // 如果运营已经手动写了 B:，就不再重复拼接
-                  if (up.includes('B:') || up.includes('BUNDLE:')) return <Text copyable={{ text: phrase }}>{phrase}</Text>
+                  if (up.includes('B:') || up.includes('BUNDLE:') || up.includes('B-')) return <Text copyable={{ text: phrase }}>{phrase}</Text>
                   const trimmed = phrase.replace(/\s+$/g, '')
                   const sel = idx >= 0 && idx < 26 ? String.fromCharCode('A'.charCodeAt(0) + idx) : ''
-                  const suffix = sel ? `${currentBundleToken}:${sel}` : currentBundleToken
+                  const codeOnly = String(currentBundleToken || '').toUpperCase().replace(/^B:/, '').replace(/^BUNDLE:/, '')
+                  const suffix = toBundleTokenDash(codeOnly, sel || null)
                   const spec = `${trimmed}(${suffix})`
                   return <Text copyable={{ text: spec }}>{spec}</Text>
                 },

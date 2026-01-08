@@ -233,7 +233,8 @@ def test_generate_by_spec_accepts_inline_selector_token(client, db_session):
     assert r_tpl.status_code == 201, r_tpl.text
     code = r_tpl.json()["code"]
 
-    r = client.post(f"{API_PREFIX}/bom/generate-by-spec", json={"spec_text": f"B:{code}:A", "sku_code": None})
+    # New platform-friendly format: B-CODE-A
+    r = client.post(f"{API_PREFIX}/bom/generate-by-spec", json={"spec_text": f"B-{code}-A", "sku_code": None})
     assert r.status_code == 200, r.text
 
 

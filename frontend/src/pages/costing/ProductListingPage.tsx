@@ -132,10 +132,26 @@ export default function ProductListingPage() {
     }))
   }, [bundleTemplatesQuery.data])
 
+  const bundleTokenFromBundleInput = useMemo(() => {
+    const t = String(bundleDraft.spec_text || '').trim()
+    if (!t) return { code: null as string | null, selector: null as string | null }
+    const m = t.match(/(?:BUNDLE:|B:)([A-Z0-9]{4,16})(?::([A-Za-z]))?|\bB-([A-Z0-9]{4,16})(?:-([A-Za-z]))?\b/i)
+    if (!m) return { code: null, selector: null }
+    const code = String(m[1] || m[3] || '').toUpperCase() || null
+    const sel = String(m[2] || m[4] || '').toUpperCase() || null
+    return { code, selector: sel }
+  }, [bundleDraft.spec_text])
+
+  const effectiveBundleCode = useMemo(() => {
+    const selected = String(bundleDraft.bundle_code ?? '').trim()
+    if (selected) return selected
+    return bundleTokenFromBundleInput.code
+  }, [bundleDraft.bundle_code, bundleTokenFromBundleInput.code])
+
   const bundleTemplateDetailQuery = useQuery({
-    queryKey: ['product-listing', 'bundle-template-by-code', bundleDraft.bundle_code],
-    queryFn: () => fetchBundleTemplateByCode(String(bundleDraft.bundle_code)),
-    enabled: !!bundleDraft.bundle_code,
+    queryKey: ['product-listing', 'bundle-template-by-code', effectiveBundleCode],
+    queryFn: () => fetchBundleTemplateByCode(String(effectiveBundleCode)),
+    enabled: !!effectiveBundleCode,
   })
 
   const bundlePhraseOptions = useMemo(() => {
@@ -237,8 +253,8 @@ export default function ProductListingPage() {
   const bundlePreviewMutation = useMutation({
     mutationFn: async () => {
       setLastError(null)
-      const code = String(bundleDraft.bundle_code ?? '').trim()
-      if (!code) throw new Error('请先选择套装（B:XXXXXX）')
+      const code = String(effectiveBundleCode ?? '').trim()
+      if (!code) throw new Error('请先选择套装，或在输入框中包含 B-XXXXXX(-A) / B:XXXXXX(:A)')
       // UI 已选择套装编码：这里允许用户在输入里直接写 B:CODE:A，
       // 我们会优先从用户输入提取 selector（避免 selector 丢失导致“模板无组件”）。
       const inputSelector =
@@ -249,7 +265,10 @@ export default function ProductListingPage() {
         .replace(/(?:BUNDLE:|B:)[A-Z0-9]{4,16}/gi, '')
         .replace(/\bB-[A-Z0-9]{4,16}(?:-[A-Za-z])?\b/gi, '')
         .trim()
-      const sel = String(bundleDraft.bundle_selector ?? '').trim().toUpperCase() || inputSelector
+      const sel =
+        String(bundleDraft.bundle_selector ?? '').trim().toUpperCase() ||
+        inputSelector ||
+        String(bundleTokenFromBundleInput.selector ?? '').trim().toUpperCase()
       const token = toBundleTokenDash(code, sel && sel.length === 1 ? sel : null)
       // 不强制使用“；”分隔，直接拼接 (B:CODE[:A]) 即可
       const spec_text = extra ? `${extra}(${token})` : `${token}`
@@ -512,6 +531,14 @@ export default function ProductListingPage() {
                     }
                     style={{ width: '100%' }}
                   />
+                  {!bundleDraft.bundle_code && bundleTokenFromBundleInput.code ? (
+                    <Alert
+                      type="info"
+                      showIcon
+                      message={`已从输入框识别套装编码：${toBundleTokenDash(bundleTokenFromBundleInput.code, bundleTokenFromBundleInput.selector)}`}
+                      description="你可以不选上面的下拉，直接点“套装：预演 BOM”。如需短语预览/选择器，请选择套装下拉。"
+                    />
+                  ) : null}
                   <Row gutter={[12, 12]}>
                     <Col xs={24} lg={12}>
                       <Card size="small" title="短语选择器（A/B/C…）">

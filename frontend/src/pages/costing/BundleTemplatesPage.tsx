@@ -1352,6 +1352,7 @@ export default function BundleTemplatesPage() {
                   const tokenDash = codeOnly ? toBundleTokenDash(codeOnly, sel) : `B-????${sel}`
                   const active = idx === activePresetIndex
                   const enabled = p?.enabled !== false
+                  const phraseText = String(p?.phrase ?? '').trim() || '-'
                   return (
                     <div
                       style={{
@@ -1365,16 +1366,14 @@ export default function BundleTemplatesPage() {
                       onClick={() => setActivePresetIndex(idx)}
                     >
                       <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                        <Space wrap size={8} style={{ width: '100%', justifyContent: 'space-between' }}>
-                          <Space wrap size={8}>
-                            <Tag color={enabled ? 'blue' : 'red'} style={{ fontWeight: 600 }}>
+                        {/* 第一行：编码（左）+ 操作按钮（右） */}
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                          <div style={{ minWidth: 0, display: 'flex', alignItems: 'center' }}>
+                            <Tag color={enabled ? 'blue' : 'red'} style={{ fontWeight: 600, marginInlineEnd: 0 }}>
                               {tokenDash}
                             </Tag>
-                            <Text ellipsis={{ tooltip: true }} style={{ maxWidth: 150 }}>
-                              {String(p?.phrase ?? '').trim() || '-'}
-                            </Text>
-                          </Space>
-                          <Space size={6}>
+                          </div>
+                          <Space size={2}>
                             <Button
                               size="small"
                               type="text"
@@ -1420,7 +1419,12 @@ export default function BundleTemplatesPage() {
                               }}
                             />
                           </Space>
-                        </Space>
+                        </div>
+
+                        {/* 第二行：纯短语 */}
+                        <Text type="secondary" ellipsis={{ tooltip: true }}>
+                          {phraseText}
+                        </Text>
                       </Space>
                     </div>
                   )

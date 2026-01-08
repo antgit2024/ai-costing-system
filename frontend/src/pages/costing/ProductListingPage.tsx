@@ -1,12 +1,14 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { Alert, Button, Card, Col, Descriptions, Divider, Input, Row, Select, Space, Table, Tabs, Tag, Typography, message } from 'antd'
+import { Alert, Button, Card, Col, Descriptions, Divider, Empty, Input, Row, Select, Space, Table, Tabs, Tag, Typography, message } from 'antd'
 
 import {
   fetchProductModelVersionLines,
   fetchProductModels,
   fetchProductModelVersions,
   fetchBundleTemplates,
+  fetchBundleTemplateByCode,
+  fetchProductModelVersionsPaged,
   generateBom,
   generateBomBySpec,
   listLineVariants,
@@ -47,7 +49,13 @@ type ProductListingDraft = {
 
 type BundleTestDraft = {
   bundle_code: string | null
+  bundle_selector: string | null
   spec_text: string
+}
+
+const toLetter = (idx: number): string => {
+  if (idx < 0 || idx >= 26) return ''
+  return String.fromCharCode('A'.charCodeAt(0) + idx)
 }
 
 export default function ProductListingPage() {
@@ -58,7 +66,7 @@ export default function ProductListingPage() {
     model_version_id: null,
     spec_text: '',
   })
-  const [bundleDraft, setBundleDraft] = useState<BundleTestDraft>({ bundle_code: null, spec_text: '' })
+  const [bundleDraft, setBundleDraft] = useState<BundleTestDraft>({ bundle_code: null, bundle_selector: null, spec_text: '' })
 
   const [parsed, setParsed] = useState<SpecParseResponse | null>(null)
   const [bom, setBom] = useState<BomGenerateResponse | null>(null)
@@ -105,6 +113,52 @@ export default function ProductListingPage() {
       label: `B:${String(x?.code ?? '').trim()} / ${String(x?.name ?? '').trim() || '-'}${x?.is_archived ? ' (archived)' : ''}`,
     }))
   }, [bundleTemplatesQuery.data])
+
+  const bundleTemplateDetailQuery = useQuery({
+    queryKey: ['product-listing', 'bundle-template-by-code', bundleDraft.bundle_code],
+    queryFn: () => fetchBundleTemplateByCode(String(bundleDraft.bundle_code)),
+    enabled: !!bundleDraft.bundle_code,
+  })
+
+  const bundlePhraseOptions = useMemo(() => {
+    const meta: any = (bundleTemplateDetailQuery.data as any)?.metadata ?? {}
+    const pp = Array.isArray(meta?.phrase_presets) ? meta.phrase_presets : []
+    return pp.slice(0, 26).map((p: any, idx: number) => {
+      const letter = toLetter(idx)
+      const phrase = String(p?.phrase ?? '').trim()
+      return { value: letter, label: `${letter}: ${phrase || '-'}` }
+    })
+  }, [bundleTemplateDetailQuery.data])
+
+  const bundlePresetComponents = useMemo(() => {
+    const sel = String(bundleDraft.bundle_selector ?? '').trim().toUpperCase()
+    if (!sel || sel.length !== 1) return []
+    const idx = sel.charCodeAt(0) - 'A'.charCodeAt(0)
+    if (idx < 0) return []
+    const meta: any = (bundleTemplateDetailQuery.data as any)?.metadata ?? {}
+    const pp = Array.isArray(meta?.phrase_presets) ? meta.phrase_presets : []
+    const hit = pp[idx]
+    const rows = Array.isArray(hit?.components) ? hit.components : []
+    return rows
+  }, [bundleDraft.bundle_selector, bundleTemplateDetailQuery.data])
+
+  const versionsPagedQuery = useQuery({
+    queryKey: ['product-model-versions-paged', 'listing', 'standard', 'for-bundle-preview'],
+    queryFn: () => fetchProductModelVersionsPaged({ version_kind: 'standard', page: 1, page_size: 200 }),
+  })
+  const versionIdToModelLabel = useMemo(() => {
+    const m = new Map<string, string>()
+    const items = (versionsPagedQuery.data?.items ?? []) as any[]
+    for (const it of items) {
+      const vid = String(it?.version_id ?? '').trim()
+      const mc = String(it?.model_code ?? '').trim()
+      const mn = String(it?.model_name ?? '').trim()
+      if (!vid) continue
+      const label = mc && mn ? `${mc}:${mn}` : mc || mn || vid.slice(0, 8)
+      m.set(vid, label)
+    }
+    return m
+  }, [versionsPagedQuery.data])
 
   const selectedModel = useMemo(() => models.find((m) => m.id === draft.model_id) ?? null, [models, draft.model_id])
   const selectedVersion = useMemo(
@@ -170,7 +224,10 @@ export default function ProductListingPage() {
       const extra = String(bundleDraft.spec_text ?? '')
         .replace(/(?:BUNDLE:|B:)[A-Z0-9]{4,16}/gi, '')
         .trim()
-      const spec_text = extra ? `B:${code} ${extra}` : `B:${code}`
+      const sel = String(bundleDraft.bundle_selector ?? '').trim().toUpperCase()
+      const token = sel && sel.length === 1 ? `B:${code}:${sel}` : `B:${code}`
+      // 不强制使用“；”分隔，直接拼接 (B:CODE[:A]) 即可
+      const spec_text = extra ? `${extra}(${token})` : `${token}`
       const bomRes = await generateBomBySpec({
         spec_text,
         sku_code: draft.sku_code || undefined,
@@ -425,12 +482,100 @@ export default function ProductListingPage() {
                     options={bundleTemplateOptions as any}
                     value={bundleDraft.bundle_code ?? undefined}
                     loading={bundleTemplatesQuery.isLoading}
-                    onChange={(v) => setBundleDraft((d) => ({ ...d, bundle_code: (v as string) ?? null }))}
+                    onChange={(v) =>
+                      setBundleDraft((d) => ({ ...d, bundle_code: (v as string) ?? null, bundle_selector: null, spec_text: '' }))
+                    }
                     style={{ width: '100%' }}
                   />
+                  <Row gutter={[12, 12]}>
+                    <Col xs={24} lg={12}>
+                      <Card size="small" title="短语选择器（A/B/C…）">
+                        <Space direction="vertical" style={{ width: '100%' }} size={8}>
+                          <Select
+                            allowClear
+                            placeholder="选择 A/B/C…（对应套装模板里的运营短语）"
+                            options={bundlePhraseOptions as any}
+                            value={bundleDraft.bundle_selector ?? undefined}
+                            loading={bundleTemplateDetailQuery.isLoading}
+                            onChange={(v) => setBundleDraft((d) => ({ ...d, bundle_selector: (v as string) ?? null }))}
+                            style={{ width: '100%' }}
+                          />
+                          <Button
+                            disabled={!bundleDraft.bundle_code || !bundleDraft.bundle_selector}
+                            onClick={() => {
+                              const sel = String(bundleDraft.bundle_selector ?? '').trim().toUpperCase()
+                              if (!sel) return
+                              const meta: any = (bundleTemplateDetailQuery.data as any)?.metadata ?? {}
+                              const pp = Array.isArray(meta?.phrase_presets) ? meta.phrase_presets : []
+                              const idx = sel.charCodeAt(0) - 'A'.charCodeAt(0)
+                              const phrase = String(pp?.[idx]?.phrase ?? '').trim()
+                              const code = String(bundleDraft.bundle_code ?? '').trim()
+                              const token = code ? `B:${code}:${sel}` : ''
+                              const text = phrase && token ? `${phrase}(${token})` : phrase || token
+                              setBundleDraft((d) => ({ ...d, spec_text: text }))
+                            }}
+                          >
+                            用所选短语生成 spec_text
+                          </Button>
+                          <Text type="secondary">
+                            预演时会按选择器拼接：{' '}
+                            <Text code>
+                              {bundleDraft.bundle_code
+                                ? bundleDraft.bundle_selector
+                                  ? `B:${bundleDraft.bundle_code}:${bundleDraft.bundle_selector}`
+                                  : `B:${bundleDraft.bundle_code}`
+                                : 'B:XXXXXX'}
+                            </Text>
+                          </Text>
+                        </Space>
+                      </Card>
+                    </Col>
+                    <Col xs={24} lg={12}>
+                      <Card size="small" title="组件行预览（来自该短语）">
+                        {bundleDraft.bundle_selector ? (
+                          <Table
+                            size="small"
+                            pagination={false}
+                            rowKey={(_, i) => `pc-${i}`}
+                            dataSource={bundlePresetComponents as any}
+                            locale={{ emptyText: '该短语未配置组件行' }}
+                            columns={[
+                              {
+                                title: '模型',
+                                width: 220,
+                                render: (_: any, r: any) => {
+                                  const vid = String(r?.model_version_id ?? '').trim()
+                                  return vid ? versionIdToModelLabel.get(vid) || vid.slice(0, 8) : '-'
+                                },
+                              },
+                              {
+                                title: '宽(cm)',
+                                width: 80,
+                                render: (_: any, r: any) => {
+                                  const v = toNumberOrNull(r?.width_mm)
+                                  return v != null ? String(v / 10) : '-'
+                                },
+                              },
+                              {
+                                title: '高(cm)',
+                                width: 80,
+                                render: (_: any, r: any) => {
+                                  const v = toNumberOrNull(r?.height_mm)
+                                  return v != null ? String(v / 10) : '-'
+                                },
+                              },
+                              { title: '数量', width: 70, render: (_: any, r: any) => String(r?.quantity ?? '-') },
+                            ]}
+                          />
+                        ) : (
+                          <Empty description="先选择 A/B/C…" />
+                        )}
+                      </Card>
+                    </Col>
+                  </Row>
                   <Input.TextArea
                     rows={4}
-                    placeholder="交易规格（可选）：用于触发词/特征串（不会解析尺寸）"
+                    placeholder="交易规格（可选）：可直接粘贴对客规格；不需要写“；”。点击预演会自动拼接 (B:CODE[:A])"
                     value={bundleDraft.spec_text}
                     onChange={(e) => setBundleDraft((d) => ({ ...d, spec_text: e.target.value }))}
                   />

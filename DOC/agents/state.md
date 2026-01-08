@@ -65,6 +65,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-07（修复线上保存失败：前端新流量发送 `components: []`，线上后端仍要求 `components >= 1` 导致 422/前端显示 400。已重启 `planner-costing.service` 使其加载最新代码后恢复正常；复测 `POST /api/planner/bundle-templates` 返回 201）
 - **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：套装模板子项UI优化：移除子项“触发词”输入框（仍由“筛选”自动填充内部数据用于命中变体），并加宽“模型版本”下拉列；验收 `npm -C frontend run build` + 原子发布）
 - **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：套装模板列表与口径优化：示例规格去掉分隔符“；”（变为 `短语(B:CODE:A)`）；列表列调整为“编码/名称/分类/解析短码/运营短语/标签/模型/更新时间/状态/操作”，并将解析短码与运营短语按 A/B/C… 打散展示；搜索支持“短码/名称/运营短语”；验收 `npm -C frontend run build` + 原子发布）
+- **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：测试台 `/costing/product-listing` 的“套装测试”优化：新增短语选择器(A/B/…)与“一键生成 spec_text（无；）”，并展示所选短语的组件行预览（模型/宽高/数量）；预演时按选择器拼接 `B:CODE:A` 调用 `bom/generate-by-spec`；验收 `npm -C frontend run build` + 原子发布）
 
 ### 关键口径备忘（避免回滚/重构改坏）
 

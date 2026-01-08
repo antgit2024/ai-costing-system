@@ -53,11 +53,11 @@ def test_parse_spec_extracts_bundle_code_tokens(client):
     assert "B:K8F3J2" in tokens2
     assert "B:K8F3J2:A" in tokens2
 
-    # New short format: B-XXXXA (CODE length fixed to 4)
-    spec_text3 = "照片墙 B-K8F3A"
+    # New short format: B-XXXXAA (CODE length fixed to 4; selector 2 letters)
+    spec_text3 = "照片墙 B-K8F3AA"
     r3 = client.post("/api/planner/spec/parse", json={"spec_text": spec_text3})
     assert r3.status_code == 200, r3.text
     tokens3 = r3.json().get("tokens") or []
     assert "B:K8F3" in tokens3
-    assert "B:K8F3:A" in tokens3
+    assert "B:K8F3:AA" in tokens3
 

@@ -47,7 +47,9 @@ type ComponentRow = {
 }
 
 type PhrasePresetRow = {
+  selector: string // AA/AB/... stable id, NOT derived from array index
   phrase: string
+  enabled?: boolean
   components: ComponentRow[]
 }
 
@@ -97,13 +99,15 @@ const normalizeBundleToken = (raw: any): string => {
 const toBundleTokenDash = (code: string, selector?: string | null): string => {
   const c = String(code ?? '').trim().toUpperCase().replace(/^B:/, '').replace(/^BUNDLE:/, '').replace(/^B-/, '')
   const sel = String(selector ?? '').trim().toUpperCase()
-  // New short format: B-XXXXA (CODE length fixed to 4). Keep compatibility with selector-less token.
+  // New short format: B-XXXXAA (CODE length fixed to 4; selector is 2 letters). Keep compatibility with selector-less token.
   return sel ? `B-${c}${sel}` : `B-${c}`
 }
 
-const toLetter = (idx: number): string => {
-  if (idx < 0 || idx >= 26) return ''
-  return String.fromCharCode('A'.charCodeAt(0) + idx)
+const toSelector2 = (idx: number): string => {
+  if (idx < 0 || idx >= 26 * 26) return ''
+  const a = Math.floor(idx / 26)
+  const b = idx % 26
+  return String.fromCharCode('A'.charCodeAt(0) + a) + String.fromCharCode('A'.charCodeAt(0) + b)
 }
 
 const SLOT_CN_FALLBACK: Record<string, string> = {
@@ -542,6 +546,8 @@ export default function BundleTemplatesPage() {
       setPhrasePresets(
         pp
           .map((x: any) => ({
+            selector: String(x?.selector ?? '').trim().toUpperCase() || undefined,
+            enabled: x?.enabled === false ? false : true,
             phrase: String(x?.phrase ?? '').trim(),
             components: Array.isArray(x?.components)
               ? (x.components as any[])
@@ -555,7 +561,12 @@ export default function BundleTemplatesPage() {
                   .filter((c: any) => !!c.model_version_id)
               : [],
           }))
-          .filter((x: any) => x.phrase && Array.isArray(x.components)),
+          .map((x: any, idx: number) => ({
+            ...x,
+            selector: String(x?.selector ?? '').trim().toUpperCase() || toSelector2(idx),
+          }))
+          // keep disabled rows; enabled rows can be empty when user is still editing
+          .filter((x: any) => !!String(x?.selector ?? '').trim()),
       )
     } else {
       setPhrasePresets([])
@@ -574,7 +585,7 @@ export default function BundleTemplatesPage() {
         }))
         .filter((c: any) => !!c.model_version_id)
       if (converted.length) {
-        setPhrasePresets([{ phrase: 'A组', components: converted }])
+        setPhrasePresets([{ selector: 'AA', phrase: 'A组', components: converted, enabled: true }])
         // seed pool with those versions if pool empty
         if (!Array.isArray(pool) || !pool.length) {
           setModelPoolVersionIds(Array.from(new Set(converted.map((x: any) => String(x.model_version_id)))))
@@ -600,6 +611,8 @@ export default function BundleTemplatesPage() {
         lexicon_rules: Array.isArray((editing?.metadata ?? {})?.lexicon_rules) ? (editing?.metadata ?? {})?.lexicon_rules : [],
         phrase_presets: phrasePresets
           .map((p) => ({
+            selector: String((p as any).selector ?? '').trim().toUpperCase() || undefined,
+            enabled: (p as any).enabled === false ? false : undefined,
             phrase: String(p.phrase ?? '').trim(),
             components: Array.isArray(p.components)
               ? p.components
@@ -613,7 +626,14 @@ export default function BundleTemplatesPage() {
                   .filter((c) => c.model_version_id && c.width_mm > 0 && c.height_mm > 0 && c.quantity > 0)
               : [],
           }))
-          .filter((p: any) => p.phrase && Array.isArray(p.components) && p.components.length > 0),
+          // Keep disabled rows (by selector) even if they are empty, to avoid selector reuse/shift.
+          // Enabled rows must have phrase + component rows.
+          .filter((p: any) => {
+            const sel = String(p?.selector ?? '').trim()
+            const enabled = p?.enabled !== false
+            if (!enabled) return !!sel
+            return !!String(p?.phrase ?? '').trim() && Array.isArray(p.components) && p.components.length > 0
+          }),
       }
       if (editing?.id) {
         return await updateBundleTemplate(editing.id, {
@@ -631,8 +651,8 @@ export default function BundleTemplatesPage() {
     onSuccess: (res: any) => {
       qc.invalidateQueries({ queryKey: ['bundle-templates'] })
       const code = String(res?.code ?? '').toUpperCase()
-      // Default hint uses new short external token, preset A: B-XXXXA
-      if (code) setCreatedTokenHint(toBundleTokenDash(code, 'A'))
+      // Default hint uses new short external token, preset AA: B-XXXXAA
+      if (code) setCreatedTokenHint(toBundleTokenDash(code, 'AA'))
       message.success(editing?.id ? '已保存' : '已创建')
       setEditing(res)
     },
@@ -888,9 +908,9 @@ export default function BundleTemplatesPage() {
                     if (!pp.length) return <Text code>{token}</Text>
                     return (
                       <Space direction="vertical" size={2}>
-                        {pp.slice(0, 8).map((_: any, idx: number) => {
-                          const letter = toLetter(idx)
-                          const t = letter ? toBundleTokenDash(codeRaw, letter) : token
+                        {pp.slice(0, 8).map((p: any, idx: number) => {
+                          const sel = String(p?.selector ?? '').trim().toUpperCase() || toSelector2(idx)
+                          const t = sel ? toBundleTokenDash(codeRaw, sel) : token
                           return (
                             <Text key={t} code copyable={{ text: t }}>
                               {t}
@@ -911,7 +931,7 @@ export default function BundleTemplatesPage() {
                     return (
                       <Space direction="vertical" size={2}>
                         {pp.slice(0, 8).map((p: any, idx: number) => {
-                          const letter = toLetter(idx)
+                          const letter = String(p?.selector ?? '').trim().toUpperCase() || toSelector2(idx)
                           const phrase = String(p?.phrase ?? '').trim()
                           const label = phrase ? `${letter}: ${phrase}` : `${letter}: -`
                           return (
@@ -1031,7 +1051,7 @@ export default function BundleTemplatesPage() {
         destroyOnClose={false}
         title={
           editing?.id
-            ? `编辑套装模板（${toBundleTokenDash(String(editing?.code ?? ''), 'A')}）`
+            ? `编辑套装模板（${toBundleTokenDash(String(editing?.code ?? ''), 'AA')}）`
             : '新建套装模板'
         }
         extra={
@@ -1049,7 +1069,7 @@ export default function BundleTemplatesPage() {
               type="success"
               showIcon
               message={`编码已生成：${createdTokenHint}`}
-              description="把短码（例如 B-XXXXA）放进交易规格即可走合并器预演。"
+              description="把短码（例如 B-XXXXAA）放进交易规格即可走合并器预演。"
             />
           ) : null}
 
@@ -1094,7 +1114,19 @@ export default function BundleTemplatesPage() {
               onClick={() =>
                 setPhrasePresets((prev) => [
                   ...prev,
-                  { phrase: '', components: [{ model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' }] },
+                  {
+                    selector: (() => {
+                      const used = new Set((prev ?? []).map((x: any) => String(x?.selector ?? '').trim().toUpperCase()).filter(Boolean))
+                      for (let i = 0; i < 26 * 26; i++) {
+                        const s = toSelector2(i)
+                        if (s && !used.has(s)) return s
+                      }
+                      return 'ZZ'
+                    })(),
+                    phrase: '',
+                    enabled: true,
+                    components: [{ model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' }],
+                  },
                 ])
               }
             >
@@ -1332,11 +1364,20 @@ export default function BundleTemplatesPage() {
                 title: '运营短语（包含命中）',
                 width: 360,
                 render: (_: any, r: any, idx: number) => (
-                  <Input
-                    placeholder="例如：雪尼尔抱枕背面纯色2个"
-                    value={String(r.phrase ?? '')}
-                    onChange={(e) => setPhrasePresets((prev) => prev.map((x, i) => (i === idx ? { ...x, phrase: e.target.value } : x)))}
-                  />
+                  <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                    <Text type="secondary">
+                      selector：<Text code>{String(r?.selector ?? '').trim().toUpperCase() || toSelector2(idx)}</Text>
+                      {r?.enabled === false ? <Text type="danger">（已停用）</Text> : null}
+                    </Text>
+                    <Input
+                      placeholder="例如：雪尼尔抱枕背面纯色2个"
+                      value={String(r.phrase ?? '')}
+                      disabled={r?.enabled === false}
+                      onChange={(e) =>
+                        setPhrasePresets((prev) => prev.map((x, i) => (i === idx ? { ...x, phrase: e.target.value } : x)))
+                      }
+                    />
+                  </Space>
                 ),
               },
               {
@@ -1349,7 +1390,7 @@ export default function BundleTemplatesPage() {
                   // 如果运营已经手动写了 B:，就不再重复拼接
                   if (up.includes('B:') || up.includes('BUNDLE:') || up.includes('B-')) return <Text copyable={{ text: phrase }}>{phrase}</Text>
                   const trimmed = phrase.replace(/\s+$/g, '')
-                  const sel = idx >= 0 && idx < 26 ? String.fromCharCode('A'.charCodeAt(0) + idx) : ''
+                  const sel = String(r?.selector ?? '').trim().toUpperCase() || toSelector2(idx)
                   const codeOnly = String(currentBundleToken || '').toUpperCase().replace(/^B:/, '').replace(/^BUNDLE:/, '')
                   const suffix = toBundleTokenDash(codeOnly, sel || null)
                   const spec = `${trimmed}(${suffix})`
@@ -1361,8 +1402,16 @@ export default function BundleTemplatesPage() {
                 width: 140,
                 render: (_: any, __: any, idx: number) => (
                   <Space>
-                    <Button size="small" danger onClick={() => setPhrasePresets((prev) => prev.filter((_, i) => i !== idx))}>
-                      删除
+                    <Button
+                      size="small"
+                      danger={phrasePresets[idx]?.enabled !== false}
+                      onClick={() =>
+                        setPhrasePresets((prev) =>
+                          prev.map((p, i) => (i !== idx ? p : { ...p, enabled: p.enabled === false ? true : false })),
+                        )
+                      }
+                    >
+                      {phrasePresets[idx]?.enabled === false ? '启用' : '停用'}
                     </Button>
                   </Space>
                 ),

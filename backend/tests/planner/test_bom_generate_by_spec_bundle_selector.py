@@ -233,12 +233,14 @@ def test_generate_by_spec_accepts_inline_selector_token(client, db_session):
     assert r_tpl.status_code == 201, r_tpl.text
     code = r_tpl.json()["code"]
 
-    # New short format: B-XXXXA (CODE length fixed to 4)
-    r = client.post(f"{API_PREFIX}/bom/generate-by-spec", json={"spec_text": f"B-{code}A", "sku_code": None})
+    # New short format: B-XXXXAA (CODE length fixed to 4; selector 2 letters)
+    r = client.post(f"{API_PREFIX}/bom/generate-by-spec", json={"spec_text": f"B-{code}AA", "sku_code": None})
     assert r.status_code == 200, r.text
 
-    # Legacy dash format still supported: B-CODE-A
+    # Legacy dash format still supported: B-CODE-A / B-CODE-AA
     r2 = client.post(f"{API_PREFIX}/bom/generate-by-spec", json={"spec_text": f"B-{code}-A", "sku_code": None})
     assert r2.status_code == 200, r2.text
+    r3 = client.post(f"{API_PREFIX}/bom/generate-by-spec", json={"spec_text": f"B-{code}-AA", "sku_code": None})
+    assert r3.status_code == 200, r3.text
 
 

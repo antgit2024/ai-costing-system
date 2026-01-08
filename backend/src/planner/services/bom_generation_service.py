@@ -223,25 +223,26 @@ def generate_bom_by_spec(
         None,
     )
     if not bundle_token:
-        raise ValueError("交易规格未包含套装编码（B:CODE / BUNDLE:CODE / B-CODE-A / B-XXXXA）")
+        raise ValueError("交易规格未包含套装编码（B:CODE / BUNDLE:CODE / B-CODE-XX / B-XXXXXX）")
     # Accept:
-    # - "B:CODE" / "B:CODE:A" / "BUNDLE:CODE" / "BUNDLE:CODE:A"
-    # - "B-CODE" / "B-CODE-A"
-    # - "B-XXXX" / "B-XXXXA" (new short form, CODE length fixed to 4)
+    # - "B:CODE" / "B:CODE:A" / "B:CODE:AA" / "BUNDLE:CODE" / "BUNDLE:CODE:A" / "BUNDLE:CODE:AA"
+    # - "B-CODE" / "B-CODE-A" / "B-CODE-AA"
+    # - "B-XXXX" / "B-XXXXAA" (new short form, CODE length fixed to 4; selector is 2 letters)
     # Only CODE is used to load template;
     # selector is parsed from spec_text below.
     raw_bt = str(bundle_token).strip()
     if raw_bt.upper().startswith("B-"):
         # Dash forms:
-        # - legacy: B-CODE / B-CODE-A
-        # - new short: B-XXXX / B-XXXXA (CODE length fixed to 4)
+        # - legacy: B-CODE / B-CODE-A / B-CODE-AA
+        # - new short: B-XXXX / B-XXXXAA (CODE length fixed to 4; selector 2 letters)
         rest = raw_bt[2:].strip()  # after "B-"
         if "-" in rest:
             # B-CODE-A
             code = rest.split("-", 1)[0].strip().upper()
         else:
-            # B-XXXXA: treat as CODE=first 4 if length==5
-            code = (rest[:4] if len(rest) == 5 else rest).strip().upper()
+            # B-XXXXAA: treat as CODE=first 4 if len==6.
+            # Also accept legacy 1-letter selector form (len==5) for backward compatibility.
+            code = (rest[:4] if len(rest) in (5, 6) else rest).strip().upper()
     else:
         # Colon forms: B:CODE(:A) / BUNDLE:CODE(:A)
         rest = raw_bt.split(":", 1)[1].strip()
@@ -261,9 +262,9 @@ def generate_bom_by_spec(
     import re
 
     _mode_match = re.search(
-        rf"(?:BUNDLE:|B:){re.escape(code)}(?::(?P<sel_colon>[A-Za-z]))?"
-        rf"|(?:\bB-{re.escape(code)}-(?P<sel_dash>[A-Za-z])\b)"
-        rf"|(?:\bB-{re.escape(code)}(?P<sel_short>[A-Za-z])\b)",
+        rf"(?:BUNDLE:|B:){re.escape(code)}(?::(?P<sel_colon>[A-Za-z]{{1,2}}))?"
+        rf"|(?:\bB-{re.escape(code)}-(?P<sel_dash>[A-Za-z]{{1,2}})\b)"
+        rf"|(?:\bB-{re.escape(code)}(?P<sel_short>[A-Za-z]{{2}})\b)",
         str(spec_text or ""),
         flags=re.IGNORECASE,
     )
@@ -273,6 +274,14 @@ def generate_bom_by_spec(
         or (str(_mode_match.group("sel_short") or "").strip().upper() if _mode_match else "")
         or ""
     ) or None
+
+    def _selector2_to_index(sel: str) -> Optional[int]:
+        s = (sel or "").strip().upper()
+        if len(s) != 2:
+            return None
+        if not ("A" <= s[0] <= "Z" and "A" <= s[1] <= "Z"):
+            return None
+        return (ord(s[0]) - ord("A")) * 26 + (ord(s[1]) - ord("A"))
 
     def _parse_qty_from_phrase(text: str) -> Optional[int]:
         import re
@@ -288,41 +297,56 @@ def generate_bom_by_spec(
             return None
 
     forced_preset_index: Optional[int] = None
+    forced_preset_selector: Optional[str] = None
     if bundle_selector and len(bundle_selector) == 1 and "A" <= bundle_selector <= "Z":
+        # Legacy 1-letter selector maps to index directly (A=0,B=1,...)
         forced_preset_index = ord(bundle_selector) - ord("A")
+    elif bundle_selector and len(bundle_selector) == 2:
+        forced_preset_selector = bundle_selector
 
     # New mode: when selector is present, allow phrase preset row to carry a full component list.
     # This supports "同模型多尺寸/多数量" (e.g. 照片墙) without relying on customer-facing text parsing.
-    if isinstance(forced_preset_index, int):
+    if forced_preset_selector or isinstance(forced_preset_index, int):
         raw_presets = tpl_meta.get("phrase_presets")
         presets = raw_presets if isinstance(raw_presets, list) else []
-        if 0 <= forced_preset_index < len(presets):
+        preset = None
+        if forced_preset_selector:
+            for p in presets:
+                if isinstance(p, dict) and str(p.get("selector") or "").strip().upper() == forced_preset_selector:
+                    preset = p
+                    break
+            # Backward compatibility: old presets without selector field can still be addressed by AA/AB... as index.
+            if preset is None:
+                idx = _selector2_to_index(forced_preset_selector)
+                if isinstance(idx, int) and 0 <= idx < len(presets):
+                    preset = presets[idx]
+        elif isinstance(forced_preset_index, int) and 0 <= forced_preset_index < len(presets):
             preset = presets[forced_preset_index]
-            if isinstance(preset, dict) and isinstance(preset.get("components"), list):
-                comps_raw = preset.get("components") or []
-                comps_new: List[Dict[str, Any]] = []
-                for i, c in enumerate(comps_raw):
-                    if not isinstance(c, dict):
-                        continue
-                    vid = str(c.get("model_version_id") or "").strip()
-                    if not vid:
-                        raise ValueError(f"短语预设组件缺少 model_version_id：preset={forced_preset_index} idx={i}")
-                    # Keep only fields used by generate_bom_multi_bundle / downstream generate_bom.
-                    # width_mm/height_mm/quantity are required for actual generation.
-                    comps_new.append(
-                        {
-                            "model_version_id": vid,
-                            "width_mm": c.get("width_mm") or c.get("width") or 0,
-                            "height_mm": c.get("height_mm") or c.get("height") or 0,
-                            "quantity": c.get("quantity") or 1,
-                            "spec_text": c.get("spec_text") or "",
-                            "tokens": c.get("tokens") or [],
-                        }
-                    )
-                if not comps_new:
-                    raise ValueError(f"短语预设未配置组件行：{code}:{bundle_selector}")
-                # Use these components as the generation source for selector mode.
-                components = comps_new
+        if preset is not None and isinstance(preset, dict) and isinstance(preset.get("components"), list):
+            comps_raw = preset.get("components") or []
+            comps_new: List[Dict[str, Any]] = []
+            for i, c in enumerate(comps_raw):
+                if not isinstance(c, dict):
+                    continue
+                vid = str(c.get("model_version_id") or "").strip()
+                if not vid:
+                    raise ValueError(f"短语预设组件缺少 model_version_id：selector={bundle_selector} idx={i}")
+                # Keep only fields used by generate_bom_multi_bundle / downstream generate_bom.
+                # width_mm/height_mm/quantity are required for actual generation.
+                comps_new.append(
+                    {
+                        "model_version_id": vid,
+                        "width_mm": c.get("width_mm") or c.get("width") or 0,
+                        "height_mm": c.get("height_mm") or c.get("height") or 0,
+                        "quantity": c.get("quantity") or 1,
+                        "spec_text": c.get("spec_text") or "",
+                        "tokens": c.get("tokens") or [],
+                    }
+                )
+            if not comps_new:
+                raise ValueError(f"短语预设未配置组件行：{code}:{bundle_selector}")
+            # Use these components as the generation source for selector mode.
+            components = comps_new
 
     if not components:
         raise ValueError(f"套装模板无组件：{code}")
@@ -333,6 +357,7 @@ def generate_bom_by_spec(
         spec_text: str,
         components: List[Dict[str, Any]],
         forced_index: Optional[int] = None,
+        forced_selector: Optional[str] = None,
     ) -> tuple[List[Dict[str, Any]], List[str], List[Dict[str, Any]], bool]:
         """
         Phrase presets (短语预设):
@@ -343,12 +368,15 @@ def generate_bom_by_spec(
         raw = tpl_meta.get("phrase_presets")
         presets = raw if isinstance(raw, list) else []
         items: List[Dict[str, Any]] = []
-        for p in presets:
+        for i_p, p in enumerate(presets):
             if not isinstance(p, dict):
                 continue
             phrase = str(p.get("phrase") or "").strip()
             if not phrase:
                 continue
+            sel = str(p.get("selector") or "").strip().upper() or None
+            enabled = p.get("enabled")
+            enabled = bool(enabled) if enabled is not None else True
             mappings = p.get("mappings")
             mappings = mappings if isinstance(mappings, list) else []
 
@@ -392,6 +420,9 @@ def generate_bom_by_spec(
             items.append(
                 {
                     "phrase": phrase,
+                    "selector": sel,
+                    "enabled": enabled,
+                    "raw_index": i_p,
                     "quantity": qty,
                     "mappings": clean_mappings,
                 }
@@ -406,9 +437,18 @@ def generate_bom_by_spec(
         remove_tokens: List[str] = []
         s = str(spec_text or "")
 
-        # Forced selection mode: choose Nth preset row directly (A=0,B=1,...),
-        # and apply its mappings without checking contains-match.
-        if isinstance(forced_index, int):
+        # Forced selection mode:
+        # - preferred: choose preset by its stable selector (AA/AB/...), no order shift.
+        # - legacy: forced_index (A=0,B=1,...) for old one-letter selectors.
+        if forced_selector:
+            it = next((x for x in items if x.get("selector") == forced_selector), None)
+            if it is None:
+                idx = _selector2_to_index(forced_selector)
+                it = items[idx] if isinstance(idx, int) and 0 <= idx < len(items) else None
+            if not it or not bool(it.get("enabled", True)):
+                trace_entries = [{"selector": forced_selector, "matched": False, "reason": "forced_selector_not_found_or_disabled"}]
+                return [], [], trace_entries, False
+        elif isinstance(forced_index, int):
             if forced_index < 0 or forced_index >= len(items):
                 trace_entries = [{"selector": forced_index, "matched": False, "reason": "forced_index_out_of_range"}]
                 return [], [], trace_entries, False
@@ -444,7 +484,7 @@ def generate_bom_by_spec(
             qty_applies = (it.get("quantity") if len(uniq_targets) == 1 else None)
             trace_entries.append(
                 {
-                    "selector": forced_index,
+                    "selector": forced_selector or forced_index,
                     "phrase": phrase,
                     "matched": True,
                     "forced": True,
@@ -456,6 +496,8 @@ def generate_bom_by_spec(
             )
         else:
             for it in items:
+                if not bool(it.get("enabled", True)):
+                    continue
                 phrase = str(it["phrase"])
                 if phrase and phrase in s:
                     matched_any = True
@@ -544,6 +586,7 @@ def generate_bom_by_spec(
         spec_text=spec_text,
         components=components,
         forced_index=forced_preset_index,
+        forced_selector=forced_preset_selector,
     )
     if phrase_remove_tokens:
         rm2 = {str(x).strip().lower() for x in phrase_remove_tokens if str(x).strip()}

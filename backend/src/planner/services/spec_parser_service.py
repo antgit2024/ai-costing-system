@@ -41,14 +41,14 @@ MODEL_CODE_3_PATTERN = re.compile(r"\b(?=[A-Z0-9]{3}\b)(?=.*[A-Z])(?=.*\d)[A-Z0-
 # - legacy: "BUNDLE:CODE" / "BUNDLE:CODE:A"
 # - v1:     "B:CODE" / "B:CODE:A"
 # - v2:     "B-CODE-A"        (legacy dash form with separator)
-# - v3:     "B-XXXXA" / "B-XXXX" (new short form, CODE length fixed to 4; selector is the last letter)
+# - v3:     "B-XXXXAA" / "B-XXXX" (new short form, CODE length fixed to 4; selector is 2 letters)
 #
 # NOTE: The v3 form MUST appear before the generic dash form, otherwise "B-XXXXA" would be parsed as code="XXXXA"
 # and selector missing.
 BUNDLE_CODE_PATTERN = re.compile(
-    r"(?:(?P<prefix>BUNDLE:|B:)(?P<code_colon>[A-Z0-9]{4,16})(?::(?P<sel_colon>[A-Z]))?)"
-    r"|(?:\bB-(?P<code_short>[A-Z0-9]{4})(?P<sel_short>[A-Z])\b)"
-    r"|(?:\bB-(?P<code_dash>[A-Z0-9]{4,16})(?:-(?P<sel_dash>[A-Z]))?\b)",
+    r"(?:(?P<prefix>BUNDLE:|B:)(?P<code_colon>[A-Z0-9]{4,16})(?::(?P<sel_colon>[A-Z]{1,2}))?)"
+    r"|(?:\bB-(?P<code_short>[A-Z0-9]{4})(?P<sel_short>[A-Z]{2})\b)"
+    r"|(?:\bB-(?P<code_dash>[A-Z0-9]{4,16})(?:-(?P<sel_dash>[A-Z]{1,2}))?\b)",
     re.IGNORECASE,
 )
 
@@ -221,6 +221,7 @@ def parse_spec(spec_text: str) -> Dict[str, Any]:
             extra_tokens.append(f"BUNDLE:{code}")
             explanations.append({"token": f"BUNDLE:{code}", "source": token, "rule": "extract_bundle_code_legacy"})
             if selector:
+                # Internal selector token is also 2-letter (AA/AB/...), keep legacy 1-letter if provided.
                 extra_tokens.append(f"B:{code}:{selector}")
                 explanations.append({"token": f"B:{code}:{selector}", "source": token, "rule": "extract_bundle_selector"})
 

@@ -65,15 +65,17 @@ type BundleTestDraft = {
   spec_text: string
 }
 
-const toLetter = (idx: number): string => {
-  if (idx < 0 || idx >= 26) return ''
-  return String.fromCharCode('A'.charCodeAt(0) + idx)
+const toSelector2 = (idx: number): string => {
+  if (idx < 0 || idx >= 26 * 26) return ''
+  const a = Math.floor(idx / 26)
+  const b = idx % 26
+  return String.fromCharCode('A'.charCodeAt(0) + a) + String.fromCharCode('A'.charCodeAt(0) + b)
 }
 
 const toBundleTokenDash = (code: string, selector?: string | null): string => {
   const c = String(code ?? '').trim().toUpperCase().replace(/^B:/, '').replace(/^BUNDLE:/, '').replace(/^B-/, '')
   const sel = String(selector ?? '').trim().toUpperCase()
-  // New short format: B-XXXXA (CODE length fixed to 4). Keep compatibility with selector-less token.
+  // New short format: B-XXXXAA (CODE length fixed to 4; selector 2 letters). Keep compatibility with selector-less token.
   return sel ? `B-${c}${sel}` : `B-${c}`
 }
 
@@ -139,9 +141,9 @@ export default function ProductListingPage() {
     // Supported:
     // - B:CODE(:A) / BUNDLE:CODE(:A)
     // - B-CODE(-A)
-    // - B-XXXXA (new short, CODE length fixed to 4)
+    // - B-XXXXAA (new short, CODE length fixed to 4; selector 2 letters)
     const m = t.match(
-      /(?:BUNDLE:|B:)([A-Z0-9]{4,16})(?::([A-Za-z]))?|\bB-([A-Z0-9]{4})([A-Za-z])\b|\bB-([A-Z0-9]{4,16})(?:-([A-Za-z]))?\b/i,
+      /(?:BUNDLE:|B:)([A-Z0-9]{4,16})(?::([A-Za-z]{1,2}))?|\bB-([A-Z0-9]{4})([A-Za-z]{2})\b|\bB-([A-Z0-9]{4,16})(?:-([A-Za-z]{1,2}))?\b/i,
     )
     if (!m) return { code: null, selector: null }
     const code = String(m[1] || m[3] || m[5] || '').toUpperCase() || null
@@ -164,21 +166,28 @@ export default function ProductListingPage() {
   const bundlePhraseOptions = useMemo(() => {
     const meta: any = (bundleTemplateDetailQuery.data as any)?.metadata ?? {}
     const pp = Array.isArray(meta?.phrase_presets) ? meta.phrase_presets : []
-    return pp.slice(0, 26).map((p: any, idx: number) => {
-      const letter = toLetter(idx)
+    return pp.slice(0, 26 * 26).map((p: any, idx: number) => {
+      const sel = String(p?.selector ?? '').trim().toUpperCase() || toSelector2(idx)
       const phrase = String(p?.phrase ?? '').trim()
-      return { value: letter, label: `${letter}: ${phrase || '-'}` }
+      return { value: sel, label: `${sel}: ${phrase || '-'}` }
     })
   }, [bundleTemplateDetailQuery.data])
 
   const bundlePresetComponents = useMemo(() => {
     const sel = String(bundleDraft.bundle_selector ?? '').trim().toUpperCase()
-    if (!sel || sel.length !== 1) return []
-    const idx = sel.charCodeAt(0) - 'A'.charCodeAt(0)
-    if (idx < 0) return []
+    if (!sel) return []
     const meta: any = (bundleTemplateDetailQuery.data as any)?.metadata ?? {}
     const pp = Array.isArray(meta?.phrase_presets) ? meta.phrase_presets : []
-    const hit = pp[idx]
+    const hit =
+      pp.find((x: any) => String(x?.selector ?? '').trim().toUpperCase() === sel) ??
+      (() => {
+        // backward compat: if presets have no selector, allow AA/AB.. map to index
+        if (sel.length !== 2) return null
+        const a = sel.charCodeAt(0) - 'A'.charCodeAt(0)
+        const b = sel.charCodeAt(1) - 'A'.charCodeAt(0)
+        const idx = a * 26 + b
+        return idx >= 0 ? pp[idx] : null
+      })()
     const rows = Array.isArray(hit?.components) ? hit.components : []
     return rows
   }, [bundleDraft.bundle_selector, bundleTemplateDetailQuery.data])
@@ -247,7 +256,7 @@ export default function ProductListingPage() {
       }
 
       const model_version_id = String(draft.model_version_id ?? '').trim()
-      if (!model_version_id) throw new Error('请先选择“已发布标准版本”（或在交易规格中提供套装短码 B-XXXXA / B:CODE）')
+      if (!model_version_id) throw new Error('请先选择“已发布标准版本”（或在交易规格中提供套装短码 B-XXXXAA / B:CODE:AA）')
 
       const parsedRes = await parseSpec({ spec_text, sku_code: draft.sku_code || undefined })
       setParsed(parsedRes)
@@ -263,37 +272,37 @@ export default function ProductListingPage() {
     mutationFn: async () => {
       setLastError(null)
       const code = String(effectiveBundleCode ?? '').trim()
-      if (!code) throw new Error('请先选择套装，或在输入框中包含 B-XXXXA / B-CODE-A / B:CODE(:A)')
+      if (!code) throw new Error('请先选择套装，或在输入框中包含 B-XXXXAA / B-CODE-AA / B:CODE(:AA)')
       // UI 已选择套装编码：这里允许用户在输入里直接写 B:CODE:A，
       // 我们会优先从用户输入提取 selector（避免 selector 丢失导致“模板无组件”）。
       const inputSelector =
         String(bundleDraft.spec_text || '')
           .match(
-            /(?:BUNDLE:|B:)[A-Z0-9]{4,16}:([A-Za-z])|\bB-[A-Z0-9]{4,16}-([A-Za-z])\b|\bB-[A-Z0-9]{4}([A-Za-z])\b/i,
+            /(?:BUNDLE:|B:)[A-Z0-9]{4,16}:([A-Za-z]{1,2})|\bB-[A-Z0-9]{4,16}-([A-Za-z]{1,2})\b|\bB-[A-Z0-9]{4}([A-Za-z]{2})\b/i,
           )
           ?.[1]?.toUpperCase() ??
         String(bundleDraft.spec_text || '')
           .match(
-            /(?:BUNDLE:|B:)[A-Z0-9]{4,16}:([A-Za-z])|\bB-[A-Z0-9]{4,16}-([A-Za-z])\b|\bB-[A-Z0-9]{4}([A-Za-z])\b/i,
+            /(?:BUNDLE:|B:)[A-Z0-9]{4,16}:([A-Za-z]{1,2})|\bB-[A-Z0-9]{4,16}-([A-Za-z]{1,2})\b|\bB-[A-Z0-9]{4}([A-Za-z]{2})\b/i,
           )
           ?.[2]?.toUpperCase() ??
         String(bundleDraft.spec_text || '')
           .match(
-            /(?:BUNDLE:|B:)[A-Z0-9]{4,16}:([A-Za-z])|\bB-[A-Z0-9]{4,16}-([A-Za-z])\b|\bB-[A-Z0-9]{4}([A-Za-z])\b/i,
+            /(?:BUNDLE:|B:)[A-Z0-9]{4,16}:([A-Za-z]{1,2})|\bB-[A-Z0-9]{4,16}-([A-Za-z]{1,2})\b|\bB-[A-Z0-9]{4}([A-Za-z]{2})\b/i,
           )
           ?.[3]?.toUpperCase() ??
         ''
       const extra = String(bundleDraft.spec_text ?? '')
         .replace(/(?:BUNDLE:|B:)[A-Z0-9]{4,16}/gi, '')
         // Remove legacy and new short tokens
-        .replace(/\bB-[A-Z0-9]{4,16}(?:-[A-Za-z])?\b/gi, '')
-        .replace(/\bB-[A-Z0-9]{4}[A-Za-z]\b/gi, '')
+        .replace(/\bB-[A-Z0-9]{4,16}(?:-[A-Za-z]{1,2})?\b/gi, '')
+        .replace(/\bB-[A-Z0-9]{4}[A-Za-z]{2}\b/gi, '')
         .trim()
       const sel =
         String(bundleDraft.bundle_selector ?? '').trim().toUpperCase() ||
         inputSelector ||
         String(bundleTokenFromBundleInput.selector ?? '').trim().toUpperCase()
-      const token = toBundleTokenDash(code, sel && sel.length === 1 ? sel : null)
+      const token = toBundleTokenDash(code, sel && (sel.length === 1 || sel.length === 2) ? sel : null)
       // 不强制使用“；”分隔，直接拼接 (B:CODE[:A]) 即可
       const spec_text = extra ? `${extra}(${token})` : `${token}`
       const bomRes = await generateBomBySpec({
@@ -546,7 +555,7 @@ export default function ProductListingPage() {
                   <Select
                     showSearch
                     allowClear
-                    placeholder="选择套装（B-XXXXA）"
+                    placeholder="选择套装（B-XXXXAA）"
                     options={bundleTemplateOptions as any}
                     value={bundleDraft.bundle_code ?? undefined}
                     loading={bundleTemplatesQuery.isLoading}
@@ -600,7 +609,7 @@ export default function ProductListingPage() {
                                 ? bundleDraft.bundle_selector
                                   ? toBundleTokenDash(bundleDraft.bundle_code, bundleDraft.bundle_selector)
                                   : toBundleTokenDash(bundleDraft.bundle_code)
-                                : 'B-XXXXA'}
+                                : 'B-XXXXAA'}
                             </Text>
                           </Text>
                         </Space>

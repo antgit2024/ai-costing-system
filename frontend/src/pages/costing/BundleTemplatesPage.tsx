@@ -23,7 +23,7 @@ import {
   message,
 } from 'antd'
 
-import { ArrowDownOutlined, ArrowUpOutlined, CopyOutlined, PauseCircleOutlined, PlayCircleOutlined } from '@ant-design/icons'
+import { ArrowDownOutlined, ArrowUpOutlined, CopyOutlined, DeleteOutlined, PauseCircleOutlined, PlayCircleOutlined } from '@ant-design/icons'
 
 import {
   archiveBundleTemplate,
@@ -567,6 +567,56 @@ export default function BundleTemplatesPage() {
       return out
     })
     setActivePresetIndex(newIdx)
+  }
+
+  const deletePhrasePreset = (pIdx: number) => {
+    const p = phrasePresets?.[pIdx]
+    if (!p) return
+    const selector = String(p?.selector ?? '').trim().toUpperCase() || toSelector2(pIdx)
+    const codeOnly = String(currentBundleToken || '').toUpperCase().replace(/^B:/, '').replace(/^BUNDLE:/, '')
+    const tokenDash = codeOnly ? toBundleTokenDash(codeOnly, selector) : selector
+
+    Modal.confirm({
+      title: `删除短语 ${selector}？`,
+      content: (
+        <div>
+          <div>删除后不可恢复。</div>
+          <div>
+            如果线上/订单已经有人在用这个编码（例如 <Text code>{tokenDash}</Text>），删除会导致无法命中；这种情况更建议“停用”。
+          </div>
+        </div>
+      ),
+      okText: '删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: () => {
+        setPhrasePresets((prev) => (prev ?? []).filter((_, i) => i !== pIdx))
+        // Remap presetSelectedByIdx keys because they are index-based `${pIdx}:${cIdx}`
+        setPresetSelectedByIdx((prev) => {
+          const out: Record<string, Record<string, string | null>> = {}
+          for (const [k, v] of Object.entries(prev ?? {})) {
+            const parts = String(k).split(':')
+            const pStr = parts[0]
+            const cStr = parts[1]
+            const pi = Number(pStr)
+            const ci = Number(cStr)
+            if (!Number.isFinite(pi) || !Number.isFinite(ci)) {
+              out[k] = v
+              continue
+            }
+            if (pi === pIdx) continue // drop deleted preset mappings
+            const npi = pi > pIdx ? pi - 1 : pi
+            out[`${npi}:${ci}`] = v
+          }
+          return out
+        })
+        setActivePresetIndex((cur) => {
+          if (cur === pIdx) return Math.max(0, cur - 1)
+          if (cur > pIdx) return cur - 1
+          return cur
+        })
+      },
+    })
   }
 
   const movePhrasePreset = (fromIdx: number, toIdx: number) => {
@@ -1450,6 +1500,17 @@ export default function BundleTemplatesPage() {
                               onClick={(e) => {
                                 e.stopPropagation()
                                 copyPhrasePreset(idx)
+                              }}
+                            />
+                            <Button
+                              size="small"
+                              type="text"
+                              className="bt-phrase-card-icon-btn"
+                              icon={<DeleteOutlined />}
+                              title="删除"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                deletePhrasePreset(idx)
                               }}
                             />
                             <Button

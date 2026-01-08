@@ -75,8 +75,14 @@ const toSelector2 = (idx: number): string => {
 const toBundleTokenDash = (code: string, selector?: string | null): string => {
   const c = String(code ?? '').trim().toUpperCase().replace(/^B:/, '').replace(/^BUNDLE:/, '').replace(/^B-/, '')
   const sel = String(selector ?? '').trim().toUpperCase()
-  // New short format: B-XXXXAA (CODE length fixed to 4; selector 2 letters). Keep compatibility with selector-less token.
-  return sel ? `B-${c}${sel}` : `B-${c}`
+  // Format rules:
+  // - New short form (only when CODE length==4 and selector length==2): B-XXXXAA
+  // - Legacy/compat selector form (any CODE): B-CODE-AA
+  if (sel) {
+    if (c.length === 4 && sel.length === 2) return `B-${c}${sel}`
+    return `B-${c}-${sel}`
+  }
+  return `B-${c}`
 }
 
 export default function ProductListingPage() {
@@ -146,10 +152,22 @@ export default function ProductListingPage() {
       /(?:BUNDLE:|B:)([A-Z0-9]{4,16})(?::([A-Za-z]{1,2}))?|\bB-([A-Z0-9]{4})([A-Za-z]{2})\b|\bB-([A-Z0-9]{4,16})(?:-([A-Za-z]{1,2}))?\b/i,
     )
     if (!m) return { code: null, selector: null }
-    const code = String(m[1] || m[3] || m[5] || '').toUpperCase() || null
-    const sel = String(m[2] || m[4] || m[6] || '').toUpperCase() || null
+    let code = String(m[1] || m[3] || m[5] || '').toUpperCase() || null
+    let sel = String(m[2] || m[4] || m[6] || '').toUpperCase() || null
+
+    // Compat: if user pasted "B-LPYJK9AA" (missing dash before selector) for legacy 6-char codes,
+    // try to split last 2 letters IF the prefix matches an existing template code.
+    if (code && !sel && code.length > 4 && /^[A-Z]{2}$/.test(code.slice(-2))) {
+      const maybeSel = code.slice(-2)
+      const maybeCode = code.slice(0, -2)
+      const exists = bundleTemplateOptions.some((x: any) => String(x?.value ?? '').trim().toUpperCase() === maybeCode)
+      if (exists) {
+        code = maybeCode
+        sel = maybeSel
+      }
+    }
     return { code, selector: sel }
-  }, [bundleDraft.spec_text])
+  }, [bundleDraft.spec_text, bundleTemplateOptions])
 
   const effectiveBundleCode = useMemo(() => {
     const selected = String(bundleDraft.bundle_code ?? '').trim()

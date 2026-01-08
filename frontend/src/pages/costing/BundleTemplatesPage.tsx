@@ -99,8 +99,14 @@ const normalizeBundleToken = (raw: any): string => {
 const toBundleTokenDash = (code: string, selector?: string | null): string => {
   const c = String(code ?? '').trim().toUpperCase().replace(/^B:/, '').replace(/^BUNDLE:/, '').replace(/^B-/, '')
   const sel = String(selector ?? '').trim().toUpperCase()
-  // New short format: B-XXXXAA (CODE length fixed to 4; selector is 2 letters). Keep compatibility with selector-less token.
-  return sel ? `B-${c}${sel}` : `B-${c}`
+  // Format rules:
+  // - New short form (only when CODE length==4 and selector length==2): B-XXXXAA
+  // - Legacy/compat selector form (any CODE): B-CODE-AA
+  if (sel) {
+    if (c.length === 4 && sel.length === 2) return `B-${c}${sel}`
+    return `B-${c}-${sel}`
+  }
+  return `B-${c}`
 }
 
 const toSelector2 = (idx: number): string => {

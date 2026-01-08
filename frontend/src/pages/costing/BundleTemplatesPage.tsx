@@ -1590,16 +1590,38 @@ export default function BundleTemplatesPage() {
                                     const baseLabel = slot ? `${slot}：${displayName}` : displayName
                                     uniqBase.set(String(baseLineId), baseLabel || String(baseLineId))
                                   }
-                                  const list = Array.from(uniqBase.values()).filter(Boolean)
                                   return (
-                                    <Text type="secondary">
-                                      默认（未命中 TOKEN 时）：兜底物料=
-                                      {list.length ? (
-                                        <Text strong>{list.join('；')}</Text>
-                                      ) : (
-                                        <Text type="secondary">-</Text>
-                                      )}
-                                    </Text>
+                                    <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                                      <Text type="secondary">默认（未命中 TOKEN 时）：兜底物料（对客名，可改）</Text>
+                                      <Space wrap size={8}>
+                                        {Array.from(uniqBase.entries()).map(([baseLineId, baseLabel]) => {
+                                          const base = baseMap.get(String(baseLineId))
+                                          const slot = getLineStructureLabel(base, versionId)
+                                          const rawName = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
+                                          const overrideKey = `${versionId}:${String(baseLineId)}`
+                                          const override = String(fallbackDisplayOverrides?.[overrideKey] ?? '').trim()
+                                          const defaultDisplay = baseLabel
+                                          return (
+                                            <Space key={`fb-${overrideKey}`} size={6}>
+                                              <Text type="secondary">{slot ? `${slot}：` : ''}</Text>
+                                              <Input
+                                                size="small"
+                                                style={{ width: 160 }}
+                                                placeholder={rawName}
+                                                value={override || defaultDisplay}
+                                                onChange={(e) => {
+                                                  const next = e.target.value
+                                                  setFallbackDisplayOverrides((prev) => ({
+                                                    ...(prev ?? {}),
+                                                    [overrideKey]: next,
+                                                  }))
+                                                }}
+                                              />
+                                            </Space>
+                                          )
+                                        })}
+                                      </Space>
+                                    </Space>
                                   )
                                 })()}
                               {selectedEntries.map(([baseLineId, variantId]) => {
@@ -1632,20 +1654,7 @@ export default function BundleTemplatesPage() {
                                           <Text type="secondary">（无 TOKEN）</Text>
                                         )}
                                         <Text type="secondary">兜底物料：</Text>
-                                        <Text type="secondary">{slot ? `${slot}：` : ''}</Text>
-                                        <Input
-                                          size="small"
-                                          style={{ width: 240 }}
-                                          disabled={false}
-                                          value={String(fallbackDisplayOverrides?.[`${versionId}:${String(baseLineId)}`] ?? displayName)}
-                                          onChange={(e) => {
-                                            const next = e.target.value
-                                            setFallbackDisplayOverrides((prev) => ({
-                                              ...(prev ?? {}),
-                                              [`${versionId}:${String(baseLineId)}`]: next,
-                                            }))
-                                          }}
-                                        />
+                                        <Text strong title={rawName}>{slot ? `${slot}：` : ''}{displayName}</Text>
                                         <Text type="secondary">→</Text>
                                       <Text type="secondary">{effect}</Text>
                                       <Tag color="green">{producedLabel || '-'}</Tag>

@@ -701,38 +701,105 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     return `≤${max}${unit}`
   }
 
+  const filterOutModelAnchor = (arr: string[]): string[] => {
+    if (!modelAnchorToken) return arr
+    const anchorLower = String(modelAnchorToken).toLowerCase()
+    return (arr ?? []).filter((t) => String(t).toLowerCase() !== anchorLower)
+  }
+
+  const renderTokenChips = (label: string, tokens: string[]) => {
+    const list = (tokens ?? []).map((x) => String(x)).filter(Boolean)
+    if (!list.length) return null
+    const shown = list.slice(0, 6)
+    const more = list.length - shown.length
+    return (
+      <Space wrap size={[4, 4]}>
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          {label}:
+        </Text>
+        {shown.map((t) => (
+          <Tag key={`${label}-${t}`}>{t}</Tag>
+        ))}
+        {more > 0 ? <Tag>+{more}</Tag> : null}
+      </Space>
+    )
+  }
+
   const variantColumns: ColumnsType<LineVariantDetailRead> = [
     { title: '启用', width: 70, render: (_: any, r: any) => (r.enabled ? <Tag color="green">ON</Tag> : <Tag>OFF</Tag>) },
-    { title: '优先级', width: 90, dataIndex: 'priority' },
-    { title: '动作', width: 140, dataIndex: 'action', render: (v) => <Tag>{String(v)}</Tag> },
     {
-      title: '条件',
+      title: '触发词 / 条件',
       render: (_: any, r: any) => {
         const cond = (r.conditions ?? {}) as any
-        const anyCnt = asStringArray(cond.spec_contains_any).length
-        const allCnt = asStringArray(cond.spec_contains_all).length
+        const anyArr = filterOutModelAnchor(asStringArray(cond.spec_contains_any))
+        const allArr = filterOutModelAnchor(asStringArray(cond.spec_contains_all))
         const w = formatBetween(cond.width_between, 'cm')
         const h = formatBetween(cond.height_between, 'cm')
         const a = formatBetween(cond.area_between, 'm²')
         const p = formatBetween(cond.perimeter_between, 'm')
         const hasMetric = !!(w || h || a || p)
 
-        if (!anyCnt && !allCnt && !hasMetric) return <span style={{ color: '#bfbfbf' }}>-</span>
-        if (anyCnt || allCnt) {
+        if (!anyArr.length && !allArr.length && !hasMetric) return <Text type="secondary">-</Text>
+
+        if (anyArr.length || allArr.length) {
           return (
-            <Space size={6}>
-              <Tag>token</Tag>
-              {anyCnt ? <Tag>any:{anyCnt}</Tag> : null}
-              {allCnt ? <Tag>all:{allCnt}</Tag> : null}
+            <Space direction="vertical" size={4} style={{ width: '100%' }}>
+              <Space size={6} wrap>
+                <Tag color="blue">token</Tag>
+                {modelAnchorToken ? (
+                  <Tag color={autoAnchorModelToken ? 'blue' : 'default'}>{modelAnchorToken}</Tag>
+                ) : null}
+              </Space>
+              {renderTokenChips('any', anyArr)}
+              {renderTokenChips('all', allArr)}
             </Space>
           )
         }
-        // 单触发类型：优先展示一个 metric（如果历史数据存在多种，这里只展示第一个）
+
+        // metric 触发（历史/扩展场景）
         const metricTag = p ? `周长${p}` : a ? `面积${a}` : w ? `宽度${w}` : h ? `高度${h}` : null
-        return metricTag ? <Tag>{metricTag}</Tag> : <span style={{ color: '#bfbfbf' }}>-</span>
+        return metricTag ? <Tag>{metricTag}</Tag> : <Text type="secondary">-</Text>
       },
     },
-    { title: 'items', width: 70, render: (_: any, r: any) => (r.items?.length ?? 0) },
+    {
+      title: '替换物料（1→1）',
+      width: 340,
+      render: (_: any, r: any) => {
+        const it0 = Array.isArray((r as any)?.items) ? (r as any).items[0] : null
+        const code = String(it0?.material_code ?? '').trim()
+        const name = String(it0?.material_name ?? '').trim()
+        const unitRaw = String(it0?.unit_of_measure ?? '').trim()
+        const unit = normalizeUnitText(unitRaw) || unitRaw
+        const refId = String(it0?.material_ref_id ?? '').trim()
+
+        if (!code && !name && !refId) return <Text type="secondary">-</Text>
+
+        return (
+          <Space direction="vertical" size={0} style={{ width: '100%' }}>
+            <Space size={6} wrap>
+              {code ? (
+                <Text code copyable={{ text: code }}>
+                  {code}
+                </Text>
+              ) : (
+                <Text type="secondary">无编码</Text>
+              )}
+              {name ? (
+                <Text ellipsis={{ tooltip: name }} style={{ maxWidth: 220 }}>
+                  {name}
+                </Text>
+              ) : null}
+              {unit ? <Tag>{unit}</Tag> : <Tag color="default">无单位</Tag>}
+            </Space>
+            {refId ? (
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                ref_id: {refId.slice(0, 8)}…
+              </Text>
+            ) : null}
+          </Space>
+        )
+      },
+    },
     {
       title: '操作',
       width: 110,
@@ -741,13 +808,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
           <Button size="small" icon={<EditOutlined />} onClick={() => openEditModal(r.id)}>
             编辑
           </Button>
-          <Button
-            size="small"
-            danger
-            type="text"
-            icon={<DeleteOutlined />}
-            onClick={() => deleteVariantMutation.mutate(r.id)}
-          />
+          <Button size="small" danger type="text" icon={<DeleteOutlined />} onClick={() => deleteVariantMutation.mutate(r.id)} />
         </Space>
       ),
     },

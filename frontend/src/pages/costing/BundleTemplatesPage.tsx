@@ -1693,9 +1693,9 @@ export default function BundleTemplatesPage() {
                                         <>
                                           <Tag
                                             style={{
-                                              background: '#cf1322',
-                                              color: '#fff',
-                                              border: 'none',
+                                              background: 'rgba(255, 77, 79, 0.14)',
+                                              color: '#cf1322',
+                                              border: '1px solid #ffccc7',
                                               fontWeight: 700,
                                             }}
                                           >
@@ -1717,9 +1717,9 @@ export default function BundleTemplatesPage() {
                                         <>
                                           <Tag
                                             style={{
-                                              background: '#1d39c4',
-                                              color: '#fff',
-                                              border: 'none',
+                                              background: 'rgba(22, 119, 255, 0.14)',
+                                              color: '#0958d9',
+                                              border: '1px solid #91caff',
                                               fontWeight: 700,
                                             }}
                                           >

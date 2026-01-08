@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { Alert, Button, Card, Col, Descriptions, Divider, Empty, Input, Row, Select, Space, Table, Tabs, Tag, Typography, message } from 'antd'
+import { isAxiosError } from 'axios'
 
 import {
   fetchProductModelVersionLines,
@@ -38,6 +39,17 @@ const computeMaterialCostFromLines = (lines: any[]): number => {
     const v = lineCost != null ? lineCost : qty * unit
     return acc + (Number.isFinite(v) ? v : 0)
   }, 0)
+}
+
+const getErrorMessage = (error: unknown) => {
+  if (isAxiosError(error)) {
+    const detail = (error as any)?.response?.data?.detail
+    if (typeof detail === 'string') return detail
+    if (Array.isArray(detail)) {
+      return detail.map((item) => (typeof item?.msg === 'string' ? item.msg : JSON.stringify(item))).join('; ')
+    }
+  }
+  return (error as any)?.message ? String((error as any).message) : String(error)
 }
 
 type ProductListingDraft = {
@@ -182,7 +194,7 @@ export default function ProductListingPage() {
       setParsed(res)
       return res
     },
-    onError: (e: any) => setLastError(String(e?.message ?? e)),
+    onError: (e: any) => setLastError(getErrorMessage(e)),
   })
 
   const previewMutation = useMutation({
@@ -212,7 +224,7 @@ export default function ProductListingPage() {
       return bomRes
     },
     onSuccess: () => message.success('解析+预演完成'),
-    onError: (e: any) => setLastError(String(e?.message ?? e)),
+    onError: (e: any) => setLastError(getErrorMessage(e)),
   })
 
   const bundlePreviewMutation = useMutation({
@@ -220,11 +232,14 @@ export default function ProductListingPage() {
       setLastError(null)
       const code = String(bundleDraft.bundle_code ?? '').trim()
       if (!code) throw new Error('请先选择套装（B:XXXXXX）')
-      // UI 已选择套装编码，这里去掉用户输入里可能重复的 B:XXXXXX，避免歧义
+      // UI 已选择套装编码：这里允许用户在输入里直接写 B:CODE:A，
+      // 我们会优先从用户输入提取 selector（避免 selector 丢失导致“模板无组件”）。
+      const inputSelector =
+        String(bundleDraft.spec_text || '').match(/(?:BUNDLE:|B:)[A-Z0-9]{4,16}:([A-Za-z])/i)?.[1]?.toUpperCase() ?? ''
       const extra = String(bundleDraft.spec_text ?? '')
         .replace(/(?:BUNDLE:|B:)[A-Z0-9]{4,16}/gi, '')
         .trim()
-      const sel = String(bundleDraft.bundle_selector ?? '').trim().toUpperCase()
+      const sel = String(bundleDraft.bundle_selector ?? '').trim().toUpperCase() || inputSelector
       const token = sel && sel.length === 1 ? `B:${code}:${sel}` : `B:${code}`
       // 不强制使用“；”分隔，直接拼接 (B:CODE[:A]) 即可
       const spec_text = extra ? `${extra}(${token})` : `${token}`
@@ -237,7 +252,7 @@ export default function ProductListingPage() {
       return bomRes
     },
     onSuccess: () => message.success('套装预演完成'),
-    onError: (e: any) => setLastError(String(e?.message ?? e)),
+    onError: (e: any) => setLastError(getErrorMessage(e)),
   })
 
   const matchedVariants = useMemo(() => {

@@ -206,3 +206,34 @@ def test_generate_by_spec_bundle_selector_prefers_preset_components_list(client,
     assert "PI5X-CHENILLE" in codes
 
 
+def test_generate_by_spec_accepts_inline_selector_token(client, db_session):
+    """
+    Regression: allow spec_text to be directly "B:CODE:A" (no parentheses/extra chars).
+    Backend should load template by CODE and apply selector A.
+    """
+    v1, _base_line_v1 = _create_version_with_one_line(db_session, model_code="PI5X")
+    v2, _base_line_v2 = _create_version_with_one_line(db_session, model_code="OZUX")
+
+    tpl_payload = {
+        "name": "照片墙-inline",
+        "components": [],
+        "metadata": {
+            "phrase_presets": [
+                {
+                    "phrase": "A组",
+                    "components": [
+                        {"model_version_id": v1.id, "width_mm": "500", "height_mm": "500", "quantity": "2"},
+                        {"model_version_id": v2.id, "width_mm": "1200", "height_mm": "800", "quantity": "1"},
+                    ],
+                }
+            ]
+        },
+    }
+    r_tpl = client.post(f"{API_PREFIX}/bundle-templates", json=tpl_payload)
+    assert r_tpl.status_code == 201, r_tpl.text
+    code = r_tpl.json()["code"]
+
+    r = client.post(f"{API_PREFIX}/bom/generate-by-spec", json={"spec_text": f"B:{code}:A", "sku_code": None})
+    assert r.status_code == 200, r.text
+
+

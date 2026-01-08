@@ -215,7 +215,10 @@ def generate_bom_by_spec(
     bundle_token = next((t for t in tokens if str(t).upper().startswith("B:") or str(t).upper().startswith("BUNDLE:")), None)
     if not bundle_token:
         raise ValueError("交易规格未包含套装编码（B:XXXX 或 BUNDLE:XXXX）")
-    code = str(bundle_token).split(":", 1)[1].strip().upper()
+    # Accept "B:CODE" or "B:CODE:A" (selector). Only CODE is used to load template;
+    # selector is parsed from spec_text below.
+    rest = str(bundle_token).split(":", 1)[1].strip()
+    code = rest.split(":", 1)[0].strip().upper()
     if not code:
         raise ValueError("套装编码非法")
 

@@ -913,7 +913,11 @@ export default function BundleTemplatesPage() {
                           const phrase = String(p?.phrase ?? '').trim()
                           const label = phrase ? `${letter}: ${phrase}` : `${letter}: -`
                           return (
-                            <Text key={`${idx}-${label}`} ellipsis={{ tooltip: label }}>
+                            <Text
+                              key={`${idx}-${label}`}
+                              ellipsis={{ tooltip: label }}
+                              copyable={phrase ? { text: phrase } : false}
+                            >
                               {label}
                             </Text>
                           )

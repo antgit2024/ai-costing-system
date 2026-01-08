@@ -979,39 +979,21 @@ export default function BundleTemplatesPage() {
           <Empty description="该版本没有行级变体规则" />
         ) : (
           <Space direction="vertical" style={{ width: '100%' }} size={12}>
-            <Alert
-              type="info"
-              showIcon
-              message="说明"
-              description={
-                <div>
-                  <div>这里按 base_line（物料行）分组列出该版本所有变体规则，你可以为每条物料行选择 0/1 条“希望触发的规则”。</div>
-                  <div>
-                    <div>
-                      模式：
-                      <Space size={8}>
-                        <Radio.Group
-                          value={presetApplyMode}
-                          onChange={(e) => setPresetApplyMode((e?.target?.value as any) ?? 'variant')}
-                          optionType="button"
-                          buttonStyle="solid"
-                        >
-                          <Radio.Button value="variant">变体（解析命中）</Radio.Button>
-                          <Radio.Button value="force">指定（强制命中，不走解析）</Radio.Button>
-                        </Radio.Group>
-                      </Space>
-                    </div>
-                    <div style={{ marginTop: 6 }}>
-                      变体：点击“按勾选填充触发词”会把所选规则的 TOKEN(any/all) 自动填充到该组件触发词里（仍需交易规格包含这些词才会命中）。
-                    </div>
-                    <div>
-                      指定：点击“按勾选强制指定”会把所选规则的 TOKEN 注入到组件行 tokens（后端直接带入 runtime_tokens），无需交易规格解析也会命中替换。
-                    </div>
-                  </div>
-                  <div>注意：最终命中仍受 priority + stop_on_hit 影响，建议用测试台预演确认。</div>
-                </div>
-              }
-            />
+            <Space wrap size={10} style={{ width: '100%', justifyContent: 'space-between' }}>
+              <Space wrap size={8}>
+                <Text type="secondary">模式：</Text>
+                <Radio.Group
+                  value={presetApplyMode}
+                  onChange={(e) => setPresetApplyMode((e?.target?.value as any) ?? 'variant')}
+                  optionType="button"
+                  buttonStyle="solid"
+                >
+                  <Radio.Button value="variant">变体（解析命中）</Radio.Button>
+                  <Radio.Button value="force">指定（强制命中，不走解析）</Radio.Button>
+                </Radio.Group>
+              </Space>
+              <Text type="secondary">提示：最终命中仍受 priority + stop_on_hit 影响，建议用测试台预演确认</Text>
+            </Space>
 
             <Collapse
               items={Array.from(presetVariantsByBaseLine.entries()).map(([baseLineId, arr]) => {

@@ -1643,7 +1643,7 @@ export default function BundleTemplatesPage() {
                           return (
                             <Space direction="vertical" size={4} style={{ width: '100%' }}>
                               {/* 默认兜底：第一条与其它行同格式（TOKEN 可输入，兜底物料原名只读） */}
-                              {(() => {
+                              {!isForce ? (() => {
                                 const seen = new Set<string>()
                                 const uniqIds: string[] = []
                                 for (const [baseLineId] of selectedEntries) {
@@ -1688,7 +1688,7 @@ export default function BundleTemplatesPage() {
                                     })}
                                   </Space>
                                 )
-                              })()}
+                              })() : null}
 
                               {selectedEntries.map(([baseLineId, variantId]) => {
                                 const v = variantsById.get(String(variantId))
@@ -1711,7 +1711,7 @@ export default function BundleTemplatesPage() {
                                         <>
                                           <Tag
                                             style={{
-                                              background: '#262626',
+                                              background: '#cf1322',
                                               color: '#fff',
                                               border: 'none',
                                               fontWeight: 700,

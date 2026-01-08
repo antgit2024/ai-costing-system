@@ -47,6 +47,8 @@ type ComponentRow = {
   height_cm: number
   quantity: number
   spec_text: string
+  // 指定模式：把所选变体规则依赖的 TOKEN 直接注入到组件行 tokens，不依赖交易规格解析
+  tokens?: string[]
 }
 
 type PhrasePresetRow = {
@@ -88,6 +90,30 @@ const formatTrigger = (condRaw: any): string => {
   if (a) parts.push(`面积: ${a}`)
   if (p) parts.push(`周长: ${p}`)
   return parts.join('；') || '-'
+}
+
+const extractTokensForVariant = (v: any): string[] => {
+  const cond = (v?.conditions ?? {}) as any
+  const anyTokens = Array.isArray(cond?.spec_contains_any) ? cond.spec_contains_any : []
+  const allTokens = Array.isArray(cond?.spec_contains_all) ? cond.spec_contains_all : []
+  const out: string[] = []
+  for (const t of [...anyTokens, ...allTokens]) {
+    const s = String(t ?? '').trim()
+    if (!s) continue
+    const up = s.toUpperCase()
+    // runtime-only binding tokens (not customer-facing)
+    if (up.startsWith('MODEL:') || up.startsWith('M:') || up.startsWith('BOUND_VERSION:') || up.startsWith('SKU:')) continue
+    out.push(s)
+  }
+  const seen = new Set<string>()
+  const uniq: string[] = []
+  for (const x of out) {
+    const k = String(x).trim()
+    if (!k || seen.has(k)) continue
+    seen.add(k)
+    uniq.push(k)
+  }
+  return uniq
 }
 
 const normalizeBundleToken = (raw: any): string => {
@@ -167,6 +193,7 @@ export default function BundleTemplatesPage() {
   const [presetSelectedByIdx, setPresetSelectedByIdx] = useState<Record<string, Record<string, string | null>>>({})
   const [presetModalOpen, setPresetModalOpen] = useState(false)
   const [presetModalKey, setPresetModalKey] = useState<{ pIdx: number; cIdx: number } | null>(null)
+  const [presetApplyMode, setPresetApplyMode] = useState<'variant' | 'force'>('variant')
 
   const selectedVersionIds = useMemo(() => {
     const ids = new Set<string>()
@@ -456,6 +483,13 @@ export default function BundleTemplatesPage() {
     return vid || null
   }, [presetModalOpen, presetModalKey, phrasePresets])
 
+  useEffect(() => {
+    if (!presetModalOpen || !presetModalKey) return
+    const r = (phrasePresets[presetModalKey.pIdx]?.components ?? [])[presetModalKey.cIdx] as any
+    const hasInjected = Array.isArray(r?.tokens) && r.tokens.length > 0
+    setPresetApplyMode(hasInjected ? 'force' : 'variant')
+  }, [presetModalOpen, presetModalKey, phrasePresets])
+
   const presetVersionLinesQuery = useQuery({
     queryKey: ['bundle-template-center', 'preset-version-lines', presetVersionId],
     queryFn: () => fetchProductModelVersionLines(String(presetVersionId)),
@@ -674,16 +708,7 @@ export default function BundleTemplatesPage() {
       const variants = presetVariantsByBaseLine.get(baseLineId) ?? []
       const v = variants.find((x: any) => String(x?.id) === String(variantId))
       if (!v) continue
-      const cond = (v?.conditions ?? {}) as any
-      const anyTokens = Array.isArray(cond?.spec_contains_any) ? cond.spec_contains_any : []
-      const allTokens = Array.isArray(cond?.spec_contains_all) ? cond.spec_contains_all : []
-      for (const t of [...anyTokens, ...allTokens]) {
-        const s = String(t ?? '').trim()
-        if (!s) continue
-        const up = s.toUpperCase()
-        if (up.startsWith('MODEL:') || up.startsWith('M:') || up.startsWith('BOUND_VERSION:') || up.startsWith('SKU:')) continue
-        tokenSet.add(s)
-      }
+      for (const t of extractTokensForVariant(v)) tokenSet.add(t)
     }
     const tokens = Array.from(tokenSet)
     const nextText = tokens.join('，')
@@ -693,11 +718,23 @@ export default function BundleTemplatesPage() {
           ? pp
           : {
               ...pp,
-              components: (pp.components ?? []).map((cc, ci) => (ci === presetModalKey.cIdx ? { ...cc, spec_text: nextText } : cc)),
+              components: (pp.components ?? []).map((cc, ci) => {
+                if (ci !== presetModalKey.cIdx) return cc
+                // 变体：填充 spec_text（需要交易规格解析命中）
+                // 指定：注入 tokens（不依赖交易规格解析，直接强制命中）
+                if (presetApplyMode === 'force') {
+                  return { ...cc, spec_text: '', tokens }
+                }
+                return { ...cc, spec_text: nextText, tokens: [] }
+              }),
             },
       ),
     )
-    message.success(tokens.length ? `已填充触发词：${tokens.join('、')}` : '所选变体不依赖 TOKEN 触发词（仅尺寸/面积/周长条件等）')
+    if (presetApplyMode === 'force') {
+      message.success(tokens.length ? `已指定（强制命中）：${tokens.join('、')}` : '所选规则不包含 TOKEN，无法通过“指定(强制)”实现（请改为变体解析或补 TOKEN 条件）')
+    } else {
+      message.success(tokens.length ? `已填充触发词：${tokens.join('、')}` : '所选变体不依赖 TOKEN 触发词（仅尺寸/面积/周长条件等）')
+    }
     setPresetModalOpen(false)
   }
 
@@ -751,6 +788,7 @@ export default function BundleTemplatesPage() {
                     height_cm: Number(c?.height_mm ?? 0) / 10,
                     quantity: Number(c?.quantity ?? 1),
                     spec_text: String(c?.spec_text ?? ''),
+                    tokens: Array.isArray(c?.tokens) ? c.tokens.map((x: any) => String(x)).filter(Boolean) : [],
                   }))
                   .filter((c: any) => !!c.model_version_id)
               : [],
@@ -809,7 +847,7 @@ export default function BundleTemplatesPage() {
           selector: allocateNextSelector2(used),
           phrase: '',
           enabled: true,
-          components: [{ model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' }],
+          components: [{ model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '', tokens: [] }],
         } as PhrasePresetRow,
       ]
       setActivePresetIndex(next.length - 1)
@@ -847,6 +885,9 @@ export default function BundleTemplatesPage() {
                     height_mm: Number(c.height_cm) * 10,
                     quantity: Number(c.quantity),
                     spec_text: String(c.spec_text || '').trim() || undefined,
+                    tokens: Array.isArray((c as any).tokens)
+                      ? ((c as any).tokens as any[]).map((x) => String(x)).filter(Boolean)
+                      : undefined,
                   }))
                   .filter((c) => c.model_version_id && c.width_mm > 0 && c.height_mm > 0 && c.quantity > 0)
               : [],
@@ -929,7 +970,7 @@ export default function BundleTemplatesPage() {
         width={980}
         onCancel={() => setPresetModalOpen(false)}
         onOk={applyPresetToComponent}
-        okText="按勾选填充触发词"
+        okText={presetApplyMode === 'force' ? '按勾选强制指定' : '按勾选填充触发词'}
         destroyOnClose
       >
         {!presetVersionId ? (
@@ -946,7 +987,26 @@ export default function BundleTemplatesPage() {
                 <div>
                   <div>这里按 base_line（物料行）分组列出该版本所有变体规则，你可以为每条物料行选择 0/1 条“希望触发的规则”。</div>
                   <div>
-                    点击“按勾选填充触发词”会把所选规则的 TOKEN(any/all) 关键词自动填充到该组件的触发词里（便于运营写对词）。
+                    <div>
+                      模式：
+                      <Space size={8}>
+                        <Radio.Group
+                          value={presetApplyMode}
+                          onChange={(e) => setPresetApplyMode((e?.target?.value as any) ?? 'variant')}
+                          optionType="button"
+                          buttonStyle="solid"
+                        >
+                          <Radio.Button value="variant">变体（解析命中）</Radio.Button>
+                          <Radio.Button value="force">指定（强制命中，不走解析）</Radio.Button>
+                        </Radio.Group>
+                      </Space>
+                    </div>
+                    <div style={{ marginTop: 6 }}>
+                      变体：点击“按勾选填充触发词”会把所选规则的 TOKEN(any/all) 自动填充到该组件触发词里（仍需交易规格包含这些词才会命中）。
+                    </div>
+                    <div>
+                      指定：点击“按勾选强制指定”会把所选规则的 TOKEN 注入到组件行 tokens（后端直接带入 runtime_tokens），无需交易规格解析也会命中替换。
+                    </div>
                   </div>
                   <div>注意：最终命中仍受 priority + stop_on_hit 影响，建议用测试台预演确认。</div>
                 </div>
@@ -1794,7 +1854,7 @@ export default function BundleTemplatesPage() {
                                             ...pp,
                                             components: [
                                               ...(pp.components ?? []),
-                                              { model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' },
+                                              { model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '', tokens: [] },
                                             ],
                                           },
                                     ),

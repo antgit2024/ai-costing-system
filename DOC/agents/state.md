@@ -80,6 +80,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-08（Frontend：套装模板短语进一步收口为自动生成：右侧短语输入改为只读自动拼接（`{兜底物料}{TOKEN}宽*高*数量` 按组件用 `+` 拼接），并新增彩色预览（绿=兜底物料、红=TOKEN 锁定、黑=尺寸数量随表格改动）。保存时 enabled preset 自动写入 phrase，不再依赖手填；验收 `npm -C frontend run build` 并已原子发布静态资源）
 - **最近校对（北京时间 GMT+8）**：2026-01-08（Frontend：应运营反馈回退“自动拼接长串”：短语恢复为可选“备注输入”（黑色可编辑），不再强制自动拼接；红色 TOKEN 仍只通过筛选器展示与变更；绿色兜底物料名改为可编辑输入并持久化到 `metadata.fallback_display_overrides`（仅显示名，不影响真实物料/扣库）。验收 `npm -C frontend run build`，并已原子发布静态资源）
 - **最近校对（北京时间 GMT+8）**：2026-01-08（Frontend：默认兜底行与替换明细对齐展示：展开区第一条改为 `TOKEN：<输入框> 兜底物料：<slot>:<原始物料全名>`（用于维护对客词，保存到 `metadata.fallback_token_overrides`，并兼容旧 `fallback_display_overrides`）；替换明细行恢复展示兜底物料原始全名，TOKEN 用红色胶囊只读。验收 `npm -C frontend run build`，并已原子发布静态资源）
+- **最近校对（北京时间 GMT+8）**：2026-01-08（Frontend：筛选器新增“变体/指定(强制命中)”模式：变体模式仍填充 `spec_text` 供交易规格解析命中；指定模式把所选规则的 TOKEN 写入 `metadata.phrase_presets[*].components[*].tokens`（后端 `generate_bom_bundle` 已支持 `component.tokens` 注入 runtime_tokens），从而无需交易规格解析也能强制替换。验收 `npm -C frontend run build`，并已原子发布静态资源）
 
 ### 关键口径备忘（避免回滚/重构改坏）
 

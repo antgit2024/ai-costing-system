@@ -1343,6 +1343,21 @@ export default function BundleTemplatesPage() {
               }
               bodyStyle={{ padding: 8 }}
             >
+              <style>{`
+                /* BundleTemplatesPage: phrase card list micro-UX */
+                .bt-phrase-card-icon-btn.ant-btn {
+                  color: rgba(0,0,0,0.45);
+                  padding: 0 4px;
+                  height: 24px;
+                }
+                .bt-phrase-card-icon-btn.ant-btn:not([disabled]):hover {
+                  color: #1677ff;
+                  background: rgba(22,119,255,0.08);
+                }
+                .bt-phrase-card-icon-btn.ant-btn[disabled] {
+                  color: rgba(0,0,0,0.25);
+                }
+              `}</style>
               <List
                 locale={{ emptyText: '暂无短语：点击右上角“新建”添加第一条' }}
                 dataSource={phrasePresets}
@@ -1373,10 +1388,11 @@ export default function BundleTemplatesPage() {
                               {tokenDash}
                             </Tag>
                           </div>
-                          <Space size={2}>
+                          <Space size={0}>
                             <Button
                               size="small"
                               type="text"
+                              className="bt-phrase-card-icon-btn"
                               icon={<CopyOutlined />}
                               title="复制"
                               onClick={(e) => {
@@ -1387,6 +1403,7 @@ export default function BundleTemplatesPage() {
                             <Button
                               size="small"
                               type="text"
+                              className="bt-phrase-card-icon-btn"
                               icon={<ArrowUpOutlined />}
                               title="上移"
                               disabled={idx <= 0}
@@ -1398,6 +1415,7 @@ export default function BundleTemplatesPage() {
                             <Button
                               size="small"
                               type="text"
+                              className="bt-phrase-card-icon-btn"
                               icon={<ArrowDownOutlined />}
                               title="下移"
                               disabled={idx >= (phrasePresets?.length ?? 0) - 1}
@@ -1409,6 +1427,7 @@ export default function BundleTemplatesPage() {
                             <Button
                               size="small"
                               type="text"
+                              className="bt-phrase-card-icon-btn"
                               icon={enabled ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
                               title={enabled ? '停用' : '启用'}
                               onClick={(e) => {
@@ -1422,7 +1441,7 @@ export default function BundleTemplatesPage() {
                         </div>
 
                         {/* 第二行：纯短语 */}
-                        <Text type="secondary" ellipsis={{ tooltip: true }}>
+                        <Text style={{ color: 'rgba(0,0,0,0.88)' }} ellipsis={{ tooltip: true }}>
                           {phraseText}
                         </Text>
                       </Space>

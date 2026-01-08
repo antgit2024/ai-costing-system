@@ -14,7 +14,7 @@ if [[ ! -d "${DIST_DIR}" ]]; then
   exit 1
 fi
 
-echo "[deploy] 原子发布：将 ${DIST_DIR} 切换到 ${TARGET_DIR}"
+echo "[deploy] 发布静态资源：将 ${DIST_DIR} 同步到 ${TARGET_DIR}"
 
 # 简单保护，防止误删根目录
 if [[ "${TARGET_DIR}" == "/" ]]; then
@@ -22,11 +22,19 @@ if [[ "${TARGET_DIR}" == "/" ]]; then
   exit 1
 fi
 
-# 原子发布：先同步到临时目录，再一次性 mv 切换
+# 发布策略说明：
+# - /assets/* 是带 hash 的不可变资源（Cache-Control: immutable），浏览器会长期缓存。
+# - 若发布时删除旧的 /assets/*，用户开着旧页面在“切换栏目”（动态 import）时会 404 并白屏：
+#   Failed to fetch dynamically imported module /assets/XXX.js
+# - 因此这里对 /assets 采用“只增不删”（不 --delete），并在最后原子替换 index.html，
+#   从而兼容“旧页面仍在运行”的情况。
+#
+# 代价：/assets 会逐渐累积，建议后续加按 mtime 的清理策略（保留近 N 天）。
+#
+# 先同步到临时目录，保证本次构建产物完整；再同步到目标目录（assets 不删），最后原子替换 index.html。
 TARGET_PARENT="$(dirname "${TARGET_DIR}")"
 TARGET_NAME="$(basename "${TARGET_DIR}")"
 TMP_DIR="${TARGET_PARENT}/${TARGET_NAME}.__deploying__"
-BACKUP_DIR="${TARGET_PARENT}/${TARGET_NAME}.__backup__"
 
 mkdir -p "${TARGET_PARENT}"
 rm -rf "${TMP_DIR}"
@@ -39,13 +47,43 @@ else
   cp -a "${DIST_DIR}/." "${TMP_DIR}/"
 fi
 
-# 原子切换（同一文件系统内 mv 是原子的）
-rm -rf "${BACKUP_DIR}"
-if [[ -d "${TARGET_DIR}" ]]; then
-  mv "${TARGET_DIR}" "${BACKUP_DIR}"
+# 确保目标目录存在
+mkdir -p "${TARGET_DIR}"
+
+if command -v rsync >/dev/null 2>&1; then
+  # 1) assets：只增不删，避免旧页面动态 import 404
+  if [[ -d "${TMP_DIR}/assets" ]]; then
+    mkdir -p "${TARGET_DIR}/assets"
+    rsync -av "${TMP_DIR}/assets/" "${TARGET_DIR}/assets/"
+  fi
+
+  # 2) 其他静态文件（除 index.html 外可直接覆盖）
+  rsync -av --exclude "assets/**" --exclude "index.html" "${TMP_DIR}/" "${TARGET_DIR}/"
+else
+  echo "[deploy] rsync 不存在，使用 cp fallback（不删除旧 assets）" >&2
+  if [[ -d "${TMP_DIR}/assets" ]]; then
+    mkdir -p "${TARGET_DIR}/assets"
+    cp -a "${TMP_DIR}/assets/." "${TARGET_DIR}/assets/"
+  fi
+  # root files
+  shopt -s dotglob nullglob
+  for f in "${TMP_DIR}/"*; do
+    base="$(basename "${f}")"
+    if [[ "${base}" == "assets" || "${base}" == "index.html" ]]; then
+      continue
+    fi
+    cp -a "${f}" "${TARGET_DIR}/"
+  done
+  shopt -u dotglob nullglob
 fi
-mv "${TMP_DIR}" "${TARGET_DIR}"
-rm -rf "${BACKUP_DIR}" || true
+
+# 3) index.html：最后原子替换，保证新 index 引用的 assets 已就绪
+if [[ -f "${TMP_DIR}/index.html" ]]; then
+  cp -a "${TMP_DIR}/index.html" "${TARGET_DIR}/index.html.__new__"
+  mv "${TARGET_DIR}/index.html.__new__" "${TARGET_DIR}/index.html"
+fi
+
+rm -rf "${TMP_DIR}" || true
 
 echo "[deploy] 完成：已原子切换至 ${TARGET_DIR}"
 

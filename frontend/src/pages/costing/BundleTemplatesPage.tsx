@@ -94,6 +94,11 @@ const normalizeBundleToken = (raw: any): string => {
   return s
 }
 
+const toLetter = (idx: number): string => {
+  if (idx < 0 || idx >= 26) return ''
+  return String.fromCharCode('A'.charCodeAt(0) + idx)
+}
+
 const SLOT_CN_FALLBACK: Record<string, string> = {
   front: '前片位',
   back: '背片位',
@@ -180,7 +185,19 @@ export default function BundleTemplatesPage() {
     }))
   }, [versionPickerQuery.data])
 
-  // NOTE: versionIdToModelLabel 仅在旧“组件清单”展示中使用；照片墙模式不再需要该映射。
+  const versionIdToModelLabel = useMemo(() => {
+    const m = new Map<string, string>()
+    const items = (versionPickerQuery.data?.items ?? []) as any[]
+    for (const it of items) {
+      const vid = String(it?.version_id ?? '').trim()
+      const mc = String(it?.model_code ?? '').trim()
+      const mn = String(it?.model_name ?? '').trim()
+      if (!vid) continue
+      const label = mc && mn ? `${mc}:${mn}` : mc || mn || vid.slice(0, 8)
+      m.set(vid, label)
+    }
+    return m
+  }, [versionPickerQuery.data])
 
   const versionIdToModelId = useMemo(() => {
     const m = new Map<string, string>()
@@ -634,6 +651,23 @@ export default function BundleTemplatesPage() {
 
   const items = (listQuery.data?.items ?? []) as any[]
 
+  const filteredItems = useMemo(() => {
+    const q = String(search ?? '').trim().toLowerCase()
+    if (!q) return items
+    return items.filter((r: any) => {
+      const code = String(r?.code ?? '').trim().toLowerCase()
+      const name = String(r?.name ?? '').trim().toLowerCase()
+      if (code.includes(q) || name.includes(q)) return true
+      const meta = r?.metadata ?? {}
+      const pp = Array.isArray(meta?.phrase_presets) ? meta.phrase_presets : []
+      for (const p of pp) {
+        const phrase = String(p?.phrase ?? '').trim().toLowerCase()
+        if (phrase && phrase.includes(q)) return true
+      }
+      return false
+    })
+  }, [items, search])
+
   return (
     <div style={{ padding: 16 }}>
       <Modal
@@ -779,9 +813,10 @@ export default function BundleTemplatesPage() {
             }
           >
             <Space wrap style={{ marginBottom: 12 }}>
-              <Input
-                style={{ width: 220 }}
-                placeholder="搜索：编码/名称"
+              <Input.Search
+                style={{ width: 280 }}
+                allowClear
+                placeholder="搜索：短码/名称/运营短语"
                 value={search}
                 onChange={(e) => {
                   setSearch(e.target.value)
@@ -815,7 +850,7 @@ export default function BundleTemplatesPage() {
             <Table
               rowKey={(r) => String((r as any).id)}
               loading={listQuery.isLoading}
-              dataSource={items}
+              dataSource={filteredItems}
               pagination={{
                 current: page,
                 pageSize,
@@ -827,16 +862,64 @@ export default function BundleTemplatesPage() {
                 },
               }}
               columns={[
-                { title: '编码', dataIndex: 'code', width: 120, render: (v) => <Text code>{String(v)}</Text> },
-                { title: '名称', dataIndex: 'name', width: 220, render: (v) => String(v ?? '').trim() || '-' },
+                { title: '编码', dataIndex: 'code', width: 110, render: (v) => <Text code>{String(v)}</Text> },
+                { title: '名称', dataIndex: 'name', width: 180, render: (v) => String(v ?? '').trim() || '-' },
                 {
                   title: '分类',
-                  width: 120,
+                  width: 90,
                   render: (_: any, r: any) => String(r?.metadata?.category ?? '').trim() || '-',
                 },
                 {
-                  title: '标签',
+                  title: '解析短码',
+                  width: 170,
+                  render: (_: any, r: any) => {
+                    const codeRaw = String(r?.code ?? '').trim()
+                    if (!codeRaw) return <Text type="secondary">-</Text>
+                    const token = normalizeBundleToken(codeRaw)
+                    const pp = Array.isArray(r?.metadata?.phrase_presets) ? r.metadata.phrase_presets : []
+                    if (!pp.length) return <Text code>{token}</Text>
+                    return (
+                      <Space direction="vertical" size={2}>
+                        {pp.slice(0, 8).map((_: any, idx: number) => {
+                          const letter = toLetter(idx)
+                          const t = letter ? `${token}:${letter}` : token
+                          return (
+                            <Text key={t} code copyable={{ text: t }}>
+                              {t}
+                            </Text>
+                          )
+                        })}
+                        {pp.length > 8 ? <Text type="secondary">+{pp.length - 8}</Text> : null}
+                      </Space>
+                    )
+                  },
+                },
+                {
+                  title: '运营短语',
                   width: 240,
+                  render: (_: any, r: any) => {
+                    const pp = Array.isArray(r?.metadata?.phrase_presets) ? r.metadata.phrase_presets : []
+                    if (!pp.length) return <Text type="secondary">-</Text>
+                    return (
+                      <Space direction="vertical" size={2}>
+                        {pp.slice(0, 8).map((p: any, idx: number) => {
+                          const letter = toLetter(idx)
+                          const phrase = String(p?.phrase ?? '').trim()
+                          const label = phrase ? `${letter}: ${phrase}` : `${letter}: -`
+                          return (
+                            <Text key={`${idx}-${label}`} ellipsis={{ tooltip: label }}>
+                              {label}
+                            </Text>
+                          )
+                        })}
+                        {pp.length > 8 ? <Text type="secondary">+{pp.length - 8}</Text> : null}
+                      </Space>
+                    )
+                  },
+                },
+                {
+                  title: '标签',
+                  width: 200,
                   render: (_: any, r: any) => {
                     const tags = parseTags(r?.metadata)
                     if (!tags.length) return <Text type="secondary">-</Text>
@@ -851,9 +934,35 @@ export default function BundleTemplatesPage() {
                   },
                 },
                 {
-                  title: '组件数',
-                  width: 90,
-                  render: (_: any, r: any) => ((r?.components ?? []) as any[]).length,
+                  title: '模型',
+                  width: 260,
+                  render: (_: any, r: any) => {
+                    const meta = r?.metadata ?? {}
+                    const pool = Array.isArray(meta?.model_pool_version_ids) ? meta.model_pool_version_ids : []
+                    const pp = Array.isArray(meta?.phrase_presets) ? meta.phrase_presets : []
+                    const ids = new Set<string>()
+                    for (const x of pool) {
+                      const s = String(x ?? '').trim()
+                      if (s) ids.add(s)
+                    }
+                    for (const p of pp) {
+                      const rows = Array.isArray(p?.components) ? p.components : []
+                      for (const c of rows) {
+                        const s = String(c?.model_version_id ?? '').trim()
+                        if (s) ids.add(s)
+                      }
+                    }
+                    const list = Array.from(ids).map((vid) => versionIdToModelLabel.get(vid) || vid.slice(0, 8))
+                    if (!list.length) return <Text type="secondary">-</Text>
+                    return (
+                      <Space wrap>
+                        {list.slice(0, 6).map((x) => (
+                          <Tag key={x}>{x}</Tag>
+                        ))}
+                        {list.length > 6 ? <Tag>+{list.length - 6}</Tag> : null}
+                      </Space>
+                    )
+                  },
                 },
                 {
                   title: '更新时间',
@@ -868,7 +977,7 @@ export default function BundleTemplatesPage() {
                 },
                 {
                   title: '操作',
-                  width: 240,
+                  width: 220,
                   render: (_: any, r: any) => (
                     <Space>
                       <Button size="small" onClick={() => openEdit(r)}>
@@ -1219,10 +1328,9 @@ export default function BundleTemplatesPage() {
                   // 如果运营已经手动写了 B:，就不再重复拼接
                   if (up.includes('B:') || up.includes('BUNDLE:')) return <Text copyable={{ text: phrase }}>{phrase}</Text>
                   const trimmed = phrase.replace(/\s+$/g, '')
-                  const needSep = /[；;]$/.test(trimmed) ? '' : '；'
                   const sel = idx >= 0 && idx < 26 ? String.fromCharCode('A'.charCodeAt(0) + idx) : ''
                   const suffix = sel ? `${currentBundleToken}:${sel}` : currentBundleToken
-                  const spec = `${trimmed}${needSep}(${suffix})`
+                  const spec = `${trimmed}(${suffix})`
                   return <Text copyable={{ text: spec }}>{spec}</Text>
                 },
               },

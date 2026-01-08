@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { Alert, Button, Card, Col, Descriptions, Divider, Empty, Input, Row, Select, Space, Table, Tabs, Tag, Typography, message } from 'antd'
 import { isAxiosError } from 'axios'
@@ -62,6 +62,7 @@ type ProductListingDraft = {
 type BundleTestDraft = {
   bundle_code: string | null
   bundle_selector: string | null
+  bundle_input: string
   spec_text: string
 }
 
@@ -93,7 +94,12 @@ export default function ProductListingPage() {
     model_version_id: null,
     spec_text: '',
   })
-  const [bundleDraft, setBundleDraft] = useState<BundleTestDraft>({ bundle_code: null, bundle_selector: null, spec_text: '' })
+  const [bundleDraft, setBundleDraft] = useState<BundleTestDraft>({
+    bundle_code: null,
+    bundle_selector: null,
+    bundle_input: '',
+    spec_text: '',
+  })
 
   const [parsed, setParsed] = useState<SpecParseResponse | null>(null)
   const [bom, setBom] = useState<BomGenerateResponse | null>(null)
@@ -142,7 +148,7 @@ export default function ProductListingPage() {
   }, [bundleTemplatesQuery.data])
 
   const bundleTokenFromBundleInput = useMemo(() => {
-    const t = String(bundleDraft.spec_text || '').trim()
+    const t = String(bundleDraft.bundle_input || bundleDraft.spec_text || '').trim()
     if (!t) return { code: null as string | null, selector: null as string | null }
     // Supported:
     // - B:CODE(:A) / BUNDLE:CODE(:A)
@@ -167,7 +173,28 @@ export default function ProductListingPage() {
       }
     }
     return { code, selector: sel }
-  }, [bundleDraft.spec_text, bundleTemplateOptions])
+  }, [bundleDraft.bundle_input, bundleDraft.spec_text, bundleTemplateOptions])
+
+  // Auto-fill: when user types/pastes B-XXXXAA or B:CODE:AA into the bundle input/spec text,
+  // automatically select template code + selector (only when user hasn't explicitly chosen them yet).
+  useEffect(() => {
+    const code = String(bundleTokenFromBundleInput.code ?? '').trim()
+    const sel = String(bundleTokenFromBundleInput.selector ?? '').trim().toUpperCase()
+    if (!code) return
+    setBundleDraft((d) => {
+      const next: BundleTestDraft = { ...d }
+      let changed = false
+      if (!String(d.bundle_code ?? '').trim()) {
+        next.bundle_code = code
+        changed = true
+      }
+      if (sel && !String(d.bundle_selector ?? '').trim()) {
+        next.bundle_selector = sel
+        changed = true
+      }
+      return changed ? next : d
+    })
+  }, [bundleTokenFromBundleInput.code, bundleTokenFromBundleInput.selector])
 
   const effectiveBundleCode = useMemo(() => {
     const selected = String(bundleDraft.bundle_code ?? '').trim()
@@ -190,6 +217,26 @@ export default function ProductListingPage() {
       return { value: sel, label: `${sel}: ${phrase || '-'}` }
     })
   }, [bundleTemplateDetailQuery.data])
+
+  const bundleSelectedPhrase = useMemo(() => {
+    const sel = String(bundleDraft.bundle_selector ?? '').trim().toUpperCase()
+    if (!sel) return null
+    const meta: any = (bundleTemplateDetailQuery.data as any)?.metadata ?? {}
+    const pp = Array.isArray(meta?.phrase_presets) ? meta.phrase_presets : []
+    const hit =
+      pp.find((x: any) => String(x?.selector ?? '').trim().toUpperCase() === sel) ??
+      (() => {
+        // backward compat: if presets have no selector, allow AA/AB.. map to index
+        if (sel.length !== 2) return null
+        const a = sel.charCodeAt(0) - 'A'.charCodeAt(0)
+        const b = sel.charCodeAt(1) - 'A'.charCodeAt(0)
+        const idx = a * 26 + b
+        return idx >= 0 ? pp[idx] : null
+      })()
+    if (!hit) return null
+    const phrase = String(hit?.phrase ?? '').trim()
+    return phrase || null
+  }, [bundleDraft.bundle_selector, bundleTemplateDetailQuery.data])
 
   const bundlePresetComponents = useMemo(() => {
     const sel = String(bundleDraft.bundle_selector ?? '').trim().toUpperCase()
@@ -570,6 +617,11 @@ export default function ProductListingPage() {
                 </>
               ) : (
                 <>
+                  <Input
+                    placeholder="套装短码（可直接输入）：例如 B-3U3PAA / B-CODE-AA / B:CODE:AA"
+                    value={bundleDraft.bundle_input}
+                    onChange={(e) => setBundleDraft((d) => ({ ...d, bundle_input: e.target.value }))}
+                  />
                   <Select
                     showSearch
                     allowClear
@@ -587,7 +639,7 @@ export default function ProductListingPage() {
                       type="info"
                       showIcon
                       message={`已从输入框识别套装编码：${toBundleTokenDash(bundleTokenFromBundleInput.code, bundleTokenFromBundleInput.selector)}`}
-                      description="你可以不选上面的下拉，直接点“套装：预演 BOM”。如需短语预览/选择器，请选择套装下拉。"
+                      description="已自动联动套装与短语 selector；可直接查看短语/组件行预览并点击“套装：预演 BOM”。"
                     />
                   ) : null}
                   <Row gutter={[12, 12]}>
@@ -603,6 +655,13 @@ export default function ProductListingPage() {
                             onChange={(v) => setBundleDraft((d) => ({ ...d, bundle_selector: (v as string) ?? null }))}
                             style={{ width: '100%' }}
                           />
+                          {bundleDraft.bundle_selector ? (
+                            <Text>
+                              <Text code>{String(bundleDraft.bundle_selector ?? '').trim().toUpperCase()}</Text>
+                              <Text>：</Text>
+                              <Text>{bundleSelectedPhrase || '-'}</Text>
+                            </Text>
+                          ) : null}
                           <Button
                             disabled={!bundleDraft.bundle_code || !bundleDraft.bundle_selector}
                             onClick={() => {
@@ -610,8 +669,16 @@ export default function ProductListingPage() {
                               if (!sel) return
                               const meta: any = (bundleTemplateDetailQuery.data as any)?.metadata ?? {}
                               const pp = Array.isArray(meta?.phrase_presets) ? meta.phrase_presets : []
-                              const idx = sel.charCodeAt(0) - 'A'.charCodeAt(0)
-                              const phrase = String(pp?.[idx]?.phrase ?? '').trim()
+                              const hit =
+                                pp.find((x: any) => String(x?.selector ?? '').trim().toUpperCase() === sel) ??
+                                (() => {
+                                  if (sel.length !== 2) return null
+                                  const a = sel.charCodeAt(0) - 'A'.charCodeAt(0)
+                                  const b = sel.charCodeAt(1) - 'A'.charCodeAt(0)
+                                  const idx = a * 26 + b
+                                  return idx >= 0 ? pp[idx] : null
+                                })()
+                              const phrase = String(hit?.phrase ?? '').trim()
                               const code = String(bundleDraft.bundle_code ?? '').trim()
                               const token = code ? toBundleTokenDash(code, sel) : ''
                               const text = phrase && token ? `${phrase}(${token})` : phrase || token

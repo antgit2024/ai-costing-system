@@ -1252,12 +1252,22 @@ def replace_version_lines(
     meta.setdefault("fixed_price", model.fixed_price)
     version.metadata_json = _json_safe(meta)
 
-    db.query(models.ModelVersionMaterial).filter(models.ModelVersionMaterial.version_id == version.id).delete(
-        synchronize_session=False
+    # IMPORTANT:
+    # Do NOT hard-delete all version lines here.
+    # These ledger line IDs are referenced by line variants (base_line_id) with FK ondelete=CASCADE.
+    # If we delete+recreate every time, operators will "lose" variants after clicking "保存清单".
+    existing_mats = (
+        db.query(models.ModelVersionMaterial)
+        .filter(models.ModelVersionMaterial.version_id == version.id)
+        .all()
     )
-    db.query(models.ModelVersionProcess).filter(models.ModelVersionProcess.version_id == version.id).delete(
-        synchronize_session=False
+    existing_procs = (
+        db.query(models.ModelVersionProcess)
+        .filter(models.ModelVersionProcess.version_id == version.id)
+        .all()
     )
+    mats_by_id = {str(x.id): x for x in existing_mats}
+    procs_by_id = {str(x.id): x for x in existing_procs}
 
     sample_spec = {
         "width_mm": _decimal(sample.get("width_mm"), Decimal("1000")),
@@ -1273,8 +1283,10 @@ def replace_version_lines(
     calc_mode = (meta.get("calc_mode") or model.calc_mode or "ratio").strip()
 
     seq = 0
+    keep_mat_ids: set[str] = set()
     for item in materials:
         seq += 1
+        incoming_id = str(item.get("id") or "").strip() or None
         kind = str(item.get("material_kind") or "real")
         ref_id = str(item.get("material_ref_id") or "").strip()
         if kind == "virtual" and ref_id:
@@ -1335,26 +1347,48 @@ def replace_version_lines(
                 if vm2 and not vm2.is_archived:
                     uom = getattr(vm2, "unit", None)
 
-        db.add(
-            models.ModelVersionMaterial(
+        # Upsert: preserve id to avoid deleting line variants.
+        row = mats_by_id.get(incoming_id) if incoming_id else None
+        if row is None:
+            row = models.ModelVersionMaterial(
+                id=incoming_id,  # allow client-provided id
                 version_id=version.id,
-                material_type=kind,
-                material_ref_id=ref_id,
-                material_code=item.get("material_code"),
-                material_name=item.get("material_name"),
-                unit_of_measure=uom,
-                calculation_method=method,
-                base_quantity=base,
-                loss_rate=_decimal(item.get("loss_rate"), Decimal("0")),
-                sequence_order=seq,
-                notes=item.get("notes"),
-                metadata_json=_json_safe(meta_line),
             )
-        )
+            db.add(row)
+        keep_mat_ids.add(str(row.id))
+        row.version_id = version.id
+        row.material_type = kind
+        row.material_ref_id = ref_id
+        row.material_code = item.get("material_code")
+        row.material_name = item.get("material_name")
+        row.unit_of_measure = uom
+        row.calculation_method = method
+        row.base_quantity = base
+        row.loss_rate = _decimal(item.get("loss_rate"), Decimal("0"))
+        row.sequence_order = seq
+        row.notes = item.get("notes")
+        # Merge existing metadata to avoid losing server-side fields not round-tripped by UI.
+        base_meta = dict(getattr(row, "metadata_json", None) or {})
+        base_meta.update(dict(item.get("metadata_json") or {}))
+        base_meta.update(meta_line)
+        row.metadata_json = _json_safe(base_meta)
+
+    # Delete removed material rows (this will cascade delete variants for intentionally removed lines).
+    if keep_mat_ids:
+        db.query(models.ModelVersionMaterial).filter(
+            models.ModelVersionMaterial.version_id == version.id,
+            ~models.ModelVersionMaterial.id.in_(list(keep_mat_ids)),
+        ).delete(synchronize_session=False)
+    else:
+        db.query(models.ModelVersionMaterial).filter(
+            models.ModelVersionMaterial.version_id == version.id
+        ).delete(synchronize_session=False)
 
     seqp = 0
+    keep_proc_ids: set[str] = set()
     for item in processes:
         seqp += 1
+        incoming_id = str(item.get("id") or "").strip() or None
         process_id = str(item.get("process_id") or "").strip()
         meta_line = dict(item.get("metadata_json") or {})
         for k in ("source_module_id", "source_module_code", "source_module_name"):
@@ -1373,15 +1407,32 @@ def replace_version_lines(
         ):
             if item.get(k) is not None:
                 meta_line[k] = item.get(k)
-        db.add(
-            models.ModelVersionProcess(
+        rowp = procs_by_id.get(incoming_id) if incoming_id else None
+        if rowp is None:
+            rowp = models.ModelVersionProcess(
+                id=incoming_id,
                 version_id=version.id,
-                process_id=process_id,
-                sequence_order=seqp,
-                notes=item.get("notes"),
-                metadata_json=_json_safe(meta_line),
             )
-        )
+            db.add(rowp)
+        keep_proc_ids.add(str(rowp.id))
+        rowp.version_id = version.id
+        rowp.process_id = process_id
+        rowp.sequence_order = seqp
+        rowp.notes = item.get("notes")
+        base_meta_p = dict(getattr(rowp, "metadata_json", None) or {})
+        base_meta_p.update(dict(item.get("metadata_json") or {}))
+        base_meta_p.update(meta_line)
+        rowp.metadata_json = _json_safe(base_meta_p)
+
+    if keep_proc_ids:
+        db.query(models.ModelVersionProcess).filter(
+            models.ModelVersionProcess.version_id == version.id,
+            ~models.ModelVersionProcess.id.in_(list(keep_proc_ids)),
+        ).delete(synchronize_session=False)
+    else:
+        db.query(models.ModelVersionProcess).filter(
+            models.ModelVersionProcess.version_id == version.id
+        ).delete(synchronize_session=False)
 
     # Persist lightweight UI stats for version list (so refresh won't lose it).
     # This is a UI convenience cache, not an accounting ledger.

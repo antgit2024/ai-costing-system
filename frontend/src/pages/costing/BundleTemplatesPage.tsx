@@ -156,9 +156,9 @@ export default function BundleTemplatesPage() {
   const [form] = Form.useForm()
   const [phrasePresets, setPhrasePresets] = useState<PhrasePresetRow[]>([])
   const [activePresetIndex, setActivePresetIndex] = useState<number>(0)
-  // 兜底物料“显示名”覆盖（仅用于运营可读性，不影响真实物料/扣库/算价）
-  // key: `${versionId}:${baseLineId}` -> displayName
-  const [fallbackDisplayOverrides, setFallbackDisplayOverrides] = useState<Record<string, string>>({})
+  // 默认兜底“对客 TOKEN”（仅用于对客展示/规范化用词；不影响真实物料/扣库/算价）
+  // key: `${versionId}:${baseLineId}` -> tokenAlias (例如：黄金绒)
+  const [fallbackTokenOverrides, setFallbackTokenOverrides] = useState<Record<string, string>>({})
 
   // 模型池（缩小范围）：多选版本
   const [modelPoolVersionIds, setModelPoolVersionIds] = useState<string[]>([])
@@ -710,7 +710,7 @@ export default function BundleTemplatesPage() {
     setModelPoolVersionIds([])
     setPresetSelectedByIdx({})
     setPhrasePresets([])
-    setFallbackDisplayOverrides({})
+    setFallbackTokenOverrides({})
     setActivePresetIndex(0)
     setDrawerOpen(true)
   }
@@ -730,9 +730,9 @@ export default function BundleTemplatesPage() {
     const vp = (row?.metadata ?? {})?.phrase_variant_presets
     if (vp && typeof vp === 'object') setPresetSelectedByIdx(vp as any)
     else setPresetSelectedByIdx({})
-    const fo = (row?.metadata ?? {})?.fallback_display_overrides
-    if (fo && typeof fo === 'object') setFallbackDisplayOverrides(fo as any)
-    else setFallbackDisplayOverrides({})
+    const fo = (row?.metadata ?? {})?.fallback_token_overrides ?? (row?.metadata ?? {})?.fallback_display_overrides
+    if (fo && typeof fo === 'object') setFallbackTokenOverrides(fo as any)
+    else setFallbackTokenOverrides({})
     // NOTE: legacy metadata.lexicon_rules is preserved on save, but UI is intentionally hidden to avoid confusion.
 
     const pp = (row?.metadata ?? {})?.phrase_presets
@@ -829,7 +829,9 @@ export default function BundleTemplatesPage() {
         shared_trigger_text: String(values.shared_trigger_text ?? '').trim() || undefined,
         model_pool_version_ids: modelPoolVersionIds,
         phrase_variant_presets: presetSelectedByIdx,
-        fallback_display_overrides: fallbackDisplayOverrides,
+        fallback_token_overrides: fallbackTokenOverrides,
+        // keep legacy field for older clients
+        fallback_display_overrides: fallbackTokenOverrides,
         // Preserve legacy lexicon_rules (global fallback mapping) if exists, but do not expose to operators.
         lexicon_rules: Array.isArray((editing?.metadata ?? {})?.lexicon_rules) ? (editing?.metadata ?? {})?.lexicon_rules : [],
         phrase_presets: phrasePresets
@@ -1578,60 +1580,60 @@ export default function BundleTemplatesPage() {
 
                           return (
                             <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                                {/* 默认兜底：不命中任何 TOKEN 时仍会使用基准物料（避免误以为“少了一行物料”） */}
-                                {(() => {
-                                  const uniqBase = new Map<string, string>()
-                                  for (const [baseLineId] of selectedEntries) {
-                                    const base = baseMap.get(String(baseLineId))
-                                    const slot = getLineStructureLabel(base, versionId)
-                                    const rawName = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
-                                    const overrideKey = `${versionId}:${String(baseLineId)}`
-                                    const displayName = String(fallbackDisplayOverrides?.[overrideKey] ?? '').trim() || rawName
-                                    const baseLabel = slot ? `${slot}：${displayName}` : displayName
-                                    uniqBase.set(String(baseLineId), baseLabel || String(baseLineId))
-                                  }
-                                  return (
-                                    <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                                      <Text type="secondary">默认（未命中 TOKEN 时）：兜底物料（对客名，可改）</Text>
-                                      <Space wrap size={8}>
-                                        {Array.from(uniqBase.entries()).map(([baseLineId, baseLabel]) => {
-                                          const base = baseMap.get(String(baseLineId))
-                                          const slot = getLineStructureLabel(base, versionId)
-                                          const rawName = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
-                                          const overrideKey = `${versionId}:${String(baseLineId)}`
-                                          const override = String(fallbackDisplayOverrides?.[overrideKey] ?? '').trim()
-                                          const defaultDisplay = baseLabel
-                                          return (
-                                            <Space key={`fb-${overrideKey}`} size={6}>
-                                              <Text type="secondary">{slot ? `${slot}：` : ''}</Text>
-                                              <Input
-                                                size="small"
-                                                style={{ width: 160 }}
-                                                placeholder={rawName}
-                                                value={override || defaultDisplay}
-                                                onChange={(e) => {
-                                                  const next = e.target.value
-                                                  setFallbackDisplayOverrides((prev) => ({
-                                                    ...(prev ?? {}),
-                                                    [overrideKey]: next,
-                                                  }))
-                                                }}
-                                              />
-                                            </Space>
-                                          )
-                                        })}
-                                      </Space>
-                                    </Space>
-                                  )
-                                })()}
+                              {/* 默认兜底：第一条与其它行同格式（TOKEN 可输入，兜底物料原名只读） */}
+                              {(() => {
+                                const seen = new Set<string>()
+                                const uniqIds: string[] = []
+                                for (const [baseLineId] of selectedEntries) {
+                                  const id = String(baseLineId)
+                                  if (!id || seen.has(id)) continue
+                                  seen.add(id)
+                                  uniqIds.push(id)
+                                }
+                                if (!uniqIds.length) return null
+                                return (
+                                  <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                                    {uniqIds.map((baseLineId) => {
+                                      const base = baseMap.get(String(baseLineId))
+                                      const slot = getLineStructureLabel(base, versionId)
+                                      const rawName = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
+                                      const overrideKey = `${versionId}:${String(baseLineId)}`
+                                      const tokenAlias = String(fallbackTokenOverrides?.[overrideKey] ?? '').trim()
+                                      return (
+                                        <Space key={`fb-token-${overrideKey}`} wrap size={10}>
+                                          <Text type="secondary">TOKEN：</Text>
+                                          <Input
+                                            size="small"
+                                            style={{ width: 180 }}
+                                            placeholder="例如：黄金绒（可选）"
+                                            disabled={disabled}
+                                            value={tokenAlias}
+                                            onChange={(e) => {
+                                              const next = e.target.value
+                                              setFallbackTokenOverrides((prev) => ({
+                                                ...(prev ?? {}),
+                                                [overrideKey]: next,
+                                              }))
+                                            }}
+                                          />
+                                          <Text type="secondary">兜底物料：</Text>
+                                          <Text title={rawName}>
+                                            {slot ? `${slot}：` : ''}
+                                            {rawName}
+                                          </Text>
+                                        </Space>
+                                      )
+                                    })}
+                                  </Space>
+                                )
+                              })()}
+
                               {selectedEntries.map(([baseLineId, variantId]) => {
                                 const v = variantsById.get(String(variantId))
                                 const base = baseMap.get(String(baseLineId))
                                 const slot = getLineStructureLabel(base, versionId)
-                                  const rawName = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
-                                  const overrideKey = `${versionId}:${String(baseLineId)}`
-                                  const displayName = String(fallbackDisplayOverrides?.[overrideKey] ?? '').trim() || rawName
-                                  const tokens = extractTokensForVariant(v)
+                                const rawName = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
+                                const tokens = extractTokensForVariant(v)
                                 const effect =
                                   v?.action === 'remove_self' ? '移除' : v?.action === 'add_siblings' ? '新增物料' : '替换物料'
                                 const produced = Array.isArray(v?.items) ? v.items : []
@@ -1643,19 +1645,22 @@ export default function BundleTemplatesPage() {
                                 return (
                                   <div key={`${k}:${baseLineId}:${variantId}`}>
                                     <Space wrap size={8}>
-                                        <Text type="secondary">TOKEN：</Text>
-                                        {tokens.length ? (
-                                          tokens.map((t) => (
-                                            <Tag key={`${k}:${baseLineId}:${variantId}:${t}`} color="blue">
-                                              {t}
-                                            </Tag>
-                                          ))
-                                        ) : (
-                                          <Text type="secondary">（无 TOKEN）</Text>
-                                        )}
-                                        <Text type="secondary">兜底物料：</Text>
-                                        <Text strong title={rawName}>{slot ? `${slot}：` : ''}{displayName}</Text>
-                                        <Text type="secondary">→</Text>
+                                      <Text type="secondary">TOKEN：</Text>
+                                      {tokens.length ? (
+                                        tokens.map((t) => (
+                                          <Tag key={`${k}:${baseLineId}:${variantId}:${t}`} color="red">
+                                            {t}
+                                          </Tag>
+                                        ))
+                                      ) : (
+                                        <Text type="secondary">（无 TOKEN）</Text>
+                                      )}
+                                      <Text type="secondary">兜底物料：</Text>
+                                      <Text strong title={rawName}>
+                                        {slot ? `${slot}：` : ''}
+                                        {rawName}
+                                      </Text>
+                                      <Text type="secondary">→</Text>
                                       <Text type="secondary">{effect}</Text>
                                       <Tag color="green">{producedLabel || '-'}</Tag>
                                     </Space>

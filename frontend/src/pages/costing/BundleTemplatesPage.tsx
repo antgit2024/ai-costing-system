@@ -97,7 +97,8 @@ const normalizeBundleToken = (raw: any): string => {
 const toBundleTokenDash = (code: string, selector?: string | null): string => {
   const c = String(code ?? '').trim().toUpperCase().replace(/^B:/, '').replace(/^BUNDLE:/, '').replace(/^B-/, '')
   const sel = String(selector ?? '').trim().toUpperCase()
-  return sel ? `B-${c}-${sel}` : `B-${c}`
+  // New short format: B-XXXXA (CODE length fixed to 4). Keep compatibility with selector-less token.
+  return sel ? `B-${c}${sel}` : `B-${c}`
 }
 
 const toLetter = (idx: number): string => {
@@ -630,7 +631,8 @@ export default function BundleTemplatesPage() {
     onSuccess: (res: any) => {
       qc.invalidateQueries({ queryKey: ['bundle-templates'] })
       const code = String(res?.code ?? '').toUpperCase()
-      if (code) setCreatedTokenHint(`B:${code}`)
+      // Default hint uses new short external token, preset A: B-XXXXA
+      if (code) setCreatedTokenHint(toBundleTokenDash(code, 'A'))
       message.success(editing?.id ? '已保存' : '已创建')
       setEditing(res)
     },
@@ -1027,7 +1029,11 @@ export default function BundleTemplatesPage() {
         onClose={() => setDrawerOpen(false)}
         width={960}
         destroyOnClose={false}
-        title={editing?.id ? `编辑套装模板（B:${String(editing?.code ?? '')}）` : '新建套装模板'}
+        title={
+          editing?.id
+            ? `编辑套装模板（${toBundleTokenDash(String(editing?.code ?? ''), 'A')}）`
+            : '新建套装模板'
+        }
         extra={
           <Space>
             <Button onClick={() => setDrawerOpen(false)}>关闭</Button>
@@ -1039,7 +1045,12 @@ export default function BundleTemplatesPage() {
       >
         <Space direction="vertical" style={{ width: '100%' }} size={12}>
           {createdTokenHint ? (
-            <Alert type="success" showIcon message={`编码已生成：${createdTokenHint}`} description="把 B: 编码放进交易规格即可走合并器预演。" />
+            <Alert
+              type="success"
+              showIcon
+              message={`编码已生成：${createdTokenHint}`}
+              description="把短码（例如 B-XXXXA）放进交易规格即可走合并器预演。"
+            />
           ) : null}
 
           <Form layout="vertical" form={form}>
@@ -1333,7 +1344,7 @@ export default function BundleTemplatesPage() {
                 render: (_: any, r: any, idx: number) => {
                   const phrase = String(r?.phrase ?? '').trim()
                   if (!phrase) return <Text type="secondary">-</Text>
-                  if (!currentBundleToken) return <Text type="secondary">（保存后生成 B: 编码）</Text>
+                  if (!currentBundleToken) return <Text type="secondary">（保存后生成短码）</Text>
                   const up = phrase.toUpperCase()
                   // 如果运营已经手动写了 B:，就不再重复拼接
                   if (up.includes('B:') || up.includes('BUNDLE:') || up.includes('B-')) return <Text copyable={{ text: phrase }}>{phrase}</Text>

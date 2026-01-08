@@ -73,7 +73,8 @@ const toLetter = (idx: number): string => {
 const toBundleTokenDash = (code: string, selector?: string | null): string => {
   const c = String(code ?? '').trim().toUpperCase().replace(/^B:/, '').replace(/^BUNDLE:/, '').replace(/^B-/, '')
   const sel = String(selector ?? '').trim().toUpperCase()
-  return sel ? `B-${c}-${sel}` : `B-${c}`
+  // New short format: B-XXXXA (CODE length fixed to 4). Keep compatibility with selector-less token.
+  return sel ? `B-${c}${sel}` : `B-${c}`
 }
 
 export default function ProductListingPage() {
@@ -135,10 +136,16 @@ export default function ProductListingPage() {
   const bundleTokenFromBundleInput = useMemo(() => {
     const t = String(bundleDraft.spec_text || '').trim()
     if (!t) return { code: null as string | null, selector: null as string | null }
-    const m = t.match(/(?:BUNDLE:|B:)([A-Z0-9]{4,16})(?::([A-Za-z]))?|\bB-([A-Z0-9]{4,16})(?:-([A-Za-z]))?\b/i)
+    // Supported:
+    // - B:CODE(:A) / BUNDLE:CODE(:A)
+    // - B-CODE(-A)
+    // - B-XXXXA (new short, CODE length fixed to 4)
+    const m = t.match(
+      /(?:BUNDLE:|B:)([A-Z0-9]{4,16})(?::([A-Za-z]))?|\bB-([A-Z0-9]{4})([A-Za-z])\b|\bB-([A-Z0-9]{4,16})(?:-([A-Za-z]))?\b/i,
+    )
     if (!m) return { code: null, selector: null }
-    const code = String(m[1] || m[3] || '').toUpperCase() || null
-    const sel = String(m[2] || m[4] || '').toUpperCase() || null
+    const code = String(m[1] || m[3] || m[5] || '').toUpperCase() || null
+    const sel = String(m[2] || m[4] || m[6] || '').toUpperCase() || null
     return { code, selector: sel }
   }, [bundleDraft.spec_text])
 
@@ -202,9 +209,11 @@ export default function ProductListingPage() {
 
   const bundleTokenInSpec = useMemo(() => {
     const t = String(draft.spec_text || '')
-    const m = t.match(/(?:BUNDLE:|B:)([A-Z0-9]{4,16})|(?:\bB-([A-Z0-9]{4,16})(?:-[A-Za-z])?\b)/i)
+    const m = t.match(
+      /(?:BUNDLE:|B:)([A-Z0-9]{4,16})|(?:\bB-([A-Z0-9]{4})(?:[A-Za-z])\b)|(?:\bB-([A-Z0-9]{4,16})(?:-[A-Za-z])?\b)/i,
+    )
     if (!m) return null
-    const code = String(m[1] || m[2] || '').toUpperCase()
+    const code = String(m[1] || m[2] || m[3] || '').toUpperCase()
     return code ? `B:${code}` : null
   }, [draft.spec_text])
 
@@ -238,7 +247,7 @@ export default function ProductListingPage() {
       }
 
       const model_version_id = String(draft.model_version_id ?? '').trim()
-      if (!model_version_id) throw new Error('请先选择“已发布标准版本”（或在交易规格中提供 BUNDLE:XXXX）')
+      if (!model_version_id) throw new Error('请先选择“已发布标准版本”（或在交易规格中提供套装短码 B-XXXXA / B:CODE）')
 
       const parsedRes = await parseSpec({ spec_text, sku_code: draft.sku_code || undefined })
       setParsed(parsedRes)
@@ -254,16 +263,31 @@ export default function ProductListingPage() {
     mutationFn: async () => {
       setLastError(null)
       const code = String(effectiveBundleCode ?? '').trim()
-      if (!code) throw new Error('请先选择套装，或在输入框中包含 B-XXXXXX(-A) / B:XXXXXX(:A)')
+      if (!code) throw new Error('请先选择套装，或在输入框中包含 B-XXXXA / B-CODE-A / B:CODE(:A)')
       // UI 已选择套装编码：这里允许用户在输入里直接写 B:CODE:A，
       // 我们会优先从用户输入提取 selector（避免 selector 丢失导致“模板无组件”）。
       const inputSelector =
-        String(bundleDraft.spec_text || '').match(/(?:BUNDLE:|B:)[A-Z0-9]{4,16}:([A-Za-z])|\bB-[A-Z0-9]{4,16}-([A-Za-z])\b/i)?.[1]?.toUpperCase() ??
-        String(bundleDraft.spec_text || '').match(/(?:BUNDLE:|B:)[A-Z0-9]{4,16}:([A-Za-z])|\bB-[A-Z0-9]{4,16}-([A-Za-z])\b/i)?.[2]?.toUpperCase() ??
+        String(bundleDraft.spec_text || '')
+          .match(
+            /(?:BUNDLE:|B:)[A-Z0-9]{4,16}:([A-Za-z])|\bB-[A-Z0-9]{4,16}-([A-Za-z])\b|\bB-[A-Z0-9]{4}([A-Za-z])\b/i,
+          )
+          ?.[1]?.toUpperCase() ??
+        String(bundleDraft.spec_text || '')
+          .match(
+            /(?:BUNDLE:|B:)[A-Z0-9]{4,16}:([A-Za-z])|\bB-[A-Z0-9]{4,16}-([A-Za-z])\b|\bB-[A-Z0-9]{4}([A-Za-z])\b/i,
+          )
+          ?.[2]?.toUpperCase() ??
+        String(bundleDraft.spec_text || '')
+          .match(
+            /(?:BUNDLE:|B:)[A-Z0-9]{4,16}:([A-Za-z])|\bB-[A-Z0-9]{4,16}-([A-Za-z])\b|\bB-[A-Z0-9]{4}([A-Za-z])\b/i,
+          )
+          ?.[3]?.toUpperCase() ??
         ''
       const extra = String(bundleDraft.spec_text ?? '')
         .replace(/(?:BUNDLE:|B:)[A-Z0-9]{4,16}/gi, '')
+        // Remove legacy and new short tokens
         .replace(/\bB-[A-Z0-9]{4,16}(?:-[A-Za-z])?\b/gi, '')
+        .replace(/\bB-[A-Z0-9]{4}[A-Za-z]\b/gi, '')
         .trim()
       const sel =
         String(bundleDraft.bundle_selector ?? '').trim().toUpperCase() ||
@@ -522,7 +546,7 @@ export default function ProductListingPage() {
                   <Select
                     showSearch
                     allowClear
-                    placeholder="选择套装（B:XXXXXX）"
+                    placeholder="选择套装（B-XXXXA）"
                     options={bundleTemplateOptions as any}
                     value={bundleDraft.bundle_code ?? undefined}
                     loading={bundleTemplatesQuery.isLoading}
@@ -576,7 +600,7 @@ export default function ProductListingPage() {
                                 ? bundleDraft.bundle_selector
                                   ? toBundleTokenDash(bundleDraft.bundle_code, bundleDraft.bundle_selector)
                                   : toBundleTokenDash(bundleDraft.bundle_code)
-                                : 'B-XXXXXX'}
+                                : 'B-XXXXA'}
                             </Text>
                           </Text>
                         </Space>

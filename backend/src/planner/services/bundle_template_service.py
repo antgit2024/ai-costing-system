@@ -12,7 +12,7 @@ from .. import models
 _ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # avoid 0/O/1/I
 
 
-def _gen_code(n: int = 6) -> str:
+def _gen_code(n: int = 4) -> str:
     return "".join(secrets.choice(_ALPHABET) for _ in range(n))
 
 
@@ -29,7 +29,8 @@ def create_template(
 
     # try a few times to avoid rare collisions
     for _ in range(20):
-        code = _gen_code(6)
+        # New: 4-char CODE (with selector appended externally, e.g. B-XXXXA)
+        code = _gen_code(4)
         exists = db.query(models.BundleTemplate).filter(models.BundleTemplate.code == code).first()
         if exists:
             continue

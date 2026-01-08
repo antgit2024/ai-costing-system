@@ -212,18 +212,38 @@ def generate_bom_by_spec(
     """
     spec_result = spec_parser_service.parse_spec(spec_text or "")
     tokens = [str(x) for x in (spec_result.get("tokens") or [])]
-    bundle_token = next((t for t in tokens if str(t).upper().startswith("B:") or str(t).upper().startswith("BUNDLE:") or str(t).upper().startswith("B-")), None)
+    bundle_token = next(
+        (
+            t
+            for t in tokens
+            if str(t).upper().startswith("B:")
+            or str(t).upper().startswith("BUNDLE:")
+            or str(t).upper().startswith("B-")
+        ),
+        None,
+    )
     if not bundle_token:
-        raise ValueError("交易规格未包含套装编码（B:XXXX 或 BUNDLE:XXXX）")
-    # Accept "B:CODE" / "B:CODE:A" / "B-CODE" / "B-CODE-A" (selector).
+        raise ValueError("交易规格未包含套装编码（B:CODE / BUNDLE:CODE / B-CODE-A / B-XXXXA）")
+    # Accept:
+    # - "B:CODE" / "B:CODE:A" / "BUNDLE:CODE" / "BUNDLE:CODE:A"
+    # - "B-CODE" / "B-CODE-A"
+    # - "B-XXXX" / "B-XXXXA" (new short form, CODE length fixed to 4)
     # Only CODE is used to load template;
     # selector is parsed from spec_text below.
     raw_bt = str(bundle_token).strip()
     if raw_bt.upper().startswith("B-"):
-        # B-CODE or B-CODE-A
-        parts = raw_bt.split("-", 2)
-        code = str(parts[1] if len(parts) >= 2 else "").strip().upper()
+        # Dash forms:
+        # - legacy: B-CODE / B-CODE-A
+        # - new short: B-XXXX / B-XXXXA (CODE length fixed to 4)
+        rest = raw_bt[2:].strip()  # after "B-"
+        if "-" in rest:
+            # B-CODE-A
+            code = rest.split("-", 1)[0].strip().upper()
+        else:
+            # B-XXXXA: treat as CODE=first 4 if length==5
+            code = (rest[:4] if len(rest) == 5 else rest).strip().upper()
     else:
+        # Colon forms: B:CODE(:A) / BUNDLE:CODE(:A)
         rest = raw_bt.split(":", 1)[1].strip()
         code = rest.split(":", 1)[0].strip().upper()
     if not code:
@@ -241,14 +261,18 @@ def generate_bom_by_spec(
     import re
 
     _mode_match = re.search(
-        rf"(?:BUNDLE:|B:){re.escape(code)}(?::([A-Za-z]))?|(?:\bB-{re.escape(code)}(?:-([A-Za-z]))?\b)",
+        rf"(?:BUNDLE:|B:){re.escape(code)}(?::(?P<sel_colon>[A-Za-z]))?"
+        rf"|(?:\bB-{re.escape(code)}-(?P<sel_dash>[A-Za-z])\b)"
+        rf"|(?:\bB-{re.escape(code)}(?P<sel_short>[A-Za-z])\b)",
         str(spec_text or ""),
         flags=re.IGNORECASE,
     )
-    bundle_selector = (str(_mode_match.group(1) or "").strip().upper() if _mode_match else "") or None
-    if _mode_match and not bundle_selector:
-        # B-CODE-A selector group
-        bundle_selector = (str(_mode_match.group(2) or "").strip().upper() if _mode_match else "") or None
+    bundle_selector = (
+        (str(_mode_match.group("sel_colon") or "").strip().upper() if _mode_match else "")
+        or (str(_mode_match.group("sel_dash") or "").strip().upper() if _mode_match else "")
+        or (str(_mode_match.group("sel_short") or "").strip().upper() if _mode_match else "")
+        or ""
+    ) or None
 
     def _parse_qty_from_phrase(text: str) -> Optional[int]:
         import re

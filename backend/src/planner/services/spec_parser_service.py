@@ -36,13 +36,19 @@ LABELED_DIMENSION_PATTERN = re.compile(
 # - must include at least one letter and one digit
 # Examples: "PI5", "A1B"
 MODEL_CODE_3_PATTERN = re.compile(r"\b(?=[A-Z0-9]{3}\b)(?=.*[A-Z])(?=.*\d)[A-Z0-9]{3}\b", re.IGNORECASE)
-# Avoid \b here because ERP/spec_text often glues Chinese text with codes, and \b may not match.
+# Avoid \b for the ":" forms because ERP/spec_text often glues Chinese text with codes.
 # Support multiple bundle token spellings:
-# - legacy: "BUNDLE:XXXX"
-# - v1: "B:XXXX"
-# - v2 (platform friendly): "B-XXXX" or "B-XXXX-A" (selector)
+# - legacy: "BUNDLE:CODE" / "BUNDLE:CODE:A"
+# - v1:     "B:CODE" / "B:CODE:A"
+# - v2:     "B-CODE-A"        (legacy dash form with separator)
+# - v3:     "B-XXXXA" / "B-XXXX" (new short form, CODE length fixed to 4; selector is the last letter)
+#
+# NOTE: The v3 form MUST appear before the generic dash form, otherwise "B-XXXXA" would be parsed as code="XXXXA"
+# and selector missing.
 BUNDLE_CODE_PATTERN = re.compile(
-    r"(?:(BUNDLE:)|(B:))([A-Z0-9]{4,16})|(?:\bB-([A-Z0-9]{4,16})(?:-([A-Z]))?\b)",
+    r"(?:(?P<prefix>BUNDLE:|B:)(?P<code_colon>[A-Z0-9]{4,16})(?::(?P<sel_colon>[A-Z]))?)"
+    r"|(?:\bB-(?P<code_short>[A-Z0-9]{4})(?P<sel_short>[A-Z])\b)"
+    r"|(?:\bB-(?P<code_dash>[A-Z0-9]{4,16})(?:-(?P<sel_dash>[A-Z]))?\b)",
     re.IGNORECASE,
 )
 
@@ -195,13 +201,18 @@ def parse_spec(spec_text: str) -> Dict[str, Any]:
         # Emit BOTH tokens for backward compatibility:
         # - New canonical: "B:XXXX"
         # - Legacy: "BUNDLE:XXXX"
-        for m in BUNDLE_CODE_PATTERN.findall(token):
-            # group3: BUNDLE: / B:
-            code1 = str(m[2] or "").strip().upper()
-            # group4: B-XXXX
-            code2 = str(m[3] or "").strip().upper()
-            selector = str(m[4] or "").strip().upper()
-            code = code1 or code2
+        for m in BUNDLE_CODE_PATTERN.finditer(token):
+            gd = m.groupdict() if m else {}
+            code = (
+                str(gd.get("code_colon") or "").strip().upper()
+                or str(gd.get("code_short") or "").strip().upper()
+                or str(gd.get("code_dash") or "").strip().upper()
+            )
+            selector = (
+                str(gd.get("sel_colon") or "").strip().upper()
+                or str(gd.get("sel_short") or "").strip().upper()
+                or str(gd.get("sel_dash") or "").strip().upper()
+            )
             if not code:
                 continue
             # Emit canonical tokens for downstream logic

@@ -67,11 +67,12 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：套装模板列表与口径优化：示例规格去掉分隔符“；”（变为 `短语(B:CODE:A)`）；列表列调整为“编码/名称/分类/解析短码/运营短语/标签/模型/更新时间/状态/操作”，并将解析短码与运营短语按 A/B/C… 打散展示；搜索支持“短码/名称/运营短语”；验收 `npm -C frontend run build` + 原子发布）
 - **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：测试台 `/costing/product-listing` 的“套装测试”优化：新增短语选择器(A/B/…)与“一键生成 spec_text（无；）”，并展示所选短语的组件行预览（模型/宽高/数量）；预演时按选择器拼接 `B:CODE:A` 调用 `bom/generate-by-spec`；验收 `npm -C frontend run build` + 原子发布）
 - **最近校对（北京时间 GMT+8）**：2026-01-08（修复套装测试 400：后端 `bom/generate-by-spec` 支持输入直接为 `B:CODE:A` 时正确识别 CODE（不再按 `CODE:A` 查模板）；前端套装测试在文本框里直接写 `B:CODE:A` 时会保留 selector，并把后端 `detail` 直接显示出来；验收：后端 pytest + 前端 build + 原子发布）
-- **最近校对（北京时间 GMT+8）**：2026-01-08（套装编码升级为平台友好格式：默认对外生成/展示 `B-CODE-A`；后端解析兼容 `B:CODE:A` / `BUNDLE:CODE:A` / `B-CODE-A`，并在 `spec/parse` 里同时产出规范 token `B:CODE` + `B:CODE:A` 供内部使用；前端“套装模板/测试台”均支持两种格式输入且默认输出新格式；验收：后端 pytest + 前端 build + 原子发布 + 后端重启）
+- **最近校对（北京时间 GMT+8）**：2026-01-08（套装短码升级为最终规范：默认对外生成/展示 `B-XXXXA`（4 位 CODE + 1 位 selector）；后端解析兼容 `B:CODE:A` / `BUNDLE:CODE:A` / `B-CODE-A` / `B-XXXXA`，并在 `spec/parse` 里统一产出规范 token `B:CODE` + `B:CODE:A` 供内部使用；套装模板 code 生成改为 4 位，降低长度且避免与 3 位模型码混淆；相关前端/后端/文档与测试同步）
 - **最近校对（北京时间 GMT+8）**：2026-01-08（测试台套装测试进一步优化：允许不选择套装下拉，只要在大输入框里包含 `B-LPYJK9-A`/`B:LPYJK9:A` 即可自动识别套装编码与 selector 并预演 BOM；验收 `npm -C frontend run build` + 原子发布）
 - **最近校对（北京时间 GMT+8）**：2026-01-08（套装模板列表体验优化：列表“运营短语”列每条短语新增复制图标（复制纯短语文本）；验收 `npm -C frontend run build` + 原子发布）
 - **最近校对（北京时间 GMT+8）**：2026-01-08（线上偶发切换栏目白屏兜底：捕获动态 import chunk / vite preloadError，自动刷新一次避免用户多次手动刷新；验收 `npm -C frontend run build` + 原子发布）
 - **最近校对（北京时间 GMT+8）**：2026-01-08（修复切换栏目白屏根因：发布脚本调整为保留旧 `/assets/*`（不再 `--delete`），仅最后原子替换 `index.html`，避免“旧页面仍在运行时动态 import 404”；已重新执行发布脚本）
+- **最近校对（北京时间 GMT+8）**：2026-01-08（套装短码最终落地：套装模板 code 改为 4 位；对外短码默认 `B-XXXXA`；后端 spec/parse 与 generate-by-spec 支持新短码并兼容旧 `B:CODE(:A)` / `B-CODE(-A)`；前端“套装模板/测试台”默认展示/生成新短码；验收：pytest + 前端 build + 原子发布）
 
 ### 关键口径备忘（避免回滚/重构改坏）
 

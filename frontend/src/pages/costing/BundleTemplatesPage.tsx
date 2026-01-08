@@ -156,6 +156,9 @@ export default function BundleTemplatesPage() {
   const [form] = Form.useForm()
   const [phrasePresets, setPhrasePresets] = useState<PhrasePresetRow[]>([])
   const [activePresetIndex, setActivePresetIndex] = useState<number>(0)
+  // 兜底物料“显示名”覆盖（仅用于运营可读性，不影响真实物料/扣库/算价）
+  // key: `${versionId}:${baseLineId}` -> displayName
+  const [fallbackDisplayOverrides, setFallbackDisplayOverrides] = useState<Record<string, string>>({})
 
   // 模型池（缩小范围）：多选版本
   const [modelPoolVersionIds, setModelPoolVersionIds] = useState<string[]>([])
@@ -594,124 +597,7 @@ export default function BundleTemplatesPage() {
     return { ok: true }
   }
 
-  const extractTokensForVariant = (v: any): string[] => {
-    const cond = (v?.conditions ?? {}) as any
-    const anyTokens = Array.isArray(cond?.spec_contains_any) ? cond.spec_contains_any : []
-    const allTokens = Array.isArray(cond?.spec_contains_all) ? cond.spec_contains_all : []
-    const out: string[] = []
-    for (const t of [...anyTokens, ...allTokens]) {
-      const s = String(t ?? '').trim()
-      if (!s) continue
-      const up = s.toUpperCase()
-      if (up.startsWith('MODEL:') || up.startsWith('M:') || up.startsWith('BOUND_VERSION:') || up.startsWith('SKU:')) continue
-      out.push(s)
-    }
-    // de-dup while preserving order
-    const seen = new Set<string>()
-    const uniq: string[] = []
-    for (const x of out) {
-      const k = String(x).trim()
-      if (!k || seen.has(k)) continue
-      seen.add(k)
-      uniq.push(k)
-    }
-    return uniq
-  }
-
-  const buildAutoPhrasePlainForPreset = (pIdx: number): string => {
-    const p = phrasePresets?.[pIdx]
-    if (!p) return ''
-    const parts: string[] = []
-    const rows = Array.isArray(p?.components) ? p.components : []
-    for (let cIdx = 0; cIdx < rows.length; cIdx++) {
-      const rr = rows[cIdx] as any
-      const versionId = String(rr?.model_version_id ?? '').trim()
-      const w = Number(rr?.width_cm ?? 0)
-      const h = Number(rr?.height_cm ?? 0)
-      const q = Number(rr?.quantity ?? 0)
-      const sizeText = w > 0 && h > 0 && q > 0 ? `${w}*${h}*${q}` : ''
-
-      const k = `${pIdx}:${cIdx}`
-      const sel = (presetSelectedByIdx[k] ?? {}) as Record<string, string | null>
-      const selectedEntries = Object.entries(sel).filter(([, v]) => !!v)
-
-      const variantsForVersion = ((variantsSummaryQuery.data ?? []) as any[]).find(
-        (x: any) => String(x?.version_id ?? '') === versionId,
-      )?.items as any[]
-      const variants = Array.isArray(variantsForVersion) ? variantsForVersion : []
-      const variantsById = new Map<string, any>()
-      for (const v of variants) {
-        if (v?.id) variantsById.set(String(v.id), v)
-      }
-
-      const baseMap = baseLineMapByVersion.get(versionId) ?? new Map<string, any>()
-      const baseNames: string[] = []
-      for (const [baseLineId] of selectedEntries) {
-        const base = baseMap.get(String(baseLineId))
-        const baseName = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
-        if (baseName) baseNames.push(baseName)
-      }
-      const uniqBases = Array.from(new Set(baseNames))
-
-      const tokenSet = new Set<string>()
-      for (const [, variantId] of selectedEntries) {
-        const v = variantsById.get(String(variantId))
-        for (const t of extractTokensForVariant(v)) tokenSet.add(t)
-      }
-      const tokens = Array.from(tokenSet)
-
-      const seg = `${uniqBases.map((x) => `{${x}}`).join('')}${tokens.map((x) => `{${x}}`).join('')}${sizeText}`
-      if (seg.trim()) parts.push(seg.trim())
-    }
-    return parts.filter(Boolean).join('+')
-  }
-
-  const buildAutoPhraseSegments = (pIdx: number): Array<{ bases: string[]; tokens: string[]; sizeText: string }> => {
-    const p = phrasePresets?.[pIdx]
-    if (!p) return []
-    const rows = Array.isArray(p?.components) ? p.components : []
-    const out: Array<{ bases: string[]; tokens: string[]; sizeText: string }> = []
-    for (let cIdx = 0; cIdx < rows.length; cIdx++) {
-      const rr = rows[cIdx] as any
-      const versionId = String(rr?.model_version_id ?? '').trim()
-      const w = Number(rr?.width_cm ?? 0)
-      const h = Number(rr?.height_cm ?? 0)
-      const q = Number(rr?.quantity ?? 0)
-      const sizeText = w > 0 && h > 0 && q > 0 ? `${w}*${h}*${q}` : ''
-
-      const k = `${pIdx}:${cIdx}`
-      const sel = (presetSelectedByIdx[k] ?? {}) as Record<string, string | null>
-      const selectedEntries = Object.entries(sel).filter(([, v]) => !!v)
-
-      const variantsForVersion = ((variantsSummaryQuery.data ?? []) as any[]).find(
-        (x: any) => String(x?.version_id ?? '') === versionId,
-      )?.items as any[]
-      const variants = Array.isArray(variantsForVersion) ? variantsForVersion : []
-      const variantsById = new Map<string, any>()
-      for (const v of variants) {
-        if (v?.id) variantsById.set(String(v.id), v)
-      }
-
-      const baseMap = baseLineMapByVersion.get(versionId) ?? new Map<string, any>()
-      const baseNames: string[] = []
-      for (const [baseLineId] of selectedEntries) {
-        const base = baseMap.get(String(baseLineId))
-        const baseName = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
-        if (baseName) baseNames.push(baseName)
-      }
-      const bases = Array.from(new Set(baseNames))
-
-      const tokenSet = new Set<string>()
-      for (const [, variantId] of selectedEntries) {
-        const v = variantsById.get(String(variantId))
-        for (const t of extractTokensForVariant(v)) tokenSet.add(t)
-      }
-      const tokens = Array.from(tokenSet)
-
-      out.push({ bases, tokens, sizeText })
-    }
-    return out
-  }
+  // NOTE: auto phrase builder removed (it was too visually noisy); keep UI structured with locked tokens + editable fallback names.
 
   const copyComponentRow = (pIdx: number, cIdx: number) => {
     const src = (phrasePresets[pIdx]?.components ?? [])[cIdx]
@@ -824,6 +710,7 @@ export default function BundleTemplatesPage() {
     setModelPoolVersionIds([])
     setPresetSelectedByIdx({})
     setPhrasePresets([])
+    setFallbackDisplayOverrides({})
     setActivePresetIndex(0)
     setDrawerOpen(true)
   }
@@ -843,6 +730,9 @@ export default function BundleTemplatesPage() {
     const vp = (row?.metadata ?? {})?.phrase_variant_presets
     if (vp && typeof vp === 'object') setPresetSelectedByIdx(vp as any)
     else setPresetSelectedByIdx({})
+    const fo = (row?.metadata ?? {})?.fallback_display_overrides
+    if (fo && typeof fo === 'object') setFallbackDisplayOverrides(fo as any)
+    else setFallbackDisplayOverrides({})
     // NOTE: legacy metadata.lexicon_rules is preserved on save, but UI is intentionally hidden to avoid confusion.
 
     const pp = (row?.metadata ?? {})?.phrase_presets
@@ -939,14 +829,14 @@ export default function BundleTemplatesPage() {
         shared_trigger_text: String(values.shared_trigger_text ?? '').trim() || undefined,
         model_pool_version_ids: modelPoolVersionIds,
         phrase_variant_presets: presetSelectedByIdx,
+        fallback_display_overrides: fallbackDisplayOverrides,
         // Preserve legacy lexicon_rules (global fallback mapping) if exists, but do not expose to operators.
         lexicon_rules: Array.isArray((editing?.metadata ?? {})?.lexicon_rules) ? (editing?.metadata ?? {})?.lexicon_rules : [],
         phrase_presets: phrasePresets
-          .map((p, pIdx) => ({
+          .map((p) => ({
             selector: String((p as any).selector ?? '').trim().toUpperCase() || undefined,
             enabled: (p as any).enabled === false ? false : undefined,
-            // phrase is auto-generated (operators no longer handcraft it)
-            phrase: String(buildAutoPhrasePlainForPreset(pIdx) || '').trim(),
+            phrase: String((p as any).phrase ?? '').trim(),
             components: Array.isArray(p.components)
               ? p.components
                   .map((c) => ({
@@ -1456,7 +1346,7 @@ export default function BundleTemplatesPage() {
                 <Space size={8}>
                   <Button size="small" type="dashed" onClick={addPhrasePreset}>
                     新建
-                  </Button>
+            </Button>
                 </Space>
               }
               bodyStyle={{ padding: 8 }}
@@ -1485,7 +1375,7 @@ export default function BundleTemplatesPage() {
                   const tokenDash = codeOnly ? toBundleTokenDash(codeOnly, sel) : `B-????${sel}`
                   const active = idx === activePresetIndex
                   const enabled = p?.enabled !== false
-                  const phraseText = buildAutoPhrasePlainForPreset(idx) || '-'
+                  const phraseText = String(p?.phrase ?? '').trim() || '-'
                   return (
                     <div
                       style={{
@@ -1505,10 +1395,10 @@ export default function BundleTemplatesPage() {
                             <Tag color={enabled ? 'blue' : 'red'} style={{ fontWeight: 600, marginInlineEnd: 0 }}>
                               {tokenDash}
                             </Tag>
-                          </div>
+          </div>
                           <Space size={0}>
                             <Button
-                              size="small"
+            size="small"
                               type="text"
                               className="bt-phrase-card-icon-btn"
                               icon={<CopyOutlined />}
@@ -1573,7 +1463,7 @@ export default function BundleTemplatesPage() {
             <Card
               size="small"
               style={{ flex: 1, minWidth: 0 }}
-              title={<Text strong>短语自动拼装</Text>}
+              title={<Text strong>短语编辑</Text>}
               bodyStyle={{ padding: 8 }}
             >
               {(phrasePresets ?? []).length <= 0 ? (
@@ -1588,17 +1478,15 @@ export default function BundleTemplatesPage() {
                 (() => {
                   const r = phrasePresets[activePresetIndex]
                   const idx = activePresetIndex
-                  const rows = Array.isArray(r?.components) ? (r.components as any[]) : []
+                const rows = Array.isArray(r?.components) ? (r.components as any[]) : []
                   const disabled = r?.enabled === false
-                  const allowed = modelPoolVersionIds.length ? new Set(modelPoolVersionIds.map((x) => String(x))) : null
-                  const options = allowed
+                const allowed = modelPoolVersionIds.length ? new Set(modelPoolVersionIds.map((x) => String(x))) : null
+                const options = allowed
                     ? (versionOptionsCompact as any[]).filter((o: any) => allowed.has(String(o?.value)))
                     : (versionOptionsCompact as any[])
                   const selector = String(r?.selector ?? '').trim().toUpperCase() || toSelector2(idx)
-                  const autoPlain = buildAutoPhrasePlainForPreset(idx)
-                  const previewSegs = buildAutoPhraseSegments(idx).filter((seg) => seg.bases.length || seg.tokens.length || seg.sizeText)
-                  return (
-                    <Space direction="vertical" style={{ width: '100%' }} size={8}>
+                return (
+                  <Space direction="vertical" style={{ width: '100%' }} size={8}>
                       <Space wrap size={10} style={{ width: '100%', justifyContent: 'space-between' }}>
                         <Space wrap size={8}>
                           <Text type="secondary">当前：</Text>
@@ -1621,45 +1509,14 @@ export default function BundleTemplatesPage() {
                         </Button>
                       </Space>
                       <Input
-                        readOnly
-                        value={autoPlain}
-                        placeholder="短语将由“兜底物料 + TOKEN + 宽高数量”自动拼接生成"
+                        placeholder="短语备注（黑色可编辑，可选）：例如 黄金绒双面30X50+PP棉枕芯"
+                        disabled={disabled}
+                        value={String(r?.phrase ?? '')}
+                        onChange={(e) =>
+                          setPhrasePresets((prev) => (prev ?? []).map((x, i) => (i === idx ? { ...x, phrase: e.target.value } : x)))
+                        }
                       />
-                      <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                        <Text type="secondary">
-                          预览：绿色=兜底物料（默认），红色=TOKEN（锁定，只能通过“筛选”变化），黑色=宽*高*数量（可通过表格改宽高数量）
-                        </Text>
-                        <div style={{ border: '1px solid rgba(0,0,0,0.06)', borderRadius: 8, padding: '8px 10px' }}>
-                          {previewSegs.length ? (
-                            <Space wrap size={6}>
-                              {previewSegs.map((seg, i) => (
-                                <span key={`seg-${idx}-${i}`}>
-                                  <Space wrap size={6}>
-                                    {seg.bases.map((b) => (
-                                      <Tag key={`b-${idx}-${i}-${b}`} color="green">
-                                        {b}
-                                      </Tag>
-                                    ))}
-                                    {seg.tokens.map((t) => (
-                                      <Tag key={`t-${idx}-${i}-${t}`} color="red">
-                                        {t}
-                                      </Tag>
-                                    ))}
-                                    {seg.sizeText ? <Text>{seg.sizeText}</Text> : null}
-                                  </Space>
-                                  {i < previewSegs.length - 1 ? (
-                                    <Text type="secondary" style={{ margin: '0 6px' }}>
-                                      +
-                                    </Text>
-                                  ) : null}
-                                </span>
-                              ))}
-                            </Space>
-                          ) : (
-                            <Text type="secondary">（先为组件行选择模型版本，并在“筛选”里勾选需要的变体词）</Text>
-                          )}
-                        </div>
-                      </Space>
+                      <Text type="secondary">提示：红色 TOKEN 只能通过“筛选”勾选变体改变；绿色兜底物料名可编辑（仅显示名）。</Text>
                       {disabled ? (
                         <Alert
                           type="warning"
@@ -1668,32 +1525,32 @@ export default function BundleTemplatesPage() {
                           description="停用状态下不会参与命中解析；如需编辑请先在左侧启用。"
                         />
                       ) : null}
-                      <Table
-                        size="small"
-                        pagination={false}
-                        rowKey={(_, mi) => `ppc-${idx}-${mi}`}
-                        dataSource={rows}
+                    <Table
+                      size="small"
+                      pagination={false}
+                      rowKey={(_, mi) => `ppc-${idx}-${mi}`}
+                      dataSource={rows}
                         locale={{ emptyText: '暂无组件行：点击右侧“+行”添加第一条' }}
-                        expandable={{
-                          expandedRowKeys: (rows ?? []).map((_: any, mi: number) => `ppc-${idx}-${mi}`),
-                          showExpandColumn: false,
-                          expandedRowRender: (rr: any, mi: number) => {
-                            const versionId = String(rr?.model_version_id ?? '').trim()
-                            const k = `${idx}:${mi}`
-                            const sel = (presetSelectedByIdx[k] ?? {}) as Record<string, string | null>
-                            const selectedEntries = Object.entries(sel).filter(([, v]) => !!v)
-                            if (!versionId || !selectedEntries.length) return null
+                      expandable={{
+                        expandedRowKeys: (rows ?? []).map((_: any, mi: number) => `ppc-${idx}-${mi}`),
+                        showExpandColumn: false,
+                        expandedRowRender: (rr: any, mi: number) => {
+                          const versionId = String(rr?.model_version_id ?? '').trim()
+                          const k = `${idx}:${mi}`
+                          const sel = (presetSelectedByIdx[k] ?? {}) as Record<string, string | null>
+                          const selectedEntries = Object.entries(sel).filter(([, v]) => !!v)
+                          if (!versionId || !selectedEntries.length) return null
 
-                            const variantsForVersion = ((variantsSummaryQuery.data ?? []) as any[]).find(
-                              (x: any) => String(x?.version_id ?? '') === versionId,
-                            )?.items as any[]
-                            const variants = Array.isArray(variantsForVersion) ? variantsForVersion : []
-                            const variantsById = new Map<string, any>()
-                            for (const v of variants) {
-                              if (v?.id) variantsById.set(String(v.id), v)
-                            }
+                          const variantsForVersion = ((variantsSummaryQuery.data ?? []) as any[]).find(
+                            (x: any) => String(x?.version_id ?? '') === versionId,
+                          )?.items as any[]
+                          const variants = Array.isArray(variantsForVersion) ? variantsForVersion : []
+                          const variantsById = new Map<string, any>()
+                          for (const v of variants) {
+                            if (v?.id) variantsById.set(String(v.id), v)
+                          }
 
-                            const baseMap = baseLineMapByVersion.get(versionId) ?? new Map<string, any>()
+                          const baseMap = baseLineMapByVersion.get(versionId) ?? new Map<string, any>()
 
                             const extractTokensForVariant = (v: any): string[] => {
                               const cond = (v?.conditions ?? {}) as any
@@ -1719,16 +1576,18 @@ export default function BundleTemplatesPage() {
                               return uniq
                             }
 
-                            return (
-                              <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                          return (
+                            <Space direction="vertical" size={4} style={{ width: '100%' }}>
                                 {/* 默认兜底：不命中任何 TOKEN 时仍会使用基准物料（避免误以为“少了一行物料”） */}
                                 {(() => {
                                   const uniqBase = new Map<string, string>()
                                   for (const [baseLineId] of selectedEntries) {
                                     const base = baseMap.get(String(baseLineId))
                                     const slot = getLineStructureLabel(base, versionId)
-                                    const baseName = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
-                                    const baseLabel = slot ? `${slot}：${baseName}` : baseName
+                                    const rawName = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
+                                    const overrideKey = `${versionId}:${String(baseLineId)}`
+                                    const displayName = String(fallbackDisplayOverrides?.[overrideKey] ?? '').trim() || rawName
+                                    const baseLabel = slot ? `${slot}：${displayName}` : displayName
                                     uniqBase.set(String(baseLineId), baseLabel || String(baseLineId))
                                   }
                                   const list = Array.from(uniqBase.values()).filter(Boolean)
@@ -1743,24 +1602,25 @@ export default function BundleTemplatesPage() {
                                     </Text>
                                   )
                                 })()}
-                                {selectedEntries.map(([baseLineId, variantId]) => {
-                                  const v = variantsById.get(String(variantId))
-                                  const base = baseMap.get(String(baseLineId))
-                                  const slot = getLineStructureLabel(base, versionId)
-                                  const baseName = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
-                                  const baseLabel = slot ? `${slot}：${baseName}` : baseName
+                              {selectedEntries.map(([baseLineId, variantId]) => {
+                                const v = variantsById.get(String(variantId))
+                                const base = baseMap.get(String(baseLineId))
+                                const slot = getLineStructureLabel(base, versionId)
+                                  const rawName = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
+                                  const overrideKey = `${versionId}:${String(baseLineId)}`
+                                  const displayName = String(fallbackDisplayOverrides?.[overrideKey] ?? '').trim() || rawName
                                   const tokens = extractTokensForVariant(v)
-                                  const effect =
-                                    v?.action === 'remove_self' ? '移除' : v?.action === 'add_siblings' ? '新增物料' : '替换物料'
-                                  const produced = Array.isArray(v?.items) ? v.items : []
-                                  const producedOne = produced[0]
-                                  const producedLabel = String(
-                                    producedOne?.material_name ?? producedOne?.material_code ?? producedOne?.material_ref_id ?? '',
-                                  ).trim()
+                                const effect =
+                                  v?.action === 'remove_self' ? '移除' : v?.action === 'add_siblings' ? '新增物料' : '替换物料'
+                                const produced = Array.isArray(v?.items) ? v.items : []
+                                const producedOne = produced[0]
+                                const producedLabel = String(
+                                  producedOne?.material_name ?? producedOne?.material_code ?? producedOne?.material_ref_id ?? '',
+                                ).trim()
 
-                                  return (
-                                    <div key={`${k}:${baseLineId}:${variantId}`}>
-                                      <Space wrap size={8}>
+                                return (
+                                  <div key={`${k}:${baseLineId}:${variantId}`}>
+                                    <Space wrap size={8}>
                                         <Text type="secondary">TOKEN：</Text>
                                         {tokens.length ? (
                                           tokens.map((t) => (
@@ -1772,170 +1632,183 @@ export default function BundleTemplatesPage() {
                                           <Text type="secondary">（无 TOKEN）</Text>
                                         )}
                                         <Text type="secondary">兜底物料：</Text>
-                                        <Text strong>{baseLabel}</Text>
+                                        <Text type="secondary">{slot ? `${slot}：` : ''}</Text>
+                                        <Input
+                                          size="small"
+                                          style={{ width: 240 }}
+                                          disabled={false}
+                                          value={String(fallbackDisplayOverrides?.[`${versionId}:${String(baseLineId)}`] ?? displayName)}
+                                          onChange={(e) => {
+                                            const next = e.target.value
+                                            setFallbackDisplayOverrides((prev) => ({
+                                              ...(prev ?? {}),
+                                              [`${versionId}:${String(baseLineId)}`]: next,
+                                            }))
+                                          }}
+                                        />
                                         <Text type="secondary">→</Text>
-                                        <Text type="secondary">{effect}</Text>
-                                        <Tag color="green">{producedLabel || '-'}</Tag>
-                                      </Space>
-                                    </div>
-                                  )
-                                })}
-                              </Space>
-                            )
-                          },
-                        }}
-                        columns={[
-                          {
+                                      <Text type="secondary">{effect}</Text>
+                                      <Tag color="green">{producedLabel || '-'}</Tag>
+                                    </Space>
+                                  </div>
+                                )
+                              })}
+                            </Space>
+                          )
+                        },
+                      }}
+                      columns={[
+                        {
                             title: '模型版本',
                             width: 520,
-                            render: (_: any, rr: any, mi: number) => (
-                              <Select
-                                showSearch
-                                allowClear
+                          render: (_: any, rr: any, mi: number) => (
+                            <Select
+                              showSearch
+                              allowClear
                                 disabled={disabled}
-                                placeholder="选择模型版本"
-                                style={{ width: '100%' }}
-                                loading={versionPickerQuery.isLoading}
-                                options={options as any}
-                                value={rr.model_version_id ?? undefined}
-                                onChange={(v) =>
-                                  setPhrasePresets((prev) =>
+                              placeholder="选择模型版本"
+                              style={{ width: '100%' }}
+                              loading={versionPickerQuery.isLoading}
+                              options={options as any}
+                              value={rr.model_version_id ?? undefined}
+                              onChange={(v) =>
+                                setPhrasePresets((prev) =>
                                     (prev ?? []).map((pp, pi) =>
+                                    pi !== idx
+                                      ? pp
+                                      : {
+                                          ...pp,
+                                          components: (pp.components ?? []).map((c, ci) =>
+                                            ci === mi ? { ...c, model_version_id: (v as any) ?? null } : c,
+                                          ),
+                                        },
+                                  ),
+                                )
+                              }
+                            />
+                          ),
+                        },
+                        {
+                            title: '宽(cm)',
+                            width: 110,
+                          render: (_: any, rr: any, mi: number) => (
+                            <Input
+                                disabled={disabled}
+                              value={String(rr.width_cm ?? '')}
+                              onChange={(e) => {
+                                const v = Number(e.target.value)
+                                setPhrasePresets((prev) =>
+                                    (prev ?? []).map((pp, pi) =>
+                                    pi !== idx
+                                      ? pp
+                                      : {
+                                          ...pp,
+                                          components: (pp.components ?? []).map((c, ci) =>
+                                            ci === mi ? { ...c, width_cm: Number.isFinite(v) ? v : 0 } : c,
+                                          ),
+                                        },
+                                  ),
+                                )
+                              }}
+                            />
+                          ),
+                        },
+                        {
+                            title: '高(cm)',
+                            width: 110,
+                          render: (_: any, rr: any, mi: number) => (
+                            <Input
+                                disabled={disabled}
+                              value={String(rr.height_cm ?? '')}
+                              onChange={(e) => {
+                                const v = Number(e.target.value)
+                                setPhrasePresets((prev) =>
+                                    (prev ?? []).map((pp, pi) =>
+                                    pi !== idx
+                                      ? pp
+                                      : {
+                                          ...pp,
+                                          components: (pp.components ?? []).map((c, ci) =>
+                                            ci === mi ? { ...c, height_cm: Number.isFinite(v) ? v : 0 } : c,
+                                          ),
+                                        },
+                                  ),
+                                )
+                              }}
+                            />
+                          ),
+                        },
+                        {
+                            title: '数量',
+                            width: 90,
+                          render: (_: any, rr: any, mi: number) => (
+                            <Input
+                                disabled={disabled}
+                              value={String(rr.quantity ?? '')}
+                              onChange={(e) => {
+                                const v = Number(e.target.value)
+                                setPhrasePresets((prev) =>
+                                    (prev ?? []).map((pp, pi) =>
+                                    pi !== idx
+                                      ? pp
+                                      : {
+                                          ...pp,
+                                          components: (pp.components ?? []).map((c, ci) =>
+                                            ci === mi ? { ...c, quantity: Number.isFinite(v) ? v : 1 } : c,
+                                          ),
+                                        },
+                                  ),
+                                )
+                              }}
+                            />
+                          ),
+                        },
+                        {
+                            title: '操作',
+                            width: 260,
+                          render: (_: any, rr: any, mi: number) => (
+                            <Space>
+                              <Button
+                                size="small"
+                                  disabled={disabled}
+                                onClick={() =>
+                                  setPhrasePresets((prev) =>
+                                      (prev ?? []).map((pp, pi) =>
                                       pi !== idx
                                         ? pp
                                         : {
                                             ...pp,
-                                            components: (pp.components ?? []).map((c, ci) =>
-                                              ci === mi ? { ...c, model_version_id: (v as any) ?? null } : c,
-                                            ),
+                                            components: [
+                                              ...(pp.components ?? []),
+                                              { model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' },
+                                            ],
                                           },
                                     ),
                                   )
                                 }
-                              />
-                            ),
-                          },
-                          {
-                            title: '宽(cm)',
-                            width: 110,
-                            render: (_: any, rr: any, mi: number) => (
-                              <Input
-                                disabled={disabled}
-                                value={String(rr.width_cm ?? '')}
-                                onChange={(e) => {
-                                  const v = Number(e.target.value)
-                                  setPhrasePresets((prev) =>
-                                    (prev ?? []).map((pp, pi) =>
-                                      pi !== idx
-                                        ? pp
-                                        : {
-                                            ...pp,
-                                            components: (pp.components ?? []).map((c, ci) =>
-                                              ci === mi ? { ...c, width_cm: Number.isFinite(v) ? v : 0 } : c,
-                                            ),
-                                          },
-                                    ),
-                                  )
-                                }}
-                              />
-                            ),
-                          },
-                          {
-                            title: '高(cm)',
-                            width: 110,
-                            render: (_: any, rr: any, mi: number) => (
-                              <Input
-                                disabled={disabled}
-                                value={String(rr.height_cm ?? '')}
-                                onChange={(e) => {
-                                  const v = Number(e.target.value)
-                                  setPhrasePresets((prev) =>
-                                    (prev ?? []).map((pp, pi) =>
-                                      pi !== idx
-                                        ? pp
-                                        : {
-                                            ...pp,
-                                            components: (pp.components ?? []).map((c, ci) =>
-                                              ci === mi ? { ...c, height_cm: Number.isFinite(v) ? v : 0 } : c,
-                                            ),
-                                          },
-                                    ),
-                                  )
-                                }}
-                              />
-                            ),
-                          },
-                          {
-                            title: '数量',
-                            width: 90,
-                            render: (_: any, rr: any, mi: number) => (
-                              <Input
-                                disabled={disabled}
-                                value={String(rr.quantity ?? '')}
-                                onChange={(e) => {
-                                  const v = Number(e.target.value)
-                                  setPhrasePresets((prev) =>
-                                    (prev ?? []).map((pp, pi) =>
-                                      pi !== idx
-                                        ? pp
-                                        : {
-                                            ...pp,
-                                            components: (pp.components ?? []).map((c, ci) =>
-                                              ci === mi ? { ...c, quantity: Number.isFinite(v) ? v : 1 } : c,
-                                            ),
-                                          },
-                                    ),
-                                  )
-                                }}
-                              />
-                            ),
-                          },
-                          {
-                            title: '操作',
-                            width: 260,
-                            render: (_: any, rr: any, mi: number) => (
-                              <Space>
-                                <Button
-                                  size="small"
-                                  disabled={disabled}
-                                  onClick={() =>
-                                    setPhrasePresets((prev) =>
-                                      (prev ?? []).map((pp, pi) =>
-                                        pi !== idx
-                                          ? pp
-                                          : {
-                                              ...pp,
-                                              components: [
-                                                ...(pp.components ?? []),
-                                                { model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' },
-                                              ],
-                                            },
-                                      ),
-                                    )
-                                  }
-                                >
-                                  +行
-                                </Button>
+                              >
+                                +行
+                              </Button>
                                 <Button size="small" disabled={disabled} onClick={() => copyComponentRow(idx, mi)}>
-                                  复制
-                                </Button>
-                                <Button
-                                  size="small"
+                                复制
+                              </Button>
+                              <Button
+                                size="small"
                                   disabled={disabled || !String(rr?.model_version_id ?? '').trim()}
-                                  onClick={() => openPresetModal(idx, mi)}
-                                >
-                                  筛选
-                                </Button>
+                                onClick={() => openPresetModal(idx, mi)}
+                              >
+                                筛选
+                              </Button>
                                 <Button size="small" disabled={disabled} danger onClick={() => deleteComponentRow(idx, mi)}>
-                                  删除
-                                </Button>
-                              </Space>
-                            ),
-                          },
-                        ]}
-                      />
-                    </Space>
-                  )
+                                删除
+                              </Button>
+                            </Space>
+                          ),
+                        },
+                      ]}
+                    />
+                  </Space>
+                )
                 })()
               )}
             </Card>

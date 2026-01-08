@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Alert,
@@ -152,6 +152,7 @@ export default function BundleTemplatesPage() {
 
   const [form] = Form.useForm()
   const [phrasePresets, setPhrasePresets] = useState<PhrasePresetRow[]>([])
+  const [activePresetIndex, setActivePresetIndex] = useState<number>(0)
 
   // 模型池（缩小范围）：多选版本
   const [modelPoolVersionIds, setModelPoolVersionIds] = useState<string[]>([])
@@ -461,7 +462,8 @@ export default function BundleTemplatesPage() {
     if (!presetVersionId) return []
     const rows = (variantsSummaryQuery.data ?? []) as Array<{ version_id: string; items: any[] }>
     const hit = rows.find((x) => String(x?.version_id) === String(presetVersionId))
-    return Array.isArray(hit?.items) ? hit.items : []
+    if (hit && Array.isArray(hit.items)) return hit.items
+    return []
   }, [presetVersionId, variantsSummaryQuery.data])
 
   const presetVariantsByBaseLine = useMemo(() => {
@@ -489,6 +491,19 @@ export default function BundleTemplatesPage() {
     setPresetModalOpen(true)
   }
 
+  const sampleSpecForPreset = (r: any, idx: number): string | null => {
+    const phrase = String(r?.phrase ?? '').trim()
+    if (!phrase) return null
+    if (!currentBundleToken) return phrase
+    const up = phrase.toUpperCase()
+    if (up.includes('B:') || up.includes('BUNDLE:') || up.includes('B-')) return phrase
+    const trimmed = phrase.replace(/\s+$/g, '')
+    const sel = String(r?.selector ?? '').trim().toUpperCase() || toSelector2(idx)
+    const codeOnly = String(currentBundleToken || '').toUpperCase().replace(/^B:/, '').replace(/^BUNDLE:/, '')
+    const suffix = toBundleTokenDash(codeOnly, sel || null)
+    return `${trimmed}(${suffix})`
+  }
+
   const copyPhrasePreset = (pIdx: number) => {
     const used = new Set((phrasePresets ?? []).map((x) => String(x?.selector ?? '').trim().toUpperCase()).filter(Boolean))
     const nextSelector = allocateNextSelector2(used)
@@ -514,6 +529,7 @@ export default function BundleTemplatesPage() {
       }
       return out
     })
+    setActivePresetIndex(newIdx)
   }
 
   const copyComponentRow = (pIdx: number, cIdx: number) => {
@@ -627,6 +643,7 @@ export default function BundleTemplatesPage() {
     setModelPoolVersionIds([])
     setPresetSelectedByIdx({})
     setPhrasePresets([])
+    setActivePresetIndex(0)
     setDrawerOpen(true)
   }
 
@@ -677,6 +694,7 @@ export default function BundleTemplatesPage() {
     } else {
       setPhrasePresets([])
     }
+    setActivePresetIndex(0)
 
     // Migration: if old template has top-level components but no preset components, map them to preset A.
     const topRows = (row?.components ?? []) as any[]
@@ -699,6 +717,33 @@ export default function BundleTemplatesPage() {
       }
     }
     setDrawerOpen(true)
+  }
+
+  useEffect(() => {
+    const len = (phrasePresets ?? []).length
+    if (len <= 0) {
+      if (activePresetIndex !== 0) setActivePresetIndex(0)
+      return
+    }
+    if (activePresetIndex < 0) setActivePresetIndex(0)
+    else if (activePresetIndex >= len) setActivePresetIndex(len - 1)
+  }, [activePresetIndex, phrasePresets])
+
+  const addPhrasePreset = () => {
+    setPhrasePresets((prev) => {
+      const used = new Set((prev ?? []).map((x: any) => String(x?.selector ?? '').trim().toUpperCase()).filter(Boolean))
+      const next = [
+        ...(prev ?? []),
+        {
+          selector: allocateNextSelector2(used),
+          phrase: '',
+          enabled: true,
+          components: [{ model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' }],
+        } as PhrasePresetRow,
+      ]
+      setActivePresetIndex(next.length - 1)
+      return next
+    })
   }
 
   const saveMutation = useMutation({
@@ -1153,7 +1198,7 @@ export default function BundleTemplatesPage() {
       <Drawer
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
-        width={960}
+        width={1280}
         destroyOnClose={false}
         title={
           editing?.id
@@ -1214,312 +1259,355 @@ export default function BundleTemplatesPage() {
 
           {/* 已按运营心智收口：不再展示“全局字段映射/可变词列表”，避免误会与绕圈。 */}
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <Button
-              type="dashed"
-              onClick={() =>
-                setPhrasePresets((prev) => [
-                  ...prev,
-                  {
-                    selector: (() => {
-                      const used = new Set((prev ?? []).map((x: any) => String(x?.selector ?? '').trim().toUpperCase()).filter(Boolean))
-                      return allocateNextSelector2(used)
-                    })(),
-                    phrase: '',
-                    enabled: true,
-                    components: [{ model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' }],
-                  },
-                ])
+          <div style={{ display: 'flex', gap: 12, width: '100%', alignItems: 'stretch' }}>
+            {/* 左侧：短语列表 + 新建/复制/停用 */}
+            <Card
+              size="small"
+              style={{ flex: '0 0 380px', minWidth: 340 }}
+              title={
+                <Space size={8}>
+                  <Text strong>短语列表</Text>
+                  <Tag>{phrasePresets.length}</Tag>
+                </Space>
               }
+              extra={
+                <Space size={8}>
+                  <Button size="small" type="dashed" onClick={addPhrasePreset}>
+                    新建
+                  </Button>
+                  <Button
+                    size="small"
+                    disabled={(phrasePresets ?? []).length <= 0}
+                    onClick={() => copyPhrasePreset(activePresetIndex)}
+                  >
+                    复制
+                  </Button>
+                  <Button
+                    size="small"
+                    danger={phrasePresets?.[activePresetIndex]?.enabled !== false}
+                    disabled={(phrasePresets ?? []).length <= 0}
+                    onClick={() =>
+                      setPhrasePresets((prev) =>
+                        (prev ?? []).map((p, i) => (i !== activePresetIndex ? p : { ...p, enabled: p.enabled === false ? true : false })),
+                      )
+                    }
+                  >
+                    {phrasePresets?.[activePresetIndex]?.enabled === false ? '启用' : '停用'}
+                  </Button>
+                </Space>
+              }
+              bodyStyle={{ padding: 8 }}
             >
-              新增短语
-            </Button>
-          </div>
-          <Table
-            size="small"
-            pagination={false}
-            rowKey={(_, idx) => `pp-${idx}`}
-            dataSource={phrasePresets}
-            locale={{ emptyText: '暂无短语：点击上方“新增短语”添加第一条' }}
-            expandable={{
-              expandedRowKeys: phrasePresets.map((_, idx) => `pp-${idx}`),
-              showExpandColumn: false,
-              expandedRowRender: (r: any, idx: number) => {
-                const rows = Array.isArray(r?.components) ? (r.components as any[]) : []
-                const allowed = modelPoolVersionIds.length ? new Set(modelPoolVersionIds.map((x) => String(x))) : null
-                const options = allowed
-                  ? (versionOptions as any[]).filter((o: any) => allowed.has(String(o?.value)))
-                  : (versionOptions as any[])
-                return (
-                  <Space direction="vertical" style={{ width: '100%' }} size={8}>
-                    <Table
-                      size="small"
-                      pagination={false}
-                      showHeader={false}
-                      rowKey={(_, mi) => `ppc-${idx}-${mi}`}
-                      dataSource={rows}
-                      expandable={{
-                        expandedRowKeys: (rows ?? []).map((_: any, mi: number) => `ppc-${idx}-${mi}`),
-                        showExpandColumn: false,
-                        expandedRowRender: (rr: any, mi: number) => {
-                          const versionId = String(rr?.model_version_id ?? '').trim()
-                          const k = `${idx}:${mi}`
-                          const sel = (presetSelectedByIdx[k] ?? {}) as Record<string, string | null>
-                          const selectedEntries = Object.entries(sel).filter(([, v]) => !!v)
-                          if (!versionId || !selectedEntries.length) return null
+              <Table
+                size="small"
+                pagination={false}
+                showHeader={false}
+                rowKey={(r: any, idx) => String(r?.selector ?? '').trim().toUpperCase() || toSelector2(idx ?? 0)}
+                dataSource={phrasePresets}
+                locale={{ emptyText: '暂无短语：点击右上角“新建”添加第一条' }}
+                rowSelection={{
+                  type: 'radio',
+                  selectedRowKeys: [
+                    String(phrasePresets?.[activePresetIndex]?.selector ?? '').trim().toUpperCase() || toSelector2(activePresetIndex),
+                  ],
+                  onChange: (keys) => {
+                    const key = String((keys ?? [])[0] ?? '').trim().toUpperCase()
+                    if (!key) return
+                    const nextIdx = (phrasePresets ?? []).findIndex(
+                      (p, i) => (String(p?.selector ?? '').trim().toUpperCase() || toSelector2(i)) === key,
+                    )
+                    if (nextIdx >= 0) setActivePresetIndex(nextIdx)
+                  },
+                }}
+                columns={[
+                  {
+                    render: (_: any, r: any, idx: number) => {
+                      const selector = String(r?.selector ?? '').trim().toUpperCase() || toSelector2(idx)
+                      const spec = sampleSpecForPreset(r, idx)
+                      return (
+                        <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                          <Space wrap size={6}>
+                            <Text code>{selector}</Text>
+                            {r?.enabled === false ? <Tag color="red">已停用</Tag> : <Tag color="green">启用</Tag>}
+                          </Space>
+                          <Input
+                            placeholder="例如：雪尼尔抱枕背面纯色2个"
+                            value={String(r?.phrase ?? '')}
+                            disabled={r?.enabled === false}
+                            onChange={(e) =>
+                              setPhrasePresets((prev) => (prev ?? []).map((x, i) => (i === idx ? { ...x, phrase: e.target.value } : x)))
+                            }
+                          />
+                          <Text type="secondary" ellipsis={{ tooltip: true }} copyable={spec ? { text: spec } : false}>
+                            {spec ? `示例：${spec}` : currentBundleToken ? '示例：-' : '示例：（保存后生成短码）'}
+                          </Text>
+                        </Space>
+                      )
+                    },
+                  },
+                ]}
+              />
+            </Card>
 
-                          const variantsForVersion = ((variantsSummaryQuery.data ?? []) as any[]).find(
-                            (x: any) => String(x?.version_id ?? '') === versionId,
-                          )?.items as any[]
-                          const variants = Array.isArray(variantsForVersion) ? variantsForVersion : []
-                          const variantsById = new Map<string, any>()
-                          for (const v of variants) {
-                            if (v?.id) variantsById.set(String(v.id), v)
-                          }
+            {/* 右侧：当前选中短语的组件行编辑 */}
+            <Card
+              size="small"
+              style={{ flex: 1, minWidth: 0 }}
+              title={
+                <Space size={8} wrap>
+                  <Text strong>组件行编辑</Text>
+                  {(phrasePresets ?? []).length > 0 ? (
+                    <>
+                      <Text type="secondary">当前：</Text>
+                      <Text code>{String(phrasePresets?.[activePresetIndex]?.selector ?? '').trim().toUpperCase() || toSelector2(activePresetIndex)}</Text>
+                      {phrasePresets?.[activePresetIndex]?.enabled === false ? <Tag color="red">已停用</Tag> : <Tag color="green">启用</Tag>}
+                    </>
+                  ) : null}
+                </Space>
+              }
+              bodyStyle={{ padding: 8 }}
+            >
+              {(phrasePresets ?? []).length <= 0 ? (
+                <Empty
+                  description={
+                    <span>
+                      先在左侧新建一条短语，再在右侧为该短语添加组件行（模型/尺寸/数量/筛选/复制）。
+                    </span>
+                  }
+                />
+              ) : (
+                (() => {
+                  const r = phrasePresets[activePresetIndex]
+                  const idx = activePresetIndex
+                  const rows = Array.isArray(r?.components) ? (r.components as any[]) : []
+                  const disabled = r?.enabled === false
+                  const allowed = modelPoolVersionIds.length ? new Set(modelPoolVersionIds.map((x) => String(x))) : null
+                  const options = allowed
+                    ? (versionOptions as any[]).filter((o: any) => allowed.has(String(o?.value)))
+                    : (versionOptions as any[])
+                  return (
+                    <Space direction="vertical" style={{ width: '100%' }} size={8}>
+                      {disabled ? (
+                        <Alert
+                          type="warning"
+                          showIcon
+                          message="该短语已停用"
+                          description="停用状态下不会参与命中解析；如需编辑请先在左侧启用。"
+                        />
+                      ) : null}
+                      <Table
+                        size="small"
+                        pagination={false}
+                        rowKey={(_, mi) => `ppc-${idx}-${mi}`}
+                        dataSource={rows}
+                        locale={{ emptyText: '暂无组件行：点击右侧“+行”添加第一条' }}
+                        expandable={{
+                          expandedRowKeys: (rows ?? []).map((_: any, mi: number) => `ppc-${idx}-${mi}`),
+                          showExpandColumn: false,
+                          expandedRowRender: (rr: any, mi: number) => {
+                            const versionId = String(rr?.model_version_id ?? '').trim()
+                            const k = `${idx}:${mi}`
+                            const sel = (presetSelectedByIdx[k] ?? {}) as Record<string, string | null>
+                            const selectedEntries = Object.entries(sel).filter(([, v]) => !!v)
+                            if (!versionId || !selectedEntries.length) return null
 
-                          const baseMap = baseLineMapByVersion.get(versionId) ?? new Map<string, any>()
+                            const variantsForVersion = ((variantsSummaryQuery.data ?? []) as any[]).find(
+                              (x: any) => String(x?.version_id ?? '') === versionId,
+                            )?.items as any[]
+                            const variants = Array.isArray(variantsForVersion) ? variantsForVersion : []
+                            const variantsById = new Map<string, any>()
+                            for (const v of variants) {
+                              if (v?.id) variantsById.set(String(v.id), v)
+                            }
 
-                          return (
-                            <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                              {selectedEntries.map(([baseLineId, variantId]) => {
-                                const v = variantsById.get(String(variantId))
-                                const base = baseMap.get(String(baseLineId))
-                                const slot = getLineStructureLabel(base, versionId)
-                                const baseName = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
-                                const baseLabel = slot ? `${slot}：${baseName}` : baseName
-                                const effect =
-                                  v?.action === 'remove_self' ? '移除' : v?.action === 'add_siblings' ? '新增物料' : '替换物料'
-                                const produced = Array.isArray(v?.items) ? v.items : []
-                                const producedOne = produced[0]
-                                const producedLabel = String(
-                                  producedOne?.material_name ?? producedOne?.material_code ?? producedOne?.material_ref_id ?? '',
-                                ).trim()
+                            const baseMap = baseLineMapByVersion.get(versionId) ?? new Map<string, any>()
 
-                                return (
-                                  <div key={`${k}:${baseLineId}:${variantId}`}>
-                                    <Space wrap size={8}>
-                                      <Text strong>{baseLabel}</Text>
-                                      <Text type="secondary">{effect}</Text>
-                                      <Tag color="green">{producedLabel || '-'}</Tag>
-                                    </Space>
-                                  </div>
-                                )
-                              })}
-                            </Space>
-                          )
-                        },
-                      }}
-                      locale={{ emptyText: '暂无组件行：点击右侧“+行”添加第一条' }}
-                      columns={[
-                        {
-                          width: 440,
-                          render: (_: any, rr: any, mi: number) => (
-                            <Select
-                              showSearch
-                              allowClear
-                              placeholder="选择模型版本"
-                              style={{ width: '100%' }}
-                              loading={versionPickerQuery.isLoading}
-                              options={options as any}
-                              value={rr.model_version_id ?? undefined}
-                              onChange={(v) =>
-                                setPhrasePresets((prev) =>
-                                  prev.map((pp, pi) =>
-                                    pi !== idx
-                                      ? pp
-                                      : {
-                                          ...pp,
-                                          components: (pp.components ?? []).map((c, ci) =>
-                                            ci === mi ? { ...c, model_version_id: (v as any) ?? null } : c,
-                                          ),
-                                        },
-                                  ),
-                                )
-                              }
-                            />
-                          ),
-                        },
-                        {
-                          width: 90,
-                          render: (_: any, rr: any, mi: number) => (
-                            <Input
-                              value={String(rr.width_cm ?? '')}
-                              onChange={(e) => {
-                                const v = Number(e.target.value)
-                                setPhrasePresets((prev) =>
-                                  prev.map((pp, pi) =>
-                                    pi !== idx
-                                      ? pp
-                                      : {
-                                          ...pp,
-                                          components: (pp.components ?? []).map((c, ci) =>
-                                            ci === mi ? { ...c, width_cm: Number.isFinite(v) ? v : 0 } : c,
-                                          ),
-                                        },
-                                  ),
-                                )
-                              }}
-                            />
-                          ),
-                        },
-                        {
-                          width: 90,
-                          render: (_: any, rr: any, mi: number) => (
-                            <Input
-                              value={String(rr.height_cm ?? '')}
-                              onChange={(e) => {
-                                const v = Number(e.target.value)
-                                setPhrasePresets((prev) =>
-                                  prev.map((pp, pi) =>
-                                    pi !== idx
-                                      ? pp
-                                      : {
-                                          ...pp,
-                                          components: (pp.components ?? []).map((c, ci) =>
-                                            ci === mi ? { ...c, height_cm: Number.isFinite(v) ? v : 0 } : c,
-                                          ),
-                                        },
-                                  ),
-                                )
-                              }}
-                            />
-                          ),
-                        },
-                        {
-                          width: 80,
-                          render: (_: any, rr: any, mi: number) => (
-                            <Input
-                              value={String(rr.quantity ?? '')}
-                              onChange={(e) => {
-                                const v = Number(e.target.value)
-                                setPhrasePresets((prev) =>
-                                  prev.map((pp, pi) =>
-                                    pi !== idx
-                                      ? pp
-                                      : {
-                                          ...pp,
-                                          components: (pp.components ?? []).map((c, ci) =>
-                                            ci === mi ? { ...c, quantity: Number.isFinite(v) ? v : 1 } : c,
-                                          ),
-                                        },
-                                  ),
-                                )
-                              }}
-                            />
-                          ),
-                        },
-                        {
-                          width: 220,
-                          render: (_: any, rr: any, mi: number) => (
-                            <Space>
-                              <Button
-                                size="small"
-                                onClick={() =>
+                            return (
+                              <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                                {selectedEntries.map(([baseLineId, variantId]) => {
+                                  const v = variantsById.get(String(variantId))
+                                  const base = baseMap.get(String(baseLineId))
+                                  const slot = getLineStructureLabel(base, versionId)
+                                  const baseName = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
+                                  const baseLabel = slot ? `${slot}：${baseName}` : baseName
+                                  const effect =
+                                    v?.action === 'remove_self' ? '移除' : v?.action === 'add_siblings' ? '新增物料' : '替换物料'
+                                  const produced = Array.isArray(v?.items) ? v.items : []
+                                  const producedOne = produced[0]
+                                  const producedLabel = String(
+                                    producedOne?.material_name ?? producedOne?.material_code ?? producedOne?.material_ref_id ?? '',
+                                  ).trim()
+
+                                  return (
+                                    <div key={`${k}:${baseLineId}:${variantId}`}>
+                                      <Space wrap size={8}>
+                                        <Text strong>{baseLabel}</Text>
+                                        <Text type="secondary">{effect}</Text>
+                                        <Tag color="green">{producedLabel || '-'}</Tag>
+                                      </Space>
+                                    </div>
+                                  )
+                                })}
+                              </Space>
+                            )
+                          },
+                        }}
+                        columns={[
+                          {
+                            title: '模型版本',
+                            width: 520,
+                            render: (_: any, rr: any, mi: number) => (
+                              <Select
+                                showSearch
+                                allowClear
+                                disabled={disabled}
+                                placeholder="选择模型版本"
+                                style={{ width: '100%' }}
+                                loading={versionPickerQuery.isLoading}
+                                options={options as any}
+                                value={rr.model_version_id ?? undefined}
+                                onChange={(v) =>
                                   setPhrasePresets((prev) =>
-                                    prev.map((pp, pi) =>
+                                    (prev ?? []).map((pp, pi) =>
                                       pi !== idx
                                         ? pp
                                         : {
                                             ...pp,
-                                            components: [
-                                              ...(pp.components ?? []),
-                                              { model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' },
-                                            ],
+                                            components: (pp.components ?? []).map((c, ci) =>
+                                              ci === mi ? { ...c, model_version_id: (v as any) ?? null } : c,
+                                            ),
                                           },
                                     ),
                                   )
                                 }
-                              >
-                                +行
-                              </Button>
-                              <Button size="small" onClick={() => copyComponentRow(idx, mi)}>
-                                复制
-                              </Button>
-                              <Button
-                                size="small"
-                                disabled={!String(rr?.model_version_id ?? '').trim()}
-                                onClick={() => openPresetModal(idx, mi)}
-                              >
-                                筛选
-                              </Button>
-                              <Button
-                                size="small"
-                                danger
-                                onClick={() => deleteComponentRow(idx, mi)}
-                              >
-                                删除
-                              </Button>
-                            </Space>
-                          ),
-                        },
-                      ]}
-                    />
-                  </Space>
-                )
-              },
-            }}
-            columns={[
-              {
-                title: '运营短语（包含命中）',
-                width: 360,
-                render: (_: any, r: any, idx: number) => (
-                  <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                    <Text type="secondary">
-                      selector：<Text code>{String(r?.selector ?? '').trim().toUpperCase() || toSelector2(idx)}</Text>
-                      {r?.enabled === false ? <Text type="danger">（已停用）</Text> : null}
-                    </Text>
-                    <Input
-                      placeholder="例如：雪尼尔抱枕背面纯色2个"
-                      value={String(r.phrase ?? '')}
-                      disabled={r?.enabled === false}
-                      onChange={(e) =>
-                        setPhrasePresets((prev) => prev.map((x, i) => (i === idx ? { ...x, phrase: e.target.value } : x)))
-                      }
-                    />
-                  </Space>
-                ),
-              },
-              {
-                title: '示例规格（自动）',
-                render: (_: any, r: any, idx: number) => {
-                  const phrase = String(r?.phrase ?? '').trim()
-                  if (!phrase) return <Text type="secondary">-</Text>
-                  if (!currentBundleToken) return <Text type="secondary">（保存后生成短码）</Text>
-                  const up = phrase.toUpperCase()
-                  // 如果运营已经手动写了 B:，就不再重复拼接
-                  if (up.includes('B:') || up.includes('BUNDLE:') || up.includes('B-')) return <Text copyable={{ text: phrase }}>{phrase}</Text>
-                  const trimmed = phrase.replace(/\s+$/g, '')
-                  const sel = String(r?.selector ?? '').trim().toUpperCase() || toSelector2(idx)
-                  const codeOnly = String(currentBundleToken || '').toUpperCase().replace(/^B:/, '').replace(/^BUNDLE:/, '')
-                  const suffix = toBundleTokenDash(codeOnly, sel || null)
-                  const spec = `${trimmed}(${suffix})`
-                  return <Text copyable={{ text: spec }}>{spec}</Text>
-                },
-              },
-              {
-                title: '操作',
-                width: 140,
-                render: (_: any, __: any, idx: number) => (
-                  <Space>
-                    <Button size="small" onClick={() => copyPhrasePreset(idx)}>
-                      复制
-                    </Button>
-                    <Button
-                      size="small"
-                      danger={phrasePresets[idx]?.enabled !== false}
-                      onClick={() =>
-                        setPhrasePresets((prev) =>
-                          prev.map((p, i) => (i !== idx ? p : { ...p, enabled: p.enabled === false ? true : false })),
-                        )
-                      }
-                    >
-                      {phrasePresets[idx]?.enabled === false ? '启用' : '停用'}
-                    </Button>
-                  </Space>
-                ),
-              },
-            ]}
-          />
+                              />
+                            ),
+                          },
+                          {
+                            title: '宽(cm)',
+                            width: 110,
+                            render: (_: any, rr: any, mi: number) => (
+                              <Input
+                                disabled={disabled}
+                                value={String(rr.width_cm ?? '')}
+                                onChange={(e) => {
+                                  const v = Number(e.target.value)
+                                  setPhrasePresets((prev) =>
+                                    (prev ?? []).map((pp, pi) =>
+                                      pi !== idx
+                                        ? pp
+                                        : {
+                                            ...pp,
+                                            components: (pp.components ?? []).map((c, ci) =>
+                                              ci === mi ? { ...c, width_cm: Number.isFinite(v) ? v : 0 } : c,
+                                            ),
+                                          },
+                                    ),
+                                  )
+                                }}
+                              />
+                            ),
+                          },
+                          {
+                            title: '高(cm)',
+                            width: 110,
+                            render: (_: any, rr: any, mi: number) => (
+                              <Input
+                                disabled={disabled}
+                                value={String(rr.height_cm ?? '')}
+                                onChange={(e) => {
+                                  const v = Number(e.target.value)
+                                  setPhrasePresets((prev) =>
+                                    (prev ?? []).map((pp, pi) =>
+                                      pi !== idx
+                                        ? pp
+                                        : {
+                                            ...pp,
+                                            components: (pp.components ?? []).map((c, ci) =>
+                                              ci === mi ? { ...c, height_cm: Number.isFinite(v) ? v : 0 } : c,
+                                            ),
+                                          },
+                                    ),
+                                  )
+                                }}
+                              />
+                            ),
+                          },
+                          {
+                            title: '数量',
+                            width: 90,
+                            render: (_: any, rr: any, mi: number) => (
+                              <Input
+                                disabled={disabled}
+                                value={String(rr.quantity ?? '')}
+                                onChange={(e) => {
+                                  const v = Number(e.target.value)
+                                  setPhrasePresets((prev) =>
+                                    (prev ?? []).map((pp, pi) =>
+                                      pi !== idx
+                                        ? pp
+                                        : {
+                                            ...pp,
+                                            components: (pp.components ?? []).map((c, ci) =>
+                                              ci === mi ? { ...c, quantity: Number.isFinite(v) ? v : 1 } : c,
+                                            ),
+                                          },
+                                    ),
+                                  )
+                                }}
+                              />
+                            ),
+                          },
+                          {
+                            title: '操作',
+                            width: 260,
+                            render: (_: any, rr: any, mi: number) => (
+                              <Space>
+                                <Button
+                                  size="small"
+                                  disabled={disabled}
+                                  onClick={() =>
+                                    setPhrasePresets((prev) =>
+                                      (prev ?? []).map((pp, pi) =>
+                                        pi !== idx
+                                          ? pp
+                                          : {
+                                              ...pp,
+                                              components: [
+                                                ...(pp.components ?? []),
+                                                { model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '' },
+                                              ],
+                                            },
+                                      ),
+                                    )
+                                  }
+                                >
+                                  +行
+                                </Button>
+                                <Button size="small" disabled={disabled} onClick={() => copyComponentRow(idx, mi)}>
+                                  复制
+                                </Button>
+                                <Button
+                                  size="small"
+                                  disabled={disabled || !String(rr?.model_version_id ?? '').trim()}
+                                  onClick={() => openPresetModal(idx, mi)}
+                                >
+                                  筛选
+                                </Button>
+                                <Button size="small" disabled={disabled} danger onClick={() => deleteComponentRow(idx, mi)}>
+                                  删除
+                                </Button>
+                              </Space>
+                            ),
+                          },
+                        ]}
+                      />
+                    </Space>
+                  )
+                })()
+              )}
+            </Card>
+          </div>
 
           {/* 旧的“组件清单（结构化）”已废弃：统一在短语预设内维护组件行清单（支持同模型多尺寸/多数量/筛选变体）。 */}
 

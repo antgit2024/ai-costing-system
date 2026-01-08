@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import { Button, Checkbox, Drawer, Input, Select, Space, Table, Tabs, Typography, message } from 'antd'
+import { Button, Checkbox, Drawer, Input, Select, Space, Switch, Table, Tabs, Tag, Typography, message } from 'antd'
 import type { Key } from 'react'
 
 import type {
@@ -10,6 +10,7 @@ import type {
   VirtualMaterialQueryParams,
 } from '@/types/planner'
 import { fetchMaterials, fetchTaxonomyItems, fetchVirtualMaterials } from '@/services/planner'
+import { normalizeUnit } from '@/utils/unit'
 
 const { Text } = Typography
 
@@ -27,6 +28,14 @@ export interface MaterialPickerDrawerProps {
   initialTab?: MaterialPickerTab
   /** 真实物料默认仅显示 BOM 物料（你要求默认勾选） */
   defaultOnlyBom?: boolean
+  /** 可选：用于同单位优先/筛选（行级变体“同单位平替”场景） */
+  baseUnit?: string | null
+  /** 可选：限制选择数量（1 表示单选） */
+  maxSelection?: number
+  /** 可选：确认按钮文案 */
+  confirmText?: string
+  /** 可选：默认分页大小（行级变体建议更大些） */
+  defaultPageSize?: number
 }
 
 export default function MaterialPickerDrawer({
@@ -36,21 +45,26 @@ export default function MaterialPickerDrawer({
   title = '选择物料',
   initialTab = 'real',
   defaultOnlyBom = true,
+  baseUnit = null,
+  maxSelection,
+  confirmText,
+  defaultPageSize = 10,
 }: MaterialPickerDrawerProps) {
   const [activeTab, setActiveTab] = useState<MaterialPickerTab>(initialTab)
+  const [onlySameUnit, setOnlySameUnit] = useState(false)
 
   // real tab filters
   const [realSearch, setRealSearch] = useState('')
   const [realCategory, setRealCategory] = useState<string | undefined>(undefined)
   const [onlyBom, setOnlyBom] = useState(defaultOnlyBom)
-  const [realPagination, setRealPagination] = useState({ current: 1, pageSize: 10 })
+  const [realPagination, setRealPagination] = useState({ current: 1, pageSize: defaultPageSize })
   const [realSelectedKeys, setRealSelectedKeys] = useState<Key[]>([])
   const [realSelectedRows, setRealSelectedRows] = useState<Material[]>([])
 
   // virtual tab filters
   const [virtualSearch, setVirtualSearch] = useState('')
   const [virtualCategory, setVirtualCategory] = useState<string | undefined>(undefined)
-  const [virtualPagination, setVirtualPagination] = useState({ current: 1, pageSize: 10 })
+  const [virtualPagination, setVirtualPagination] = useState({ current: 1, pageSize: defaultPageSize })
   const [virtualSelectedKeys, setVirtualSelectedKeys] = useState<Key[]>([])
   const [virtualSelectedRows, setVirtualSelectedRows] = useState<VirtualMaterial[]>([])
 
@@ -65,17 +79,23 @@ export default function MaterialPickerDrawer({
       setRealSearch('')
       setRealCategory(undefined)
       setOnlyBom(defaultOnlyBom)
-      setRealPagination({ current: 1, pageSize: 10 })
+      setRealPagination({ current: 1, pageSize: defaultPageSize })
       setRealSelectedKeys([])
       setRealSelectedRows([])
 
       setVirtualSearch('')
       setVirtualCategory(undefined)
-      setVirtualPagination({ current: 1, pageSize: 10 })
+      setVirtualPagination({ current: 1, pageSize: defaultPageSize })
       setVirtualSelectedKeys([])
       setVirtualSelectedRows([])
+      setOnlySameUnit(false)
     }
-  }, [defaultOnlyBom, open])
+  }, [defaultOnlyBom, defaultPageSize, open])
+
+  const normalizedBaseUnit = useMemo(() => {
+    const s = normalizeUnit(String(baseUnit ?? ''))
+    return s ? s : null
+  }, [baseUnit])
 
   const realCategoryQuery = useQuery({
     queryKey: ['taxonomy-items', 'material_category', 'material-picker'],
@@ -133,6 +153,10 @@ export default function MaterialPickerDrawer({
         message.warning('请选择至少一个真实物料')
         return
       }
+      if (maxSelection === 1 && realSelectedRows.length !== 1) {
+        message.warning('当前仅允许选择 1 个真实物料')
+        return
+      }
       onConfirm({ kind: onlyBom ? 'bom' : 'real', materials: realSelectedRows })
       onClose()
       return
@@ -141,9 +165,45 @@ export default function MaterialPickerDrawer({
       message.warning('请选择至少一个虚拟物料')
       return
     }
+    if (maxSelection === 1 && virtualSelectedRows.length !== 1) {
+      message.warning('当前仅允许选择 1 个虚拟物料')
+      return
+    }
     onConfirm({ kind: 'virtual', materials: virtualSelectedRows })
     onClose()
   }
+
+  const realItems = useMemo(() => {
+    const items = (realQuery.data?.items ?? []) as Material[]
+    const baseU = normalizedBaseUnit
+    const arr = items.slice()
+    const rankOf = (m: Material): number => {
+      if (!baseU) return 1
+      const u = normalizeUnit(String((m as any)?.unit ?? ''))
+      return u && u === baseU ? 0 : 1
+    }
+    arr.sort((a, b) => rankOf(a) - rankOf(b))
+    if (onlySameUnit && baseU) {
+      return arr.filter((m) => normalizeUnit(String((m as any)?.unit ?? '')) === baseU)
+    }
+    return arr
+  }, [normalizedBaseUnit, onlySameUnit, realQuery.data?.items])
+
+  const virtualItems = useMemo(() => {
+    const items = (virtualQuery.data?.items ?? []) as VirtualMaterial[]
+    const baseU = normalizedBaseUnit
+    const arr = items.slice()
+    const rankOf = (m: VirtualMaterial): number => {
+      if (!baseU) return 1
+      const u = normalizeUnit(String((m as any)?.unit ?? ''))
+      return u && u === baseU ? 0 : 1
+    }
+    arr.sort((a, b) => rankOf(a) - rankOf(b))
+    if (onlySameUnit && baseU) {
+      return arr.filter((m) => normalizeUnit(String((m as any)?.unit ?? '')) === baseU)
+    }
+    return arr
+  }, [normalizedBaseUnit, onlySameUnit, virtualQuery.data?.items])
 
   return (
     <Drawer
@@ -156,7 +216,7 @@ export default function MaterialPickerDrawer({
         <Space>
           <Button onClick={onClose}>取消</Button>
           <Button type="primary" onClick={handleConfirm}>
-            添加
+            {confirmText ?? '添加'}
           </Button>
         </Space>
       }
@@ -173,6 +233,7 @@ export default function MaterialPickerDrawer({
       {activeTab === 'real' ? (
         <Space direction="vertical" style={{ width: '100%' }} size={12}>
           <Space wrap align="start">
+            {normalizedBaseUnit ? <Tag color="geekblue">基准单位：{normalizedBaseUnit}</Tag> : null}
             <Input.Search
               placeholder="搜索编码/名称"
               allowClear
@@ -213,6 +274,14 @@ export default function MaterialPickerDrawer({
             >
               仅 BOM 物料
             </Checkbox>
+            {normalizedBaseUnit ? (
+              <Switch
+                checked={onlySameUnit}
+                onChange={(v) => setOnlySameUnit(v)}
+                checkedChildren="仅同单位"
+                unCheckedChildren="同单位置顶"
+              />
+            ) : null}
             <Text type="secondary" style={{ fontSize: 12 }}>
               默认勾选 BOM 物料（更符合“工艺模块清单”的主路径）
             </Text>
@@ -221,10 +290,17 @@ export default function MaterialPickerDrawer({
           <Table<Material>
             rowKey="id"
             loading={realQuery.isLoading}
-            dataSource={realQuery.data?.items ?? []}
+            dataSource={realItems}
             rowSelection={{
               selectedRowKeys: realSelectedKeys,
               onChange: (keys, rows) => {
+                if (maxSelection === 1) {
+                  const lastKey = keys.length ? keys[keys.length - 1] : undefined
+                  const lastRow = rows.length ? rows[rows.length - 1] : undefined
+                  setRealSelectedKeys(lastKey != null ? [lastKey] : [])
+                  setRealSelectedRows(lastRow ? [lastRow] : [])
+                  return
+                }
                 setRealSelectedKeys(keys)
                 setRealSelectedRows(rows)
               },
@@ -234,7 +310,7 @@ export default function MaterialPickerDrawer({
               pageSize: realPagination.pageSize,
               total: realQuery.data?.total ?? 0,
               showSizeChanger: true,
-              onChange: (page, pageSize) => setRealPagination({ current: page, pageSize: pageSize ?? 10 }),
+              onChange: (page, pageSize) => setRealPagination({ current: page, pageSize: pageSize ?? defaultPageSize }),
             }}
             columns={[
               { title: '编码', dataIndex: 'material_code', width: 160, render: (v: string) => <Text code>{v}</Text> },
@@ -247,6 +323,7 @@ export default function MaterialPickerDrawer({
       ) : (
         <Space direction="vertical" style={{ width: '100%' }} size={12}>
           <Space wrap align="start">
+            {normalizedBaseUnit ? <Tag color="geekblue">基准单位：{normalizedBaseUnit}</Tag> : null}
             <Input.Search
               placeholder="搜索编码/名称"
               allowClear
@@ -278,6 +355,14 @@ export default function MaterialPickerDrawer({
                 value: it.name,
               }))}
             />
+            {normalizedBaseUnit ? (
+              <Switch
+                checked={onlySameUnit}
+                onChange={(v) => setOnlySameUnit(v)}
+                checkedChildren="仅同单位"
+                unCheckedChildren="同单位置顶"
+              />
+            ) : null}
             <Text type="secondary" style={{ fontSize: 12 }}>
               虚拟物料默认只显示“启用”状态
             </Text>
@@ -286,10 +371,17 @@ export default function MaterialPickerDrawer({
           <Table<VirtualMaterial>
             rowKey="id"
             loading={virtualQuery.isLoading}
-            dataSource={virtualQuery.data?.items ?? []}
+            dataSource={virtualItems}
             rowSelection={{
               selectedRowKeys: virtualSelectedKeys,
               onChange: (keys, rows) => {
+                if (maxSelection === 1) {
+                  const lastKey = keys.length ? keys[keys.length - 1] : undefined
+                  const lastRow = rows.length ? rows[rows.length - 1] : undefined
+                  setVirtualSelectedKeys(lastKey != null ? [lastKey] : [])
+                  setVirtualSelectedRows(lastRow ? [lastRow] : [])
+                  return
+                }
                 setVirtualSelectedKeys(keys)
                 setVirtualSelectedRows(rows)
               },
@@ -300,7 +392,7 @@ export default function MaterialPickerDrawer({
               total: virtualQuery.data?.total ?? 0,
               showSizeChanger: true,
               onChange: (page, pageSize) =>
-                setVirtualPagination({ current: page, pageSize: pageSize ?? 10 }),
+                setVirtualPagination({ current: page, pageSize: pageSize ?? defaultPageSize }),
             }}
             columns={[
               {
@@ -312,6 +404,7 @@ export default function MaterialPickerDrawer({
               { title: '名称', dataIndex: 'name' },
               { title: '分类', dataIndex: 'category', width: 160, render: (v?: string) => v || '-' },
               { title: '类型', dataIndex: 'virtual_kind', width: 120, render: (v?: string) => v || '-' },
+              { title: '单位', dataIndex: 'unit', width: 100, render: (v?: string) => v || '-' },
             ]}
           />
         </Space>

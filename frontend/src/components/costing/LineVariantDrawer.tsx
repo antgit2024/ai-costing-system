@@ -14,7 +14,7 @@ import {
   replaceLineVariantItems,
   updateLineVariant,
 } from '@/services/planner'
-import MaterialSelectModal from './MaterialSelectModal'
+import MaterialPickerDrawer from '@/components/costing/MaterialPickerDrawer'
 import { normalizeUnit as normalizeUnitText } from '@/utils/unit'
 import type {
   BomGenerateResponse,
@@ -1405,23 +1405,54 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
           </Space>
         </Modal>
 
-        <MaterialSelectModal
+        <MaterialPickerDrawer
           open={materialPickerOpen}
           onClose={() => {
             setMaterialPickerOpen(false)
             setMaterialPickerRowKey(null)
           }}
           title="选择替换物料（同单位平替）"
-          onlyBom
+          initialTab="real"
+          defaultOnlyBom
           baseUnit={baseUnit}
-          onSelect={(m) => {
+          maxSelection={1}
+          confirmText="选择"
+          defaultPageSize={50}
+          onConfirm={async (result) => {
             const key = materialPickerRowKey
             if (!key) return
             const inheritedMethod = baseLineParamsFromBom.calculation_method
             const inheritedBaseQty = baseLineParamsFromBom.base_quantity
+
+            if (result.kind === 'virtual') {
+              const vm = (result.materials ?? [])[0] as any
+              if (!vm) return
+              updateModalRow(key, {
+                item: {
+                  ...(modalRows.find((x) => x.key === key)?.item ?? ({} as any)),
+                  material_kind: 'virtual',
+                  material_ref_id: vm.id,
+                  material_code: vm.virtual_code ?? null,
+                  material_name: vm.name ?? null,
+                  unit_of_measure: vm.unit ?? null,
+                  calculation_method:
+                    inheritedMethod ??
+                    ((modalRows.find((x) => x.key === key)?.item as any)?.calculation_method ?? 'count'),
+                  base_quantity:
+                    inheritedBaseQty != null && Number.isFinite(inheritedBaseQty)
+                      ? inheritedBaseQty
+                      : ((modalRows.find((x) => x.key === key)?.item as any)?.base_quantity ?? 1),
+                } as any,
+              })
+              return
+            }
+
+            const m = (result.materials ?? [])[0] as any
+            if (!m) return
             updateModalRow(key, {
               item: {
                 ...(modalRows.find((x) => x.key === key)?.item ?? ({} as any)),
+                material_kind: result.kind === 'bom' ? 'real' : 'real',
                 material_ref_id: m.id,
                 material_code: m.material_code,
                 material_name: m.material_name,

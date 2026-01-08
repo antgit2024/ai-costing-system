@@ -83,6 +83,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-08（Frontend：筛选器新增“变体/指定(强制命中)”模式：变体模式仍填充 `spec_text` 供交易规格解析命中；指定模式把所选规则的 TOKEN 写入 `metadata.phrase_presets[*].components[*].tokens`（后端 `generate_bom_bundle` 已支持 `component.tokens` 注入 runtime_tokens），从而无需交易规格解析也能强制替换。验收 `npm -C frontend run build`，并已原子发布静态资源）
 - **最近校对（北京时间 GMT+8）**：2026-01-08（Frontend：抽屉列表的替换明细样式优化：按组件行判断是“变体/指定”并分别渲染；“变体/指定”用深色底白字高反差标签（变体蓝、指定黑+棕）提升可读性。验收 `npm -C frontend run build`，并已原子发布静态资源）
 - **最近校对（北京时间 GMT+8）**：2026-01-08（Frontend：指定模式 UI 再收口：将“指定”标签改为大红底白字；当组件行处于指定模式（存在 tokens 注入）时，隐藏第一条默认兜底行（TOKEN 输入 + 兜底物料）避免重复干扰。验收 `npm -C frontend run build`，并已原子发布静态资源）
+- **最近校对（北京时间 GMT+8）**：2026-01-08（Frontend：替换明细标签统一口径：将“变体”改为 `TOKEN` 标签；真实 token 词（如“雪尼尔”）改为淡红胶囊样式；将“指定”改为英文 `FORCE`（大红底白字），“强制替换”改为淡橙底。验收 `npm -C frontend run build`，并已原子发布静态资源）
 
 ### 关键口径备忘（避免回滚/重构改坏）
 

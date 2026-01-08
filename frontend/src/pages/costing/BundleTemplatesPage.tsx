@@ -1717,13 +1717,13 @@ export default function BundleTemplatesPage() {
                                               fontWeight: 700,
                                             }}
                                           >
-                                            指定
+                                            FORCE
                                           </Tag>
                                           <Tag
                                             style={{
-                                              background: '#7c2d12',
-                                              color: '#fff',
-                                              border: 'none',
+                                              background: 'rgba(250,173,20,0.18)',
+                                              color: '#d46b08',
+                                              border: '1px solid #ffe7ba',
                                               fontWeight: 700,
                                             }}
                                           >
@@ -1741,9 +1741,24 @@ export default function BundleTemplatesPage() {
                                               fontWeight: 700,
                                             }}
                                           >
-                                            变体
+                                            TOKEN
                                           </Tag>
-                                          <Text strong>{tokens.length ? tokens.join('、') : '（无 TOKEN）'}</Text>
+                                          {tokens.length ? (
+                                            tokens.map((t) => (
+                                              <Tag
+                                                key={`${k}:${baseLineId}:${variantId}:${t}`}
+                                                style={{
+                                                  background: 'rgba(255,77,79,0.15)',
+                                                  color: '#cf1322',
+                                                  border: '1px solid #ffccc7',
+                                                }}
+                                              >
+                                                {t}
+                                              </Tag>
+                                            ))
+                                          ) : (
+                                            <Text type="secondary">（无 TOKEN）</Text>
+                                          )}
                                           <Text type="secondary">兜底物料：</Text>
                                           <Text strong title={rawName}>
                                             {slot ? `${slot}：` : ''}

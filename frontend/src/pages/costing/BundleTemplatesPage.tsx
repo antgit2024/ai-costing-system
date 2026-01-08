@@ -1569,6 +1569,28 @@ export default function BundleTemplatesPage() {
 
                             return (
                               <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                                {/* 默认兜底：不命中任何 TOKEN 时仍会使用基准物料（避免误以为“少了一行物料”） */}
+                                {(() => {
+                                  const uniqBase = new Map<string, string>()
+                                  for (const [baseLineId] of selectedEntries) {
+                                    const base = baseMap.get(String(baseLineId))
+                                    const slot = getLineStructureLabel(base, versionId)
+                                    const baseName = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
+                                    const baseLabel = slot ? `${slot}：${baseName}` : baseName
+                                    uniqBase.set(String(baseLineId), baseLabel || String(baseLineId))
+                                  }
+                                  const list = Array.from(uniqBase.values()).filter(Boolean)
+                                  return (
+                                    <Text type="secondary">
+                                      默认（未命中 TOKEN 时）：兜底物料=
+                                      {list.length ? (
+                                        <Text strong>{list.join('；')}</Text>
+                                      ) : (
+                                        <Text type="secondary">-</Text>
+                                      )}
+                                    </Text>
+                                  )
+                                })()}
                                 {selectedEntries.map(([baseLineId, variantId]) => {
                                   const v = variantsById.get(String(variantId))
                                   const base = baseMap.get(String(baseLineId))

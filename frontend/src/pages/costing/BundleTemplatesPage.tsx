@@ -1543,44 +1543,39 @@ export default function BundleTemplatesPage() {
 
                             const baseMap = baseLineMapByVersion.get(versionId) ?? new Map<string, any>()
 
-                            // display tokens (from selected variants) to help operators build spec_text / understand triggers
-                            const tokenSet = new Set<string>()
-                            for (const [, variantId] of selectedEntries) {
-                              const v = variantsById.get(String(variantId))
-                              if (!v) continue
+                            const extractTokensForVariant = (v: any): string[] => {
                               const cond = (v?.conditions ?? {}) as any
                               const anyTokens = Array.isArray(cond?.spec_contains_any) ? cond.spec_contains_any : []
                               const allTokens = Array.isArray(cond?.spec_contains_all) ? cond.spec_contains_all : []
+                              const out: string[] = []
                               for (const t of [...anyTokens, ...allTokens]) {
                                 const s = String(t ?? '').trim()
                                 if (!s) continue
                                 const up = s.toUpperCase()
                                 if (up.startsWith('MODEL:') || up.startsWith('M:') || up.startsWith('BOUND_VERSION:') || up.startsWith('SKU:')) continue
-                                tokenSet.add(s)
+                                out.push(s)
                               }
+                              // de-dup while preserving order
+                              const seen = new Set<string>()
+                              const uniq: string[] = []
+                              for (const x of out) {
+                                const k = String(x).trim()
+                                if (!k || seen.has(k)) continue
+                                seen.add(k)
+                                uniq.push(k)
+                              }
+                              return uniq
                             }
-                            const tokens = Array.from(tokenSet)
 
                             return (
                               <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                                <Space wrap size={6}>
-                                  <Text type="secondary">TOKEN：</Text>
-                                  {tokens.length ? (
-                                    tokens.map((t) => (
-                                      <Tag key={t} color="blue">
-                                        {t}
-                                      </Tag>
-                                    ))
-                                  ) : (
-                                    <Text type="secondary">（无 TOKEN，可能仅尺寸/面积/周长条件）</Text>
-                                  )}
-                                </Space>
                                 {selectedEntries.map(([baseLineId, variantId]) => {
                                   const v = variantsById.get(String(variantId))
                                   const base = baseMap.get(String(baseLineId))
                                   const slot = getLineStructureLabel(base, versionId)
                                   const baseName = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
                                   const baseLabel = slot ? `${slot}：${baseName}` : baseName
+                                  const tokens = extractTokensForVariant(v)
                                   const effect =
                                     v?.action === 'remove_self' ? '移除' : v?.action === 'add_siblings' ? '新增物料' : '替换物料'
                                   const produced = Array.isArray(v?.items) ? v.items : []
@@ -1592,6 +1587,16 @@ export default function BundleTemplatesPage() {
                                   return (
                                     <div key={`${k}:${baseLineId}:${variantId}`}>
                                       <Space wrap size={8}>
+                                        <Text type="secondary">TOKEN：</Text>
+                                        {tokens.length ? (
+                                          tokens.map((t) => (
+                                            <Tag key={`${k}:${baseLineId}:${variantId}:${t}`} color="blue">
+                                              {t}
+                                            </Tag>
+                                          ))
+                                        ) : (
+                                          <Text type="secondary">（无 TOKEN）</Text>
+                                        )}
                                         <Text type="secondary">兜底物料：</Text>
                                         <Text strong>{baseLabel}</Text>
                                         <Text type="secondary">→</Text>

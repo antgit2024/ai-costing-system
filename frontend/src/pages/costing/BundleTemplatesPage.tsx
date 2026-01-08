@@ -588,12 +588,129 @@ export default function BundleTemplatesPage() {
     const p = phrasePresets?.[activePresetIndex]
     if (!p) return { ok: false, reason: '请先新建一条短语' }
     if (p?.enabled === false) return { ok: false, reason: '该短语已停用，请先启用再保存' }
-    const phrase = String(p?.phrase ?? '').trim()
-    if (!phrase) return { ok: false, reason: '请先填写短语文本' }
     const rows = Array.isArray(p?.components) ? p.components : []
     const valid = rows.filter((c: any) => String(c?.model_version_id ?? '').trim() && Number(c?.width_cm) > 0 && Number(c?.height_cm) > 0 && Number(c?.quantity) > 0)
     if (!valid.length) return { ok: false, reason: '请至少填写 1 条完整组件行（模型/宽/高/数量）' }
     return { ok: true }
+  }
+
+  const extractTokensForVariant = (v: any): string[] => {
+    const cond = (v?.conditions ?? {}) as any
+    const anyTokens = Array.isArray(cond?.spec_contains_any) ? cond.spec_contains_any : []
+    const allTokens = Array.isArray(cond?.spec_contains_all) ? cond.spec_contains_all : []
+    const out: string[] = []
+    for (const t of [...anyTokens, ...allTokens]) {
+      const s = String(t ?? '').trim()
+      if (!s) continue
+      const up = s.toUpperCase()
+      if (up.startsWith('MODEL:') || up.startsWith('M:') || up.startsWith('BOUND_VERSION:') || up.startsWith('SKU:')) continue
+      out.push(s)
+    }
+    // de-dup while preserving order
+    const seen = new Set<string>()
+    const uniq: string[] = []
+    for (const x of out) {
+      const k = String(x).trim()
+      if (!k || seen.has(k)) continue
+      seen.add(k)
+      uniq.push(k)
+    }
+    return uniq
+  }
+
+  const buildAutoPhrasePlainForPreset = (pIdx: number): string => {
+    const p = phrasePresets?.[pIdx]
+    if (!p) return ''
+    const parts: string[] = []
+    const rows = Array.isArray(p?.components) ? p.components : []
+    for (let cIdx = 0; cIdx < rows.length; cIdx++) {
+      const rr = rows[cIdx] as any
+      const versionId = String(rr?.model_version_id ?? '').trim()
+      const w = Number(rr?.width_cm ?? 0)
+      const h = Number(rr?.height_cm ?? 0)
+      const q = Number(rr?.quantity ?? 0)
+      const sizeText = w > 0 && h > 0 && q > 0 ? `${w}*${h}*${q}` : ''
+
+      const k = `${pIdx}:${cIdx}`
+      const sel = (presetSelectedByIdx[k] ?? {}) as Record<string, string | null>
+      const selectedEntries = Object.entries(sel).filter(([, v]) => !!v)
+
+      const variantsForVersion = ((variantsSummaryQuery.data ?? []) as any[]).find(
+        (x: any) => String(x?.version_id ?? '') === versionId,
+      )?.items as any[]
+      const variants = Array.isArray(variantsForVersion) ? variantsForVersion : []
+      const variantsById = new Map<string, any>()
+      for (const v of variants) {
+        if (v?.id) variantsById.set(String(v.id), v)
+      }
+
+      const baseMap = baseLineMapByVersion.get(versionId) ?? new Map<string, any>()
+      const baseNames: string[] = []
+      for (const [baseLineId] of selectedEntries) {
+        const base = baseMap.get(String(baseLineId))
+        const baseName = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
+        if (baseName) baseNames.push(baseName)
+      }
+      const uniqBases = Array.from(new Set(baseNames))
+
+      const tokenSet = new Set<string>()
+      for (const [, variantId] of selectedEntries) {
+        const v = variantsById.get(String(variantId))
+        for (const t of extractTokensForVariant(v)) tokenSet.add(t)
+      }
+      const tokens = Array.from(tokenSet)
+
+      const seg = `${uniqBases.map((x) => `{${x}}`).join('')}${tokens.map((x) => `{${x}}`).join('')}${sizeText}`
+      if (seg.trim()) parts.push(seg.trim())
+    }
+    return parts.filter(Boolean).join('+')
+  }
+
+  const buildAutoPhraseSegments = (pIdx: number): Array<{ bases: string[]; tokens: string[]; sizeText: string }> => {
+    const p = phrasePresets?.[pIdx]
+    if (!p) return []
+    const rows = Array.isArray(p?.components) ? p.components : []
+    const out: Array<{ bases: string[]; tokens: string[]; sizeText: string }> = []
+    for (let cIdx = 0; cIdx < rows.length; cIdx++) {
+      const rr = rows[cIdx] as any
+      const versionId = String(rr?.model_version_id ?? '').trim()
+      const w = Number(rr?.width_cm ?? 0)
+      const h = Number(rr?.height_cm ?? 0)
+      const q = Number(rr?.quantity ?? 0)
+      const sizeText = w > 0 && h > 0 && q > 0 ? `${w}*${h}*${q}` : ''
+
+      const k = `${pIdx}:${cIdx}`
+      const sel = (presetSelectedByIdx[k] ?? {}) as Record<string, string | null>
+      const selectedEntries = Object.entries(sel).filter(([, v]) => !!v)
+
+      const variantsForVersion = ((variantsSummaryQuery.data ?? []) as any[]).find(
+        (x: any) => String(x?.version_id ?? '') === versionId,
+      )?.items as any[]
+      const variants = Array.isArray(variantsForVersion) ? variantsForVersion : []
+      const variantsById = new Map<string, any>()
+      for (const v of variants) {
+        if (v?.id) variantsById.set(String(v.id), v)
+      }
+
+      const baseMap = baseLineMapByVersion.get(versionId) ?? new Map<string, any>()
+      const baseNames: string[] = []
+      for (const [baseLineId] of selectedEntries) {
+        const base = baseMap.get(String(baseLineId))
+        const baseName = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
+        if (baseName) baseNames.push(baseName)
+      }
+      const bases = Array.from(new Set(baseNames))
+
+      const tokenSet = new Set<string>()
+      for (const [, variantId] of selectedEntries) {
+        const v = variantsById.get(String(variantId))
+        for (const t of extractTokensForVariant(v)) tokenSet.add(t)
+      }
+      const tokens = Array.from(tokenSet)
+
+      out.push({ bases, tokens, sizeText })
+    }
+    return out
   }
 
   const copyComponentRow = (pIdx: number, cIdx: number) => {
@@ -825,10 +942,11 @@ export default function BundleTemplatesPage() {
         // Preserve legacy lexicon_rules (global fallback mapping) if exists, but do not expose to operators.
         lexicon_rules: Array.isArray((editing?.metadata ?? {})?.lexicon_rules) ? (editing?.metadata ?? {})?.lexicon_rules : [],
         phrase_presets: phrasePresets
-          .map((p) => ({
+          .map((p, pIdx) => ({
             selector: String((p as any).selector ?? '').trim().toUpperCase() || undefined,
             enabled: (p as any).enabled === false ? false : undefined,
-            phrase: String(p.phrase ?? '').trim(),
+            // phrase is auto-generated (operators no longer handcraft it)
+            phrase: String(buildAutoPhrasePlainForPreset(pIdx) || '').trim(),
             components: Array.isArray(p.components)
               ? p.components
                   .map((c) => ({
@@ -847,7 +965,7 @@ export default function BundleTemplatesPage() {
             const sel = String(p?.selector ?? '').trim()
             const enabled = p?.enabled !== false
             if (!enabled) return !!sel
-            return !!String(p?.phrase ?? '').trim() && Array.isArray(p.components) && p.components.length > 0
+            return Array.isArray(p.components) && p.components.length > 0
           }),
       }
       if (editing?.id) {
@@ -1367,7 +1485,7 @@ export default function BundleTemplatesPage() {
                   const tokenDash = codeOnly ? toBundleTokenDash(codeOnly, sel) : `B-????${sel}`
                   const active = idx === activePresetIndex
                   const enabled = p?.enabled !== false
-                  const phraseText = String(p?.phrase ?? '').trim() || '-'
+                  const phraseText = buildAutoPhrasePlainForPreset(idx) || '-'
                   return (
                     <div
                       style={{
@@ -1455,7 +1573,7 @@ export default function BundleTemplatesPage() {
             <Card
               size="small"
               style={{ flex: 1, minWidth: 0 }}
-              title={<Text strong>短语编辑</Text>}
+              title={<Text strong>短语自动拼装</Text>}
               bodyStyle={{ padding: 8 }}
             >
               {(phrasePresets ?? []).length <= 0 ? (
@@ -1477,6 +1595,8 @@ export default function BundleTemplatesPage() {
                     ? (versionOptionsCompact as any[]).filter((o: any) => allowed.has(String(o?.value)))
                     : (versionOptionsCompact as any[])
                   const selector = String(r?.selector ?? '').trim().toUpperCase() || toSelector2(idx)
+                  const autoPlain = buildAutoPhrasePlainForPreset(idx)
+                  const previewSegs = buildAutoPhraseSegments(idx).filter((seg) => seg.bases.length || seg.tokens.length || seg.sizeText)
                   return (
                     <Space direction="vertical" style={{ width: '100%' }} size={8}>
                       <Space wrap size={10} style={{ width: '100%', justifyContent: 'space-between' }}>
@@ -1501,13 +1621,45 @@ export default function BundleTemplatesPage() {
                         </Button>
                       </Space>
                       <Input
-                        placeholder="短语，例如：黄金绒双面45X45"
-                        disabled={disabled}
-                        value={String(r?.phrase ?? '')}
-                        onChange={(e) =>
-                          setPhrasePresets((prev) => (prev ?? []).map((x, i) => (i === idx ? { ...x, phrase: e.target.value } : x)))
-                        }
+                        readOnly
+                        value={autoPlain}
+                        placeholder="短语将由“兜底物料 + TOKEN + 宽高数量”自动拼接生成"
                       />
+                      <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                        <Text type="secondary">
+                          预览：绿色=兜底物料（默认），红色=TOKEN（锁定，只能通过“筛选”变化），黑色=宽*高*数量（可通过表格改宽高数量）
+                        </Text>
+                        <div style={{ border: '1px solid rgba(0,0,0,0.06)', borderRadius: 8, padding: '8px 10px' }}>
+                          {previewSegs.length ? (
+                            <Space wrap size={6}>
+                              {previewSegs.map((seg, i) => (
+                                <span key={`seg-${idx}-${i}`}>
+                                  <Space wrap size={6}>
+                                    {seg.bases.map((b) => (
+                                      <Tag key={`b-${idx}-${i}-${b}`} color="green">
+                                        {b}
+                                      </Tag>
+                                    ))}
+                                    {seg.tokens.map((t) => (
+                                      <Tag key={`t-${idx}-${i}-${t}`} color="red">
+                                        {t}
+                                      </Tag>
+                                    ))}
+                                    {seg.sizeText ? <Text>{seg.sizeText}</Text> : null}
+                                  </Space>
+                                  {i < previewSegs.length - 1 ? (
+                                    <Text type="secondary" style={{ margin: '0 6px' }}>
+                                      +
+                                    </Text>
+                                  ) : null}
+                                </span>
+                              ))}
+                            </Space>
+                          ) : (
+                            <Text type="secondary">（先为组件行选择模型版本，并在“筛选”里勾选需要的变体词）</Text>
+                          )}
+                        </div>
+                      </Space>
                       {disabled ? (
                         <Alert
                           type="warning"

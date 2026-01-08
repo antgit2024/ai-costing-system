@@ -1578,7 +1578,7 @@ export default function BundleTemplatesPage() {
                           setPhrasePresets((prev) => (prev ?? []).map((x, i) => (i === idx ? { ...x, phrase: e.target.value } : x)))
                         }
                       />
-                      <Text type="secondary">提示：红色 TOKEN 只能通过“筛选”勾选变体改变；绿色兜底物料名可编辑（仅显示名）。</Text>
+                      <Text type="secondary">提示：在“筛选”里可选模式：变体（解析命中）/ 指定（强制命中）。</Text>
                       {disabled ? (
                         <Alert
                           type="warning"
@@ -1602,6 +1602,8 @@ export default function BundleTemplatesPage() {
                           const sel = (presetSelectedByIdx[k] ?? {}) as Record<string, string | null>
                           const selectedEntries = Object.entries(sel).filter(([, v]) => !!v)
                           if (!versionId || !selectedEntries.length) return null
+                          const injectedTokens = Array.isArray(rr?.tokens) ? (rr.tokens as any[]).map((x) => String(x).trim()).filter(Boolean) : []
+                          const isForce = injectedTokens.length > 0
 
                           const variantsForVersion = ((variantsSummaryQuery.data ?? []) as any[]).find(
                             (x: any) => String(x?.version_id ?? '') === versionId,
@@ -1705,24 +1707,53 @@ export default function BundleTemplatesPage() {
                                 return (
                                   <div key={`${k}:${baseLineId}:${variantId}`}>
                                     <Space wrap size={8}>
-                                      <Text type="secondary">TOKEN：</Text>
-                                      {tokens.length ? (
-                                        tokens.map((t) => (
-                                          <Tag key={`${k}:${baseLineId}:${variantId}:${t}`} color="red">
-                                            {t}
+                                      {isForce ? (
+                                        <>
+                                          <Tag
+                                            style={{
+                                              background: '#262626',
+                                              color: '#fff',
+                                              border: 'none',
+                                              fontWeight: 700,
+                                            }}
+                                          >
+                                            指定
                                           </Tag>
-                                        ))
+                                          <Tag
+                                            style={{
+                                              background: '#7c2d12',
+                                              color: '#fff',
+                                              border: 'none',
+                                              fontWeight: 700,
+                                            }}
+                                          >
+                                            强制替换
+                                          </Tag>
+                                          <Tag color="green">{producedLabel || '-'}</Tag>
+                                        </>
                                       ) : (
-                                        <Text type="secondary">（无 TOKEN）</Text>
+                                        <>
+                                          <Tag
+                                            style={{
+                                              background: '#1d39c4',
+                                              color: '#fff',
+                                              border: 'none',
+                                              fontWeight: 700,
+                                            }}
+                                          >
+                                            变体
+                                          </Tag>
+                                          <Text strong>{tokens.length ? tokens.join('、') : '（无 TOKEN）'}</Text>
+                                          <Text type="secondary">兜底物料：</Text>
+                                          <Text strong title={rawName}>
+                                            {slot ? `${slot}：` : ''}
+                                            {rawName}
+                                          </Text>
+                                          <Text type="secondary">→</Text>
+                                          <Text type="secondary">{effect}</Text>
+                                          <Tag color="green">{producedLabel || '-'}</Tag>
+                                        </>
                                       )}
-                                      <Text type="secondary">兜底物料：</Text>
-                                      <Text strong title={rawName}>
-                                        {slot ? `${slot}：` : ''}
-                                        {rawName}
-                                      </Text>
-                                      <Text type="secondary">→</Text>
-                                      <Text type="secondary">{effect}</Text>
-                                      <Tag color="green">{producedLabel || '-'}</Tag>
                                     </Space>
                                   </div>
                                 )

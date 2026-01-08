@@ -212,6 +212,13 @@ const PLACEHOLDER_UNIT_OPTIONS = [
   { label: '个', value: '个' },
 ]
 
+const VM_UNIT_OPTIONS = [
+  { label: '平米', value: '平米' },
+  { label: '米', value: '米' },
+  { label: '个', value: '个' },
+  { label: '套', value: '套' },
+]
+
 const fallbackRandomCode = (prefix: string, width: number) => {
   const digits = String(Math.floor(Math.random() * 10 ** width)).padStart(width, '0')
   return `${prefix}${digits}`
@@ -426,6 +433,8 @@ const VirtualMaterialsPage = () => {
   const activeBindings = useMemo(() => bindingsValue ?? [], [bindingsValue])
   const virtualKind = (Form.useWatch('virtual_kind', basicForm) as VirtualKind | undefined) ?? 'kit'
   const placeholderUnit = String(Form.useWatch('unit', basicForm) || '').trim()
+  const manualBomUnitPrice = Form.useWatch(['metadata_json', 'bom_unit_price'], basicForm)
+  const selectedUnit = String(Form.useWatch('unit', basicForm) || '').trim()
 
   const bindingSummary = useMemo(() => {
     if (!activeBindings.length) {
@@ -574,6 +583,16 @@ const VirtualMaterialsPage = () => {
       const unit = placeholderUnit || '-'
       return `${formatCurrency(0, bindingSummary.currency || 'CNY')} / ${unit}`
     }
+    // If user explicitly provided a manual BOM unit price (e.g. 0 for "兜底-零成本"),
+    // prefer showing it for clarity even when bindings are missing.
+    if (manualBomUnitPrice !== undefined && manualBomUnitPrice !== null && String(manualBomUnitPrice) !== '') {
+      const currency = bindingSummary.currency || 'CNY'
+      const unitLabel =
+        virtualKind === 'kit'
+          ? DEFAULT_VIRTUAL_UNIT
+          : bindingSummary.unitLabel || bindingSummary.baseUnit || selectedUnit || '件'
+      return `${formatCurrency(Number(manualBomUnitPrice), currency)} / ${unitLabel}`
+    }
     if (virtualKind === 'recipe' && !bindingSummary.allUnits) {
       return '配方型要求子物料单位一致，请先统一单位后再参考虚拟单价'
     }
@@ -584,9 +603,9 @@ const VirtualMaterialsPage = () => {
     const unitLabel =
       virtualKind === 'kit'
         ? DEFAULT_VIRTUAL_UNIT
-        : bindingSummary.unitLabel || bindingSummary.baseUnit || '件'
+        : bindingSummary.unitLabel || bindingSummary.baseUnit || selectedUnit || '件'
     return `${formatCurrency(bindingSummary.totalPrice, currency)} / ${unitLabel}`
-  }, [bindingSummary, placeholderUnit, virtualKind])
+  }, [bindingSummary, manualBomUnitPrice, placeholderUnit, selectedUnit, virtualKind])
   const totalRatioPercent = useMemo(() => {
     if (virtualKind !== 'recipe') {
       return null
@@ -812,15 +831,22 @@ const VirtualMaterialsPage = () => {
       // - kit：固定“套”
       // - recipe：自动从子物料单位推导（展示在 BOM 单价里）
       // - placeholder：必须显式选择 unit（后续模型替换映射依赖）
+      const unitFromForm = String(values.unit ?? '').trim() || undefined
       const unit =
         kind === 'kit'
           ? DEFAULT_VIRTUAL_UNIT
           : kind === 'placeholder'
             ? String(values.unit || '').trim()
-            : (bindingSummary.baseUnit ?? undefined)
+            : (bindingSummary.baseUnit || unitFromForm)
       if (kind === 'placeholder') {
         if (!unit) {
           message.error('占位型必须选择单位')
+          return
+        }
+      }
+      if (kind === 'recipe' && !bindingSummary.baseUnit) {
+        if (!unit) {
+          message.error('配方型在未绑定物料时，请先选择单位（用于兜底/对账）')
           return
         }
       }
@@ -1482,6 +1508,42 @@ const VirtualMaterialsPage = () => {
                       <Input placeholder="请输入虚拟物料名称" />
                     </Form.Item>
                   </Col>
+                  <Form.Item noStyle shouldUpdate={(prev, curr) => prev.virtual_kind !== curr.virtual_kind}>
+                    {() => {
+                      const kind = (basicForm.getFieldValue('virtual_kind') as VirtualKind) ?? 'kit'
+                      if (kind === 'kit') return null
+                      if (kind === 'placeholder') return null // placeholder 已有“单位”字段（且必填）
+                      // recipe：允许在未绑定子物料时手选单位，用于“兜底-零成本”类虚拟物料
+                      return (
+                        <Col xs={24} md={12}>
+                          <Form.Item
+                            label="单位（可选）"
+                            name="unit"
+                            extra="配方型默认从子物料推导单位；若尚未绑定子物料（如兜底零成本），可先手动选择单位。"
+                          >
+                            <Select allowClear options={VM_UNIT_OPTIONS} placeholder="未绑定子物料时建议先选" />
+                          </Form.Item>
+                        </Col>
+                      )
+                    }}
+                  </Form.Item>
+                  <Form.Item noStyle shouldUpdate={(prev, curr) => prev.virtual_kind !== curr.virtual_kind}>
+                    {() => {
+                      const kind = (basicForm.getFieldValue('virtual_kind') as VirtualKind) ?? 'kit'
+                      if (kind === 'placeholder') return null
+                      return (
+                        <Col xs={24} md={12}>
+                          <Form.Item
+                            label="虚拟 BOM 单价（可手填）"
+                            name={['metadata_json', 'bom_unit_price']}
+                            extra="可用于“兜底-零成本”等场景（例如填 0）。若不填则按绑定真实物料自动汇总推导。"
+                          >
+                            <InputNumber min={0} precision={6} style={{ width: '100%' }} placeholder="例如：0" />
+                          </Form.Item>
+                        </Col>
+                      )
+                    }}
+                  </Form.Item>
                   <Col xs={24} md={12}>
                     <Form.Item
                       label="分类"

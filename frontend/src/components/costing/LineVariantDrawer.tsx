@@ -532,6 +532,10 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
 
       const enableGate = (row: ModalRuleRow): string | null => {
         if (!row.enabled) return null
+        // IMPORTANT:
+        // 新增/编辑其他行时会 invalidatePreview()，此时 lastPreviewOk 会被清空。
+        // 但“已入库且未改动”的已启用规则并没有发生变化，不应该阻塞保存（否则会出现：预演被 dirty 拦住、保存又要求预演 的死循环）。
+        if (row.id && !row.dirty) return null
         if (!lastPreviewOk) return '启用前必须先预演成功（spec/parse + bom/generate）'
         if (needDim && (lastPreviewSummary as any)?.[needDim] == null) return `你选择了“${triggerLabel(draftTriggerType)}”，但预演样例未解析出对应数值，请换 spec_text 重新预演`
         const ref = String(row.item.material_ref_id ?? '').trim()

@@ -666,73 +666,62 @@ def sync_version_lines_from_modules(
         existing_by_source_proc[key] = row
 
     selected = {str(x).strip() for x in (module_ids or []) if str(x).strip()}
-    # Decide which existing rows should be removed for re-sync.
+    # IMPORTANT:
+    # Do NOT delete+recreate module-derived version lines during sync.
+    # These line IDs may be referenced by line variants (base_line_id) with FK ondelete=CASCADE.
+    # If we delete module rows during sync, operators will "lose" line variants after clicking "同步".
+    #
+    # Sync policy:
     # - selected empty: sync all modules
-    #   - keep_overrides=True: keep user-added (non-module) rows; refresh module-derived rows
-    #   - keep_overrides=False: wipe everything (original behavior)
-    # - selected non-empty: only refresh selected modules; keep others (and keep user-added rows)
-    to_delete_mat: list[models.ModelVersionMaterial] = []
-    to_delete_proc: list[models.ModelVersionProcess] = []
-    if not selected and not keep_overrides:
-        db.query(models.ModelVersionMaterial).filter(models.ModelVersionMaterial.version_id == version.id).delete(
-            synchronize_session=False
-        )
-        db.query(models.ModelVersionProcess).filter(models.ModelVersionProcess.version_id == version.id).delete(
-            synchronize_session=False
-        )
-        kept_mat_max_seq = 0
-        kept_proc_max_seq = 0
-    else:
-        # Row-by-row delete to preserve non-module rows (and/or unselected modules)
-        kept_mat_max_seq = 0
-        kept_proc_max_seq = 0
-        if not selected:
-            # sync all modules but keep non-module rows
-            for row in existing_materials:
-                meta = row.metadata_json or {}
-                src = str(meta.get("source_module_id") or "").strip()
-                if src:
-                    to_delete_mat.append(row)
-                else:
-                    kept_mat_max_seq = max(kept_mat_max_seq, int(row.sequence_order or 0))
-            for row in existing_processes:
-                meta = row.metadata_json or {}
-                src = str(meta.get("source_module_id") or "").strip()
-                if src:
-                    to_delete_proc.append(row)
-                else:
-                    kept_proc_max_seq = max(kept_proc_max_seq, int(row.sequence_order or 0))
-        else:
-            # selected sync: only delete rows belonging to selected modules
-            for row in existing_materials:
-                meta = row.metadata_json or {}
-                src = str(meta.get("source_module_id") or "").strip()
-                if src and src in selected:
-                    to_delete_mat.append(row)
-                else:
-                    kept_mat_max_seq = max(kept_mat_max_seq, int(row.sequence_order or 0))
-            for row in existing_processes:
-                meta = row.metadata_json or {}
-                src = str(meta.get("source_module_id") or "").strip()
-                if src and src in selected:
-                    to_delete_proc.append(row)
-                else:
-                    kept_proc_max_seq = max(kept_proc_max_seq, int(row.sequence_order or 0))
+    #   - keep_overrides=True: keep user-added rows; refresh module-derived rows IN-PLACE
+    #   - keep_overrides=False: wipe user-added rows; refresh module-derived rows IN-PLACE
+    # - selected non-empty: only refresh selected modules; keep other modules and user-added rows
+    refresh_modules: set[str] = selected if selected else {str(x).strip() for x in all_module_ids if str(x).strip()}
+    wipe_user_added_rows = (not selected) and (not keep_overrides)
 
-        for row in to_delete_mat:
-            db.delete(row)
-        for row in to_delete_proc:
-            db.delete(row)
+    # When wipe_user_added_rows, delete rows without source_module_id (user-added), but keep module-derived rows
+    # so their ids stay stable for line variants.
+    if wipe_user_added_rows:
+        for row in existing_materials:
+            meta = row.metadata_json or {}
+            if not str(meta.get("source_module_id") or "").strip():
+                db.delete(row)
+        for row in existing_processes:
+            meta = row.metadata_json or {}
+            if not str(meta.get("source_module_id") or "").strip():
+                db.delete(row)
         db.flush()
+
+    # Compute max sequence among rows that are kept (not in refresh scope)
+    kept_mat_max_seq = 0
+    kept_proc_max_seq = 0
+    for row in existing_materials:
+        meta = row.metadata_json or {}
+        src = str(meta.get("source_module_id") or "").strip()
+        if wipe_user_added_rows and not src:
+            continue
+        if src and src in refresh_modules:
+            continue
+        kept_mat_max_seq = max(kept_mat_max_seq, int(row.sequence_order or 0))
+    for row in existing_processes:
+        meta = row.metadata_json or {}
+        src = str(meta.get("source_module_id") or "").strip()
+        if wipe_user_added_rows and not src:
+            continue
+        if src and src in refresh_modules:
+            continue
+        kept_proc_max_seq = max(kept_proc_max_seq, int(row.sequence_order or 0))
 
     # Ensure new rows get non-conflicting sequence_order (append after kept rows)
     seq_mat = kept_mat_max_seq
     seq_proc = kept_proc_max_seq
+    produced_source_keys_mat: set[str] = set()
+    produced_source_keys_proc: set[str] = set()
     for link in module_links:
         module = module_by_id.get(link.module_id)
         if not module:
             continue
-        if selected and str(module.id) not in selected:
+        if refresh_modules and str(module.id) not in refresh_modules:
             continue
 
         for m in module.materials or []:
@@ -831,22 +820,42 @@ def sync_version_lines_from_modules(
                             "name": vm.name,
                         }
 
-            db.add(
-                models.ModelVersionMaterial(
-                    version_id=version.id,
-                    material_type=mat_kind,
-                    material_ref_id=ref_id,
-                    material_code=mat_code,
-                    material_name=mat_name,
-                    unit_of_measure=uom,
-                    calculation_method=method,
-                    base_quantity=base_qty,
-                    loss_rate=_decimal(m.loss_rate, Decimal("0")),
-                    sequence_order=seq_mat,
-                    notes=m.selection_notes,
-                    metadata_json=_json_safe(meta),
-                )
-            )
+            produced_source_keys_mat.add(source_key)
+            row = existing_by_source_mat.get(source_key)
+
+            # keep_overrides: preserve version-level adjustments on module-derived rows
+            if row and keep_overrides:
+                mat_kind = row.material_type or mat_kind
+                ref_id = row.material_ref_id or ref_id
+                mat_code = row.material_code or mat_code
+                mat_name = row.material_name or mat_name
+                uom = row.unit_of_measure or uom
+                method = row.calculation_method or method
+                base_qty = _decimal(row.base_quantity, base_qty)
+                loss_rate = _decimal(row.loss_rate, _decimal(m.loss_rate, Decimal("0")))
+                notes = row.notes
+            else:
+                loss_rate = _decimal(m.loss_rate, Decimal("0"))
+                notes = m.selection_notes
+
+            if not row:
+                row = models.ModelVersionMaterial(version_id=version.id)
+                db.add(row)
+
+            row.version_id = version.id
+            row.material_type = mat_kind
+            row.material_ref_id = ref_id
+            row.material_code = mat_code
+            row.material_name = mat_name
+            row.unit_of_measure = uom
+            row.calculation_method = method
+            row.base_quantity = base_qty
+            row.loss_rate = loss_rate
+            row.sequence_order = seq_mat
+            row.notes = notes
+            base_meta = dict(getattr(row, "metadata_json", None) or {})
+            base_meta.update(meta)
+            row.metadata_json = _json_safe(base_meta)
 
         for s in module.steps or []:
             if s.is_archived:
@@ -903,15 +912,39 @@ def sync_version_lines_from_modules(
                 ):
                     if k in old_meta:
                         meta[k] = old_meta[k]
-            db.add(
-                models.ModelVersionProcess(
-                    version_id=version.id,
-                    process_id=s.process_id,
-                    sequence_order=seq_proc,
-                    notes=s.notes,
-                    metadata_json=_json_safe(meta),
-                )
-            )
+            produced_source_keys_proc.add(source_key)
+            rowp = existing_by_source_proc.get(source_key)
+            if not rowp:
+                rowp = models.ModelVersionProcess(version_id=version.id)
+                db.add(rowp)
+            rowp.version_id = version.id
+            rowp.process_id = s.process_id
+            rowp.sequence_order = seq_proc
+            rowp.notes = rowp.notes if (rowp and keep_overrides) else s.notes
+            base_meta_p = dict(getattr(rowp, "metadata_json", None) or {})
+            base_meta_p.update(meta)
+            rowp.metadata_json = _json_safe(base_meta_p)
+
+    # Delete stale module-derived rows in refresh scope that were not produced in this run
+    for row in list_version_material_lines(db, version.id):
+        meta = row.metadata_json or {}
+        src = str(meta.get("source_module_id") or "").strip()
+        src_row = str(meta.get("source_row_id") or "").strip()
+        if not src or not src_row:
+            continue
+        key = f"{src}::{src_row}"
+        if src in refresh_modules and key not in produced_source_keys_mat:
+            db.delete(row)
+    for row in list_version_process_lines(db, version.id):
+        meta = row.metadata_json or {}
+        src = str(meta.get("source_module_id") or "").strip()
+        src_row = str(meta.get("source_row_id") or "").strip()
+        if not src or not src_row:
+            continue
+        key = f"{src}::{src_row}"
+        if src in refresh_modules and key not in produced_source_keys_proc:
+            db.delete(row)
+    db.flush()
 
     db.commit()
 

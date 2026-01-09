@@ -87,6 +87,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-08（Frontend：筛选器弹窗 UI 收口：移除说明 Alert；将“变体/指定”模式开关移到弹窗顶部独立一行，保留一条简短提示。验收 `npm -C frontend run build`，并已原子发布静态资源）
 - **最近校对（北京时间 GMT+8）**：2026-01-08（Frontend：视觉优化：明细中的 `TOKEN` / `FORCE` 标签底色改为更淡的浅色背景（配深色字与边框），降低刺眼感。验收 `npm -C frontend run build`，并已原子发布静态资源）
 - **最近校对（北京时间 GMT+8）**：2026-01-08（Frontend：编辑套装模板抽屉左侧短语列表新增“删除”按钮（带二次确认与风险提示：若线上已用该 selector 编码建议先停用），删除会同步清理 `presetSelectedByIdx` 并修正当前选中项。验收 `npm -C frontend run build`，并已原子发布静态资源）
+- **最近校对（北京时间 GMT+8）**：2026-01-08（Frontend：模型变体规则编辑器增强：新增触发类型“尺寸（宽+高，cm）”，允许同一条规则同时配置 token(any/all)+width_between+height_between，并保持替换物料在同一行选择；用于落地“材质用 TOKEN、尺寸用条件”的写法。验收 `npm -C frontend run build`，并已原子发布静态资源）
 
 ### 关键口径备忘（避免回滚/重构改坏）
 

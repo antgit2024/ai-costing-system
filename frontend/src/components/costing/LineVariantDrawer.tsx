@@ -43,7 +43,7 @@ type EditableItemRow = LineVariantItemPayload & {
 }
 
 type MetricOp = 'off' | 'gte' | 'lte' | 'eq' | 'between'
-type TriggerType = 'token' | 'width' | 'height' | 'area' | 'perimeter'
+type TriggerType = 'token' | 'width' | 'height' | 'area' | 'perimeter' | 'size'
 type TokenMode = 'any' | 'all'
 
 type ModalRuleRow = {
@@ -57,6 +57,10 @@ type ModalRuleRow = {
   op: Exclude<MetricOp, 'off'>
   min: number | null
   max: number | null
+  // size mode (height)
+  h_op?: Exclude<MetricOp, 'off'>
+  h_min?: number | null
+  h_max?: number | null
   token_any: string[]
   token_all: string[]
   // item (1->1)
@@ -211,18 +215,21 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
   }, [baseLineQuery.data, baseLineId])
 
   const inferTriggerType = (cond: any): TriggerType => {
+    // Prefer size trigger when both width/height constraints exist (even if token exists).
+    if (cond?.width_between && cond?.height_between) return 'size'
     const anyCnt = asStringArray(cond?.spec_contains_any).length
     const allCnt = asStringArray(cond?.spec_contains_all).length
-    if (anyCnt || allCnt) return 'token'
     if (cond?.perimeter_between) return 'perimeter'
     if (cond?.area_between) return 'area'
     if (cond?.width_between) return 'width'
     if (cond?.height_between) return 'height'
+    if (anyCnt || allCnt) return 'token'
     return 'token'
   }
 
   const triggerLabel = (t: TriggerType): string => {
     if (t === 'token') return 'token（包含）'
+    if (t === 'size') return '尺寸（宽+高，cm）'
     if (t === 'width') return '宽度（cm）'
     if (t === 'height') return '高度（cm）'
     if (t === 'area') return '面积（m²）'
@@ -263,8 +270,22 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     let op: Exclude<MetricOp, 'off'> = 'gte'
     let min: number | null = null
     let max: number | null = null
+    let h_op: Exclude<MetricOp, 'off'> = 'gte'
+    let h_min: number | null = null
+    let h_max: number | null = null
     const t = inferTriggerType(cond)
-    if (t !== 'token') {
+    if (t === 'size') {
+      const wPair = asBetween(cond.width_between)
+      const hPair = asBetween(cond.height_between)
+      const wOp = opFromBetween(wPair)
+      const hOp = opFromBetween(hPair)
+      op = (wOp === 'off' ? 'gte' : wOp) as any
+      min = wPair?.[0] ?? null
+      max = wPair?.[1] ?? null
+      h_op = (hOp === 'off' ? 'gte' : hOp) as any
+      h_min = hPair?.[0] ?? null
+      h_max = hPair?.[1] ?? null
+    } else if (t !== 'token') {
       const pair =
         t === 'width'
           ? asBetween(cond.width_between)
@@ -288,6 +309,9 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
       op,
       min,
       max,
+      h_op,
+      h_min,
+      h_max,
       token_any: anyArr,
       token_all: allArr,
       item: item0,
@@ -295,10 +319,9 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
   }
 
   const rowToConditions = (trigger: TriggerType, row: ModalRuleRow): any => {
-    if (trigger === 'token') {
+    const withToken = (base: any) => {
       const anyArr = row.token_any ?? []
       const allArr0 = row.token_all ?? []
-      // UI 侧默认自动锚定 MODEL:<code>（用户不用手输），以减少跨品类扩展后的误触发风险。
       const allArr = (() => {
         if (!autoAnchorModelToken) return allArr0
         if (!modelAnchorToken) return allArr0
@@ -306,8 +329,9 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
         if (lower.has(modelAnchorToken.toLowerCase())) return allArr0
         return [...allArr0, modelAnchorToken]
       })()
-      return { spec_contains_any: anyArr, spec_contains_all: allArr }
+      return { ...base, spec_contains_any: anyArr, spec_contains_all: allArr }
     }
+    if (trigger === 'token') return withToken({})
     const toPair = (): [number | null, number | null] | null => {
       const a = row.min
       const b = row.max
@@ -316,11 +340,23 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
       if (row.op === 'lte') return [null, b]
       return [a, a]
     }
+    const toPairH = (): [number | null, number | null] | null => {
+      const a = row.h_min ?? null
+      const b = row.h_max ?? null
+      const op = row.h_op ?? 'gte'
+      if (op === 'between') return [a, b]
+      if (op === 'gte') return [a, null]
+      if (op === 'lte') return [null, b]
+      return [a, a]
+    }
     const pair = betweenToPayload(toPair())
     if (trigger === 'width') return { spec_contains_any: [], spec_contains_all: [], width_between: pair }
     if (trigger === 'height') return { spec_contains_any: [], spec_contains_all: [], height_between: pair }
     if (trigger === 'area') return { spec_contains_any: [], spec_contains_all: [], area_between: pair }
-    return { spec_contains_any: [], spec_contains_all: [], perimeter_between: pair }
+    if (trigger === 'perimeter') return { spec_contains_any: [], spec_contains_all: [], perimeter_between: pair }
+    // size: token + width + height
+    const hPair = betweenToPayload(toPairH())
+    return withToken({ width_between: pair, height_between: hPair })
   }
 
   const inferTokenMode = (r: ModalRuleRow): TokenMode => {
@@ -412,6 +448,9 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
         op: r.op,
         min: r.min ?? null,
         max: r.max ?? null,
+        h_op: r.h_op ?? null,
+        h_min: r.h_min ?? null,
+        h_max: r.h_max ?? null,
         token_any: r.token_any ?? [],
         token_all: r.token_all ?? [],
         item: {
@@ -510,6 +549,8 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
               ? 'area_m2'
               : draftTriggerType === 'perimeter'
                 ? 'perimeter_m'
+                : draftTriggerType === 'size'
+                  ? 'size_wh'
                 : null
 
       const itemPayloadFromRow = (it: EditableItemRow): LineVariantItemPayload => ({
@@ -537,7 +578,13 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
         // 但“已入库且未改动”的已启用规则并没有发生变化，不应该阻塞保存（否则会出现：预演被 dirty 拦住、保存又要求预演 的死循环）。
         if (row.id && !row.dirty) return null
         if (!lastPreviewOk) return '启用前必须先预演成功（spec/parse + bom/generate）'
-        if (needDim && (lastPreviewSummary as any)?.[needDim] == null) return `你选择了“${triggerLabel(draftTriggerType)}”，但预演样例未解析出对应数值，请换 spec_text 重新预演`
+        if (needDim === 'size_wh') {
+          if ((lastPreviewSummary as any)?.width_cm == null || (lastPreviewSummary as any)?.height_cm == null) {
+            return `你选择了“${triggerLabel(draftTriggerType)}”，但预演样例未解析出宽/高，请换 spec_text 重新预演`
+          }
+        } else if (needDim && (lastPreviewSummary as any)?.[needDim] == null) {
+          return `你选择了“${triggerLabel(draftTriggerType)}”，但预演样例未解析出对应数值，请换 spec_text 重新预演`
+        }
         const ref = String(row.item.material_ref_id ?? '').trim()
         if (!ref) return '请先选择替换物料并保存（让后端回填单位）'
         if (!baseUnit || !normalizeUnit(row.item.unit_of_measure)) {
@@ -858,6 +905,9 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
         op: 'gte',
         min: null,
         max: null,
+        h_op: 'gte',
+        h_min: null,
+        h_max: null,
         token_any: [],
         token_all: [],
         item: blankItemRow(),
@@ -981,6 +1031,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                     style={{ width: 220 }}
                     options={[
                       { label: 'token（包含）', value: 'token' },
+                      { label: '尺寸（宽+高，cm）', value: 'size' },
                       { label: '宽度（cm）', value: 'width' },
                       { label: '高度（cm）', value: 'height' },
                       { label: '面积（m²）', value: 'area' },
@@ -989,7 +1040,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                     onChange={(v) => handleTriggerTypeChange(v as any)}
                   />
                   <Tag color="blue">action=replace_self</Tag>
-                  {draftTriggerType === 'token' && modelAnchorToken ? (
+                  {(draftTriggerType === 'token' || draftTriggerType === 'size') && modelAnchorToken ? (
                     <Space size={6}>
                       <Tag color={autoAnchorModelToken ? 'blue' : 'default'}>自动锚定：{modelAnchorToken}</Tag>
                       <Switch
@@ -1041,6 +1092,9 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                           }
                           if (v) {
                             const needDim =
+                              draftTriggerType === 'size'
+                                ? 'size_wh'
+                                : 
                               draftTriggerType === 'width'
                                 ? 'width_cm'
                                 : draftTriggerType === 'height'
@@ -1050,7 +1104,12 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                                     : draftTriggerType === 'perimeter'
                                       ? 'perimeter_m'
                                       : null
-                            if (needDim && (lastPreviewSummary as any)?.[needDim] == null) {
+                            if (needDim === 'size_wh') {
+                              if ((lastPreviewSummary as any)?.width_cm == null || (lastPreviewSummary as any)?.height_cm == null) {
+                                message.error(`你选择了“${triggerLabel(draftTriggerType)}”，但预演样例未解析出宽/高，请换 spec_text 重新预演`)
+                                return
+                              }
+                            } else if (needDim && (lastPreviewSummary as any)?.[needDim] == null) {
                               message.error(`你选择了“${triggerLabel(draftTriggerType)}”，但预演样例未解析出对应数值，请换 spec_text 重新预演`)
                               return
                             }
@@ -1081,7 +1140,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                   {
                     title: '条件表达式',
                     render: (_: any, r: ModalRuleRow) => {
-                      if (draftTriggerType === 'token') {
+                      if (draftTriggerType === 'token' || draftTriggerType === 'size') {
                         const mode = inferTokenMode(r)
                         const tokenStr = (mode === 'all' ? r.token_all : r.token_any).join(',')
                         return (
@@ -1115,6 +1174,73 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                               style={{ width: 260 }}
                               size="small"
                             />
+                            {draftTriggerType === 'size' ? (
+                              <Space wrap size={6}>
+                                <Tag style={{ marginInlineStart: 4 }}>宽(cm)</Tag>
+                                <Select
+                                  size="small"
+                                  value={r.op}
+                                  style={{ width: 92 }}
+                                  options={[
+                                    { label: '≥', value: 'gte' },
+                                    { label: '≤', value: 'lte' },
+                                    { label: '=', value: 'eq' },
+                                    { label: '区间', value: 'between' },
+                                  ]}
+                                  onChange={(v) => updateModalRow(r.key, { op: v as any })}
+                                />
+                                {r.op === 'between' ? (
+                                  <Space wrap size={6}>
+                                    <InputNumber size="small" placeholder="min" value={r.min} onChange={(v) => updateModalRow(r.key, { min: v == null ? null : Number(v) })} />
+                                    <Text type="secondary">到</Text>
+                                    <InputNumber size="small" placeholder="max" value={r.max} onChange={(v) => updateModalRow(r.key, { max: v == null ? null : Number(v) })} />
+                                  </Space>
+                                ) : (
+                                  <InputNumber
+                                    size="small"
+                                    placeholder="value"
+                                    value={r.op === 'lte' ? r.max : r.min}
+                                    onChange={(v) => {
+                                      const n = v == null ? null : Number(v)
+                                      if (r.op === 'lte') updateModalRow(r.key, { max: n })
+                                      else updateModalRow(r.key, { min: n })
+                                    }}
+                                  />
+                                )}
+
+                                <Tag style={{ marginInlineStart: 4 }}>高(cm)</Tag>
+                                <Select
+                                  size="small"
+                                  value={r.h_op ?? 'gte'}
+                                  style={{ width: 92 }}
+                                  options={[
+                                    { label: '≥', value: 'gte' },
+                                    { label: '≤', value: 'lte' },
+                                    { label: '=', value: 'eq' },
+                                    { label: '区间', value: 'between' },
+                                  ]}
+                                  onChange={(v) => updateModalRow(r.key, { h_op: v as any })}
+                                />
+                                {(r.h_op ?? 'gte') === 'between' ? (
+                                  <Space wrap size={6}>
+                                    <InputNumber size="small" placeholder="min" value={r.h_min ?? null} onChange={(v) => updateModalRow(r.key, { h_min: v == null ? null : Number(v) })} />
+                                    <Text type="secondary">到</Text>
+                                    <InputNumber size="small" placeholder="max" value={r.h_max ?? null} onChange={(v) => updateModalRow(r.key, { h_max: v == null ? null : Number(v) })} />
+                                  </Space>
+                                ) : (
+                                  <InputNumber
+                                    size="small"
+                                    placeholder="value"
+                                    value={(r.h_op ?? 'gte') === 'lte' ? (r.h_max ?? null) : (r.h_min ?? null)}
+                                    onChange={(v) => {
+                                      const n = v == null ? null : Number(v)
+                                      if ((r.h_op ?? 'gte') === 'lte') updateModalRow(r.key, { h_max: n })
+                                      else updateModalRow(r.key, { h_min: n })
+                                    }}
+                                  />
+                                )}
+                              </Space>
+                            ) : null}
                             {modelAnchorToken ? (
                               <Tag color={autoAnchorModelToken ? 'blue' : 'default'}>
                                 自动锚定：{modelAnchorToken} {autoAnchorModelToken ? '' : '（已关闭）'}

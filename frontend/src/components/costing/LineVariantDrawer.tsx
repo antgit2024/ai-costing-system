@@ -50,6 +50,10 @@ type ModalRuleRow = {
   key: string
   id?: string
   enabled: boolean
+  // per-row trigger (for token mode: 一级=token, 二级=size)
+  trigger_type: TriggerType
+  // 二级规则归属（用于把 size 规则挂到某条 token 一级下）
+  parent_variant_id?: string | null
   // UI-only: local edits not persisted to backend yet.
   dirty?: boolean
   token_mode?: TokenMode
@@ -304,6 +308,8 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
       key,
       id: v.id,
       enabled: !!v.enabled,
+      trigger_type: t,
+      parent_variant_id: (v as any)?.metadata ? (String(((v as any).metadata as any)?.parent_variant_id ?? '').trim() || null) : null,
       dirty: false,
       token_mode: anyArr.length > 0 ? 'any' : 'all',
       op,
@@ -400,7 +406,18 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
   useEffect(() => {
     if (!editModalOpen) return
     // keep rows in sync with current trigger selection (simple filter view)
-    const filtered = variants.filter((v) => inferTriggerType((v.conditions ?? {}) as any) === draftTriggerType)
+    const filtered =
+      draftTriggerType === 'token'
+        ? variants.filter((v) => {
+            const t = inferTriggerType((v.conditions ?? {}) as any)
+            if (t === 'token') return true
+            if (t === 'size') {
+              const pid = String(((v as any)?.metadata as any)?.parent_variant_id ?? '').trim()
+              return !!pid
+            }
+            return false
+          })
+        : variants.filter((v) => inferTriggerType((v.conditions ?? {}) as any) === draftTriggerType)
     setModalRows(filtered.map((v) => rowFromVariant(v)))
   }, [editModalOpen, variants, draftTriggerType])
 
@@ -879,9 +896,24 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
         return merged
       }),
     )
+    // token 模式：二级尺寸继承一级 token；当一级 token 变化时同步给它的二级
+    const patchKeys = Object.keys(patch ?? {})
+    const touchedToken = patchKeys.includes('token_any') || patchKeys.includes('token_all') || patchKeys.includes('token_mode')
+    if (touchedToken && draftTriggerType === 'token') {
+      setModalRows((prev) => {
+        const parent = prev.find((x) => x.key === key)
+        if (!parent?.id) return prev
+        return prev.map((r) => {
+          if (r.trigger_type !== 'size') return r
+          if (String(r.parent_variant_id ?? '') !== String(parent.id)) return r
+          const next: ModalRuleRow = { ...r, ...(patch as any), dirty: true }
+          if (next.enabled) next.enabled = false
+          return next
+        })
+      })
+    }
     // 仅切换“启动(enabled)”不应使预演失效，否则会出现：预演通过→打开启动→保存时又提示必须预演 的冲突
-    const keys = Object.keys(patch ?? {})
-    const onlyEnabledToggle = keys.length === 1 && keys[0] === 'enabled'
+    const onlyEnabledToggle = patchKeys.length === 1 && patchKeys[0] === 'enabled'
     if (!onlyEnabledToggle) invalidatePreview()
   }
 
@@ -901,6 +933,8 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
       {
         key,
         enabled: false,
+        trigger_type: draftTriggerType,
+        parent_variant_id: null,
         dirty: true,
         op: 'gte',
         min: null,

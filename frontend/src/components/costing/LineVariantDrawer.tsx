@@ -54,6 +54,8 @@ type ModalRuleRow = {
   trigger_type: TriggerType
   // 二级规则归属（用于把 size 规则挂到某条 token 一级下）
   parent_variant_id?: string | null
+  // variant-level metadata (persisted on LineVariant itself)
+  metadata_json?: Record<string, unknown>
   // UI-only: local edits not persisted to backend yet.
   dirty?: boolean
   token_mode?: TokenMode
@@ -264,6 +266,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
 
   const rowFromVariant = (v: LineVariantDetailRead): ModalRuleRow => {
     const cond = (v.conditions ?? {}) as any
+    const meta = (v.metadata ?? {}) as any
     const anyArr = asStringArray(cond.spec_contains_any)
     let allArr = asStringArray(cond.spec_contains_all)
     // If backend stored auto anchor token, hide it from user input (show separately in UI).
@@ -309,7 +312,8 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
       id: v.id,
       enabled: !!v.enabled,
       trigger_type: t,
-      parent_variant_id: (v as any)?.metadata ? (String(((v as any).metadata as any)?.parent_variant_id ?? '').trim() || null) : null,
+      parent_variant_id: String(meta?.parent_variant_id ?? '').trim() || null,
+      metadata_json: (meta ?? {}) as any,
       dirty: false,
       token_mode: anyArr.length > 0 ? 'any' : 'all',
       op,
@@ -400,7 +404,9 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     setDraftStopOnHit(!!selectedVariant.stop_on_hit)
     const cond = (selectedVariant.conditions ?? {}) as any
     const inferred = inferTriggerType(cond)
-    setDraftTriggerType(inferred)
+    // token 二级（size）应回到 token 父子编辑模式
+    const pid = String(((selectedVariant as any)?.metadata as any)?.parent_variant_id ?? '').trim()
+    setDraftTriggerType(inferred === 'size' && pid ? 'token' : inferred)
   }, [open, selectedVariant])
 
   useEffect(() => {
@@ -418,7 +424,29 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
             return false
           })
         : variants.filter((v) => inferTriggerType((v.conditions ?? {}) as any) === draftTriggerType)
-    setModalRows(filtered.map((v) => rowFromVariant(v)))
+    const nextRows = filtered.map((v) => rowFromVariant(v))
+    if (draftTriggerType === 'token') {
+      const parentIds = new Set(
+        nextRows
+          .filter((r) => r.trigger_type === 'size')
+          .map((r) => String(r.parent_variant_id ?? '').trim())
+          .filter(Boolean),
+      )
+      const normalized = nextRows.map((r) => {
+        if (r.trigger_type !== 'token') return r
+        if (!r.id) return r
+        if (!parentIds.has(String(r.id))) return r
+        if (!r.enabled) return r
+        // 若后端历史上误启用了 token 一级（但存在二级），这里强制关闭并要求保存落库
+        return { ...r, enabled: false, dirty: true }
+      })
+      setModalRows(normalized)
+      if (nextRows.some((r) => r.trigger_type === 'token' && r.enabled && r.id && parentIds.has(String(r.id)))) {
+        message.warning('检测到 token 一级存在二级尺寸分段：已自动关闭一级“启动”。请保存以落库。')
+      }
+      return
+    }
+    setModalRows(nextRows)
   }, [editModalOpen, variants, draftTriggerType])
 
   useEffect(() => {
@@ -450,7 +478,9 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     const v = variants.find((x) => x.id === variantId)
     if (v) {
       const inferred = inferTriggerType((v.conditions ?? {}) as any)
-      setDraftTriggerType(inferred)
+      // token 二级（size）应回到 token 父子编辑模式
+      const pid = String(((v as any)?.metadata as any)?.parent_variant_id ?? '').trim()
+      setDraftTriggerType(inferred === 'size' && pid ? 'token' : inferred)
     }
     setEditModalOpen(true)
   }
@@ -461,6 +491,8 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     () =>
       modalRows.map((r) => ({
         id: r.id ?? null,
+        trigger_type: r.trigger_type ?? null,
+        parent_variant_id: r.parent_variant_id ?? null,
         // 注意：fingerprint 不包含 enabled，否则“预演通过 → 打开启动”会被判定为预演过期（逻辑冲突）
         op: r.op,
         min: r.min ?? null,
@@ -556,20 +588,6 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
 
   const modalSaveMutation = useMutation({
     mutationFn: async () => {
-      const unitOfTrigger = draftTriggerType === 'area' ? 'm²' : draftTriggerType === 'perimeter' ? 'm' : 'cm'
-      const needDim =
-        draftTriggerType === 'width'
-          ? 'width_cm'
-          : draftTriggerType === 'height'
-            ? 'height_cm'
-            : draftTriggerType === 'area'
-              ? 'area_m2'
-              : draftTriggerType === 'perimeter'
-                ? 'perimeter_m'
-                : draftTriggerType === 'size'
-                  ? 'size_wh'
-                : null
-
       const itemPayloadFromRow = (it: EditableItemRow): LineVariantItemPayload => ({
         sequence_order: 0,
         material_kind: (it.material_kind ?? 'real') as any,
@@ -588,19 +606,31 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
         metadata_json: (it.metadata_json ?? {}) as any,
       })
 
-      const enableGate = (row: ModalRuleRow): string | null => {
+      const needDimForRow = (row: ModalRuleRow): string | null => {
+        if (row.trigger_type === 'size') return 'size_wh'
+        if (row.trigger_type === 'width') return 'width_cm'
+        if (row.trigger_type === 'height') return 'height_cm'
+        if (row.trigger_type === 'area') return 'area_m2'
+        if (row.trigger_type === 'perimeter') return 'perimeter_m'
+        return null
+      }
+
+      const enableGate = (row: ModalRuleRow, hasChildRows: boolean): string | null => {
+        // token 父：只要有二级，就必须禁用（避免一级抢命中）
+        if (row.trigger_type === 'token' && hasChildRows) return '该 token 一级存在二级尺寸分段：一级不可启用（请启用二级）'
         if (!row.enabled) return null
         // IMPORTANT:
         // 新增/编辑其他行时会 invalidatePreview()，此时 lastPreviewOk 会被清空。
         // 但“已入库且未改动”的已启用规则并没有发生变化，不应该阻塞保存（否则会出现：预演被 dirty 拦住、保存又要求预演 的死循环）。
         if (row.id && !row.dirty) return null
         if (!lastPreviewOk) return '启用前必须先预演成功（spec/parse + bom/generate）'
-        if (needDim === 'size_wh') {
+        const need = needDimForRow(row)
+        if (need === 'size_wh') {
           if ((lastPreviewSummary as any)?.width_cm == null || (lastPreviewSummary as any)?.height_cm == null) {
-            return `你选择了“${triggerLabel(draftTriggerType)}”，但预演样例未解析出宽/高，请换 spec_text 重新预演`
+            return `你选择了“${triggerLabel(row.trigger_type)}”，但预演样例未解析出宽/高，请换 spec_text 重新预演`
           }
-        } else if (needDim && (lastPreviewSummary as any)?.[needDim] == null) {
-          return `你选择了“${triggerLabel(draftTriggerType)}”，但预演样例未解析出对应数值，请换 spec_text 重新预演`
+        } else if (need && (lastPreviewSummary as any)?.[need] == null) {
+          return `你选择了“${triggerLabel(row.trigger_type)}”，但预演样例未解析出对应数值，请换 spec_text 重新预演`
         }
         const ref = String(row.item.material_ref_id ?? '').trim()
         if (!ref) return '请先选择替换物料并保存（让后端回填单位）'
@@ -615,40 +645,70 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
 
       // validate rows first
       for (const r of modalRows) {
-        if (draftTriggerType === 'token') {
+        if (r.trigger_type === 'token' || r.trigger_type === 'size' || r.trigger_type === 'width' || r.trigger_type === 'height' || r.trigger_type === 'area' || r.trigger_type === 'perimeter') {
           // UI 会自动追加 MODEL 锚定，但规则仍必须至少填写 1 个“业务 token”（例如 WB02339）
           if ((r.token_any?.length ?? 0) === 0 && (r.token_all?.length ?? 0) === 0) {
             throw new Error('token 规则至少填写 1 个 token（推荐 token(all)：例如 WB02339）')
           }
-        } else {
+        }
+        if (r.trigger_type === 'size') {
+          // width
           if (r.op === 'between') {
-            if (r.min == null || r.max == null) throw new Error(`区间条件必须同时填写 min/max（单位 ${unitOfTrigger}）`)
+            if (r.min == null || r.max == null) throw new Error('尺寸规则：宽度区间必须同时填写 min/max（单位 cm）')
           } else if (r.op === 'gte' || r.op === 'eq') {
-            if (r.min == null) throw new Error(`条件值不能为空（单位 ${unitOfTrigger}）`)
+            if (r.min == null) throw new Error('尺寸规则：宽度条件值不能为空（单位 cm）')
           } else if (r.op === 'lte') {
-            if (r.max == null) throw new Error(`条件值不能为空（单位 ${unitOfTrigger}）`)
+            if (r.max == null) throw new Error('尺寸规则：宽度条件值不能为空（单位 cm）')
+          }
+          // height
+          const hop = r.h_op ?? 'gte'
+          if (hop === 'between') {
+            if (r.h_min == null || r.h_max == null) throw new Error('尺寸规则：高度区间必须同时填写 min/max（单位 cm）')
+          } else if (hop === 'gte' || hop === 'eq') {
+            if (r.h_min == null) throw new Error('尺寸规则：高度条件值不能为空（单位 cm）')
+          } else if (hop === 'lte') {
+            if (r.h_max == null) throw new Error('尺寸规则：高度条件值不能为空（单位 cm）')
+          }
+        } else if (r.trigger_type !== 'token') {
+          // metric-only rows (width/height/area/perimeter)
+          const unit = r.trigger_type === 'area' ? 'm²' : r.trigger_type === 'perimeter' ? 'm' : 'cm'
+          if (r.op === 'between') {
+            if (r.min == null || r.max == null) throw new Error(`区间条件必须同时填写 min/max（单位 ${unit}）`)
+          } else if (r.op === 'gte' || r.op === 'eq') {
+            if (r.min == null) throw new Error(`条件值不能为空（单位 ${unit}）`)
+          } else if (r.op === 'lte') {
+            if (r.max == null) throw new Error(`条件值不能为空（单位 ${unit}）`)
           }
         }
-        const gate = enableGate(r)
+        const hasChildRows =
+          r.trigger_type === 'token' ? modalRows.some((x) => x.trigger_type === 'size' && String(x.parent_variant_id ?? '') === String(r.id ?? '')) : false
+        const gate = enableGate(r, hasChildRows)
         if (gate) throw new Error(gate)
       }
 
       // persist rows sequentially
       for (let i = 0; i < modalRows.length; i++) {
         const r = modalRows[i]
-        const conditions = rowToConditions(draftTriggerType, r)
+        const conditions = rowToConditions(r.trigger_type, r)
         const items = [itemPayloadFromRow(r.item)]
+        const hasChildRows =
+          r.trigger_type === 'token' ? modalRows.some((x) => x.trigger_type === 'size' && String(x.parent_variant_id ?? '') === String(r.id ?? '')) : false
+        const enabled = r.trigger_type === 'token' && hasChildRows ? false : !!r.enabled
+        const metadataJson =
+          r.trigger_type === 'size'
+            ? ({ ...(r.metadata_json ?? {}), parent_variant_id: String(r.parent_variant_id ?? '').trim() || null } as any)
+            : (r.metadata_json ?? undefined)
         if (!r.id) {
           const payload: LineVariantCreateRequest = {
             version_id: versionId,
             base_line_id: baseLineId,
-            enabled: !!r.enabled,
+            enabled,
             priority: 100,
             action: FIXED_ACTION,
             stop_on_hit: true,
             notes: '',
             conditions,
-            metadata_json: {},
+            metadata_json: metadataJson ?? {},
             items,
             operator_id: 'planner-ui',
           }
@@ -664,12 +724,13 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
           }
         } else {
           const updatePayload: LineVariantUpdateRequest = {
-            enabled: !!r.enabled,
+            enabled,
             priority: 100,
             action: FIXED_ACTION,
             stop_on_hit: true,
             notes: undefined,
             conditions,
+            metadata_json: metadataJson,
             operator_id: 'planner-ui',
           }
           await updateLineVariant(r.id, updatePayload)
@@ -918,10 +979,34 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
   }
 
   const removeModalRow = async (row: ModalRuleRow) => {
+    if (draftTriggerType === 'token' && row.trigger_type === 'token' && row.id) {
+      const children = modalRows.filter((r) => r.trigger_type === 'size' && String(r.parent_variant_id ?? '') === String(row.id))
+      if (children.length > 0) {
+        const ok = await new Promise<boolean>((resolve) => {
+          Modal.confirm({
+            title: '删除一级规则？',
+            content: `该 token 一级下有 ${children.length} 条二级尺寸规则，将一并删除。是否继续？`,
+            okText: '继续删除',
+            okButtonProps: { danger: true },
+            cancelText: '取消',
+            onOk: () => resolve(true),
+            onCancel: () => resolve(false),
+          })
+        })
+        if (!ok) return
+        for (const c of children) {
+          if (c.id) await deleteVariantMutation.mutateAsync(c.id)
+        }
+      }
+    }
     if (row.id) {
       await deleteVariantMutation.mutateAsync(row.id)
     } else {
       setModalRows((prev) => prev.filter((r) => r.key !== row.key))
+    }
+    // token 模式删除父行：同时清理本地子行（未入库的）
+    if (draftTriggerType === 'token' && row.trigger_type === 'token' && row.id) {
+      setModalRows((prev) => prev.filter((r) => !(r.trigger_type === 'size' && String(r.parent_variant_id ?? '') === String(row.id))))
     }
     invalidatePreview()
   }
@@ -935,7 +1020,9 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
         enabled: false,
         trigger_type: draftTriggerType,
         parent_variant_id: null,
+        metadata_json: {},
         dirty: true,
+        token_mode: 'all',
         op: 'gte',
         min: null,
         max: null,
@@ -947,6 +1034,56 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
         item: blankItemRow(),
       },
     ])
+    invalidatePreview()
+  }
+
+  const tokenParents = useMemo(() => modalRows.filter((r) => r.trigger_type === 'token'), [modalRows])
+  const childrenByParentId = useMemo(() => {
+    const map: Record<string, ModalRuleRow[]> = {}
+    for (const r of modalRows) {
+      if (r.trigger_type !== 'size') continue
+      const pid = String(r.parent_variant_id ?? '').trim()
+      if (!pid) continue
+      if (!map[pid]) map[pid] = []
+      map[pid].push(r)
+    }
+    return map
+  }, [modalRows])
+  const childrenOf = (parentId: string | undefined): ModalRuleRow[] => (parentId ? childrenByParentId[String(parentId)] ?? [] : [])
+  const parentHasChildren = (parentId: string | undefined): boolean => childrenOf(parentId).length > 0
+
+  const addChildSizeRow = (parent: ModalRuleRow) => {
+    if (!parent?.id) {
+      message.warning('请先保存一级 token 规则（拿到ID）后再新增二级尺寸')
+      return
+    }
+    const key = `tmp-${Date.now()}-${Math.random().toString(16).slice(2)}`
+    const mode = inferTokenMode(parent)
+    const inheritedAll = mode === 'all' ? parent.token_all ?? [] : []
+    const inheritedAny = mode === 'any' ? parent.token_any ?? [] : []
+    setModalRows((prev) => [
+      ...(prev ?? []),
+      {
+        key,
+        enabled: false,
+        trigger_type: 'size',
+        parent_variant_id: parent.id,
+        metadata_json: { parent_variant_id: parent.id },
+        dirty: true,
+        token_mode: mode,
+        op: 'gte',
+        min: null,
+        max: null,
+        h_op: 'gte',
+        h_min: null,
+        h_max: null,
+        token_any: inheritedAny,
+        token_all: inheritedAll,
+        item: blankItemRow(),
+      },
+    ])
+    // 有二级：一级不可启用
+    updateModalRow(parent.key, { enabled: false } as any)
     invalidatePreview()
   }
 
@@ -1092,9 +1229,33 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
               }
               extra={
                 <Space size={8}>
+              {draftTriggerType === 'token' ? (
+                <>
                   <Button size="small" type="primary" onClick={addModalRow}>
-                    新增
+                    新增一级(token)
                   </Button>
+                  <Select
+                    size="small"
+                    placeholder="新增二级(尺寸)…"
+                    style={{ width: 220 }}
+                    value={null as any}
+                    options={tokenParents.map((p) => ({
+                      label: `${(inferTokenMode(p) === 'all' ? p.token_all : p.token_any).join(',') || '未命名token'} · ${p.id ? p.id.slice(0, 6) : '未保存'}`,
+                      value: p.key,
+                      disabled: !p.id,
+                    }))}
+                    onChange={(parentKey) => {
+                      const parent = tokenParents.find((p) => p.key === parentKey)
+                      if (!parent) return
+                      addChildSizeRow(parent)
+                    }}
+                  />
+                </>
+              ) : (
+                <Button size="small" type="primary" onClick={addModalRow}>
+                  新增
+                </Button>
+              )}
                   <Button
                     size="small"
                     type="primary"
@@ -1110,7 +1271,257 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                 rowKey="key"
                 size="small"
                 pagination={false}
-                dataSource={modalRows}
+                dataSource={draftTriggerType === 'token' ? tokenParents : modalRows}
+                expandable={
+                  draftTriggerType === 'token'
+                    ? {
+                        rowExpandable: (r) => r.trigger_type === 'token' && !!r.id && parentHasChildren(r.id),
+                        expandedRowRender: (parent) => (
+                          <Table
+                            rowKey="key"
+                            size="small"
+                            pagination={false}
+                            dataSource={childrenOf(parent.id)}
+                            columns={[
+                              {
+                                title: '启动',
+                                width: 70,
+                                render: (_: any, r: ModalRuleRow) => (
+                                  <Switch
+                                    checked={!!r.enabled}
+                                    onChange={(v) => {
+                                      if (v && r.dirty) {
+                                        message.error('规则有未保存改动：请先保存→预演→再启动。')
+                                        return
+                                      }
+                                      if (v && (!lastPreviewOk || previewStale)) {
+                                        message.error(previewStale ? '预演已过期：请先重新预演' : '启用前必须先预演成功')
+                                        return
+                                      }
+                                      if (v) {
+                                        if ((lastPreviewSummary as any)?.width_cm == null || (lastPreviewSummary as any)?.height_cm == null) {
+                                          message.error('你选择了“尺寸（宽+高）”，但预演样例未解析出宽/高，请换 spec_text 重新预演')
+                                          return
+                                        }
+                                        const ref = String(r.item.material_ref_id ?? '').trim()
+                                        if (!ref) {
+                                          message.error('请先选择替换物料并保存（让后端回填单位）')
+                                          return
+                                        }
+                                        if (!baseUnit) {
+                                          message.error('基准行单位缺失：请先补齐主数据单位并“保存清单”，再回来启用规则')
+                                          return
+                                        }
+                                        const targetU = normalizeUnit(r.item.unit_of_measure)
+                                        if (!targetU) {
+                                          message.error('替换物料单位缺失：请先保存（让后端回填 unit_of_measure）')
+                                          return
+                                        }
+                                        if (targetU !== baseUnit) {
+                                          message.error(`单位不一致：基准=${baseUnit}，替换物料=${targetU}（只允许同单位平替）`)
+                                          return
+                                        }
+                                      }
+                                      updateModalRow(r.key, { enabled: v })
+                                    }}
+                                  />
+                                ),
+                              },
+                              {
+                                title: '二级：尺寸（宽+高）',
+                                render: (_: any, r: ModalRuleRow) => {
+                                  const mode = inferTokenMode(r)
+                                  const tokenStr = (mode === 'all' ? r.token_all : r.token_any).join(',')
+                                  return (
+                                    <Space wrap size={8}>
+                                      <Tag>继承token</Tag>
+                                      <Text type="secondary">{tokenStr || '-'}</Text>
+                                      <Tag style={{ marginInlineStart: 4 }}>宽(cm)</Tag>
+                                      <Select
+                                        size="small"
+                                        value={r.op}
+                                        style={{ width: 92 }}
+                                        options={[
+                                          { label: '≥', value: 'gte' },
+                                          { label: '≤', value: 'lte' },
+                                          { label: '=', value: 'eq' },
+                                          { label: '区间', value: 'between' },
+                                        ]}
+                                        onChange={(v) => updateModalRow(r.key, { op: v as any })}
+                                      />
+                                      {r.op === 'between' ? (
+                                        <Space wrap size={6}>
+                                          <InputNumber
+                                            size="small"
+                                            placeholder="min"
+                                            value={r.min}
+                                            onChange={(v) => updateModalRow(r.key, { min: v == null ? null : Number(v) })}
+                                          />
+                                          <Text type="secondary">到</Text>
+                                          <InputNumber
+                                            size="small"
+                                            placeholder="max"
+                                            value={r.max}
+                                            onChange={(v) => updateModalRow(r.key, { max: v == null ? null : Number(v) })}
+                                          />
+                                        </Space>
+                                      ) : (
+                                        <InputNumber
+                                          size="small"
+                                          placeholder="value"
+                                          value={r.op === 'lte' ? r.max : r.min}
+                                          onChange={(v) => {
+                                            const n = v == null ? null : Number(v)
+                                            if (r.op === 'lte') updateModalRow(r.key, { max: n })
+                                            else updateModalRow(r.key, { min: n })
+                                          }}
+                                        />
+                                      )}
+
+                                      <Tag style={{ marginInlineStart: 4 }}>高(cm)</Tag>
+                                      <Select
+                                        size="small"
+                                        value={r.h_op ?? 'gte'}
+                                        style={{ width: 92 }}
+                                        options={[
+                                          { label: '≥', value: 'gte' },
+                                          { label: '≤', value: 'lte' },
+                                          { label: '=', value: 'eq' },
+                                          { label: '区间', value: 'between' },
+                                        ]}
+                                        onChange={(v) => updateModalRow(r.key, { h_op: v as any })}
+                                      />
+                                      {(r.h_op ?? 'gte') === 'between' ? (
+                                        <Space wrap size={6}>
+                                          <InputNumber
+                                            size="small"
+                                            placeholder="min"
+                                            value={r.h_min ?? null}
+                                            onChange={(v) => updateModalRow(r.key, { h_min: v == null ? null : Number(v) })}
+                                          />
+                                          <Text type="secondary">到</Text>
+                                          <InputNumber
+                                            size="small"
+                                            placeholder="max"
+                                            value={r.h_max ?? null}
+                                            onChange={(v) => updateModalRow(r.key, { h_max: v == null ? null : Number(v) })}
+                                          />
+                                        </Space>
+                                      ) : (
+                                        <InputNumber
+                                          size="small"
+                                          placeholder="value"
+                                          value={(r.h_op ?? 'gte') === 'lte' ? (r.h_max ?? null) : (r.h_min ?? null)}
+                                          onChange={(v) => {
+                                            const n = v == null ? null : Number(v)
+                                            if ((r.h_op ?? 'gte') === 'lte') updateModalRow(r.key, { h_max: n })
+                                            else updateModalRow(r.key, { h_min: n })
+                                          }}
+                                        />
+                                      )}
+                                    </Space>
+                                  )
+                                },
+                              },
+                              {
+                                title: '替换物料',
+                                width: 260,
+                                render: (_: any, r: ModalRuleRow) => (
+                                  <Space direction="vertical" size={0} style={{ width: '100%' }}>
+                                    <Space.Compact style={{ width: '100%' }}>
+                                      <Input
+                                        readOnly
+                                        placeholder="点击右侧“选择”"
+                                        value={String(r.item.material_code ?? '') || String(r.item.material_ref_id ?? '') || ''}
+                                      />
+                                      <Button
+                                        size="small"
+                                        onClick={() => {
+                                          setMaterialPickerRowKey(r.key)
+                                          setMaterialPickerOpen(true)
+                                        }}
+                                      >
+                                        选择
+                                      </Button>
+                                    </Space.Compact>
+                                    <Text type="secondary" style={{ fontSize: 12 }}>
+                                      {r.item.material_code ?? '-'} {r.item.material_name ?? ''}
+                                    </Text>
+                                    <Text type="secondary" style={{ fontSize: 12 }}>
+                                      单位：{r.item.unit_of_measure ?? '-'}
+                                    </Text>
+                                  </Space>
+                                ),
+                              },
+                              {
+                                title: '用量(β)',
+                                width: 70,
+                                render: (_: any, r: ModalRuleRow) => (
+                                  <InputNumber
+                                    size="small"
+                                    min={0}
+                                    value={toNumber(r.item.base_quantity, 0)}
+                                    onChange={(v) => updateModalRow(r.key, { item: { ...r.item, base_quantity: toNumber(v, 0) } })}
+                                    style={{ width: 70 }}
+                                  />
+                                ),
+                              },
+                              {
+                                title: '固定(α)',
+                                width: 70,
+                                render: (_: any, r: ModalRuleRow) => (
+                                  <InputNumber
+                                    size="small"
+                                    min={0}
+                                    value={toNumber(r.item.fixed_quantity, 0)}
+                                    onChange={(v) => updateModalRow(r.key, { item: { ...r.item, fixed_quantity: toNumber(v, 0) } })}
+                                    style={{ width: 70 }}
+                                  />
+                                ),
+                              },
+                              {
+                                title: '覆盖率',
+                                width: 70,
+                                render: (_: any, r: ModalRuleRow) => (
+                                  <InputNumber
+                                    size="small"
+                                    min={0}
+                                    max={1}
+                                    step={0.1}
+                                    value={toNumber(r.item.coverage_ratio, 1)}
+                                    onChange={(v) => updateModalRow(r.key, { item: { ...r.item, coverage_ratio: toNumber(v, 1) } })}
+                                    style={{ width: 70 }}
+                                  />
+                                ),
+                              },
+                              {
+                                title: '损耗%',
+                                width: 70,
+                                render: (_: any, r: ModalRuleRow) => (
+                                  <InputNumber
+                                    size="small"
+                                    min={0}
+                                    max={100}
+                                    value={toNumber(r.item.loss_rate, 0)}
+                                    onChange={(v) => updateModalRow(r.key, { item: { ...r.item, loss_rate: toNumber(v, 0) } })}
+                                    style={{ width: 70 }}
+                                  />
+                                ),
+                              },
+                              {
+                                title: '',
+                                width: 44,
+                                render: (_: any, r: ModalRuleRow) => (
+                                  <Button size="small" danger type="text" icon={<DeleteOutlined />} onClick={() => void removeModalRow(r)} />
+                                ),
+                              },
+                            ]}
+                            scroll={{ x: 1000 }}
+                          />
+                        ),
+                      }
+                    : undefined
+                }
                 columns={[
                   {
                     title: '启动',
@@ -1119,6 +1530,10 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                       <Switch
                         checked={!!r.enabled}
                         onChange={(v) => {
+                          if (draftTriggerType === 'token' && r.trigger_type === 'token' && r.id && parentHasChildren(r.id)) {
+                            message.error('该 token 一级存在二级尺寸分段：一级不可启用（请启用二级）')
+                            return
+                          }
                           if (v && r.dirty) {
                             message.error('规则有未保存改动：请先保存→预演→再启动。')
                             return
@@ -1128,26 +1543,26 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                             return
                           }
                           if (v) {
+                            const t = r.trigger_type
                             const needDim =
-                              draftTriggerType === 'size'
+                              t === 'size'
                                 ? 'size_wh'
-                                : 
-                              draftTriggerType === 'width'
-                                ? 'width_cm'
-                                : draftTriggerType === 'height'
-                                  ? 'height_cm'
-                                  : draftTriggerType === 'area'
-                                    ? 'area_m2'
-                                    : draftTriggerType === 'perimeter'
-                                      ? 'perimeter_m'
-                                      : null
+                                : t === 'width'
+                                  ? 'width_cm'
+                                  : t === 'height'
+                                    ? 'height_cm'
+                                    : t === 'area'
+                                      ? 'area_m2'
+                                      : t === 'perimeter'
+                                        ? 'perimeter_m'
+                                        : null
                             if (needDim === 'size_wh') {
                               if ((lastPreviewSummary as any)?.width_cm == null || (lastPreviewSummary as any)?.height_cm == null) {
-                                message.error(`你选择了“${triggerLabel(draftTriggerType)}”，但预演样例未解析出宽/高，请换 spec_text 重新预演`)
+                                message.error(`你选择了“${triggerLabel(t)}”，但预演样例未解析出宽/高，请换 spec_text 重新预演`)
                                 return
                               }
                             } else if (needDim && (lastPreviewSummary as any)?.[needDim] == null) {
-                              message.error(`你选择了“${triggerLabel(draftTriggerType)}”，但预演样例未解析出对应数值，请换 spec_text 重新预演`)
+                              message.error(`你选择了“${triggerLabel(t)}”，但预演样例未解析出对应数值，请换 spec_text 重新预演`)
                               return
                             }
                             const ref = String(r.item.material_ref_id ?? '').trim()
@@ -1226,7 +1641,22 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                         </Space>
                       )
 
-                      if (draftTriggerType === 'token') return tokenEditor
+                      if (draftTriggerType === 'token') {
+                        const hasChild = r.trigger_type === 'token' && r.id ? parentHasChildren(r.id) : false
+                        return (
+                          <Space wrap size={8}>
+                            {tokenEditor}
+                            {r.trigger_type === 'token' ? (
+                              <>
+                                {hasChild ? <Tag color="orange">存在二级：一级不可启用/不可选替换</Tag> : <Tag color="blue">一级：可直接替换</Tag>}
+                                <Button size="small" onClick={() => addChildSizeRow(r)} disabled={!r.id}>
+                                  新增二级(尺寸)
+                                </Button>
+                              </>
+                            ) : null}
+                          </Space>
+                        )
+                      }
 
                       if (draftTriggerType === 'size') {
                         return (
@@ -1370,6 +1800,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                           />
                           <Button
                             size="small"
+                            disabled={draftTriggerType === 'token' && r.trigger_type === 'token' && r.id ? parentHasChildren(r.id) : false}
                             onClick={() => {
                               setMaterialPickerRowKey(r.key)
                               setMaterialPickerOpen(true)
@@ -1384,6 +1815,11 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                         <Text type="secondary" style={{ fontSize: 12 }}>
                           单位：{r.item.unit_of_measure ?? '-'}
                         </Text>
+                        {draftTriggerType === 'token' && r.trigger_type === 'token' && r.id && parentHasChildren(r.id) ? (
+                          <Text type="secondary" style={{ fontSize: 12 }}>
+                            该一级存在二级：替换物料由二级决定
+                          </Text>
+                        ) : null}
                         {(() => {
                           const baseU = baseUnit
                           const targetU = normalizeUnit(r.item.unit_of_measure)
@@ -1404,6 +1840,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                       <InputNumber
                         size="small"
                         min={0}
+                        disabled={draftTriggerType === 'token' && r.trigger_type === 'token' && r.id ? parentHasChildren(r.id) : false}
                         value={toNumber(r.item.base_quantity, 0)}
                         onChange={(v) => updateModalRow(r.key, { item: { ...r.item, base_quantity: toNumber(v, 0) } })}
                         style={{ width: 70 }}
@@ -1417,6 +1854,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                       <InputNumber
                         size="small"
                         min={0}
+                        disabled={draftTriggerType === 'token' && r.trigger_type === 'token' && r.id ? parentHasChildren(r.id) : false}
                         value={toNumber(r.item.fixed_quantity, 0)}
                         onChange={(v) => updateModalRow(r.key, { item: { ...r.item, fixed_quantity: toNumber(v, 0) } })}
                         style={{ width: 70 }}
@@ -1432,6 +1870,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                         min={0}
                         max={1}
                         step={0.1}
+                        disabled={draftTriggerType === 'token' && r.trigger_type === 'token' && r.id ? parentHasChildren(r.id) : false}
                         value={toNumber(r.item.coverage_ratio, 1)}
                         onChange={(v) => updateModalRow(r.key, { item: { ...r.item, coverage_ratio: toNumber(v, 1) } })}
                         style={{ width: 70 }}
@@ -1446,6 +1885,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                         size="small"
                         min={0}
                         max={100}
+                        disabled={draftTriggerType === 'token' && r.trigger_type === 'token' && r.id ? parentHasChildren(r.id) : false}
                         value={toNumber(r.item.loss_rate, 0)}
                         onChange={(v) => updateModalRow(r.key, { item: { ...r.item, loss_rate: toNumber(v, 0) } })}
                         style={{ width: 70 }}

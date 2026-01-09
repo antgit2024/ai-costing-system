@@ -350,10 +350,10 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
       return [a, a]
     }
     const pair = betweenToPayload(toPair())
-    if (trigger === 'width') return { spec_contains_any: [], spec_contains_all: [], width_between: pair }
-    if (trigger === 'height') return { spec_contains_any: [], spec_contains_all: [], height_between: pair }
-    if (trigger === 'area') return { spec_contains_any: [], spec_contains_all: [], area_between: pair }
-    if (trigger === 'perimeter') return { spec_contains_any: [], spec_contains_all: [], perimeter_between: pair }
+    if (trigger === 'width') return withToken({ width_between: pair })
+    if (trigger === 'height') return withToken({ height_between: pair })
+    if (trigger === 'area') return withToken({ area_between: pair })
+    if (trigger === 'perimeter') return withToken({ perimeter_between: pair })
     // size: token + width + height
     const hPair = betweenToPayload(toPairH())
     return withToken({ width_between: pair, height_between: hPair })
@@ -1051,6 +1051,9 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                       />
                     </Space>
                   ) : null}
+                  <Text type="secondary">
+                    同一指标多段区间：请点“新增”添加多行规则（每行=一段区间，表示 OR）
+                  </Text>
                 </Space>
               }
               extra={
@@ -1140,117 +1143,152 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                   {
                     title: '条件表达式',
                     render: (_: any, r: ModalRuleRow) => {
-                      if (draftTriggerType === 'token' || draftTriggerType === 'size') {
-                        const mode = inferTokenMode(r)
-                        const tokenStr = (mode === 'all' ? r.token_all : r.token_any).join(',')
+                      // 一级：TOKEN（可空）。二级：选一个指标类型（token/尺寸/宽/高/面积/周长）
+                      const mode = inferTokenMode(r)
+                      const tokenStr = (mode === 'all' ? r.token_all : r.token_any).join(',')
+                      const tokenEditor = (
+                        <Space wrap size={6}>
+                          <Select
+                            size="small"
+                            value={mode}
+                            style={{ width: 120 }}
+                            options={[
+                              { label: 'token(all)', value: 'all' },
+                              { label: 'token(any)', value: 'any' },
+                            ]}
+                            onChange={(v) => {
+                              const next = (v as TokenMode) ?? 'all'
+                              if (next === 'all') {
+                                updateModalRow(r.key, {
+                                  token_mode: 'all',
+                                  token_all: r.token_all?.length ? r.token_all : r.token_any,
+                                  token_any: [],
+                                })
+                              }
+                              if (next === 'any') {
+                                updateModalRow(r.key, {
+                                  token_mode: 'any',
+                                  token_any: r.token_any?.length ? r.token_any : r.token_all,
+                                  token_all: [],
+                                })
+                              }
+                            }}
+                          />
+                          <Input
+                            placeholder={mode === 'all' ? 'TOKEN(all) 可空，逗号分隔' : 'TOKEN(any) 可空，逗号分隔'}
+                            value={tokenStr}
+                            onChange={(e) => {
+                              const arr = splitTokens(e.target.value)
+                              updateModalRow(r.key, mode === 'all' ? { token_all: arr } : { token_any: arr })
+                            }}
+                            style={{ width: 260 }}
+                            size="small"
+                          />
+                          {modelAnchorToken ? (
+                            <Tag color={autoAnchorModelToken ? 'blue' : 'default'}>
+                              自动锚定：{modelAnchorToken} {autoAnchorModelToken ? '' : '（已关闭）'}
+                            </Tag>
+                          ) : null}
+                        </Space>
+                      )
+
+                      if (draftTriggerType === 'token') return tokenEditor
+
+                      if (draftTriggerType === 'size') {
                         return (
-                          <Space wrap size={6}>
+                          <Space wrap size={8}>
+                            {tokenEditor}
+                            <Tag style={{ marginInlineStart: 4 }}>宽(cm)</Tag>
                             <Select
                               size="small"
-                              value={mode}
-                              style={{ width: 120 }}
+                              value={r.op}
+                              style={{ width: 92 }}
                               options={[
-                                { label: 'token(all)', value: 'all' },
-                                { label: 'token(any)', value: 'any' },
+                                { label: '≥', value: 'gte' },
+                                { label: '≤', value: 'lte' },
+                                { label: '=', value: 'eq' },
+                                { label: '区间', value: 'between' },
                               ]}
-                              onChange={(v) => {
-                                const next = (v as TokenMode) ?? 'all'
-                                // 切换模式时，把当前 token 迁移到对应字段，避免用户反复手填
-                                if (next === 'all') {
-                                  updateModalRow(r.key, { token_mode: 'all', token_all: r.token_all?.length ? r.token_all : r.token_any, token_any: [] })
-                                }
-                                if (next === 'any') {
-                                  updateModalRow(r.key, { token_mode: 'any', token_any: r.token_any?.length ? r.token_any : r.token_all, token_all: [] })
-                                }
-                              }}
+                              onChange={(v) => updateModalRow(r.key, { op: v as any })}
                             />
-                            <Input
-                              placeholder={mode === 'all' ? 'token(all) 逗号分隔' : 'token(any) 逗号分隔'}
-                              value={tokenStr}
-                              onChange={(e) => {
-                                const arr = splitTokens(e.target.value)
-                                updateModalRow(r.key, mode === 'all' ? { token_all: arr } : { token_any: arr })
-                              }}
-                              style={{ width: 260 }}
-                              size="small"
-                            />
-                            {draftTriggerType === 'size' ? (
+                            {r.op === 'between' ? (
                               <Space wrap size={6}>
-                                <Tag style={{ marginInlineStart: 4 }}>宽(cm)</Tag>
-                                <Select
+                                <InputNumber
                                   size="small"
-                                  value={r.op}
-                                  style={{ width: 92 }}
-                                  options={[
-                                    { label: '≥', value: 'gte' },
-                                    { label: '≤', value: 'lte' },
-                                    { label: '=', value: 'eq' },
-                                    { label: '区间', value: 'between' },
-                                  ]}
-                                  onChange={(v) => updateModalRow(r.key, { op: v as any })}
+                                  placeholder="min"
+                                  value={r.min}
+                                  onChange={(v) => updateModalRow(r.key, { min: v == null ? null : Number(v) })}
                                 />
-                                {r.op === 'between' ? (
-                                  <Space wrap size={6}>
-                                    <InputNumber size="small" placeholder="min" value={r.min} onChange={(v) => updateModalRow(r.key, { min: v == null ? null : Number(v) })} />
-                                    <Text type="secondary">到</Text>
-                                    <InputNumber size="small" placeholder="max" value={r.max} onChange={(v) => updateModalRow(r.key, { max: v == null ? null : Number(v) })} />
-                                  </Space>
-                                ) : (
-                                  <InputNumber
-                                    size="small"
-                                    placeholder="value"
-                                    value={r.op === 'lte' ? r.max : r.min}
-                                    onChange={(v) => {
-                                      const n = v == null ? null : Number(v)
-                                      if (r.op === 'lte') updateModalRow(r.key, { max: n })
-                                      else updateModalRow(r.key, { min: n })
-                                    }}
-                                  />
-                                )}
-
-                                <Tag style={{ marginInlineStart: 4 }}>高(cm)</Tag>
-                                <Select
+                                <Text type="secondary">到</Text>
+                                <InputNumber
                                   size="small"
-                                  value={r.h_op ?? 'gte'}
-                                  style={{ width: 92 }}
-                                  options={[
-                                    { label: '≥', value: 'gte' },
-                                    { label: '≤', value: 'lte' },
-                                    { label: '=', value: 'eq' },
-                                    { label: '区间', value: 'between' },
-                                  ]}
-                                  onChange={(v) => updateModalRow(r.key, { h_op: v as any })}
+                                  placeholder="max"
+                                  value={r.max}
+                                  onChange={(v) => updateModalRow(r.key, { max: v == null ? null : Number(v) })}
                                 />
-                                {(r.h_op ?? 'gte') === 'between' ? (
-                                  <Space wrap size={6}>
-                                    <InputNumber size="small" placeholder="min" value={r.h_min ?? null} onChange={(v) => updateModalRow(r.key, { h_min: v == null ? null : Number(v) })} />
-                                    <Text type="secondary">到</Text>
-                                    <InputNumber size="small" placeholder="max" value={r.h_max ?? null} onChange={(v) => updateModalRow(r.key, { h_max: v == null ? null : Number(v) })} />
-                                  </Space>
-                                ) : (
-                                  <InputNumber
-                                    size="small"
-                                    placeholder="value"
-                                    value={(r.h_op ?? 'gte') === 'lte' ? (r.h_max ?? null) : (r.h_min ?? null)}
-                                    onChange={(v) => {
-                                      const n = v == null ? null : Number(v)
-                                      if ((r.h_op ?? 'gte') === 'lte') updateModalRow(r.key, { h_max: n })
-                                      else updateModalRow(r.key, { h_min: n })
-                                    }}
-                                  />
-                                )}
                               </Space>
-                            ) : null}
-                            {modelAnchorToken ? (
-                              <Tag color={autoAnchorModelToken ? 'blue' : 'default'}>
-                                自动锚定：{modelAnchorToken} {autoAnchorModelToken ? '' : '（已关闭）'}
-                              </Tag>
-                            ) : null}
+                            ) : (
+                              <InputNumber
+                                size="small"
+                                placeholder="value"
+                                value={r.op === 'lte' ? r.max : r.min}
+                                onChange={(v) => {
+                                  const n = v == null ? null : Number(v)
+                                  if (r.op === 'lte') updateModalRow(r.key, { max: n })
+                                  else updateModalRow(r.key, { min: n })
+                                }}
+                              />
+                            )}
+
+                            <Tag style={{ marginInlineStart: 4 }}>高(cm)</Tag>
+                            <Select
+                              size="small"
+                              value={r.h_op ?? 'gte'}
+                              style={{ width: 92 }}
+                              options={[
+                                { label: '≥', value: 'gte' },
+                                { label: '≤', value: 'lte' },
+                                { label: '=', value: 'eq' },
+                                { label: '区间', value: 'between' },
+                              ]}
+                              onChange={(v) => updateModalRow(r.key, { h_op: v as any })}
+                            />
+                            {(r.h_op ?? 'gte') === 'between' ? (
+                              <Space wrap size={6}>
+                                <InputNumber
+                                  size="small"
+                                  placeholder="min"
+                                  value={r.h_min ?? null}
+                                  onChange={(v) => updateModalRow(r.key, { h_min: v == null ? null : Number(v) })}
+                                />
+                                <Text type="secondary">到</Text>
+                                <InputNumber
+                                  size="small"
+                                  placeholder="max"
+                                  value={r.h_max ?? null}
+                                  onChange={(v) => updateModalRow(r.key, { h_max: v == null ? null : Number(v) })}
+                                />
+                              </Space>
+                            ) : (
+                              <InputNumber
+                                size="small"
+                                placeholder="value"
+                                value={(r.h_op ?? 'gte') === 'lte' ? (r.h_max ?? null) : (r.h_min ?? null)}
+                                onChange={(v) => {
+                                  const n = v == null ? null : Number(v)
+                                  if ((r.h_op ?? 'gte') === 'lte') updateModalRow(r.key, { h_max: n })
+                                  else updateModalRow(r.key, { h_min: n })
+                                }}
+                              />
+                            )}
                           </Space>
                         )
                       }
+
+                      const unit = draftTriggerType === 'area' ? 'm²' : draftTriggerType === 'perimeter' ? 'm' : 'cm'
                       return (
-                        <Space wrap>
+                        <Space wrap size={8}>
+                          {tokenEditor}
                           <Select
                             value={r.op}
                             style={{ width: 120 }}
@@ -1280,6 +1318,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                               }}
                             />
                           )}
+                          <Text type="secondary">{unit}</Text>
                         </Space>
                       )
                     },

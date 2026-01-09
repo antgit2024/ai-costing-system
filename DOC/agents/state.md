@@ -139,7 +139,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-01 17:05（Planner：环境文件治理（真实 .env 不进 Git））
 - **分支**：`backup/20251214-1535`
 
-- **最近校对（北京时间 GMT+8）**：2026-01-09（Frontend：LineVariantDrawer token 模式支持父子二级：父=token（可直接替换）；子=尺寸（宽+高，cm）多行 OR 且继承父 token；有子则父自动禁用启用/替换，子规则写入 `metadata_json.parent_variant_id` 以回显分组。验收：`npm -C frontend run build`；发布：`cd /home/admin/ai-costing-system/frontend && PLANNER_STATIC_DIR=/var/www/html/ai-costing/dist ./scripts/deploy_static.sh`）
+- **最近校对（北京时间 GMT+8）**：2026-01-09（Frontend：LineVariantDrawer token 模式父子二级（按运营口径修正）：**一级 token 可空**（无二级时可直接替换并配置 β/α/覆盖率/损耗%）；若存在二级，则一级自动关闭不启用且禁用替换参数，仅作为 token 门槛（可空=无条件）。二级类型仅允许三选一：**尺寸（宽+高，cm）/面积（m²）/周长（m）**，同一一级下二级类型互斥；二级多行表示 OR，使用“+行”新增；子规则保存写入 `metadata_json.parent_variant_id` 以回显分组。验收：`npm -C frontend run build`；发布：`cd /home/admin/ai-costing-system/frontend && PLANNER_STATIC_DIR=/var/www/html/ai-costing/dist ./scripts/deploy_static.sh`）
 
 - **本轮闭环产物（Frontend / LineVariants - 替换物料选择器验收修复）**：
   - 产物：`LineVariantDrawer` 的“替换物料”选择器链路可用（打开→搜索→选择→回填），并修复缩进错位导致的构建失败；启用时补齐“单位缺失/不一致”红字提示（不改后端口径）。

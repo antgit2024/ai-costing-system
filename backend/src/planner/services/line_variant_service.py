@@ -215,6 +215,7 @@ def evaluate_conditions(
     checks = {
         "width_between": metrics.get("width_cm"),
         "height_between": metrics.get("height_cm"),
+        "diameter_between": metrics.get("diameter_cm"),
         "area_between": metrics.get("area_m2"),
         "perimeter_between": metrics.get("perimeter_m"),
     }

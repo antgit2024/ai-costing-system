@@ -1795,6 +1795,7 @@ def _build_measurement(
 def _build_metrics(spec_result: Dict[str, Any], measurement: Dict[str, Decimal]) -> Dict[str, Decimal | None]:
     width_cm = spec_result.get("width_cm")
     height_cm = spec_result.get("height_cm")
+    diameter_cm = spec_result.get("diameter_cm")
     area_m2 = spec_result.get("area_m2")
     perimeter_m = spec_result.get("perimeter_m")
     if width_cm is None:
@@ -1810,6 +1811,7 @@ def _build_metrics(spec_result: Dict[str, Any], measurement: Dict[str, Decimal])
     return {
         "width_cm": width_cm,
         "height_cm": height_cm,
+        "diameter_cm": diameter_cm,
         "area_m2": area_m2,
         "perimeter_m": perimeter_m,
     }

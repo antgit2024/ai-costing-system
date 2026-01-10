@@ -43,7 +43,7 @@ type EditableItemRow = LineVariantItemPayload & {
 }
 
 type MetricOp = 'off' | 'gte' | 'lte' | 'eq' | 'between'
-type TriggerType = 'token' | 'width' | 'height' | 'area' | 'perimeter' | 'size'
+type TriggerType = 'token' | 'width' | 'height' | 'area' | 'perimeter' | 'size' | 'diameter'
 type TokenMode = 'any' | 'all'
 
 type ModalRuleRow = {
@@ -221,6 +221,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     const allCnt = asStringArray(cond?.spec_contains_all).length
     if (cond?.perimeter_between) return 'perimeter'
     if (cond?.area_between) return 'area'
+    if (cond?.diameter_between) return 'diameter'
     if (cond?.width_between) return 'width'
     if (cond?.height_between) return 'height'
     if (anyCnt || allCnt) return 'token'
@@ -233,6 +234,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     if (t === 'width') return '宽度（cm）'
     if (t === 'height') return '高度（cm）'
     if (t === 'area') return '面积（m²）'
+    if (t === 'diameter') return '直径（cm）'
     return '周长（m）'
   }
 
@@ -294,7 +296,9 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
             ? asBetween(cond.height_between)
             : t === 'area'
               ? asBetween(cond.area_between)
-              : asBetween(cond.perimeter_between)
+              : t === 'perimeter'
+                ? asBetween(cond.perimeter_between)
+                : asBetween(cond.diameter_between)
       const o = opFromBetween(pair)
       op = (o === 'off' ? 'gte' : o) as any
       min = pair?.[0] ?? null
@@ -361,6 +365,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     if (trigger === 'height') return withToken({ height_between: pair })
     if (trigger === 'area') return withToken({ area_between: pair })
     if (trigger === 'perimeter') return withToken({ perimeter_between: pair })
+    if (trigger === 'diameter') return withToken({ diameter_between: pair })
     // size: token + width + height
     const hPair = betweenToPayload(toPairH())
     return withToken({ width_between: pair, height_between: hPair })
@@ -397,7 +402,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
         ? variants.filter((v) => {
             const t = inferTriggerType((v.conditions ?? {}) as any)
             if (t === 'token') return true
-            if (t === 'size' || t === 'area' || t === 'perimeter') {
+            if (t === 'size' || t === 'area' || t === 'perimeter' || t === 'diameter') {
               const pid = String(((v as any)?.metadata as any)?.parent_variant_id ?? '').trim()
               return !!pid
             }
@@ -408,7 +413,10 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     if (draftTriggerType === 'token') {
       const parentIds = new Set(
         nextRows
-          .filter((r) => r.trigger_type === 'size' || r.trigger_type === 'area' || r.trigger_type === 'perimeter')
+          .filter(
+            (r) =>
+              r.trigger_type === 'size' || r.trigger_type === 'area' || r.trigger_type === 'perimeter' || r.trigger_type === 'diameter',
+          )
           .map((r) => String(r.parent_variant_id ?? '').trim())
           .filter(Boolean),
       )
@@ -568,6 +576,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
         if (row.trigger_type === 'height') return 'height_cm'
         if (row.trigger_type === 'area') return 'area_m2'
         if (row.trigger_type === 'perimeter') return 'perimeter_m'
+        if (row.trigger_type === 'diameter') return 'diameter_cm'
         return null
       }
 
@@ -645,7 +654,10 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
           r.trigger_type === 'token'
             ? normalizedRows.some(
                 (x) =>
-                  (x.trigger_type === 'size' || x.trigger_type === 'area' || x.trigger_type === 'perimeter') &&
+                  (x.trigger_type === 'size' ||
+                    x.trigger_type === 'area' ||
+                    x.trigger_type === 'perimeter' ||
+                    x.trigger_type === 'diameter') &&
                   String(x.parent_variant_id ?? '') === String(r.id ?? ''),
               )
             : false
@@ -662,13 +674,16 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
           r.trigger_type === 'token'
             ? normalizedRows.some(
                 (x) =>
-                  (x.trigger_type === 'size' || x.trigger_type === 'area' || x.trigger_type === 'perimeter') &&
+                  (x.trigger_type === 'size' ||
+                    x.trigger_type === 'area' ||
+                    x.trigger_type === 'perimeter' ||
+                    x.trigger_type === 'diameter') &&
                   String(x.parent_variant_id ?? '') === String(r.id ?? ''),
               )
             : false
         const enabled = r.trigger_type === 'token' && hasChildRows ? false : !!r.enabled
         const metadataJson =
-          r.trigger_type === 'size' || r.trigger_type === 'area' || r.trigger_type === 'perimeter'
+          r.trigger_type === 'size' || r.trigger_type === 'area' || r.trigger_type === 'perimeter' || r.trigger_type === 'diameter'
             ? ({
                 ...(r.metadata_json ?? {}),
                 parent_variant_id: String(r.parent_variant_id ?? '').trim() || null,
@@ -907,7 +922,8 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
   const childrenByParentId = useMemo(() => {
     const map: Record<string, ModalRuleRow[]> = {}
     for (const r of modalRows) {
-      if (r.trigger_type !== 'size' && r.trigger_type !== 'area' && r.trigger_type !== 'perimeter') continue
+      if (r.trigger_type !== 'size' && r.trigger_type !== 'area' && r.trigger_type !== 'perimeter' && r.trigger_type !== 'diameter')
+        continue
       const pid = String(r.parent_variant_id ?? '').trim()
       if (!pid) continue
       if (!map[pid]) map[pid] = []
@@ -918,24 +934,26 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
   const childrenOf = (parentId: string | undefined): ModalRuleRow[] => (parentId ? childrenByParentId[String(parentId)] ?? [] : [])
   const parentHasChildren = (parentId: string | undefined): boolean => childrenOf(parentId).length > 0
 
-  const getParentChildType = (parent: ModalRuleRow): 'size' | 'area' | 'perimeter' | null => {
+  const getParentChildType = (parent: ModalRuleRow): 'size' | 'area' | 'perimeter' | 'diameter' | null => {
     const ch = childrenOf(parent.id)
     if (ch.length > 0) {
       const types = Array.from(
         new Set(
           ch
             .map((r) => r.trigger_type)
-            .filter((t) => t === 'size' || t === 'area' || t === 'perimeter') as Array<'size' | 'area' | 'perimeter'>,
+            .filter((t) => t === 'size' || t === 'area' || t === 'perimeter' || t === 'diameter') as Array<
+              'size' | 'area' | 'perimeter' | 'diameter'
+            >,
         ),
       )
       return types.length === 1 ? types[0] : null
     }
     const raw = String((parent.metadata_json as any)?.child_trigger_type ?? '').trim()
-    if (raw === 'size' || raw === 'area' || raw === 'perimeter') return raw
+    if (raw === 'size' || raw === 'area' || raw === 'perimeter' || raw === 'diameter') return raw
     return null
   }
 
-  const addChildMetricRow = (parent: ModalRuleRow, childType: 'size' | 'area' | 'perimeter') => {
+  const addChildMetricRow = (parent: ModalRuleRow, childType: 'size' | 'area' | 'perimeter' | 'diameter') => {
     if (!parent?.id) {
       message.warning('请先保存一级规则（拿到ID）后再新增二级')
       return
@@ -1129,7 +1147,16 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                       }
                       const hasChild = !!parent.id && parentHasChildren(parent.id)
                       const childType = getParentChildType(parent)
-                      const childTypeLabel = childType === 'size' ? '尺寸（宽+高）' : childType === 'area' ? '面积' : childType === 'perimeter' ? '周长' : null
+                      const childTypeLabel =
+                        childType === 'size'
+                          ? '尺寸（宽+高）'
+                          : childType === 'area'
+                            ? '面积'
+                            : childType === 'perimeter'
+                              ? '周长'
+                              : childType === 'diameter'
+                                ? '直径'
+                                : null
                       const disableParentReplace = hasChild
 
                       const parentMode = inferTokenMode(parent)
@@ -1297,6 +1324,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                                     { label: '尺寸（宽+高，cm）', value: 'size' },
                                     { label: '面积（m²）', value: 'area' },
                                     { label: '周长（m）', value: 'perimeter' },
+                                    { label: '直径（cm）', value: 'diameter' },
                                   ]}
                                   onChange={(v) => {
                                     updateModalRow(parent.key, { metadata_json: { ...(parent.metadata_json ?? {}), child_trigger_type: v as any } } as any)
@@ -1308,7 +1336,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                                   onClick={() => {
                                     const t = getParentChildType(parent)
                                     if (!t) {
-                                      message.error('请先选择二级类型（尺寸/面积/周长）')
+                                      message.error('请先选择二级类型（尺寸/面积/周长/直径）')
                                       return
                                     }
                                     addChildMetricRow(parent, t)

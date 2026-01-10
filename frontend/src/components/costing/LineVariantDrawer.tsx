@@ -690,12 +690,16 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                 parent_child_type: r.trigger_type,
               } as any)
             : (r.metadata_json ?? undefined)
+        // Priority: make 圆形(直径) rows win over 方形(宽高) rows when spec contains diameter,
+        // otherwise width=height may shadow diameter due to stop_on_hit.
+        const priority = r.trigger_type === 'diameter' ? 110 : 100
+
         if (!r.id) {
           const payload: LineVariantCreateRequest = {
             version_id: versionId,
             base_line_id: baseLineId,
             enabled,
-            priority: 100,
+            priority,
             action: FIXED_ACTION,
             stop_on_hit: true,
             notes: '',
@@ -717,7 +721,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
         } else {
           const updatePayload: LineVariantUpdateRequest = {
             enabled,
-            priority: 100,
+            priority,
             action: FIXED_ACTION,
             stop_on_hit: true,
             notes: undefined,

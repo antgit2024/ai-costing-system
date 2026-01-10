@@ -1329,7 +1329,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                                   ),
                                 },
                                 {
-                                  title: '二级（两行）',
+                                  title: '表达式/替换物料',
                                   render: (_: any, r: ModalRuleRow) => {
                                     const unit = r.trigger_type === 'area' ? 'm²' : r.trigger_type === 'perimeter' ? 'm' : 'cm'
                                     const materialCode = r.item.material_code ?? null
@@ -1480,64 +1480,90 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                                         </div>
 
                                         {/* 第二行：替换 + 参数 */}
-                                        <Row gutter={8} align="middle">
-                                          <Col flex="260px">
-                                            <Space size={6} wrap>
-                                              <Text code>{materialDisplay}</Text>
-                                              <Button
-                                                size="small"
-                                                type="text"
-                                                icon={<EditOutlined />}
-                                                onClick={() => {
-                                                  setMaterialPickerRowKey(r.key)
-                                                  setMaterialPickerOpen(true)
-                                                }}
-                                              />
-                                            </Space>
-                                          </Col>
-                                          <Col flex="70px">
-                                            <InputNumber
+                                        <div>
+                                          <Space size={6} wrap>
+                                            <Text code>{materialDisplay}</Text>
+                                            <Button
                                               size="small"
-                                              min={0}
-                                              value={toNumber(r.item.base_quantity, 0)}
-                                              onChange={(v) => updateModalRow(r.key, { item: { ...r.item, base_quantity: toNumber(v, 0) } })}
-                                              style={{ width: 70 }}
+                                              type="text"
+                                              icon={<EditOutlined />}
+                                              onClick={() => {
+                                                setMaterialPickerRowKey(r.key)
+                                                setMaterialPickerOpen(true)
+                                              }}
                                             />
-                                          </Col>
-                                          <Col flex="70px">
-                                            <InputNumber
-                                              size="small"
-                                              min={0}
-                                              value={toNumber(r.item.fixed_quantity, 0)}
-                                              onChange={(v) => updateModalRow(r.key, { item: { ...r.item, fixed_quantity: toNumber(v, 0) } })}
-                                              style={{ width: 70 }}
-                                            />
-                                          </Col>
-                                          <Col flex="70px">
-                                            <InputNumber
-                                              size="small"
-                                              min={0}
-                                              max={1}
-                                              step={0.1}
-                                              value={toNumber(r.item.coverage_ratio, 1)}
-                                              onChange={(v) => updateModalRow(r.key, { item: { ...r.item, coverage_ratio: toNumber(v, 1) } })}
-                                              style={{ width: 70 }}
-                                            />
-                                          </Col>
-                                          <Col flex="70px">
-                                            <InputNumber
-                                              size="small"
-                                              min={0}
-                                              max={100}
-                                              value={toNumber(r.item.loss_rate, 0)}
-                                              onChange={(v) => updateModalRow(r.key, { item: { ...r.item, loss_rate: toNumber(v, 0) } })}
-                                              style={{ width: 70 }}
-                                            />
-                                          </Col>
-                                        </Row>
+                                          </Space>
+                                        </div>
                                       </Space>
                                     )
                                   },
+                                },
+                                {
+                                  title: '用量(β)',
+                                  width: 84,
+                                  render: (_: any, r: ModalRuleRow) => (
+                                    <div>
+                                      <div style={{ height: 34 }} />
+                                      <InputNumber
+                                        size="small"
+                                        min={0}
+                                        value={toNumber(r.item.base_quantity, 0)}
+                                        onChange={(v) => updateModalRow(r.key, { item: { ...r.item, base_quantity: toNumber(v, 0) } })}
+                                        style={{ width: 80 }}
+                                      />
+                                    </div>
+                                  ),
+                                },
+                                {
+                                  title: '固定(α)',
+                                  width: 84,
+                                  render: (_: any, r: ModalRuleRow) => (
+                                    <div>
+                                      <div style={{ height: 34 }} />
+                                      <InputNumber
+                                        size="small"
+                                        min={0}
+                                        value={toNumber(r.item.fixed_quantity, 0)}
+                                        onChange={(v) => updateModalRow(r.key, { item: { ...r.item, fixed_quantity: toNumber(v, 0) } })}
+                                        style={{ width: 80 }}
+                                      />
+                                    </div>
+                                  ),
+                                },
+                                {
+                                  title: '覆盖率',
+                                  width: 84,
+                                  render: (_: any, r: ModalRuleRow) => (
+                                    <div>
+                                      <div style={{ height: 34 }} />
+                                      <InputNumber
+                                        size="small"
+                                        min={0}
+                                        max={1}
+                                        step={0.1}
+                                        value={toNumber(r.item.coverage_ratio, 1)}
+                                        onChange={(v) => updateModalRow(r.key, { item: { ...r.item, coverage_ratio: toNumber(v, 1) } })}
+                                        style={{ width: 80 }}
+                                      />
+                                    </div>
+                                  ),
+                                },
+                                {
+                                  title: '损耗%',
+                                  width: 84,
+                                  render: (_: any, r: ModalRuleRow) => (
+                                    <div>
+                                      <div style={{ height: 34 }} />
+                                      <InputNumber
+                                        size="small"
+                                        min={0}
+                                        max={100}
+                                        value={toNumber(r.item.loss_rate, 0)}
+                                        onChange={(v) => updateModalRow(r.key, { item: { ...r.item, loss_rate: toNumber(v, 0) } })}
+                                        style={{ width: 80 }}
+                                      />
+                                    </div>
+                                  ),
                                 },
                                 {
                                   title: '',
@@ -1547,7 +1573,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                                   ),
                                 },
                               ]}
-                              scroll={{ x: 900 }}
+                              scroll={{ x: 980 }}
                             />
                           </Card>
                         </Space>

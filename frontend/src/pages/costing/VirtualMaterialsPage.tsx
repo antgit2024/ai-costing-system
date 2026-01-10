@@ -435,6 +435,18 @@ const VirtualMaterialsPage = () => {
   const placeholderUnit = String(Form.useWatch('unit', basicForm) || '').trim()
   const manualBomUnitPrice = Form.useWatch(['metadata_json', 'bom_unit_price'], basicForm)
   const selectedUnit = String(Form.useWatch('unit', basicForm) || '').trim()
+  const selectedVirtualCode = String(Form.useWatch('virtual_code', basicForm) || '').trim()
+  const selectedVirtualName = String(Form.useWatch('name', basicForm) || '').trim()
+
+  const [bomOverrideModalOpen, setBomOverrideModalOpen] = useState(false)
+  const [bomOverrideDraftPrice, setBomOverrideDraftPrice] = useState<number | null>(null)
+  const [bomOverrideDraftUnit, setBomOverrideDraftUnit] = useState<string | null>(null)
+
+  const isZeroCostFallback = useMemo(() => {
+    const name = selectedVirtualName
+    const code = selectedVirtualCode
+    return name.startsWith('兜底-零成本-') || code === 'VM00052' || code === 'VM00053' || code === 'VM00054'
+  }, [selectedVirtualCode, selectedVirtualName])
 
   const bindingSummary = useMemo(() => {
     if (!activeBindings.length) {
@@ -583,8 +595,6 @@ const VirtualMaterialsPage = () => {
       const unit = placeholderUnit || '-'
       return `${formatCurrency(0, bindingSummary.currency || 'CNY')} / ${unit}`
     }
-    // If user explicitly provided a manual BOM unit price (e.g. 0 for "兜底-零成本"),
-    // prefer showing it for clarity even when bindings are missing.
     if (manualBomUnitPrice !== undefined && manualBomUnitPrice !== null && String(manualBomUnitPrice) !== '') {
       const currency = bindingSummary.currency || 'CNY'
       const unitLabel =
@@ -606,6 +616,22 @@ const VirtualMaterialsPage = () => {
         : bindingSummary.unitLabel || bindingSummary.baseUnit || selectedUnit || '件'
     return `${formatCurrency(bindingSummary.totalPrice, currency)} / ${unitLabel}`
   }, [bindingSummary, manualBomUnitPrice, placeholderUnit, selectedUnit, virtualKind])
+
+  const virtualBomPriceMeta = useMemo(() => {
+    if (virtualKind === 'placeholder') {
+      return { source: 'fixed' as const, tag: '占位固定0' }
+    }
+    if (isZeroCostFallback) {
+      return { source: 'fixed' as const, tag: '兜底固定0' }
+    }
+    if (manualBomUnitPrice !== undefined && manualBomUnitPrice !== null && String(manualBomUnitPrice) !== '') {
+      return { source: 'manual' as const, tag: '手动覆盖' }
+    }
+    if (bindingSummary.totalPrice !== undefined) {
+      return { source: 'derived' as const, tag: '自动推导' }
+    }
+    return { source: 'unknown' as const, tag: '未推导' }
+  }, [bindingSummary.totalPrice, isZeroCostFallback, manualBomUnitPrice, virtualKind])
   const totalRatioPercent = useMemo(() => {
     if (virtualKind !== 'recipe') {
       return null
@@ -1512,36 +1538,14 @@ const VirtualMaterialsPage = () => {
                     {() => {
                       const kind = (basicForm.getFieldValue('virtual_kind') as VirtualKind) ?? 'kit'
                       if (kind === 'kit') return null
-                      if (kind === 'placeholder') return null // placeholder 已有“单位”字段（且必填）
-                      // recipe：允许在未绑定子物料时手选单位，用于“兜底-零成本”类虚拟物料
-                      return (
-                        <Col xs={24} md={12}>
-                          <Form.Item
-                            label="单位（可选）"
-                            name="unit"
-                            extra="配方型默认从子物料推导单位；若尚未绑定子物料（如兜底零成本），可先手动选择单位。"
-                          >
-                            <Select allowClear options={VM_UNIT_OPTIONS} placeholder="未绑定子物料时建议先选" />
-                          </Form.Item>
-                        </Col>
-                      )
+                      return null
                     }}
                   </Form.Item>
                   <Form.Item noStyle shouldUpdate={(prev, curr) => prev.virtual_kind !== curr.virtual_kind}>
                     {() => {
                       const kind = (basicForm.getFieldValue('virtual_kind') as VirtualKind) ?? 'kit'
                       if (kind === 'placeholder') return null
-                      return (
-                        <Col xs={24} md={12}>
-                          <Form.Item
-                            label="虚拟 BOM 单价（可手填）"
-                            name={['metadata_json', 'bom_unit_price']}
-                            extra="可用于“兜底-零成本”等场景（例如填 0）。若不填则按绑定真实物料自动汇总推导。"
-                          >
-                            <InputNumber min={0} precision={6} style={{ width: '100%' }} placeholder="例如：0" />
-                          </Form.Item>
-                        </Col>
-                      )
+                      return null
                     }}
                   </Form.Item>
                   <Col xs={24} md={12}>
@@ -1682,8 +1686,124 @@ const VirtualMaterialsPage = () => {
                 layout="horizontal"
                 style={{ marginBottom: 12, background: '#fafafa', padding: '12px 16px', borderRadius: 8 }}
               >
-                <Descriptions.Item label="虚拟 BOM 单价">{virtualBomPriceLabel}</Descriptions.Item>
+                <Descriptions.Item label="BOM 单价（用于成本）">
+                  <Space size={8} wrap>
+                    <Text>{virtualBomPriceLabel}</Text>
+                    <Tag
+                      color={
+                        virtualBomPriceMeta.source === 'manual'
+                          ? 'orange'
+                          : virtualBomPriceMeta.source === 'derived'
+                            ? 'green'
+                            : 'default'
+                      }
+                    >
+                      {virtualBomPriceMeta.tag}
+                    </Tag>
+                    {virtualKind !== 'placeholder' && !isZeroCostFallback ? (
+                      virtualBomPriceMeta.source === 'manual' ? (
+                        <Button
+                          size="small"
+                          type="link"
+                          onClick={() => {
+                            const meta = (basicForm.getFieldValue('metadata_json') || {}) as Record<string, unknown>
+                            basicForm.setFieldsValue({ metadata_json: { ...meta, bom_unit_price: undefined } })
+                            message.success('已清除手动覆盖：保存基础信息后将使用自动推导单价')
+                          }}
+                        >
+                          清除覆盖
+                        </Button>
+                      ) : (
+                        <Button
+                          size="small"
+                          type="link"
+                          onClick={() => {
+                            setBomOverrideDraftPrice(
+                              manualBomUnitPrice !== undefined && manualBomUnitPrice !== null && String(manualBomUnitPrice) !== ''
+                                ? Number(manualBomUnitPrice)
+                                : null,
+                            )
+                            setBomOverrideDraftUnit(selectedUnit || null)
+                            setBomOverrideModalOpen(true)
+                          }}
+                        >
+                          设置覆盖
+                        </Button>
+                      )
+                    ) : null}
+                  </Space>
+                </Descriptions.Item>
               </Descriptions>
+              <Modal
+                title="设置 BOM 单价覆盖"
+                open={bomOverrideModalOpen}
+                onCancel={() => setBomOverrideModalOpen(false)}
+                okText="确定（写入覆盖）"
+                cancelText="取消"
+                destroyOnClose
+                okButtonProps={{ disabled: isZeroCostFallback || virtualKind === 'placeholder' }}
+                onOk={() => {
+                  const nextPrice =
+                    bomOverrideDraftPrice === null ||
+                    bomOverrideDraftPrice === undefined ||
+                    String(bomOverrideDraftPrice) === ''
+                      ? undefined
+                      : Number(bomOverrideDraftPrice)
+                  const meta = (basicForm.getFieldValue('metadata_json') || {}) as Record<string, unknown>
+                  basicForm.setFieldsValue({
+                    metadata_json: { ...meta, bom_unit_price: nextPrice },
+                    ...(virtualKind === 'recipe' && bomOverrideDraftUnit ? { unit: bomOverrideDraftUnit } : {}),
+                  })
+                  setBomOverrideModalOpen(false)
+                  message.success('已写入覆盖值：请点“保存基础信息”入库后生效（成本将优先使用覆盖值）')
+                }}
+              >
+                <Space direction="vertical" style={{ width: '100%' }} size={12}>
+                  {isZeroCostFallback ? (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      message="兜底-零成本 虚拟物料：BOM 单价与单位已锁定，不允许覆盖"
+                      description="如需调整，请新建非兜底虚拟物料并绑定真实物料推导单价。"
+                    />
+                  ) : null}
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="默认口径：自动推导"
+                    description="自动推导=按绑定真实物料的 BOM 单价 × 配比 × 损耗 汇总。仅在兜底/临时需要时使用覆盖。"
+                  />
+                  <Row gutter={12}>
+                    <Col span={12}>
+                      <div style={{ marginBottom: 6 }}>
+                        <Text type="secondary">覆盖单价（可留空=不覆盖）</Text>
+                      </div>
+                      <InputNumber
+                        min={0}
+                        precision={6}
+                        style={{ width: '100%' }}
+                        value={bomOverrideDraftPrice ?? undefined}
+                        onChange={(v) => setBomOverrideDraftPrice(v == null ? null : Number(v))}
+                        placeholder="例如：0"
+                        disabled={isZeroCostFallback || virtualKind === 'placeholder'}
+                      />
+                    </Col>
+                    <Col span={12}>
+                      <div style={{ marginBottom: 6 }}>
+                        <Text type="secondary">单位（配方型可选）</Text>
+                      </div>
+                      <Select
+                        allowClear
+                        disabled={isZeroCostFallback || virtualKind !== 'recipe'}
+                        options={VM_UNIT_OPTIONS}
+                        value={bomOverrideDraftUnit ?? undefined}
+                        onChange={(v) => setBomOverrideDraftUnit(v ?? null)}
+                        placeholder={virtualKind === 'recipe' ? '不填则沿用当前单位/自动推导' : '仅配方型可选'}
+                      />
+                    </Col>
+                  </Row>
+                </Space>
+              </Modal>
               <Alert
                 type="warning"
                 showIcon

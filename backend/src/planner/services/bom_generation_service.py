@@ -1402,19 +1402,73 @@ def _attach_costing(
     - line_cost: computed_quantity * bom_unit_price
     Also compute process (labor) cost from model_version_processes and include in totals.
     """
-    real_ids: List[str] = []
+    # Resolve pricing snapshots:
+    # - real/bom: from material master (materials)
+    # - virtual: from virtual_materials.metadata_json.bom_unit_price (if present)
+    material_ids: List[str] = []
+    virtual_ids: List[str] = []
     for line in final_lines:
-        if (line.get("material_kind") or "real") == "real" and line.get("material_ref_id"):
-            real_ids.append(str(line["material_ref_id"]))
+        ref_id = line.get("material_ref_id")
+        if not ref_id:
+            continue
+        kind = str(line.get("material_kind") or "real")
+        if kind in ("real", "bom"):
+            material_ids.append(str(ref_id))
+        elif kind == "virtual":
+            virtual_ids.append(str(ref_id))
 
     materials: Dict[str, models.Material] = {}
-    if real_ids:
-        rows = (
-            db.query(models.Material)
-            .filter(models.Material.id.in_(list({*real_ids})))
-            .all()
-        )
+    if material_ids:
+        rows = db.query(models.Material).filter(models.Material.id.in_(list({*material_ids}))).all()
         materials = {m.id: m for m in rows}
+
+    virtuals: Dict[str, models.VirtualMaterial] = {}
+    if virtual_ids:
+        rows = db.query(models.VirtualMaterial).filter(models.VirtualMaterial.id.in_(list({*virtual_ids}))).all()
+        virtuals = {v.id: v for v in rows}
+
+    # If virtual material has no bom_unit_price snapshot on itself, try deriving from bindings:
+    # virtual_bom_unit_price = Σ(child_bom_unit_price * ratio * (1 + binding_loss_rate))
+    virtual_price_by_id: Dict[str, Decimal] = {}
+    if virtual_ids:
+        try:
+            bindings_rows = (
+                db.query(models.VirtualMaterialBinding, models.Material)
+                .join(models.Material, models.Material.id == models.VirtualMaterialBinding.material_id)
+                .filter(models.VirtualMaterialBinding.virtual_material_id.in_(list({*virtual_ids})))
+                .filter(models.Material.is_archived.is_(False))
+                .all()
+            )
+            by_vm: Dict[str, list[tuple[models.VirtualMaterialBinding, models.Material]]] = {}
+            for b, m in bindings_rows:
+                by_vm.setdefault(str(b.virtual_material_id), []).append((b, m))
+
+            for vm_id, pairs in by_vm.items():
+                total = Decimal("0")
+                ok = True
+                for b, m in pairs:
+                    child_price = product_model_service._derive_bom_unit_price(m)
+                    if child_price is None:
+                        ok = False
+                        break
+                    try:
+                        ratio = Decimal(str(b.quantity_ratio or 0))
+                    except Exception:  # noqa: BLE001
+                        ratio = Decimal("0")
+                    try:
+                        blr = Decimal(str(b.loss_rate or 0))
+                    except Exception:  # noqa: BLE001
+                        blr = Decimal("0")
+                    if ratio <= 0:
+                        continue
+                    if blr > 0:
+                        ratio = ratio * (Decimal("1") + (blr / Decimal("100")))
+                    total += child_price * ratio
+                if ok and total > 0:
+                    virtual_price_by_id[vm_id] = total
+        except Exception:  # noqa: BLE001
+            # best-effort; never block costing
+            pass
 
     material_cost_total = Decimal("0")
     priced_lines = 0
@@ -1424,10 +1478,31 @@ def _attach_costing(
     for line in final_lines:
         price: Optional[Decimal] = None
 
-        if (line.get("material_kind") or "real") == "real" and line.get("material_ref_id"):
-            m = materials.get(str(line.get("material_ref_id")))
-            if m is not None:
-                price = product_model_service._derive_bom_unit_price(m)
+        kind = str(line.get("material_kind") or "real")
+        ref_id = str(line.get("material_ref_id") or "").strip() or None
+        if ref_id:
+            if kind in ("real", "bom"):
+                m = materials.get(ref_id)
+                if m is not None:
+                    price = product_model_service._derive_bom_unit_price(m)
+            elif kind == "virtual":
+                vm = virtuals.get(ref_id)
+                if vm is not None:
+                    # Hard-rule: "兜底-零成本-*" virtual materials are always 0 cost (locked).
+                    try:
+                        if (vm.virtual_code in {"VM00052", "VM00053", "VM00054"}) or str(vm.name or "").startswith("兜底-零成本-"):
+                            price = Decimal("0")
+                        else:
+                            raw = (vm.metadata_json or {}).get("bom_unit_price")
+                            if raw not in (None, ""):
+                                try:
+                                    price = Decimal(str(raw))
+                                except Exception:  # noqa: BLE001
+                                    price = None
+                    except Exception:  # noqa: BLE001
+                        price = None
+                if price is None:
+                    price = virtual_price_by_id.get(ref_id)
 
         if price is None:
             meta = line.get("metadata") or {}

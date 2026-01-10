@@ -1886,6 +1886,7 @@ class LineVariantCondition(BaseModel):
     spec_contains_all: Optional[List[str]] = None
     width_between: Optional[Tuple[Optional[Decimal], Optional[Decimal]]] = None
     height_between: Optional[Tuple[Optional[Decimal], Optional[Decimal]]] = None
+    diameter_between: Optional[Tuple[Optional[Decimal], Optional[Decimal]]] = None
     area_between: Optional[Tuple[Optional[Decimal], Optional[Decimal]]] = None
     perimeter_between: Optional[Tuple[Optional[Decimal], Optional[Decimal]]] = None
 

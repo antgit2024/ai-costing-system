@@ -1482,14 +1482,12 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                                           )}
                                         </div>
 
-                                        {/* 第二行：替换 + 参数 */}
+                                        {/* 第二行：替换物料（按钮在前、无图标） */}
                                         <div>
                                           <Space size={8} wrap>
-                                            <Text code>{materialDisplay}</Text>
                                             <Button
                                               size="small"
                                               type="default"
-                                              icon={<EditOutlined />}
                                               onClick={() => {
                                                 setMaterialPickerRowKey(r.key)
                                                 setMaterialPickerOpen(true)
@@ -1497,6 +1495,13 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                                             >
                                               替换物料
                                             </Button>
+                                            <Text code>{materialDisplay}</Text>
+                                          </Space>
+                                        </div>
+
+                                        {/* 第三行：参数 */}
+                                        <div>
+                                          <Space size={8} wrap>
                                             <Text type="secondary">用量(β)：</Text>
                                             <InputNumber
                                               size="small"

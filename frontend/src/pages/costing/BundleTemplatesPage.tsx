@@ -23,7 +23,16 @@ import {
   message,
 } from 'antd'
 
-import { ArrowDownOutlined, ArrowUpOutlined, CopyOutlined, DeleteOutlined, PauseCircleOutlined, PlayCircleOutlined } from '@ant-design/icons'
+import {
+  ArrowDownOutlined,
+  ArrowUpOutlined,
+  CheckCircleFilled,
+  CloseCircleFilled,
+  CopyOutlined,
+  DeleteOutlined,
+  PauseCircleOutlined,
+  PlayCircleOutlined,
+} from '@ant-design/icons'
 
 import {
   archiveBundleTemplate,
@@ -208,6 +217,16 @@ export default function BundleTemplatesPage() {
   const [presetModalOpen, setPresetModalOpen] = useState(false)
   const [presetModalKey, setPresetModalKey] = useState<{ pIdx: number; cIdx: number } | null>(null)
   const [presetApplyMode, setPresetApplyMode] = useState<'variant' | 'force'>('variant')
+  const [presetValidation, setPresetValidation] = useState<{
+    presetIndex: number
+    checkedAt: number
+    ok: boolean
+    issues: { level: 'error' | 'warn'; message: string }[]
+    // component_key = `${presetIndex}:${componentIndex}`
+    componentOk: Record<string, boolean>
+    // base_line_key = `${presetIndex}:${componentIndex}:${baseLineId}`
+    baseLineOk: Record<string, boolean>
+  } | null>(null)
 
   const selectedVersionIds = useMemo(() => {
     const ids = new Set<string>()
@@ -693,6 +712,124 @@ export default function BundleTemplatesPage() {
     const valid = rows.filter((c: any) => String(c?.model_version_id ?? '').trim() && Number(c?.width_cm) > 0 && Number(c?.height_cm) > 0 && Number(c?.quantity) > 0)
     if (!valid.length) return { ok: false, reason: '请至少填写 1 条完整组件行（模型/宽/高/数量）' }
     return { ok: true }
+  }
+
+  const validateCurrentPreset = () => {
+    const pIdx = activePresetIndex
+    const p = phrasePresets?.[pIdx]
+    if (!p) {
+      message.warning('请先选择一个短语')
+      return
+    }
+    const issues: { level: 'error' | 'warn'; message: string }[] = []
+    const componentOk: Record<string, boolean> = {}
+    const baseLineOk: Record<string, boolean> = {}
+
+    const rows = Array.isArray(p?.components) ? p.components : []
+    for (let cIdx = 0; cIdx < rows.length; cIdx++) {
+      const rr = rows[cIdx] as any
+      const compKey = `${pIdx}:${cIdx}`
+      const versionId = String(rr?.model_version_id ?? '').trim()
+      const w = Number(rr?.width_cm ?? 0)
+      const h = Number(rr?.height_cm ?? 0)
+      const forceMap = (rr?.force_variant_by_base_line ?? {}) as any
+      const isForce = Array.isArray(rr?.tokens) && rr.tokens.length > 0
+      let okThisComp = true
+
+      if (!versionId) {
+        okThisComp = false
+        issues.push({ level: 'error', message: `组件${cIdx + 1}：未选择模型版本` })
+      }
+      if (!(w > 0 && h > 0)) {
+        okThisComp = false
+        issues.push({ level: 'error', message: `组件${cIdx + 1}：尺寸非法（宽/高必须 >0）` })
+      }
+
+      const baseMap = baseLineMapByVersion.get(versionId) ?? new Map<string, any>()
+      // 兜底“零成本”行：不允许填 TOKEN（避免和真实变体 token 冲突）
+      for (const [baseLineId, base] of baseMap.entries()) {
+        const rawName = String(base?.material_name ?? base?.material_code ?? '').trim()
+        const isZeroCostFallback = rawName.includes('兜底-零成本')
+        const overrideKey = `${versionId}:${String(baseLineId)}`
+        const alias = String(fallbackTokenOverrides?.[overrideKey] ?? '').trim()
+        const key = `${pIdx}:${cIdx}:${baseLineId}`
+        if (isZeroCostFallback && alias) {
+          okThisComp = false
+          baseLineOk[key] = false
+          issues.push({
+            level: 'error',
+            message: `组件${cIdx + 1}：兜底物料「${rawName}」不应配置 TOKEN（当前=${alias}），否则易与真实变体冲突`,
+          })
+        } else {
+          baseLineOk[key] = true
+        }
+      }
+
+      // 已选变体规则是否仍存在（防止你说的“改完变体，这里不更新导致失效”）
+      const sel = (presetSelectedByIdx?.[compKey] ?? {}) as Record<string, VariantPresetSelection>
+      const variantsForVersion = ((variantsSummaryQuery.data ?? []) as any[]).find((x: any) => String(x?.version_id ?? '') === versionId)
+        ?.items as any[]
+      const variants = Array.isArray(variantsForVersion) ? variantsForVersion : []
+      const variantsById = new Map<string, any>()
+      for (const v of variants) if (v?.id) variantsById.set(String(v.id), v)
+
+      for (const [baseLineId, s] of Object.entries(sel)) {
+        const parentId = String(s?.parent_variant_id ?? '').trim()
+        if (!parentId) continue
+        const parent = variantsById.get(parentId)
+        const base = baseMap.get(String(baseLineId))
+        const baseName = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
+        const baseKey = `${pIdx}:${cIdx}:${baseLineId}`
+
+        if (!parent) {
+          okThisComp = false
+          baseLineOk[baseKey] = false
+          issues.push({ level: 'error', message: `组件${cIdx + 1}：物料行「${baseName}」所选一级规则已不存在/已变更（请重新筛选）` })
+          continue
+        }
+
+        // 强制模式：若一级含二级，必须能定位到 1 条子条件
+        const children = variants.filter((x: any) => String(x?.metadata?.parent_variant_id ?? '').trim() === parentId)
+        const hasChild = children.length > 0
+        const forcedChildId = String(s?.forced_child_variant_id ?? '').trim()
+        if (isForce && hasChild && !forcedChildId) {
+          okThisComp = false
+          baseLineOk[baseKey] = false
+          issues.push({ level: 'error', message: `组件${cIdx + 1}：物料行「${baseName}」强制模式下必须选择 1 条子条件` })
+          continue
+        }
+
+        // 强制映射存在性（前端已写入 rr.force_variant_by_base_line；这里再确认）
+        if (isForce) {
+          const forcedVariantId = String(forceMap?.[String(baseLineId)] ?? '').trim()
+          if (!forcedVariantId) {
+            okThisComp = false
+            baseLineOk[baseKey] = false
+            issues.push({ level: 'error', message: `组件${cIdx + 1}：物料行「${baseName}」缺少强制映射（请重新筛选/保存）` })
+            continue
+          }
+          if (!variantsById.get(forcedVariantId)) {
+            okThisComp = false
+            baseLineOk[baseKey] = false
+            issues.push({ level: 'error', message: `组件${cIdx + 1}：物料行「${baseName}」强制规则已不存在/已变更（请重新筛选）` })
+            continue
+          }
+        }
+      }
+
+      componentOk[compKey] = okThisComp
+    }
+
+    const hasError = issues.some((x) => x.level === 'error')
+    setPresetValidation({
+      presetIndex: pIdx,
+      checkedAt: Date.now(),
+      ok: !hasError,
+      issues,
+      componentOk,
+      baseLineOk,
+    })
+    message.success(hasError ? '检验完成：存在问题（红色）' : '检验通过（绿色）')
   }
 
   // NOTE: auto phrase builder removed (it was too visually noisy); keep UI structured with locked tokens + editable fallback names.
@@ -1816,21 +1953,56 @@ export default function BundleTemplatesPage() {
                           <Text code>{selector}</Text>
                           {disabled ? <Tag color="red">已停用</Tag> : <Tag color="green">启用</Tag>}
                         </Space>
-                        <Button
-                          type="primary"
-                          loading={saveMutation.isPending}
-                          onClick={() => {
-                            const v = validateActivePreset()
-                            if (!v.ok) {
-                              message.warning(v.reason || '请完善当前短语')
-                              return
+                        <Space wrap size={8}>
+                          <Button
+                            onClick={() => validateCurrentPreset()}
+                            icon={
+                              presetValidation && presetValidation.presetIndex === idx ? (
+                                presetValidation.ok ? (
+                                  <CheckCircleFilled style={{ color: '#52c41a' }} />
+                                ) : (
+                                  <CloseCircleFilled style={{ color: '#ff4d4f' }} />
+                                )
+                              ) : undefined
                             }
-                            saveMutation.mutate()
-                          }}
-                        >
-                          保存当前短语
-                        </Button>
+                          >
+                            检验结果
+                          </Button>
+                          <Button
+                            type="primary"
+                            loading={saveMutation.isPending}
+                            onClick={() => {
+                              const v = validateActivePreset()
+                              if (!v.ok) {
+                                message.warning(v.reason || '请完善当前短语')
+                                return
+                              }
+                              saveMutation.mutate()
+                            }}
+                          >
+                            保存当前短语
+                          </Button>
+                        </Space>
                       </Space>
+                      {presetValidation && presetValidation.presetIndex === idx && presetValidation.issues.length ? (
+                        <Alert
+                          type={presetValidation.ok ? 'success' : 'error'}
+                          showIcon
+                          message={presetValidation.ok ? '检验通过' : '检验未通过'}
+                          description={
+                            <div>
+                              {presetValidation.issues.slice(0, 6).map((it, i2) => (
+                                <div key={`${idx}-iss-${i2}`}>
+                                  <Text type={it.level === 'error' ? 'danger' : 'secondary'}>{it.message}</Text>
+                                </div>
+                              ))}
+                              {presetValidation.issues.length > 6 ? (
+                                <Text type="secondary">…还有 {presetValidation.issues.length - 6} 条</Text>
+                              ) : null}
+                            </div>
+                          }
+                        />
+                      ) : null}
                       <Input
                         placeholder="短语备注（黑色可编辑，可选）：例如 黄金绒双面30X50+PP棉枕芯"
                         disabled={disabled}
@@ -1929,7 +2101,7 @@ export default function BundleTemplatesPage() {
                                             size="small"
                                             style={{ width: 180 }}
                                             placeholder="例如：黄金绒（可选）"
-                                            disabled={disabled}
+                                            disabled={disabled || rawName.includes('兜底-零成本')}
                                             value={tokenAlias}
                                             onChange={(e) => {
                                               const next = e.target.value

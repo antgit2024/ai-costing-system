@@ -761,7 +761,9 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
       if (!text) throw new Error('请先输入 spec_text')
       const [parsed, bom] = await Promise.all([
         parseSpec({ spec_text: text }),
-        generateBom({ spec_text: text, model_version_id: versionId, include_disabled_variants: true }),
+        // Preview should match production behavior: only enabled variants participate.
+        // Including disabled variants can cause a disabled token-parent (stop_on_hit) to shadow enabled child rules and confuse operators.
+        generateBom({ spec_text: text, model_version_id: versionId, include_disabled_variants: false }),
       ])
       return { parsed, bom }
     },

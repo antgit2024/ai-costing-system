@@ -972,7 +972,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
       }
       open={open}
       onCancel={onClose}
-      width={1100}
+      width={1300}
       footer={null}
       destroyOnClose
       bodyStyle={{ maxHeight: '80vh', overflowY: 'auto' }}
@@ -1502,7 +1502,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                                               onChange={(v) =>
                                                 updateModalRow(r.key, { item: { ...r.item, base_quantity: toNumber(v, 0) } })
                                               }
-                                              style={{ width: 86 }}
+                                              style={{ width: 58 }}
                                             />
                                             <Text type="secondary">固定(α)：</Text>
                                             <InputNumber
@@ -1512,7 +1512,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                                               onChange={(v) =>
                                                 updateModalRow(r.key, { item: { ...r.item, fixed_quantity: toNumber(v, 0) } })
                                               }
-                                              style={{ width: 86 }}
+                                              style={{ width: 58 }}
                                             />
                                             <Text type="secondary">覆盖率：</Text>
                                             <InputNumber
@@ -1524,7 +1524,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                                               onChange={(v) =>
                                                 updateModalRow(r.key, { item: { ...r.item, coverage_ratio: toNumber(v, 1) } })
                                               }
-                                              style={{ width: 86 }}
+                                              style={{ width: 58 }}
                                             />
                                             <Text type="secondary">损耗%：</Text>
                                             <InputNumber
@@ -1533,7 +1533,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                                               max={100}
                                               value={toNumber(r.item.loss_rate, 0)}
                                               onChange={(v) => updateModalRow(r.key, { item: { ...r.item, loss_rate: toNumber(v, 0) } })}
-                                              style={{ width: 86 }}
+                                              style={{ width: 58 }}
                                             />
                                           </Space>
                                         </div>

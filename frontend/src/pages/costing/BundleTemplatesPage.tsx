@@ -47,6 +47,7 @@ import {
   listLineVariants,
   updateBundleTemplate,
 } from '@/services/planner'
+import BundlePhraseListPanel from '@/components/costing/BundlePhraseListPanel'
 
 const { Text } = Typography
 
@@ -192,7 +193,6 @@ export default function BundleTemplatesPage() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [editing, setEditing] = useState<any | null>(null)
   const [createdTokenHint, setCreatedTokenHint] = useState<string | null>(null)
-  const [phraseListOpen, setPhraseListOpen] = useState(false)
 
   const [form] = Form.useForm()
   const [phrasePresets, setPhrasePresets] = useState<PhrasePresetRow[]>([])
@@ -253,22 +253,6 @@ export default function BundleTemplatesPage() {
     return ''
   }, [editing?.code, createdTokenHint])
 
-  const phraseListRows = useMemo(() => {
-    const codeOnly = String(currentBundleToken || '').replace(/^B:/, '').trim().toUpperCase()
-    const stripBraces = (s: string) => String(s ?? '').replace(/[{}]/g, '').replace(/\s+/g, ' ').trim()
-    const rows = (phrasePresets ?? []).map((p, idx) => {
-      const selector = String(p?.selector ?? '').trim().toUpperCase() || toSelector2(idx)
-      const phraseRaw = String(p?.phrase ?? '')
-      const phraseExample = stripBraces(phraseRaw)
-      const tokenDash = codeOnly ? toBundleTokenDash(codeOnly, selector) : selector
-      const suggestA = phraseExample ? `${tokenDash} ${phraseExample}` : tokenDash
-      const suggestB = phraseExample ? `${phraseExample} (${tokenDash})` : tokenDash
-      const components = Array.isArray(p?.components) ? p.components : []
-      const enabled = p?.enabled !== false
-      return { idx, selector, enabled, phraseRaw, phraseExample, tokenDash, suggestA, suggestB, components }
-    })
-    return rows.filter((r) => !!String(r.selector).trim())
-  }, [currentBundleToken, phrasePresets])
 
   const listQuery = useQuery({
     queryKey: ['bundle-templates', { search, category, tag, includeArchived, page, pageSize }],
@@ -1248,101 +1232,6 @@ export default function BundleTemplatesPage() {
   return (
     <div style={{ padding: 16 }}>
       <Modal
-        open={phraseListOpen}
-        title="生成短语列表（运营可复制）"
-        width={1100}
-        onCancel={() => setPhraseListOpen(false)}
-        footer={<Button onClick={() => setPhraseListOpen(false)}>关闭</Button>}
-        destroyOnClose
-      >
-        <Alert
-          type="info"
-          showIcon
-          style={{ marginBottom: 12 }}
-          message="说明：这里不会枚举所有组合，只展示你已维护的 selector/短语模板，并生成两种推荐写法供复制。"
-          description="遇到“同一规格里出现多个面料词”的混搭，建议用【筛选 → 指定（强制命中）】把组件钉死，否则解析命中可能不稳定。"
-        />
-        <Table
-          size="small"
-          pagination={false}
-          rowKey={(r: any) => String(r.selector)}
-          dataSource={phraseListRows}
-          columns={[
-            {
-              title: 'selector',
-              width: 90,
-              render: (_: any, r: any) => (
-                <Space size={6}>
-                  <Text code>{String(r.selector)}</Text>
-                  {r.enabled ? <Tag color="green">启用</Tag> : <Tag color="red">停用</Tag>}
-                </Space>
-              ),
-            },
-            {
-              title: '模板短语（含占位符）',
-              dataIndex: 'phraseRaw',
-              width: 360,
-              render: (v: any) => (
-                <Text style={{ color: 'rgba(0,0,0,0.88)' }} ellipsis={{ tooltip: true }}>
-                  {String(v ?? '') || '-'}
-                </Text>
-              ),
-            },
-            {
-              title: '可复制写法（推荐）',
-              key: 'suggest',
-              render: (_: any, r: any) => {
-                const copy = async (text: string) => {
-                  try {
-                    await navigator.clipboard.writeText(text)
-                    message.success('已复制')
-                  } catch {
-                    message.error('复制失败：请检查浏览器权限')
-                  }
-                }
-                return (
-                  <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                    <Space wrap size={8}>
-                      <Text code>{String(r.suggestA)}</Text>
-                      <Button size="small" icon={<CopyOutlined />} onClick={() => copy(String(r.suggestA))}>
-                        复制
-                      </Button>
-                    </Space>
-                    <Space wrap size={8}>
-                      <Text code>{String(r.suggestB)}</Text>
-                      <Button size="small" icon={<CopyOutlined />} onClick={() => copy(String(r.suggestB))}>
-                        复制
-                      </Button>
-                    </Space>
-                  </Space>
-                )
-              },
-            },
-            {
-              title: '组件概览（spec_text/tokens）',
-              key: 'components',
-              width: 260,
-              render: (_: any, r: any) => {
-                const comps = Array.isArray(r.components) ? r.components : []
-                if (!comps.length) return <Text type="secondary">-</Text>
-                return (
-                  <Space direction="vertical" size={2}>
-                    <Text type="secondary">组件数：{comps.length}</Text>
-                    {comps.slice(0, 6).map((c: any, i: number) => (
-                      <Text key={`${r.selector}-c-${i}`} type="secondary">
-                        {String(c.model_version_id ?? '').slice(0, 8)}… / {String(c.width_cm ?? '')}×{String(c.height_cm ?? '')} / qty:{String(c.quantity ?? '')}{' '}
-                        / spec:{String(c.spec_text ?? '') || '-'} / toks:{Array.isArray(c.tokens) ? c.tokens.length : 0}
-                      </Text>
-                    ))}
-                    {comps.length > 6 ? <Text type="secondary">…</Text> : null}
-                  </Space>
-                )
-              },
-            },
-          ]}
-        />
-      </Modal>
-      <Modal
         open={presetModalOpen}
         title="预设变体筛选（按物料行选择变体规则 → 一键填充触发词）"
         width={980}
@@ -2067,7 +1956,6 @@ export default function BundleTemplatesPage() {
                           {disabled ? <Tag color="red">已停用</Tag> : <Tag color="green">启用</Tag>}
                         </Space>
                         <Space wrap size={8}>
-                          <Button onClick={() => setPhraseListOpen(true)}>生成短语列表</Button>
                           <Button
                             onClick={() => validateCurrentPreset()}
                             icon={
@@ -2126,6 +2014,12 @@ export default function BundleTemplatesPage() {
                         }
                       />
                       <Text type="secondary">提示：在“筛选”里可选模式：变体（解析命中）/ 指定（强制命中）。</Text>
+                      <BundlePhraseListPanel
+                        bundleCode={currentBundleToken}
+                        phrasePresets={phrasePresets as any}
+                        activeSelector={selector}
+                        defaultOpen={false}
+                      />
                       {disabled ? (
                         <Alert
                           type="warning"

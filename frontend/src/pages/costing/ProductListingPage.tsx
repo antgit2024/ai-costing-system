@@ -3,6 +3,7 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { Alert, Button, Card, Col, Descriptions, Divider, Empty, Input, Row, Select, Space, Table, Tabs, Tag, Typography, message } from 'antd'
 import { isAxiosError } from 'axios'
 
+import BundlePhraseListPanel from '@/components/costing/BundlePhraseListPanel'
 import {
   fetchProductModelVersionLines,
   fetchProductModels,
@@ -717,6 +718,15 @@ export default function ProductListingPage() {
                           </Text>
                         </Space>
                       </Card>
+                      <div style={{ marginTop: 12 }}>
+                        <BundlePhraseListPanel
+                          bundleCode={effectiveBundleCode}
+                          phrasePresets={(((bundleTemplateDetailQuery.data as any)?.metadata ?? {})?.phrase_presets ?? []) as any}
+                          activeSelector={bundleDraft.bundle_selector}
+                          defaultOpen={false}
+                          title="短语生成器（运营可改词+验证）"
+                        />
+                      </div>
                     </Col>
                     <Col xs={24} lg={12}>
                       <Card size="small" title="组件行预览（来自该短语）">

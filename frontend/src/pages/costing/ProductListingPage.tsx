@@ -105,6 +105,7 @@ export default function ProductListingPage() {
   const [parsed, setParsed] = useState<SpecParseResponse | null>(null)
   const [bom, setBom] = useState<BomGenerateResponse | null>(null)
   const [bundleComponentsDebug, setBundleComponentsDebug] = useState<any[] | null>(null)
+  const [bundleDebugRaw, setBundleDebugRaw] = useState<any | null>(null)
   const [lastError, setLastError] = useState<string | null>(null)
   const [bundleDebugMode, setBundleDebugMode] = useState(false)
 
@@ -340,6 +341,7 @@ export default function ProductListingPage() {
     mutationFn: async () => {
       setLastError(null)
       setBundleComponentsDebug(null)
+      setBundleDebugRaw(null)
       const code = String(effectiveBundleCode ?? '').trim()
       if (!code) throw new Error('请先选择套装，或在输入框中包含 B-XXXXAA / B-CODE-AA / B:CODE(:AA)')
       // UI 已选择套装编码：这里允许用户在输入里直接写 B:CODE:A，
@@ -380,6 +382,7 @@ export default function ProductListingPage() {
           sku_code: draft.sku_code || undefined,
         })
         const merged = (dbg?.merged ?? null) as any
+        setBundleDebugRaw(dbg)
         setBundleComponentsDebug(Array.isArray(dbg?.components) ? dbg.components : [])
         setBom(merged as any)
         setParsed(((merged as any)?.trace ?? {})?.parsed ?? null)
@@ -854,6 +857,21 @@ export default function ProductListingPage() {
                       <Text>Debug：</Text>
                       <Button size="small" type={bundleDebugMode ? 'primary' : 'default'} onClick={() => setBundleDebugMode((v) => !v)}>
                         {bundleDebugMode ? '已开启（返回组件明细）' : '关闭'}
+                      </Button>
+                      <Button
+                        size="small"
+                        disabled={!bundleDebugRaw}
+                        onClick={async () => {
+                          try {
+                            const text = JSON.stringify(bundleDebugRaw ?? {}, null, 2)
+                            await navigator.clipboard.writeText(text)
+                            message.success('已复制套装 debug 诊断 JSON（可直接发给任何人/新AGENT排障）')
+                          } catch (e: any) {
+                            message.error(`复制失败：${String(e?.message ?? e)}`)
+                          }
+                        }}
+                      >
+                        复制诊断
                       </Button>
                       <Text type="secondary">开启后会展示每个组件的命中明细（含 forced_by_bundle），便于定位 30×50/45×45 配对问题。</Text>
                     </Space>

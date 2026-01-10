@@ -1481,89 +1481,65 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
 
                                         {/* 第二行：替换 + 参数 */}
                                         <div>
-                                          <Space size={6} wrap>
+                                          <Space size={8} wrap>
                                             <Text code>{materialDisplay}</Text>
                                             <Button
                                               size="small"
-                                              type="text"
+                                              type="default"
                                               icon={<EditOutlined />}
                                               onClick={() => {
                                                 setMaterialPickerRowKey(r.key)
                                                 setMaterialPickerOpen(true)
                                               }}
+                                            >
+                                              替换物料
+                                            </Button>
+                                            <Text type="secondary">用量(β)：</Text>
+                                            <InputNumber
+                                              size="small"
+                                              min={0}
+                                              value={toNumber(r.item.base_quantity, 0)}
+                                              onChange={(v) =>
+                                                updateModalRow(r.key, { item: { ...r.item, base_quantity: toNumber(v, 0) } })
+                                              }
+                                              style={{ width: 86 }}
+                                            />
+                                            <Text type="secondary">固定(α)：</Text>
+                                            <InputNumber
+                                              size="small"
+                                              min={0}
+                                              value={toNumber(r.item.fixed_quantity, 0)}
+                                              onChange={(v) =>
+                                                updateModalRow(r.key, { item: { ...r.item, fixed_quantity: toNumber(v, 0) } })
+                                              }
+                                              style={{ width: 86 }}
+                                            />
+                                            <Text type="secondary">覆盖率：</Text>
+                                            <InputNumber
+                                              size="small"
+                                              min={0}
+                                              max={1}
+                                              step={0.1}
+                                              value={toNumber(r.item.coverage_ratio, 1)}
+                                              onChange={(v) =>
+                                                updateModalRow(r.key, { item: { ...r.item, coverage_ratio: toNumber(v, 1) } })
+                                              }
+                                              style={{ width: 86 }}
+                                            />
+                                            <Text type="secondary">损耗%：</Text>
+                                            <InputNumber
+                                              size="small"
+                                              min={0}
+                                              max={100}
+                                              value={toNumber(r.item.loss_rate, 0)}
+                                              onChange={(v) => updateModalRow(r.key, { item: { ...r.item, loss_rate: toNumber(v, 0) } })}
+                                              style={{ width: 86 }}
                                             />
                                           </Space>
                                         </div>
                                       </Space>
                                     )
                                   },
-                                },
-                                {
-                                  title: '用量(β)',
-                                  width: 84,
-                                  render: (_: any, r: ModalRuleRow) => (
-                                    <div>
-                                      <div style={{ height: 34 }} />
-                                      <InputNumber
-                                        size="small"
-                                        min={0}
-                                        value={toNumber(r.item.base_quantity, 0)}
-                                        onChange={(v) => updateModalRow(r.key, { item: { ...r.item, base_quantity: toNumber(v, 0) } })}
-                                        style={{ width: 80 }}
-                                      />
-                                    </div>
-                                  ),
-                                },
-                                {
-                                  title: '固定(α)',
-                                  width: 84,
-                                  render: (_: any, r: ModalRuleRow) => (
-                                    <div>
-                                      <div style={{ height: 34 }} />
-                                      <InputNumber
-                                        size="small"
-                                        min={0}
-                                        value={toNumber(r.item.fixed_quantity, 0)}
-                                        onChange={(v) => updateModalRow(r.key, { item: { ...r.item, fixed_quantity: toNumber(v, 0) } })}
-                                        style={{ width: 80 }}
-                                      />
-                                    </div>
-                                  ),
-                                },
-                                {
-                                  title: '覆盖率',
-                                  width: 84,
-                                  render: (_: any, r: ModalRuleRow) => (
-                                    <div>
-                                      <div style={{ height: 34 }} />
-                                      <InputNumber
-                                        size="small"
-                                        min={0}
-                                        max={1}
-                                        step={0.1}
-                                        value={toNumber(r.item.coverage_ratio, 1)}
-                                        onChange={(v) => updateModalRow(r.key, { item: { ...r.item, coverage_ratio: toNumber(v, 1) } })}
-                                        style={{ width: 80 }}
-                                      />
-                                    </div>
-                                  ),
-                                },
-                                {
-                                  title: '损耗%',
-                                  width: 84,
-                                  render: (_: any, r: ModalRuleRow) => (
-                                    <div>
-                                      <div style={{ height: 34 }} />
-                                      <InputNumber
-                                        size="small"
-                                        min={0}
-                                        max={100}
-                                        value={toNumber(r.item.loss_rate, 0)}
-                                        onChange={(v) => updateModalRow(r.key, { item: { ...r.item, loss_rate: toNumber(v, 0) } })}
-                                        style={{ width: 80 }}
-                                      />
-                                    </div>
-                                  ),
                                 },
                                 {
                                   title: '',
@@ -1573,7 +1549,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                                   ),
                                 },
                               ]}
-                              scroll={{ x: 980 }}
+                              scroll={{ x: 900 }}
                             />
                           </Card>
                         </Space>

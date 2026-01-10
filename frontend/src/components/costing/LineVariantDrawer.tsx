@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Card, Col, Drawer, Input, InputNumber, Modal, Row, Select, Space, Switch, Table, Tag, Typography, message } from 'antd'
-import type { ColumnsType } from 'antd/es/table'
+import { Alert, Button, Card, Col, Input, InputNumber, Modal, Row, Select, Space, Switch, Table, Tag, Typography, message } from 'antd'
+// ColumnsType used by legacy rule list UI (removed)
 import { DeleteOutlined, EditOutlined, PlayCircleOutlined } from '@ant-design/icons'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
@@ -74,7 +74,7 @@ type ModalRuleRow = {
 }
 
 const FIXED_ACTION: LineVariantAction = 'replace_self'
-const STABLE_SHAPE_LABEL = '最稳形态：replace_self + 同单位 1→1（启用前必须预演成功）'
+// STABLE_SHAPE_LABEL: legacy banner text (rule list layer removed)
 
 const asStringArray = (v: unknown): string[] => (Array.isArray(v) ? v.map((x) => String(x)).filter(Boolean) : [])
 
@@ -151,15 +151,11 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
   const { open, onClose, versionId, baseLineId, baseLineLabel, modelCode } = props
   const queryClient = useQueryClient()
 
-  const [selectedVariantId, setSelectedVariantId] = useState<string | null>(null)
-  const [draftStopOnHit, setDraftStopOnHit] = useState(true)
   // legacy single-rule item editor removed; modal uses per-row item
   const [draftTriggerType, setDraftTriggerType] = useState<TriggerType>('token')
 
-  const [editModalOpen, setEditModalOpen] = useState(false)
   const [materialPickerOpen, setMaterialPickerOpen] = useState(false)
   const [materialPickerRowKey, setMaterialPickerRowKey] = useState<string | null>(null)
-  const [editMode, setEditMode] = useState<'create' | 'edit'>('edit')
   const [modalRows, setModalRows] = useState<ModalRuleRow[]>([])
   const [selectedTokenParentKey, setSelectedTokenParentKey] = useState<string | null>(null)
   const [autoAnchorModelToken] = useState(true)
@@ -191,11 +187,6 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
   })
 
   const variants = (variantsQuery.data ?? []) as LineVariantDetailRead[]
-
-  const selectedVariant = useMemo(
-    () => variants.find((v) => v.id === selectedVariantId) ?? null,
-    [selectedVariantId, variants],
-  )
 
   const modelAnchorToken = useMemo(() => {
     const raw = String(modelCode ?? '').trim()
@@ -394,27 +385,10 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
 
   const anyDirty = useMemo(() => modalRows.some((r) => !!r.dirty), [modalRows])
 
-  useEffect(() => {
-    if (!open) return
-    // default select: first variant if any
-    if (!selectedVariantId && variants.length > 0) {
-      setSelectedVariantId(variants[0].id)
-    }
-  }, [open, variants, selectedVariantId])
+  // 变体编辑器默认进入 token 模式（你们当前主要用 token→二级指标）；其他触发类型仍可在非 token 模式下使用
 
   useEffect(() => {
     if (!open) return
-    if (!selectedVariant) return
-    setDraftStopOnHit(!!selectedVariant.stop_on_hit)
-    const cond = (selectedVariant.conditions ?? {}) as any
-    const inferred = inferTriggerType(cond)
-    // token 二级（size/area/perimeter）应回到 token 父子编辑模式
-    const pid = String(((selectedVariant as any)?.metadata as any)?.parent_variant_id ?? '').trim()
-    setDraftTriggerType((inferred === 'size' || inferred === 'area' || inferred === 'perimeter') && pid ? 'token' : inferred)
-  }, [open, selectedVariant])
-
-  useEffect(() => {
-    if (!editModalOpen) return
     // keep rows in sync with current trigger selection (simple filter view)
     const filtered =
       draftTriggerType === 'token'
@@ -451,10 +425,10 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
       return
     }
     setModalRows(nextRows)
-  }, [editModalOpen, variants, draftTriggerType])
+  }, [open, variants, draftTriggerType])
 
   useEffect(() => {
-    if (!editModalOpen) return
+    if (!open) return
     if (draftTriggerType !== 'token') return
     setSelectedTokenParentKey((prev) => {
       const list = modalRows.filter((r) => r.trigger_type === 'token')
@@ -462,43 +436,12 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
       if (prev && list.some((p) => p.key === prev)) return prev
       return list[0].key
     })
-  }, [editModalOpen, draftTriggerType, modalRows])
+  }, [open, draftTriggerType, modalRows])
 
   useEffect(() => {
     if (!open) return
     invalidatePreview()
   }, [open, versionId, baseLineId])
-
-
-  const openCreateModal = () => {
-    setEditMode('create')
-    setSelectedVariantId(null)
-    // reset draft
-    setDraftStopOnHit(true)
-    setDraftTriggerType('token')
-    setSpecText('')
-    setSpecParsed(null)
-    setBomPreview(null)
-    setLastPreviewAt(null)
-    setLastPreviewOk(null)
-    setLastPreviewError(null)
-    setLastPreviewSummary(null)
-    setLastPreviewFingerprint(null)
-    setEditModalOpen(true)
-  }
-
-  const openEditModal = (variantId: string) => {
-    setEditMode('edit')
-    setSelectedVariantId(variantId)
-    const v = variants.find((x) => x.id === variantId)
-    if (v) {
-      const inferred = inferTriggerType((v.conditions ?? {}) as any)
-      // token 二级（size/area/perimeter）应回到 token 父子编辑模式
-      const pid = String(((v as any)?.metadata as any)?.parent_variant_id ?? '').trim()
-      setDraftTriggerType((inferred === 'size' || inferred === 'area' || inferred === 'perimeter') && pid ? 'token' : inferred)
-    }
-    setEditModalOpen(true)
-  }
 
   // legacy buildConditionsPayload removed: modal uses rowToConditions per row
 
@@ -533,9 +476,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     const payload = {
       versionId,
       baseLineId,
-      selectedVariantId,
       action: FIXED_ACTION,
-      stop_on_hit: draftStopOnHit,
       trigger_type: draftTriggerType,
       // 以弹窗多行规则为准（用于“预演是否过期”的判定）
       rules: normalizedModalRowsForFingerprint,
@@ -545,8 +486,6 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
   }, [
     versionId,
     baseLineId,
-    selectedVariantId,
-    draftStopOnHit,
     draftTriggerType,
     normalizedModalRowsForFingerprint,
     specText,
@@ -784,7 +723,6 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     },
     onSuccess: async () => {
       message.success('已删除')
-      setSelectedVariantId(null)
       await queryClient.invalidateQueries({ queryKey: ['lineVariants', versionId, baseLineId] })
     },
     onError: (err: any) => message.error(err?.response?.data?.detail ?? '删除失败'),
@@ -840,130 +778,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     },
   })
 
-  // (legacy) itemColumns removed: modal now edits per-row item inline
-
-  const formatBetween = (pair: any, unit: string): string | null => {
-    const b = asBetween(pair)
-    if (!b) return null
-    const [min, max] = b
-    if (min == null && max == null) return null
-    if (min != null && max != null) return min === max ? `=${min}${unit}` : `${min}~${max}${unit}`
-    if (min != null) return `≥${min}${unit}`
-    return `≤${max}${unit}`
-  }
-
-  const filterOutModelAnchor = (arr: string[]): string[] => {
-    if (!modelAnchorToken) return arr
-    const anchorLower = String(modelAnchorToken).toLowerCase()
-    return (arr ?? []).filter((t) => String(t).toLowerCase() !== anchorLower)
-  }
-
-  const renderTokenChips = (label: string, tokens: string[]) => {
-    const list = (tokens ?? []).map((x) => String(x)).filter(Boolean)
-    if (!list.length) return null
-    const shown = list.slice(0, 6)
-    const more = list.length - shown.length
-    return (
-      <Space wrap size={[4, 4]}>
-        <Text type="secondary" style={{ fontSize: 12 }}>
-          {label}:
-        </Text>
-        {shown.map((t) => (
-          <Tag key={`${label}-${t}`}>{t}</Tag>
-        ))}
-        {more > 0 ? <Tag>+{more}</Tag> : null}
-      </Space>
-    )
-  }
-
-  const variantColumns: ColumnsType<LineVariantDetailRead> = [
-    { title: '启用', width: 70, render: (_: any, r: any) => (r.enabled ? <Tag color="green">ON</Tag> : <Tag>OFF</Tag>) },
-    {
-      title: '触发词 / 条件',
-      render: (_: any, r: any) => {
-        const cond = (r.conditions ?? {}) as any
-        const anyArr = filterOutModelAnchor(asStringArray(cond.spec_contains_any))
-        const allArr = filterOutModelAnchor(asStringArray(cond.spec_contains_all))
-        const w = formatBetween(cond.width_between, 'cm')
-        const h = formatBetween(cond.height_between, 'cm')
-        const a = formatBetween(cond.area_between, 'm²')
-        const p = formatBetween(cond.perimeter_between, 'm')
-        const hasMetric = !!(w || h || a || p)
-
-        if (!anyArr.length && !allArr.length && !hasMetric) return <Text type="secondary">-</Text>
-
-        if (anyArr.length || allArr.length) {
-          return (
-            <Space direction="vertical" size={4} style={{ width: '100%' }}>
-              <Space size={6} wrap>
-                <Tag color="blue">token</Tag>
-                {modelAnchorToken ? (
-                  <Tag color={autoAnchorModelToken ? 'blue' : 'default'}>{modelAnchorToken}</Tag>
-                ) : null}
-              </Space>
-              {renderTokenChips('any', anyArr)}
-              {renderTokenChips('all', allArr)}
-            </Space>
-          )
-        }
-
-        // metric 触发（历史/扩展场景）
-        const metricTag = p ? `周长${p}` : a ? `面积${a}` : w ? `宽度${w}` : h ? `高度${h}` : null
-        return metricTag ? <Tag>{metricTag}</Tag> : <Text type="secondary">-</Text>
-      },
-    },
-    {
-      title: '替换物料（1→1）',
-      width: 340,
-      render: (_: any, r: any) => {
-        const it0 = Array.isArray((r as any)?.items) ? (r as any).items[0] : null
-        const code = String(it0?.material_code ?? '').trim()
-        const name = String(it0?.material_name ?? '').trim()
-        const unitRaw = String(it0?.unit_of_measure ?? '').trim()
-        const unit = normalizeUnitText(unitRaw) || unitRaw
-        const refId = String(it0?.material_ref_id ?? '').trim()
-
-        if (!code && !name && !refId) return <Text type="secondary">-</Text>
-
-        return (
-          <Space direction="vertical" size={0} style={{ width: '100%' }}>
-            <Space size={6} wrap>
-              {code ? (
-                <Text code copyable={{ text: code }}>
-                  {code}
-                </Text>
-              ) : (
-                <Text type="secondary">无编码</Text>
-              )}
-              {name ? (
-                <Text ellipsis={{ tooltip: name }} style={{ maxWidth: 220 }}>
-                  {name}
-                </Text>
-              ) : null}
-              {unit ? <Tag>{unit}</Tag> : <Tag color="default">无单位</Tag>}
-            </Space>
-            {refId ? (
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                ref_id: {refId.slice(0, 8)}…
-              </Text>
-            ) : null}
-          </Space>
-        )
-      },
-    },
-    {
-      title: '操作',
-      width: 110,
-      render: (_: any, r: any) => (
-        <Space size={6}>
-          <Button size="small" icon={<EditOutlined />} onClick={() => openEditModal(r.id)}>
-            编辑
-          </Button>
-          <Button size="small" danger type="text" icon={<DeleteOutlined />} onClick={() => deleteVariantMutation.mutate(r.id)} />
-        </Space>
-      ),
-    },
-  ]
+  // 规则列表层已移除：点击“物料变体”直接进入编辑工作台（避免多一层无意义的抽屉/列表）
 
   const updateModalRow = (key: string, patch: Partial<ModalRuleRow>) => {
     setModalRows((prev) =>
@@ -1144,96 +959,23 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
   }
 
   return (
-    <Drawer
+    <Modal
       title={
         <Space direction="vertical" size={0}>
-          <div>物料行变体（Overlay）</div>
+          <div>物料行变体</div>
           <Text type="secondary" style={{ fontSize: 12 }}>
             version={versionId.slice(0, 8)}… · base_line_id={baseLineId.slice(0, 8)}… {baseLineLabel ? `· ${baseLineLabel}` : ''}
           </Text>
         </Space>
       }
-      width={1100}
       open={open}
-      onClose={onClose}
+      onCancel={onClose}
+      width={1100}
+      footer={null}
       destroyOnClose
+      bodyStyle={{ maxHeight: '80vh', overflowY: 'auto' }}
     >
       <Space direction="vertical" size={12} style={{ width: '100%' }}>
-        <Alert
-          type="info"
-          showIcon
-          message="行级变体已收口为 ERP 最稳第一步"
-          description={
-            <div style={{ fontSize: 12 }}>
-              <div>
-                <b>{STABLE_SHAPE_LABEL}</b>
-              </div>
-              <div style={{ color: '#8c8c8c' }}>
-                口径唯一真相：DOC/costing/manuals/standard_model_variants_ops_rules.md（7.1/7.2）
-              </div>
-            </div>
-          }
-        />
-
-        <Card
-          size="small"
-          title="规则列表（只展示/选择）"
-          extra={
-            <Space>
-              <Button size="small" type="primary" onClick={openCreateModal}>
-                新建规则
-              </Button>
-              <Button size="small" onClick={() => variantsQuery.refetch()} disabled={variantsQuery.isLoading}>
-                刷新
-              </Button>
-            </Space>
-          }
-        >
-          {variants.length === 0 ? (
-            <Alert
-              type="warning"
-              showIcon
-              style={{ marginBottom: 12 }}
-              message="该行暂无规则"
-              description={
-                <span style={{ fontSize: 12 }}>
-                  如果你之前建过规则但这里为空，通常是 <b>base_line_id 变化</b>（例如未“保存清单/同步清单”导致行ID不稳定）。
-                  建议：先在主抽屉里保存清单，再回来创建/查看行级变体。
-                </span>
-              }
-            />
-          ) : null}
-          <Table
-            rowKey="id"
-            size="small"
-            pagination={false}
-            loading={variantsQuery.isLoading}
-            dataSource={variants}
-            columns={variantColumns}
-            rowClassName={(r) => (r.id === selectedVariantId ? 'pm-selected-row' : '')}
-            onRow={(r) => ({
-              onClick: () => setSelectedVariantId(r.id),
-              style: { cursor: 'pointer' },
-            })}
-          />
-        </Card>
-        <div style={{ fontSize: 12, color: '#8c8c8c' }}>
-          选择一条规则后点击“编辑”在弹窗内配置（触发类型/条件/替换物料/预演）。
-        </div>
-        <Modal
-          title={
-            editMode === 'create'
-              ? `新建规则（${baseLineLabel ?? baseLineId.slice(0, 8)}…）`
-              : `编辑规则（${selectedVariantId?.slice(0, 8) ?? '-'}）`
-          }
-          open={editModalOpen}
-          onCancel={() => setEditModalOpen(false)}
-          width={1100}
-          footer={null}
-          bodyStyle={{ maxHeight: '72vh', overflowY: 'auto' }}
-          destroyOnClose
-        >
-          <Space direction="vertical" size={12} style={{ width: '100%' }}>
             <Card
               size="small"
               title={
@@ -1306,7 +1048,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                     loading={modalSaveMutation.isPending}
                     onClick={() => modalSaveMutation.mutate()}
                   >
-                    {editMode === 'create' ? '创建并保存' : '保存'}
+                    保存
                   </Button>
                 </Space>
               }
@@ -2307,9 +2049,6 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                 </Card>
               </Space>
             </Card>
-          </Space>
-        </Modal>
-
         <MaterialPickerDrawer
           open={materialPickerOpen}
           onClose={() => {
@@ -2375,7 +2114,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
           }}
         />
       </Space>
-    </Drawer>
+    </Modal>
   )
 }
 

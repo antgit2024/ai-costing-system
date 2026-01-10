@@ -1029,107 +1029,6 @@ export default function ProductListingPage() {
                     ] as any[])
                   : []),
                 {
-                  key: 'bundle_components',
-                  label: '套装组件命中（debug）',
-                  children:
-                    mode === 'multi' ? (
-                      bundleComponentsDebug && bundleComponentsDebug.length ? (
-                        <Space direction="vertical" style={{ width: '100%' }} size={12}>
-                          <Alert
-                            type="info"
-                            showIcon
-                            message="debug 返回：每个组件都有自己的 measurement_mm / runtime_tokens / matched_variants（含 forced_by_bundle）"
-                          />
-                          <Table
-                            size="small"
-                            pagination={false}
-                            rowKey={(_, i) => `bc-${i}`}
-                            dataSource={bundleComponentsDebug}
-                            columns={[
-                              {
-                                title: '组件',
-                                width: 70,
-                                render: (_: any, r: any) => String(r?.component_index ?? '-'),
-                              },
-                              {
-                                title: '版本',
-                                width: 160,
-                                render: (_: any, r: any) => {
-                                  const vid = String((r?.trace ?? {})?.model_version_id ?? '').trim()
-                                  return vid ? <Text code>{vid.slice(0, 8)}…</Text> : <Text type="secondary">-</Text>
-                                },
-                              },
-                              {
-                                title: '尺寸/数量',
-                                width: 160,
-                                render: (_: any, r: any) => {
-                                  const mm = (r?.trace ?? {})?.measurement_mm ?? {}
-                                  const w = toNumberOrNull((mm as any)?.width_mm)
-                                  const h = toNumberOrNull((mm as any)?.height_mm)
-                                  const q = toNumberOrNull((mm as any)?.quantity)
-                                  const wcm = w != null ? (w / 10).toFixed(0) : '-'
-                                  const hcm = h != null ? (h / 10).toFixed(0) : '-'
-                                  return (
-                                    <Space size={6}>
-                                      <Tag>{wcm}×{hcm}</Tag>
-                                      <Tag>qty:{q ?? '-'}</Tag>
-                                    </Space>
-                                  )
-                                },
-                              },
-                              {
-                                title: 'runtime_tokens（截断）',
-                                render: (_: any, r: any) => {
-                                  const toks = ((r?.trace ?? {})?.runtime_tokens ?? []) as any[]
-                                  const show = toks.map((x) => String(x)).filter(Boolean).slice(0, 8)
-                                  return show.length ? (
-                                    <Space wrap size={6}>
-                                      {show.map((t) => (
-                                        <Tag key={t}>{t}</Tag>
-                                      ))}
-                                      {toks.length > 8 ? <Text type="secondary">…</Text> : null}
-                                    </Space>
-                                  ) : (
-                                    <Text type="secondary">-</Text>
-                                  )
-                                },
-                              },
-                              {
-                                title: '命中摘要',
-                                width: 220,
-                                render: (_: any, r: any) => {
-                                  const hits = ((r?.trace ?? {})?.matched_variants ?? []) as any[]
-                                  const forced = hits.find((x) => String(x?.reason ?? '') === 'forced_by_bundle')
-                                  const matched = hits.filter((x) => x?.matched === true)
-                                  return (
-                                    <Space direction="vertical" size={2}>
-                                      {forced ? <Tag color="volcano">FORCED</Tag> : <Tag>normal</Tag>}
-                                      <Text type="secondary">matched: {matched.length}</Text>
-                                    </Space>
-                                  )
-                                },
-                              },
-                            ]}
-                            expandable={{
-                              expandedRowRender: (r: any) => {
-                                const hits = ((r?.trace ?? {})?.matched_variants ?? []) as any[]
-                                return (
-                                  <pre style={{ whiteSpace: 'pre-wrap', margin: 0 }}>
-                                    {JSON.stringify(hits.slice(0, 80), null, 2)}
-                                  </pre>
-                                )
-                              },
-                            }}
-                          />
-                        </Space>
-                      ) : (
-                        <Text type="secondary">暂无：请在左侧开启 Debug 后再点“套装：预演 BOM”。</Text>
-                      )
-                    ) : (
-                      <Text type="secondary">仅套装模式可用</Text>
-                    ),
-                },
-                {
                   key: 'bom',
                   label: '最终 BOM（final_material_lines）',
                   children: bom ? (
@@ -1288,6 +1187,107 @@ export default function ProductListingPage() {
                   ) : (
                     <Text type="secondary">暂无（先点“解析+预演”）</Text>
                   ),
+                },
+                {
+                  key: 'bundle_components',
+                  label: '套装组件命中（debug）',
+                  children:
+                    mode === 'multi' ? (
+                      bundleComponentsDebug && bundleComponentsDebug.length ? (
+                        <Space direction="vertical" style={{ width: '100%' }} size={12}>
+                          <Alert
+                            type="info"
+                            showIcon
+                            message="debug 返回：每个组件都有自己的 measurement_mm / runtime_tokens / matched_variants（含 forced_by_bundle）"
+                          />
+                          <Table
+                            size="small"
+                            pagination={false}
+                            rowKey={(_, i) => `bc-${i}`}
+                            dataSource={bundleComponentsDebug}
+                            columns={[
+                              {
+                                title: '组件',
+                                width: 70,
+                                render: (_: any, r: any) => String(r?.component_index ?? '-'),
+                              },
+                              {
+                                title: '版本',
+                                width: 160,
+                                render: (_: any, r: any) => {
+                                  const vid = String((r?.trace ?? {})?.model_version_id ?? '').trim()
+                                  return vid ? <Text code>{vid.slice(0, 8)}…</Text> : <Text type="secondary">-</Text>
+                                },
+                              },
+                              {
+                                title: '尺寸/数量',
+                                width: 160,
+                                render: (_: any, r: any) => {
+                                  const mm = (r?.trace ?? {})?.measurement_mm ?? {}
+                                  const w = toNumberOrNull((mm as any)?.width_mm)
+                                  const h = toNumberOrNull((mm as any)?.height_mm)
+                                  const q = toNumberOrNull((mm as any)?.quantity)
+                                  const wcm = w != null ? (w / 10).toFixed(0) : '-'
+                                  const hcm = h != null ? (h / 10).toFixed(0) : '-'
+                                  return (
+                                    <Space size={6}>
+                                      <Tag>{wcm}×{hcm}</Tag>
+                                      <Tag>qty:{q ?? '-'}</Tag>
+                                    </Space>
+                                  )
+                                },
+                              },
+                              {
+                                title: 'runtime_tokens（截断）',
+                                render: (_: any, r: any) => {
+                                  const toks = ((r?.trace ?? {})?.runtime_tokens ?? []) as any[]
+                                  const show = toks.map((x) => String(x)).filter(Boolean).slice(0, 8)
+                                  return show.length ? (
+                                    <Space wrap size={6}>
+                                      {show.map((t) => (
+                                        <Tag key={t}>{t}</Tag>
+                                      ))}
+                                      {toks.length > 8 ? <Text type="secondary">…</Text> : null}
+                                    </Space>
+                                  ) : (
+                                    <Text type="secondary">-</Text>
+                                  )
+                                },
+                              },
+                              {
+                                title: '命中摘要',
+                                width: 220,
+                                render: (_: any, r: any) => {
+                                  const hits = ((r?.trace ?? {})?.matched_variants ?? []) as any[]
+                                  const forced = hits.find((x) => String(x?.reason ?? '') === 'forced_by_bundle')
+                                  const matched = hits.filter((x) => x?.matched === true)
+                                  return (
+                                    <Space direction="vertical" size={2}>
+                                      {forced ? <Tag color="volcano">FORCED</Tag> : <Tag>normal</Tag>}
+                                      <Text type="secondary">matched: {matched.length}</Text>
+                                    </Space>
+                                  )
+                                },
+                              },
+                            ]}
+                            expandable={{
+                              expandedRowRender: (r: any) => {
+                                const hits = ((r?.trace ?? {})?.matched_variants ?? []) as any[]
+                                return (
+                                  <pre style={{ whiteSpace: 'pre-wrap', margin: 0 }}>
+                                    {JSON.stringify(hits.slice(0, 80), null, 2)}
+                                  </pre>
+                                )
+                              },
+                            }}
+                          />
+                        </Space>
+                      ) : (
+                        <Text type="secondary">暂无：请在左侧开启 Debug 后再点“套装：预演 BOM”。</Text>
+                      )
+                    ) : (
+                      <Text type="secondary">仅套装模式可用</Text>
+                    ),
                 },
               ]}
             />

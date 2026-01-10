@@ -83,10 +83,12 @@ const formatTrigger = (condRaw: any): string => {
   if (all.length) parts.push(`TOKEN(all): ${all.join('、')}`)
   const w = formatBetween(cond.width_between, 'cm')
   const h = formatBetween(cond.height_between, 'cm')
+  const d = formatBetween(cond.diameter_between, 'cm')
   const a = formatBetween(cond.area_between, 'm²')
   const p = formatBetween(cond.perimeter_between, 'm')
   if (w) parts.push(`宽: ${w}`)
   if (h) parts.push(`高: ${h}`)
+  if (d) parts.push(`直径: ${d}`)
   if (a) parts.push(`面积: ${a}`)
   if (p) parts.push(`周长: ${p}`)
   return parts.join('；') || '-'

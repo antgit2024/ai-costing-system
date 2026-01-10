@@ -12,7 +12,12 @@ DIMENSION_PATTERN = re.compile(
     re.IGNORECASE,
 )
 DIAMETER_PATTERN = re.compile(
-    r"(直径|φ|Φ|D)\s*(?P<value>\d{1,4}(?:\.\d+)?)\s*(?P<unit>cm|厘米|mm|毫米|m|米)?",
+    # Accept:
+    # - 直径50 / φ50 / Φ50 / D50
+    # - 圆50 / 圆形50
+    # - 圆(50) / 圆形（50）
+    # NOTE: "圆形" must appear before "圆" to avoid partial match.
+    r"(直径|φ|Φ|D|圆形|圆)\s*[（(]?\s*(?P<value>\d{1,4}(?:\.\d+)?)\s*(?P<unit>cm|厘米|mm|毫米|m|米)?\s*[）)]?",
     re.IGNORECASE,
 )
 TOKEN_SPLIT_PATTERN = re.compile(r"[;\n\r,，/\\\+|、]+")

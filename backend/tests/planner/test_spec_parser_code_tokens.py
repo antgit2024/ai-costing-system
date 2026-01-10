@@ -61,3 +61,12 @@ def test_parse_spec_extracts_bundle_code_tokens(client):
     assert "B:K8F3" in tokens3
     assert "B:K8F3:AA" in tokens3
 
+
+def test_parse_spec_extracts_diameter_from_round_forms(client):
+    # 圆形直径表达：圆50 / 圆形50 / 圆(50)
+    for spec_text in ["羽丝绒,圆50", "羽丝绒,圆形50", "羽丝绒,圆(50)", "羽丝绒,直径50", "羽丝绒,φ50"]:
+        r = client.post("/api/planner/spec/parse", json={"spec_text": spec_text})
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert str(data.get("diameter_cm")) in ("50", "50.0")
+

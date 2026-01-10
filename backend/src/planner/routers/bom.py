@@ -111,3 +111,30 @@ def generate_bom_by_spec(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return schemas.BomGenerateResponse(**result)
 
+
+@router.post(
+    "/generate-by-spec-debug",
+    response_model=schemas.BomGenerateMultiBundleResponse,
+    status_code=status.HTTP_200_OK,
+)
+def generate_bom_by_spec_debug(
+    payload: schemas.BomGenerateBySpecRequest,
+    db: Session = Depends(get_db),
+) -> schemas.BomGenerateMultiBundleResponse:
+    """
+    Debug endpoint:
+    - Like /bom/generate-by-spec, but returns per-component details (components[]),
+      so operators can verify forced-by-bundle and child-condition matching visually.
+    """
+    try:
+        result = bom_generation_service.generate_bom_by_spec(
+            db,
+            spec_text=payload.spec_text,
+            sku_code=payload.sku_code,
+            include_disabled_variants=bool(payload.include_disabled_variants),
+            return_components=True,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return schemas.BomGenerateMultiBundleResponse(**result)
+

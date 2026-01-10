@@ -222,6 +222,7 @@ def generate_bom_by_spec(
     spec_text: str,
     sku_code: Optional[str],
     include_disabled_variants: bool = False,
+    return_components: bool = False,
 ) -> Dict[str, Any]:
     """
     Generate BOM by spec_text tokens (high-priority, customer-facing).
@@ -800,6 +801,10 @@ def generate_bom_by_spec(
         trace["phrase_presets"] = phrase_trace
     trace["parsed"] = spec_result  # overwrite parsed to be the original spec parse result
     merged["trace"] = trace
+    if return_components:
+        # Keep the same enriched merged trace, and return full multi-bundle result for debugging.
+        res["merged"] = merged
+        return res
     return merged
 
 

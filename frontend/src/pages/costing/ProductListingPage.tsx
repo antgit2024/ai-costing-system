@@ -528,6 +528,9 @@ export default function ProductListingPage() {
       unit_cost,
       priced_material_lines: costing?.priced_material_lines ?? costing?.priced_lines ?? null,
       missing_price_material_lines: costing?.missing_price_material_lines ?? costing?.missing_price_lines ?? null,
+      missing_price_material_codes: Array.isArray(costing?.missing_price_material_codes)
+        ? costing.missing_price_material_codes.map((x: any) => String(x)).filter(Boolean)
+        : [],
       missing_price_process_lines: costing?.missing_price_process_lines ?? null,
     }
   }, [bom, processLines])
@@ -1144,6 +1147,25 @@ export default function ProductListingPage() {
                         <Descriptions.Item label="缺物料单价行">{String(costingSummary?.missing_price_material_lines ?? '-')}</Descriptions.Item>
                         <Descriptions.Item label="缺工序单价行">{String(costingSummary?.missing_price_process_lines ?? '-')}</Descriptions.Item>
                       </Descriptions>
+                      {(costingSummary?.missing_price_material_codes ?? []).length ? (
+                        <Alert
+                          type="error"
+                          showIcon
+                          message="存在缺失 BOM 单价的物料行（会导致行成本为空/0，影响总成本）"
+                          description={
+                            <Space wrap size={6}>
+                              <Text type="secondary">缺单价编码：</Text>
+                              {(costingSummary?.missing_price_material_codes ?? []).slice(0, 12).map((c: string) => (
+                                <Tag key={c} color="red">
+                                  {c}
+                                </Tag>
+                              ))}
+                              {(costingSummary?.missing_price_material_codes ?? []).length > 12 ? <Text type="secondary">…</Text> : null}
+                              <Text type="secondary">处理建议：为虚拟物料设置 metadata.bom_unit_price，或确保其展开后的真实物料有单价并在成本口径里使用展开成本。</Text>
+                            </Space>
+                          }
+                        />
+                      ) : null}
 
                       <Divider style={{ margin: '4px 0' }} />
                       <Text strong>物料（{finalLines.length}）</Text>
@@ -1161,8 +1183,34 @@ export default function ProductListingPage() {
                           { title: '单位', dataIndex: 'unit_of_measure', width: 90, render: (v) => v ?? '-' },
                           { title: '计量方式', dataIndex: 'calculation_method', width: 110, render: (v) => String(v ?? '-') },
                           { title: '损耗%', dataIndex: 'loss_rate', width: 90, render: (v) => (v == null ? '-' : String(v)) },
-                          { title: 'BOM单价', dataIndex: 'bom_unit_price', width: 110, render: (v) => formatMoney2(v) },
-                          { title: '行成本', dataIndex: 'line_cost', width: 110, render: (v) => formatMoney2(v) },
+                          {
+                            title: 'BOM单价',
+                            dataIndex: 'bom_unit_price',
+                            width: 130,
+                            render: (v) => {
+                              const miss = v == null || v === ''
+                              return (
+                                <Space size={6}>
+                                  <Text>{formatMoney2(v)}</Text>
+                                  {miss ? <Tag color="red">缺单价</Tag> : null}
+                                </Space>
+                              )
+                            },
+                          },
+                          {
+                            title: '行成本',
+                            dataIndex: 'line_cost',
+                            width: 130,
+                            render: (v, r: any) => {
+                              const miss = (r as any)?.bom_unit_price == null || (r as any)?.bom_unit_price === ''
+                              return (
+                                <Space size={6}>
+                                  <Text>{formatMoney2(v)}</Text>
+                                  {miss ? <Tag color="red">缺单价</Tag> : null}
+                                </Space>
+                              )
+                            },
+                          },
                         ]}
                       />
 

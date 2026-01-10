@@ -1105,7 +1105,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                             title: 'TOKEN表达式',
                             render: (_: any, r: ModalRuleRow) => {
                               const mode = inferTokenMode(r)
-                              const tokenStr = (mode === 'all' ? r.token_all : r.token_any).join(',')
+                              const tokenArr = mode === 'all' ? r.token_all : r.token_any
                               const hasChild = !!r.id && parentHasChildren(r.id)
                               const childType = getParentChildType(r)
                               const childLabel = childType === 'size' ? '尺寸' : childType === 'area' ? '面积' : childType === 'perimeter' ? '周长' : '-'
@@ -1115,9 +1115,28 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                                     <Tag color="blue">{mode === 'all' ? 'token(all)' : 'token(any)'}</Tag>
                                     {hasChild ? <Tag color="orange">二级:{childLabel}</Tag> : <Tag>无二级</Tag>}
                                   </Space>
-                                  <Text type="secondary" style={{ fontSize: 12 }}>
-                                    {tokenStr || '（空=无条件）'}
-                                  </Text>
+                                  <Space wrap size={6}>
+                                    {(tokenArr ?? []).length ? (
+                                      (tokenArr ?? []).map((t) => (
+                                        <Tag
+                                          key={String(t)}
+                                          style={{
+                                            borderColor: '#ff4d4f',
+                                            background: '#fff1f0',
+                                            color: '#cf1322',
+                                            borderRadius: 999,
+                                            marginInlineEnd: 0,
+                                          }}
+                                        >
+                                          {String(t)}
+                                        </Tag>
+                                      ))
+                                    ) : (
+                                      <Text type="secondary" style={{ fontSize: 12 }}>
+                                        （空=无条件）
+                                      </Text>
+                                    )}
+                                  </Space>
                                 </Space>
                               )
                             },
@@ -1127,6 +1146,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                             width: 70,
                             render: (_: any, r: ModalRuleRow) => (
                               <Switch
+                                size="small"
                                 checked={!!r.enabled}
                                 disabled={!!r.id && parentHasChildren(r.id)}
                                 onChange={(v) => {

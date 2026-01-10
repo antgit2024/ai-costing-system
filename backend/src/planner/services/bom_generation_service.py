@@ -85,6 +85,7 @@ def generate_bom(
     )
     measurement = _build_measurement(version, spec_result, quantity)
     metrics = _build_metrics(spec_result, measurement)
+    diameter_cm = metrics.get("diameter_cm")
 
     base_lines = product_model_service.list_version_material_lines(db, version.id)
     process_lines = product_model_service.list_version_process_lines(db, version.id)
@@ -105,6 +106,24 @@ def generate_bom(
 
     for row in base_lines:
         variant_rules = variants_by_line.get(row.id, [])
+        # Ensure stable and intuitive precedence:
+        # - primary: higher priority first
+        # - when diameter is present in spec, evaluate diameter rules before width/height rules,
+        #   otherwise a square rule (W=H) can shadow a diameter rule due to stop_on_hit.
+        # - finally: older rules first for determinism
+        if variant_rules:
+            def _is_diameter_rule(v: models.ProductModelLineVariant) -> bool:
+                cond = v.conditions_json or {}
+                return "diameter_between" in cond
+
+            variant_rules = sorted(
+                variant_rules,
+                key=lambda v: (
+                    -(v.priority or 0),
+                    0 if (diameter_cm is not None and _is_diameter_rule(v)) else 1,
+                    v.created_at,
+                ),
+            )
         keep_base = True
         replacement_lines: List[Dict[str, Any]] = []
         additions: List[Dict[str, Any]] = []

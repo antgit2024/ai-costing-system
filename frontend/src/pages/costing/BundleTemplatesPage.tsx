@@ -1108,35 +1108,71 @@ export default function BundleTemplatesPage() {
                     >
                       <Space direction="vertical" style={{ width: '100%' }} size={10}>
                         <Radio value="">不选择（该物料行用默认/其它规则）</Radio>
-                        {arr.map((v: any) => {
-                          const trigger = formatTrigger(v?.conditions)
-                          const produced = Array.isArray(v?.items) ? v.items : []
-                          const producedLabels: string[] = produced
-                            .map((it: any) => String(it?.material_name ?? it?.material_code ?? '').trim())
-                            .filter(Boolean)
-                            .slice(0, 8)
-                          return (
-                            <Radio key={String(v?.id)} value={String(v?.id)}>
-                              <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                                <Space size={8} wrap>
-                                  <Tag color={v?.enabled ? 'green' : 'default'}>{v?.enabled ? 'enabled' : 'disabled'}</Tag>
-                                  <Tag>priority: {String(v?.priority ?? '-')}</Tag>
-                                  <Tag>stop_on_hit: {String(!!v?.stop_on_hit)}</Tag>
-                                  <Tag>action: {String(v?.action ?? '-')}</Tag>
-                                </Space>
-                                <Text type="secondary">{trigger}</Text>
-                                {producedLabels.length ? (
-                                  <Space size={6} wrap>
-                                    <Text type="secondary">替换/新增物料：</Text>
-                                    {producedLabels.map((x: string) => (
-                                      <Tag key={x}>{x}</Tag>
-                                    ))}
+                        {(() => {
+                          // 变体筛选（套装模板）按“一级”展示：
+                          // - 新变体体系：二级（尺寸/面积/周长/直径）会写 metadata.parent_variant_id 归属某个一级 token 父规则
+                          // - 套装里不需要逐条挑选二级表达式；只需选一级（用于填充触发词 / 强制命中）
+                          const parents = arr.filter((v: any) => !String(v?.metadata?.parent_variant_id ?? '').trim())
+                          const options = parents.length ? parents : arr
+                          return options.map((v: any) => {
+                            const id = String(v?.id ?? '')
+                            const childRows = arr.filter((x: any) => String(x?.metadata?.parent_variant_id ?? '').trim() === id)
+                            const hasChild = childRows.length > 0
+                            const trigger = formatTrigger(v?.conditions)
+                            const tokens = extractTokensForVariant(v)
+                            const produced = Array.isArray(v?.items) ? v.items : []
+                            const producedLabels: string[] = produced
+                              .map((it: any) => String(it?.material_name ?? it?.material_code ?? '').trim())
+                              .filter(Boolean)
+                              .slice(0, 8)
+                            return (
+                              <Radio key={String(v?.id)} value={String(v?.id)}>
+                                <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                                  <Space size={8} wrap>
+                                    {hasChild ? (
+                                      <Tag color="orange">一级（含二级×{childRows.length}）</Tag>
+                                    ) : (
+                                      <Tag color={v?.enabled ? 'green' : 'default'}>{v?.enabled ? 'enabled' : 'disabled'}</Tag>
+                                    )}
+                                    <Tag>priority: {String(v?.priority ?? '-')}</Tag>
+                                    <Tag>stop_on_hit: {String(!!v?.stop_on_hit)}</Tag>
+                                    <Tag>action: {String(v?.action ?? '-')}</Tag>
                                   </Space>
-                                ) : null}
-                              </Space>
-                            </Radio>
-                          )
-                        })}
+                                  {/* 只读展示：优先展示 TOKEN 分词；无 TOKEN 时回退展示完整条件 */}
+                                  {tokens.length ? (
+                                    <Space wrap size={6}>
+                                      <Text type="secondary">TOKEN：</Text>
+                                      {tokens.map((t) => (
+                                        <Tag
+                                          key={`${String(v?.id)}:${t}`}
+                                          style={{
+                                            background: 'rgba(255,77,79,0.15)',
+                                            color: '#cf1322',
+                                            border: '1px solid #ffccc7',
+                                          }}
+                                        >
+                                          {t}
+                                        </Tag>
+                                      ))}
+                                      {hasChild ? <Text type="secondary">（二级按尺寸/指标继续判断）</Text> : null}
+                                    </Space>
+                                  ) : (
+                                    <Text type="secondary">{trigger}</Text>
+                                  )}
+                                  {/* 一级含二级时，最终替换由二级决定；不在此处展示“替换物料”以免误导 */}
+                                  {!hasChild && producedLabels.length ? (
+                                    <Space size={6} wrap>
+                                      <Text type="secondary">替换/新增物料：</Text>
+                                      {producedLabels.map((x: string) => (
+                                        <Tag key={x}>{x}</Tag>
+                                      ))}
+                                    </Space>
+                                  ) : null}
+                                </Space>
+                              </Radio>
+                            )
+                          })
+                        })()}
                       </Space>
                     </Radio.Group>
                   ),

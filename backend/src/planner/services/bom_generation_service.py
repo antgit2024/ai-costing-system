@@ -360,6 +360,9 @@ def generate_bom_by_spec(
                         "quantity": c.get("quantity") or 1,
                         "spec_text": c.get("spec_text") or "",
                         "tokens": c.get("tokens") or [],
+                        # Optional: force a specific line-variant per base_line_id (used by bundle template UI "指定(强制命中)")
+                        # Shape: { "<base_line_id>": "<variant_id>" }
+                        "force_variant_by_base_line": c.get("force_variant_by_base_line") or {},
                     }
                 )
             if not comps_new:
@@ -900,6 +903,16 @@ def generate_bom_bundle(
         if width_mm <= 0 or height_mm <= 0 or qty <= 0:
             raise ValueError(f"components[{idx}] 尺寸/数量非法：width_mm/height_mm/quantity 必须 > 0")
 
+        # Optional per-component forced variant mapping: base_line_id -> variant_id
+        force_map_raw = comp.get("force_variant_by_base_line") or {}
+        force_map: Dict[str, str] = {}
+        if isinstance(force_map_raw, dict):
+            for k, v in force_map_raw.items():
+                kk = str(k or "").strip()
+                vv = str(v or "").strip()
+                if kk and vv:
+                    force_map[kk] = vv
+
         spec_text = str(comp.get("spec_text") or "").strip()
         spec_result = spec_parser_service.parse_spec(spec_text)
         extra_tokens = []
@@ -930,6 +943,56 @@ def generate_bom_bundle(
             keep_base = True
             replacement_lines: List[Dict[str, Any]] = []
             additions: List[Dict[str, Any]] = []
+
+            forced_variant_id = force_map.get(str(row.id))
+            if forced_variant_id:
+                forced_variant = next((v for v in variant_rules if str(v.id) == str(forced_variant_id)), None)
+                if not forced_variant:
+                    raise ValueError(f"components[{idx}] 强制命中失败：base_line_id={row.id} 未找到 variant_id={forced_variant_id}")
+                if not forced_variant.enabled and not include_disabled_variants:
+                    raise ValueError(f"components[{idx}] 强制命中失败：所选规则已禁用 variant_id={forced_variant_id}")
+
+                produced = [
+                    _materialize_variant_item(
+                        item,
+                        base_row=row,
+                        measurement=measurement,
+                        variant_id=forced_variant.id,
+                        base_line_id=row.id,
+                    )
+                    for item in forced_variant.items or []
+                ]
+                trace_entry = {
+                    "variant_id": forced_variant.id,
+                    "base_line_id": row.id,
+                    "action": forced_variant.action,
+                    "matched": True,
+                    "reason": "forced_by_bundle",
+                }
+                trace_entry["produced_item_ids"] = [line["variant_item_id"] for line in produced]
+                if forced_variant.action in ("replace_bundle", "replace_self"):
+                    keep_base = False
+                    replacement_lines = produced
+                    trace_entry["effect"] = f"replace_with_{len(produced)}"
+                elif forced_variant.action == "remove_self":
+                    keep_base = False
+                    replacement_lines = []
+                    trace_entry["effect"] = "removed"
+                elif forced_variant.action == "add_siblings":
+                    additions.extend(produced)
+                    trace_entry["effect"] = f"added_{len(produced)}"
+                trace_hits.append(trace_entry)
+                # Forced selection always stops further evaluation for this base line.
+                if keep_base:
+                    _push(_materialize_base_line(row, measurement=measurement))
+                    for add_line in additions:
+                        _push(add_line)
+                else:
+                    for repl_line in replacement_lines:
+                        _push(repl_line)
+                    for add_line in additions:
+                        _push(add_line)
+                continue
 
             for variant in variant_rules:
                 if not variant.enabled and not include_disabled_variants:

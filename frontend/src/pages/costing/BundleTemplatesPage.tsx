@@ -49,6 +49,9 @@ type ComponentRow = {
   spec_text: string
   // 指定模式：把所选变体规则依赖的 TOKEN 直接注入到组件行 tokens，不依赖交易规格解析
   tokens?: string[]
+  // 指定(强制命中)：可选强制指定某个 base_line_id 使用某条 line-variant
+  // shape: { "<base_line_id>": "<variant_id>" }
+  force_variant_by_base_line?: Record<string, string>
 }
 
 type PhrasePresetRow = {
@@ -787,6 +790,15 @@ export default function BundleTemplatesPage() {
     }
     const tokens = Array.from(tokenSet)
     const nextText = tokens.join('，')
+    const forceVariantByBaseLine: Record<string, string> = {}
+    if (presetApplyMode === 'force') {
+      for (const [baseLineId, sel] of Object.entries(selectedMap)) {
+        const parentId = String(sel?.parent_variant_id ?? '').trim()
+        if (!parentId) continue
+        const forcedChildId = String(sel?.forced_child_variant_id ?? '').trim()
+        forceVariantByBaseLine[String(baseLineId)] = forcedChildId || parentId
+      }
+    }
     setPhrasePresets((prev) =>
       prev.map((pp, pi) =>
         pi !== presetModalKey.pIdx
@@ -798,9 +810,9 @@ export default function BundleTemplatesPage() {
                 // 变体：填充 spec_text（需要交易规格解析命中）
                 // 指定：注入 tokens（不依赖交易规格解析，直接强制命中）
                 if (presetApplyMode === 'force') {
-                  return { ...cc, spec_text: '', tokens }
+                  return { ...cc, spec_text: '', tokens, force_variant_by_base_line: forceVariantByBaseLine }
                 }
-                return { ...cc, spec_text: nextText, tokens: [] }
+                return { ...cc, spec_text: nextText, tokens: [], force_variant_by_base_line: undefined }
               }),
             },
       ),
@@ -985,6 +997,10 @@ export default function BundleTemplatesPage() {
                     tokens: Array.isArray((c as any).tokens)
                       ? ((c as any).tokens as any[]).map((x) => String(x)).filter(Boolean)
                       : undefined,
+                    force_variant_by_base_line:
+                      c.force_variant_by_base_line && typeof c.force_variant_by_base_line === 'object'
+                        ? c.force_variant_by_base_line
+                        : undefined,
                   }))
                   .filter((c) => c.model_version_id && c.width_mm > 0 && c.height_mm > 0 && c.quantity > 0)
               : [],

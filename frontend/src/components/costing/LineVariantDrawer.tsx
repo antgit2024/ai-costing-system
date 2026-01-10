@@ -572,9 +572,9 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
       }
 
       const enableGate = (row: ModalRuleRow, hasChildRows: boolean): string | null => {
-        // token 父：只要有二级，就必须禁用（避免一级抢命中）
-        if (row.trigger_type === 'token' && hasChildRows) return '该 token 一级存在二级规则：一级不可启用（请启用二级）'
         if (!row.enabled) return null
+        // token 父：只要有二级且被启用，就必须拦截（避免一级抢命中）
+        if (row.trigger_type === 'token' && hasChildRows) return '该 token 一级存在二级规则：一级不可启用（请启用二级）'
         // IMPORTANT:
         // 新增/编辑其他行时会 invalidatePreview()，此时 lastPreviewOk 会被清空。
         // 但“已入库且未改动”的已启用规则并没有发生变化，不应该阻塞保存（否则会出现：预演被 dirty 拦住、保存又要求预演 的死循环）。
@@ -1032,27 +1032,11 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                 </Space>
               }
               extra={
-                <Space size={8}>
-              {draftTriggerType === 'token' ? (
-                <>
+                draftTriggerType === 'token' ? null : (
                   <Button size="small" type="primary" onClick={addModalRow}>
-                    新增一级(token)
+                    新增
                   </Button>
-                </>
-              ) : (
-                <Button size="small" type="primary" onClick={addModalRow}>
-                  新增
-                </Button>
-              )}
-                  <Button
-                    size="small"
-                    type="primary"
-                    loading={modalSaveMutation.isPending}
-                    onClick={() => modalSaveMutation.mutate()}
-                  >
-                    保存
-                  </Button>
-                </Space>
+                )
               }
             >
               {draftTriggerType === 'token' ? (
@@ -1146,46 +1130,60 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                           <Card size="small" title="一级详情（编辑）">
                             <Row gutter={[12, 12]}>
                               <Col span={24}>
-                                <Space wrap size={8}>
-                                  <Tag color="blue">TOKEN 条件表达式</Tag>
-                                  <Select
-                                    size="small"
-                                    value={parentMode}
-                                    style={{ width: 120 }}
-                                    options={[
-                                      { label: 'token(all)', value: 'all' },
-                                      { label: 'token(any)', value: 'any' },
-                                    ]}
-                                    onChange={(v) => {
-                                      const next = (v as any) ?? 'all'
-                                      if (next === 'all') {
-                                        updateModalRow(parent.key, {
-                                          token_mode: 'all',
-                                          token_all: parent.token_all?.length ? parent.token_all : parent.token_any,
-                                          token_any: [],
-                                        })
-                                      }
-                                      if (next === 'any') {
-                                        updateModalRow(parent.key, {
-                                          token_mode: 'any',
-                                          token_any: parent.token_any?.length ? parent.token_any : parent.token_all,
-                                          token_all: [],
-                                        })
-                                      }
-                                    }}
-                                  />
-                                  <Input
-                                    size="small"
-                                    style={{ width: 220 }}
-                                    value={parentTokenStr}
-                                    placeholder="token 可空，逗号分隔"
-                                    onChange={(e) => {
-                                      const arr = splitTokens(e.target.value)
-                                      updateModalRow(parent.key, parentMode === 'all' ? { token_all: arr } : { token_any: arr })
-                                    }}
-                                  />
-                                  {hasChild ? <Tag color="orange">存在二级：一级仅作 token 门槛（可空）</Tag> : <Tag color="green">无二级：本级替换生效</Tag>}
-                                </Space>
+                                <Row gutter={8} align="middle" wrap={false}>
+                                  <Col flex="auto">
+                                    <Space wrap size={8}>
+                                      <Tag color="blue">TOKEN 条件表达式</Tag>
+                                      <Select
+                                        size="small"
+                                        value={parentMode}
+                                        style={{ width: 120 }}
+                                        options={[
+                                          { label: 'token(all)', value: 'all' },
+                                          { label: 'token(any)', value: 'any' },
+                                        ]}
+                                        onChange={(v) => {
+                                          const next = (v as any) ?? 'all'
+                                          if (next === 'all') {
+                                            updateModalRow(parent.key, {
+                                              token_mode: 'all',
+                                              token_all: parent.token_all?.length ? parent.token_all : parent.token_any,
+                                              token_any: [],
+                                            })
+                                          }
+                                          if (next === 'any') {
+                                            updateModalRow(parent.key, {
+                                              token_mode: 'any',
+                                              token_any: parent.token_any?.length ? parent.token_any : parent.token_all,
+                                              token_all: [],
+                                            })
+                                          }
+                                        }}
+                                      />
+                                      <Input
+                                        size="small"
+                                        style={{ width: 220 }}
+                                        value={parentTokenStr}
+                                        placeholder="token 可空，逗号分隔"
+                                        onChange={(e) => {
+                                          const arr = splitTokens(e.target.value)
+                                          updateModalRow(parent.key, parentMode === 'all' ? { token_all: arr } : { token_any: arr })
+                                        }}
+                                      />
+                                      {hasChild ? <Tag color="orange">存在二级：一级仅作 token 门槛（可空）</Tag> : <Tag color="green">无二级：本级替换生效</Tag>}
+                                    </Space>
+                                  </Col>
+                                  <Col flex="none">
+                                    <Button
+                                      size="small"
+                                      type="primary"
+                                      loading={modalSaveMutation.isPending}
+                                      onClick={() => modalSaveMutation.mutate()}
+                                    >
+                                      保存
+                                    </Button>
+                                  </Col>
+                                </Row>
                               </Col>
 
                               <Col span={24}>

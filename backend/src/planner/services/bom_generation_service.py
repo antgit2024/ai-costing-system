@@ -251,6 +251,10 @@ def generate_bom_by_spec(
     # Only CODE is used to load template;
     # selector is parsed from spec_text below.
     raw_bt = str(bundle_token).strip()
+    # Guardrail: spec parser may keep trailing text together with bundle token, e.g.
+    # "B-3U3PAF 雪尼尔..." => bundle_token becomes "B-3U3PAF 雪尼尔..."
+    # We only want the first whitespace-separated token for bundle parsing.
+    raw_bt = raw_bt.split()[0] if raw_bt else raw_bt
     if raw_bt.upper().startswith("B-"):
         # Dash forms:
         # - legacy: B-CODE / B-CODE-A / B-CODE-AA

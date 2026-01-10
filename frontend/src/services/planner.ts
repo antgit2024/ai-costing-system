@@ -1390,6 +1390,12 @@ export const generateBomBySpec = async (payload: BomGenerateBySpecRequest): Prom
   return response.data
 }
 
+// Debug: return per-component details for bundle (components[])
+export const generateBomBySpecDebug = async (payload: BomGenerateBySpecRequest): Promise<any> => {
+  const response = await plannerClient.post(`/bom/generate-by-spec-debug`, payload)
+  return response.data
+}
+
 export const fetchProductModelMaterials = async (
   modelId: string,
 ): Promise<Array<Record<string, any>>> => {

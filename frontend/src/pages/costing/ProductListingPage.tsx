@@ -89,7 +89,7 @@ const toBundleTokenDash = (code: string, selector?: string | null): string => {
 }
 
 export default function ProductListingPage() {
-  const [mode, setMode] = useState<'single' | 'multi'>('single')
+  const [mode, setMode] = useState<'single' | 'multi' | 'spec_gen'>('single')
   const [draft, setDraft] = useState<ProductListingDraft>({
     sku_code: '',
     model_id: null,
@@ -379,9 +379,9 @@ export default function ProductListingPage() {
       const spec_text = extra ? `${extra}(${token})` : `${token}`
       if (bundleDebugMode) {
         const dbg = await generateBomBySpecDebug({
-          spec_text,
-          sku_code: draft.sku_code || undefined,
-        })
+        spec_text,
+        sku_code: draft.sku_code || undefined,
+      })
         const merged = (dbg?.merged ?? null) as any
         setBundleDebugRaw(dbg)
         setBundleComponentsDebug(Array.isArray(dbg?.components) ? dbg.components : [])
@@ -590,6 +590,7 @@ export default function ProductListingPage() {
                 items={[
                   { key: 'single', label: '模型测试' },
                   { key: 'multi', label: '套装测试' },
+                  { key: 'spec_gen', label: '规格生成' },
                 ]}
               />
 
@@ -634,7 +635,7 @@ export default function ProductListingPage() {
                     }}
                   />
                 </>
-              ) : (
+              ) : mode === 'multi' ? (
                 <>
                   <Input
                     placeholder="套装短码（可直接输入）：例如 B-3U3PAA / B-CODE-AA / B:CODE:AA"
@@ -776,6 +777,69 @@ export default function ProductListingPage() {
                     placeholder="交易规格（可选）：可直接粘贴对客规格；不需要写“；”。点击预演会自动拼接 (B:CODE[:A])"
                     value={bundleDraft.spec_text}
                     onChange={(e) => setBundleDraft((d) => ({ ...d, spec_text: e.target.value }))}
+                  />
+                </>
+              ) : (
+                <>
+                  <Row gutter={[12, 12]}>
+                    <Col xs={24} lg={12}>
+                      <Card size="small" title="模块（套装模板）">
+                        <Select
+                          showSearch
+                          allowClear
+                          placeholder="选择套装（B-XXXXAA）"
+                          options={bundleTemplateOptions as any}
+                          value={bundleDraft.bundle_code ?? undefined}
+                          loading={bundleTemplatesQuery.isLoading}
+                          onChange={(v) =>
+                            setBundleDraft((d) => ({ ...d, bundle_code: (v as string) ?? null, bundle_selector: null, spec_text: '' }))
+                          }
+                          style={{ width: '100%' }}
+                        />
+                      </Card>
+                    </Col>
+                    <Col xs={24} lg={12}>
+                      <Card size="small" title="版本（短语 selector）">
+                        <Select
+                          allowClear
+                          placeholder="选择 AA/AB/…（对应运营短语）"
+                          options={bundlePhraseOptions as any}
+                          value={bundleDraft.bundle_selector ?? undefined}
+                          loading={bundleTemplateDetailQuery.isLoading}
+                          onChange={(v) => setBundleDraft((d) => ({ ...d, bundle_selector: (v as string) ?? null }))}
+                          style={{ width: '100%' }}
+                          disabled={!bundleDraft.bundle_code}
+                        />
+                      </Card>
+                    </Col>
+                  </Row>
+                  <Button
+                    type="primary"
+                    disabled={!bundleDraft.bundle_code}
+                    onClick={() => {
+                      if (!bundleDraft.bundle_code) {
+                        message.warning('请先选择套装模板')
+                        return
+                      }
+                      message.success('已生成规格列表（可编辑/可校验）')
+                    }}
+                  >
+                    生成规格
+                  </Button>
+                  <BundlePhraseListPanel
+                    title="规格生成"
+                    bundleCode={effectiveBundleCode}
+                    phrasePresets={(((bundleTemplateDetailQuery.data as any)?.metadata ?? {})?.phrase_presets ?? []) as any}
+                    activeSelector={bundleDraft.bundle_selector}
+                    defaultOpen
+                    showGenerateBom
+                    generateBomLoading={bundlePreviewMutation.isPending}
+                    onGenerateBom={({ selector, phrase }) => {
+                      // 关键：spec_text 只写“对客短语”，不要拼 B码；bundlePreviewMutation 会自动拼 token
+                      setBundleDraft((d) => ({ ...d, bundle_selector: selector, spec_text: String(phrase || '').trim() }))
+                      // 直接预演并在右侧展示最终BOM（原界面不变）
+                      bundlePreviewMutation.mutate()
+                    }}
                   />
                 </>
               )}

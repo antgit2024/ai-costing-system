@@ -74,6 +74,9 @@ export default function BundlePhraseListPanel(props: {
   activeSelector?: string | null
   title?: string
   defaultOpen?: boolean
+  showGenerateBom?: boolean
+  onGenerateBom?: (args: { selector: string; phrase: string; output: string }) => void
+  generateBomLoading?: boolean
 }) {
   const {
     bundleCode,
@@ -82,6 +85,9 @@ export default function BundlePhraseListPanel(props: {
     activeSelector,
     title = '短语生成器（可复制/可校验）',
     defaultOpen = true,
+    showGenerateBom = false,
+    onGenerateBom,
+    generateBomLoading = false,
   } = props
 
   const [mode, setMode] = useState<PhraseWriteMode>(defaultMode)
@@ -298,6 +304,37 @@ export default function BundlePhraseListPanel(props: {
                         )
                       },
                     },
+                    ...(showGenerateBom
+                      ? [
+                          {
+                            title: '生成BOM',
+                            width: 130,
+                            render: (_: any, r: any) => {
+                              const v = validateRow(r)
+                              const phrase = String(draftBySelector[r.selector] ?? '').trim()
+                              const out = buildOutput(r)
+                              return (
+                                <Button
+                                  size="small"
+                                  type="primary"
+                                  disabled={!v.ok || !onGenerateBom}
+                                  loading={generateBomLoading}
+                                  onClick={() => {
+                                    if (!v.ok) {
+                                      message.warning('请先修正：必含片段校验未通过')
+                                      return
+                                    }
+                                    if (!onGenerateBom) return
+                                    onGenerateBom({ selector: String(r.selector), phrase, output: out })
+                                  }}
+                                >
+                                  生成BOM
+                                </Button>
+                              )
+                            },
+                          } as any,
+                        ]
+                      : []),
                   ]}
                 />
               </Card>

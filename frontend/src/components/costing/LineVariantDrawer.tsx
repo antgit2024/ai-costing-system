@@ -1153,7 +1153,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
           </Text>
         </Space>
       }
-      width={980}
+      width={1100}
       open={open}
       onClose={onClose}
       destroyOnClose
@@ -1228,7 +1228,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
           }
           open={editModalOpen}
           onCancel={() => setEditModalOpen(false)}
-          width={980}
+          width={1100}
           footer={null}
           bodyStyle={{ maxHeight: '72vh', overflowY: 'auto' }}
           destroyOnClose

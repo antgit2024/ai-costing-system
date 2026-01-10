@@ -191,8 +191,17 @@ export default function BundleTemplatesPage() {
   // 模型池（缩小范围）：多选版本
   const [modelPoolVersionIds, setModelPoolVersionIds] = useState<string[]>([])
 
-  // 预设变体筛选：每个短语行内组件 key(pIdx:cIdx) -> { base_line_id -> selected_variant_id }
-  const [presetSelectedByIdx, setPresetSelectedByIdx] = useState<Record<string, Record<string, string | null>>>({})
+  // 预设变体筛选：每个短语行内组件 key(pIdx:cIdx) -> { base_line_id -> selection }
+  // selection:
+  // - parent_variant_id: 选中的一级（token门槛）
+  // - child_variant_ids: 解析命中模式下默认全选（用于说明/落库；真实命中由后端按尺寸/指标决定）
+  // - forced_child_variant_id: 强制命中模式下只允许选一个子条件（精确指定）
+  type VariantPresetSelection = {
+    parent_variant_id: string | null
+    child_variant_ids?: string[]
+    forced_child_variant_id?: string | null
+  }
+  const [presetSelectedByIdx, setPresetSelectedByIdx] = useState<Record<string, Record<string, VariantPresetSelection>>>({})
   const [presetModalOpen, setPresetModalOpen] = useState(false)
   const [presetModalKey, setPresetModalKey] = useState<{ pIdx: number; cIdx: number } | null>(null)
   const [presetApplyMode, setPresetApplyMode] = useState<'variant' | 'force'>('variant')
@@ -558,7 +567,7 @@ export default function BundleTemplatesPage() {
     setPhrasePresets((prev) => [...(prev ?? []), copied])
     // copy selected variants (by component index)
     setPresetSelectedByIdx((prev) => {
-      const out: Record<string, Record<string, string | null>> = { ...(prev ?? {}) }
+      const out: Record<string, Record<string, VariantPresetSelection>> = { ...(prev ?? {}) }
       for (const [k, v] of Object.entries(prev ?? {})) {
         if (!k.startsWith(`${pIdx}:`)) continue
         const cIdxStr = k.split(':')[1]
@@ -595,7 +604,7 @@ export default function BundleTemplatesPage() {
         setPhrasePresets((prev) => (prev ?? []).filter((_, i) => i !== pIdx))
         // Remap presetSelectedByIdx keys because they are index-based `${pIdx}:${cIdx}`
         setPresetSelectedByIdx((prev) => {
-          const out: Record<string, Record<string, string | null>> = {}
+          const out: Record<string, Record<string, VariantPresetSelection>> = {}
           for (const [k, v] of Object.entries(prev ?? {})) {
             const parts = String(k).split(':')
             const pStr = parts[0]
@@ -633,7 +642,7 @@ export default function BundleTemplatesPage() {
     })
     // Remap presetSelectedByIdx keys because they are index-based `${pIdx}:${cIdx}`
     setPresetSelectedByIdx((prev) => {
-      const out: Record<string, Record<string, string | null>> = {}
+      const out: Record<string, Record<string, VariantPresetSelection>> = {}
       if (!prev || typeof prev !== 'object') return out
       const keys = Object.entries(prev)
       const mapIdx = (i: number): number => {
@@ -699,7 +708,7 @@ export default function BundleTemplatesPage() {
     )
     // shift selections for this preset (index-based keys), and clone selections for the copied row
     setPresetSelectedByIdx((prev) => {
-      const out: Record<string, Record<string, string | null>> = {}
+      const out: Record<string, Record<string, VariantPresetSelection>> = {}
       const prefix = `${pIdx}:`
       for (const [k, v] of Object.entries(prev ?? {})) {
         if (!k.startsWith(prefix)) {
@@ -732,7 +741,7 @@ export default function BundleTemplatesPage() {
     )
     // shift selections down to avoid "selected variants" misalignment
     setPresetSelectedByIdx((prev) => {
-      const out: Record<string, Record<string, string | null>> = {}
+      const out: Record<string, Record<string, VariantPresetSelection>> = {}
       const prefix = `${pIdx}:`
       for (const [k, v] of Object.entries(prev ?? {})) {
         if (!k.startsWith(prefix)) {
@@ -755,10 +764,24 @@ export default function BundleTemplatesPage() {
     const k = `${presetModalKey.pIdx}:${presetModalKey.cIdx}`
     const selectedMap = presetSelectedByIdx[k] ?? {}
     const tokenSet = new Set<string>()
-    for (const [baseLineId, variantId] of Object.entries(selectedMap)) {
-      if (!variantId) continue
+    for (const [baseLineId, sel] of Object.entries(selectedMap)) {
+      const parentId = String(sel?.parent_variant_id ?? '').trim()
+      if (!parentId) continue
       const variants = presetVariantsByBaseLine.get(baseLineId) ?? []
-      const v = variants.find((x: any) => String(x?.id) === String(variantId))
+      // “变体（解析命中）”：选一级即可（tokens 从一级拿，二级由尺寸/指标决定）
+      // “指定（强制命中）”：若一级有二级，必须选一个子条件；否则就用一级本身
+      const forcedChildId = String(sel?.forced_child_variant_id ?? '').trim()
+      let pickId = parentId
+      if (presetApplyMode === 'force') {
+        if (forcedChildId) {
+          pickId = forcedChildId
+        } else {
+          const children = variants.filter((x: any) => String(x?.metadata?.parent_variant_id ?? '').trim() === parentId)
+          const firstChildId = String(children?.[0]?.id ?? '').trim()
+          pickId = firstChildId || parentId
+        }
+      }
+      const v = variants.find((x: any) => String(x?.id) === String(pickId))
       if (!v) continue
       for (const t of extractTokensForVariant(v)) tokenSet.add(t)
     }
@@ -817,8 +840,30 @@ export default function BundleTemplatesPage() {
     const pool = (meta?.model_pool_version_ids ?? meta?.model_pool ?? meta?.model_versions) as any
     setModelPoolVersionIds(Array.isArray(pool) ? pool.map((x) => String(x)).filter(Boolean) : [])
     const vp = (row?.metadata ?? {})?.phrase_variant_presets
-    if (vp && typeof vp === 'object') setPresetSelectedByIdx(vp as any)
-    else setPresetSelectedByIdx({})
+    if (vp && typeof vp === 'object') {
+      // Backward compatibility:
+      // - legacy: { [k]: { [base_line_id]: variant_id|null } }
+      // - new:    { [k]: { [base_line_id]: { parent_variant_id, child_variant_ids?, forced_child_variant_id? } } }
+      const out: Record<string, Record<string, VariantPresetSelection>> = {}
+      for (const [k, m] of Object.entries(vp as any)) {
+        if (!m || typeof m !== 'object') continue
+        const inner: Record<string, VariantPresetSelection> = {}
+        for (const [baseLineId, rawSel] of Object.entries(m as any)) {
+          if (!baseLineId) continue
+          if (rawSel && typeof rawSel === 'object' && 'parent_variant_id' in (rawSel as any)) {
+            inner[String(baseLineId)] = rawSel as any
+            continue
+          }
+          // legacy string/null
+          const vid = String(rawSel ?? '').trim()
+          inner[String(baseLineId)] = { parent_variant_id: vid || null }
+        }
+        out[String(k)] = inner
+      }
+      setPresetSelectedByIdx(out)
+    } else {
+      setPresetSelectedByIdx({})
+    }
     const fo = (row?.metadata ?? {})?.fallback_token_overrides ?? (row?.metadata ?? {})?.fallback_display_overrides
     if (fo && typeof fo === 'object') setFallbackTokenOverrides(fo as any)
     else setFallbackTokenOverrides({})
@@ -1056,7 +1101,11 @@ export default function BundleTemplatesPage() {
                 const baseLabelRaw = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
                 const baseLabel = slot ? `${slot}：${baseLabelRaw}` : baseLabelRaw
 
-                const selectedVariant = selected ? (arr ?? []).find((x: any) => String(x?.id) === String(selected)) : null
+                const selectedParentId = String(selected?.parent_variant_id ?? '').trim()
+                const selectedVariant = selectedParentId ? (arr ?? []).find((x: any) => String(x?.id) === selectedParentId) : null
+                const childRows = selectedParentId
+                  ? (arr ?? []).filter((x: any) => String(x?.metadata?.parent_variant_id ?? '').trim() === selectedParentId)
+                  : []
                 const selectedProduced = Array.isArray(selectedVariant?.items) ? selectedVariant.items : []
                 const selectedProducedLabels: string[] = selectedProduced
                   .map((it: any) => String(it?.material_name ?? it?.material_code ?? '').trim())
@@ -1075,15 +1124,22 @@ export default function BundleTemplatesPage() {
                     <Space size={8}>
                       <Text strong>{baseLabel}</Text>
                       <Text type="secondary">{arr.length}条规则</Text>
-                      {selected ? (
+                      {selectedParentId ? (
                         <Space size={6}>
                           <Text type="secondary">{selectedEffect}</Text>
-                          {selectedProducedLabels.length ? (
+                          {selectedProducedLabels.length && childRows.length === 0 ? (
                             <Tag color="green">{selectedProducedLabels.join('、')}</Tag>
                           ) : (
                             <Tag color="green">-</Tag>
                           )}
-                          <Tag color="green">已选1条</Tag>
+                          {childRows.length ? <Tag color="orange">含二级×{childRows.length}</Tag> : null}
+                          {presetApplyMode === 'force' && childRows.length ? (
+                            <Tag color="volcano">强制：选1条子条件</Tag>
+                          ) : presetApplyMode === 'variant' && childRows.length ? (
+                            <Tag color="blue">解析：子条件默认全选</Tag>
+                          ) : (
+                            <Tag color="green">已选</Tag>
+                          )}
                         </Space>
                       ) : (
                         <Tag>未选</Tag>
@@ -1092,16 +1148,24 @@ export default function BundleTemplatesPage() {
                   ),
                   children: (
                     <Radio.Group
-                      value={selected ?? ''}
+                      value={selectedParentId || ''}
                       onChange={(e) => {
-                        const vid = String(e?.target?.value ?? '')
+                        const parentId = String(e?.target?.value ?? '')
                         const k = presetModalKey ? `${presetModalKey.pIdx}:${presetModalKey.cIdx}` : ''
                         if (!k) return
+                        const children = parentId
+                          ? (arr ?? []).filter((x: any) => String(x?.metadata?.parent_variant_id ?? '').trim() === parentId)
+                          : []
+                        const childIds = children.map((x: any) => String(x?.id)).filter(Boolean)
                         setPresetSelectedByIdx((prev) => ({
                           ...prev,
                           [k]: {
                             ...(prev[k] ?? {}),
-                            [baseLineId]: vid ? vid : null,
+                            [baseLineId]: {
+                              parent_variant_id: parentId ? parentId : null,
+                              child_variant_ids: childIds,
+                              forced_child_variant_id: childIds.length ? childIds[0] : null,
+                            },
                           },
                         }))
                       }}
@@ -1125,6 +1189,8 @@ export default function BundleTemplatesPage() {
                               .map((it: any) => String(it?.material_name ?? it?.material_code ?? '').trim())
                               .filter(Boolean)
                               .slice(0, 8)
+                            const isSelectedParent = String(selectedParentId) === id
+                            const forcedChildId = String(selected?.forced_child_variant_id ?? '').trim()
                             return (
                               <Radio key={String(v?.id)} value={String(v?.id)}>
                                 <Space direction="vertical" size={4} style={{ width: '100%' }}>
@@ -1159,6 +1225,42 @@ export default function BundleTemplatesPage() {
                                   ) : (
                                     <Text type="secondary">{trigger}</Text>
                                   )}
+                                  {hasChild && isSelectedParent ? (
+                                    presetApplyMode === 'variant' ? (
+                                      <Text type="secondary" style={{ fontSize: 12 }}>
+                                        子条件默认全选：{childRows.length}条（套装里不在此处逐条选择）
+                                      </Text>
+                                    ) : (
+                                      <Space wrap size={8}>
+                                        <Text type="secondary">指定子条件：</Text>
+                                        <Select
+                                          size="small"
+                                          style={{ width: 520, maxWidth: '100%' }}
+                                          placeholder="请选择一条子条件（强制命中）"
+                                          value={forcedChildId || String(childRows?.[0]?.id ?? '') || undefined}
+                                          options={childRows.map((c: any) => ({
+                                            value: String(c?.id),
+                                            label: formatTrigger(c?.conditions),
+                                          }))}
+                                          onChange={(cid) => {
+                                            const k = presetModalKey ? `${presetModalKey.pIdx}:${presetModalKey.cIdx}` : ''
+                                            if (!k) return
+                                            setPresetSelectedByIdx((prev) => ({
+                                              ...(prev ?? {}),
+                                              [k]: {
+                                                ...(prev?.[k] ?? {}),
+                                                [baseLineId]: {
+                                                  ...(prev?.[k]?.[baseLineId] ?? { parent_variant_id: id }),
+                                                  parent_variant_id: id,
+                                                  forced_child_variant_id: String(cid ?? '').trim() || null,
+                                                },
+                                              },
+                                            }))
+                                          }}
+                                        />
+                                      </Space>
+                                    )
+                                  ) : null}
                                   {/* 一级含二级时，最终替换由二级决定；不在此处展示“替换物料”以免误导 */}
                                   {!hasChild && producedLabels.length ? (
                                     <Space size={6} wrap>
@@ -1680,8 +1782,8 @@ export default function BundleTemplatesPage() {
                         expandedRowRender: (rr: any, mi: number) => {
                           const versionId = String(rr?.model_version_id ?? '').trim()
                           const k = `${idx}:${mi}`
-                          const sel = (presetSelectedByIdx[k] ?? {}) as Record<string, string | null>
-                          const selectedEntries = Object.entries(sel).filter(([, v]) => !!v)
+                          const sel = (presetSelectedByIdx[k] ?? {}) as Record<string, VariantPresetSelection>
+                          const selectedEntries = Object.entries(sel).filter(([, v]) => !!String(v?.parent_variant_id ?? '').trim())
                           if (!versionId || !selectedEntries.length) return null
                           const injectedTokens = Array.isArray(rr?.tokens) ? (rr.tokens as any[]).map((x) => String(x).trim()).filter(Boolean) : []
                           const isForce = injectedTokens.length > 0
@@ -1771,8 +1873,11 @@ export default function BundleTemplatesPage() {
                                 )
                               })() : null}
 
-                              {selectedEntries.map(([baseLineId, variantId]) => {
-                                const v = variantsById.get(String(variantId))
+                              {selectedEntries.map(([baseLineId, s]) => {
+                                const parentId = String(s?.parent_variant_id ?? '').trim()
+                                const forcedChildId = String(s?.forced_child_variant_id ?? '').trim()
+                                const pickId = isForce && forcedChildId ? forcedChildId : parentId
+                                const v = variantsById.get(String(pickId))
                                 const base = baseMap.get(String(baseLineId))
                                 const slot = getLineStructureLabel(base, versionId)
                                 const rawName = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
@@ -1786,7 +1891,7 @@ export default function BundleTemplatesPage() {
                                 ).trim()
 
                                 return (
-                                  <div key={`${k}:${baseLineId}:${variantId}`}>
+                                  <div key={`${k}:${baseLineId}:${pickId}`}>
                                     <Space wrap size={8}>
                                       {isForce ? (
                                         <>
@@ -1827,7 +1932,7 @@ export default function BundleTemplatesPage() {
                                           {tokens.length ? (
                                             tokens.map((t) => (
                                               <Tag
-                                                key={`${k}:${baseLineId}:${variantId}:${t}`}
+                                                key={`${k}:${baseLineId}:${pickId}:${t}`}
                                                 style={{
                                                   background: 'rgba(255,77,79,0.15)',
                                                   color: '#cf1322',
@@ -1850,6 +1955,8 @@ export default function BundleTemplatesPage() {
                                           <Tag color="green">{producedLabel || '-'}</Tag>
                                         </>
                                       )}
+                                      {isForce && parentId ? <Tag color="orange">一级:{parentId.slice(0, 8)}…</Tag> : null}
+                                      {isForce && forcedChildId ? <Tag color="volcano">子:{forcedChildId.slice(0, 8)}…</Tag> : null}
                                     </Space>
                                   </div>
                                 )

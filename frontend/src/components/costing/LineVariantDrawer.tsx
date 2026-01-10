@@ -934,7 +934,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
   const childrenOf = (parentId: string | undefined): ModalRuleRow[] => (parentId ? childrenByParentId[String(parentId)] ?? [] : [])
   const parentHasChildren = (parentId: string | undefined): boolean => childrenOf(parentId).length > 0
 
-  const getParentChildType = (parent: ModalRuleRow): 'size' | 'area' | 'perimeter' | 'diameter' | null => {
+  const getParentChildType = (parent: ModalRuleRow): 'size' | 'area' | 'perimeter' | null => {
     const ch = childrenOf(parent.id)
     if (ch.length > 0) {
       const types = Array.from(
@@ -946,14 +946,19 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
             >,
         ),
       )
-      return types.length === 1 ? types[0] : null
+      // Treat diameter as a "shape variant" under 尺寸组（对外只锁定为 size）
+      if (types.length === 1) return (types[0] === 'diameter' ? 'size' : (types[0] as any))
+      if (types.length === 2 && types.includes('size') && types.includes('diameter')) return 'size'
+      return null
     }
     const raw = String((parent.metadata_json as any)?.child_trigger_type ?? '').trim()
-    if (raw === 'size' || raw === 'area' || raw === 'perimeter' || raw === 'diameter') return raw
+    if (raw === 'size' || raw === 'area' || raw === 'perimeter') return raw
+    // Backward compatibility: if historical value ever wrote diameter, treat it as size group.
+    if (raw === 'diameter') return 'size'
     return null
   }
 
-  const addChildMetricRow = (parent: ModalRuleRow, childType: 'size' | 'area' | 'perimeter' | 'diameter') => {
+  const addChildMetricRow = (parent: ModalRuleRow, childType: 'size' | 'area' | 'perimeter') => {
     if (!parent?.id) {
       message.warning('请先保存一级规则（拿到ID）后再新增二级')
       return
@@ -1149,14 +1154,12 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                       const childType = getParentChildType(parent)
                       const childTypeLabel =
                         childType === 'size'
-                          ? '尺寸（宽+高）'
+                          ? '尺寸（方=宽+高；圆=直径）'
                           : childType === 'area'
                             ? '面积'
                             : childType === 'perimeter'
                               ? '周长'
-                              : childType === 'diameter'
-                                ? '直径'
-                                : null
+                              : null
                       const disableParentReplace = hasChild
 
                       const parentMode = inferTokenMode(parent)
@@ -1324,7 +1327,6 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                                     { label: '尺寸（宽+高，cm）', value: 'size' },
                                     { label: '面积（m²）', value: 'area' },
                                     { label: '周长（m）', value: 'perimeter' },
-                                    { label: '直径（cm）', value: 'diameter' },
                                   ]}
                                   onChange={(v) => {
                                     updateModalRow(parent.key, { metadata_json: { ...(parent.metadata_json ?? {}), child_trigger_type: v as any } } as any)
@@ -1336,7 +1338,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                                   onClick={() => {
                                     const t = getParentChildType(parent)
                                     if (!t) {
-                                      message.error('请先选择二级类型（尺寸/面积/周长/直径）')
+                                      message.error('请先选择二级类型（尺寸/面积/周长）')
                                       return
                                     }
                                     addChildMetricRow(parent, t)
@@ -1385,89 +1387,175 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                                       <Space direction="vertical" size={6} style={{ width: '100%' }}>
                                         {/* 第一行：条件表达式 */}
                                         <div>
-                                          {r.trigger_type === 'size' ? (
+                                          {r.trigger_type === 'size' || r.trigger_type === 'diameter' ? (
                                             <Space wrap size={8}>
-                                              <Tag>宽(cm)</Tag>
+                                              <Tag>形态</Tag>
                                               <Select
                                                 size="small"
-                                                value={r.op}
+                                                value={r.trigger_type === 'diameter' ? 'round' : 'rect'}
                                                 style={{ width: 92 }}
                                                 options={[
-                                                  { label: '≥', value: 'gte' },
-                                                  { label: '≤', value: 'lte' },
-                                                  { label: '=', value: 'eq' },
-                                                  { label: '区间', value: 'between' },
+                                                  { label: '方形', value: 'rect' },
+                                                  { label: '圆形', value: 'round' },
                                                 ]}
-                                                onChange={(v) => updateModalRow(r.key, { op: v as any })}
+                                                onChange={(v) => {
+                                                  const next = String(v)
+                                                  if (next === 'round' && r.trigger_type !== 'diameter') {
+                                                    // 把“宽/高”模式切到“直径”模式：默认取宽的值（或已有值）作为直径
+                                                    const guess =
+                                                      r.op === 'lte'
+                                                        ? r.max ?? null
+                                                        : r.op === 'between'
+                                                          ? r.min ?? null
+                                                          : r.min ?? null
+                                                    updateModalRow(r.key, {
+                                                      trigger_type: 'diameter',
+                                                      min: r.op === 'lte' ? null : guess,
+                                                      max: r.op === 'lte' ? guess : r.op === 'between' ? r.max ?? null : null,
+                                                    })
+                                                  } else if (next === 'rect' && r.trigger_type === 'diameter') {
+                                                    // 把“直径”模式切到“宽+高”模式：宽=高=直径
+                                                    const dMin = r.min ?? null
+                                                    const dMax = r.max ?? null
+                                                    updateModalRow(r.key, {
+                                                      trigger_type: 'size',
+                                                      h_op: r.op,
+                                                      h_min: dMin,
+                                                      h_max: dMax,
+                                                    })
+                                                  }
+                                                }}
                                               />
-                                              {r.op === 'between' ? (
-                                                <Space wrap size={6}>
-                                                  <InputNumber
+
+                                              {r.trigger_type === 'diameter' ? (
+                                                <>
+                                                  <Tag>直径(cm)</Tag>
+                                                  <Select
                                                     size="small"
-                                                    placeholder="min"
-                                                    value={r.min}
-                                                    onChange={(v) => updateModalRow(r.key, { min: v == null ? null : Number(v) })}
+                                                    value={r.op}
+                                                    style={{ width: 92 }}
+                                                    options={[
+                                                      { label: '≥', value: 'gte' },
+                                                      { label: '≤', value: 'lte' },
+                                                      { label: '=', value: 'eq' },
+                                                      { label: '区间', value: 'between' },
+                                                    ]}
+                                                    onChange={(v) => updateModalRow(r.key, { op: v as any })}
                                                   />
-                                                  <Text type="secondary">到</Text>
-                                                  <InputNumber
-                                                    size="small"
-                                                    placeholder="max"
-                                                    value={r.max}
-                                                    onChange={(v) => updateModalRow(r.key, { max: v == null ? null : Number(v) })}
-                                                  />
-                                                </Space>
+                                                  {r.op === 'between' ? (
+                                                    <Space wrap size={6}>
+                                                      <InputNumber
+                                                        size="small"
+                                                        placeholder="min"
+                                                        value={r.min}
+                                                        onChange={(v) => updateModalRow(r.key, { min: v == null ? null : Number(v) })}
+                                                      />
+                                                      <Text type="secondary">到</Text>
+                                                      <InputNumber
+                                                        size="small"
+                                                        placeholder="max"
+                                                        value={r.max}
+                                                        onChange={(v) => updateModalRow(r.key, { max: v == null ? null : Number(v) })}
+                                                      />
+                                                    </Space>
+                                                  ) : (
+                                                    <InputNumber
+                                                      size="small"
+                                                      placeholder="value"
+                                                      value={r.op === 'lte' ? r.max : r.min}
+                                                      onChange={(v) => {
+                                                        const n = v == null ? null : Number(v)
+                                                        if (r.op === 'lte') updateModalRow(r.key, { max: n })
+                                                        else updateModalRow(r.key, { min: n })
+                                                      }}
+                                                    />
+                                                  )}
+                                                </>
                                               ) : (
-                                                <InputNumber
-                                                  size="small"
-                                                  placeholder="value"
-                                                  value={r.op === 'lte' ? r.max : r.min}
-                                                  onChange={(v) => {
-                                                    const n = v == null ? null : Number(v)
-                                                    if (r.op === 'lte') updateModalRow(r.key, { max: n })
-                                                    else updateModalRow(r.key, { min: n })
-                                                  }}
-                                                />
-                                              )}
-                                              <Tag>高(cm)</Tag>
-                                              <Select
-                                                size="small"
-                                                value={r.h_op ?? 'gte'}
-                                                style={{ width: 92 }}
-                                                options={[
-                                                  { label: '≥', value: 'gte' },
-                                                  { label: '≤', value: 'lte' },
-                                                  { label: '=', value: 'eq' },
-                                                  { label: '区间', value: 'between' },
-                                                ]}
-                                                onChange={(v) => updateModalRow(r.key, { h_op: v as any })}
-                                              />
-                                              {(r.h_op ?? 'gte') === 'between' ? (
-                                                <Space wrap size={6}>
-                                                  <InputNumber
+                                                <>
+                                                  <Tag>宽(cm)</Tag>
+                                                  <Select
                                                     size="small"
-                                                    placeholder="min"
-                                                    value={r.h_min ?? null}
-                                                    onChange={(v) => updateModalRow(r.key, { h_min: v == null ? null : Number(v) })}
+                                                    value={r.op}
+                                                    style={{ width: 92 }}
+                                                    options={[
+                                                      { label: '≥', value: 'gte' },
+                                                      { label: '≤', value: 'lte' },
+                                                      { label: '=', value: 'eq' },
+                                                      { label: '区间', value: 'between' },
+                                                    ]}
+                                                    onChange={(v) => updateModalRow(r.key, { op: v as any })}
                                                   />
-                                                  <Text type="secondary">到</Text>
-                                                  <InputNumber
+                                                  {r.op === 'between' ? (
+                                                    <Space wrap size={6}>
+                                                      <InputNumber
+                                                        size="small"
+                                                        placeholder="min"
+                                                        value={r.min}
+                                                        onChange={(v) => updateModalRow(r.key, { min: v == null ? null : Number(v) })}
+                                                      />
+                                                      <Text type="secondary">到</Text>
+                                                      <InputNumber
+                                                        size="small"
+                                                        placeholder="max"
+                                                        value={r.max}
+                                                        onChange={(v) => updateModalRow(r.key, { max: v == null ? null : Number(v) })}
+                                                      />
+                                                    </Space>
+                                                  ) : (
+                                                    <InputNumber
+                                                      size="small"
+                                                      placeholder="value"
+                                                      value={r.op === 'lte' ? r.max : r.min}
+                                                      onChange={(v) => {
+                                                        const n = v == null ? null : Number(v)
+                                                        if (r.op === 'lte') updateModalRow(r.key, { max: n })
+                                                        else updateModalRow(r.key, { min: n })
+                                                      }}
+                                                    />
+                                                  )}
+                                                  <Tag>高(cm)</Tag>
+                                                  <Select
                                                     size="small"
-                                                    placeholder="max"
-                                                    value={r.h_max ?? null}
-                                                    onChange={(v) => updateModalRow(r.key, { h_max: v == null ? null : Number(v) })}
+                                                    value={r.h_op ?? r.op}
+                                                    style={{ width: 92 }}
+                                                    options={[
+                                                      { label: '≥', value: 'gte' },
+                                                      { label: '≤', value: 'lte' },
+                                                      { label: '=', value: 'eq' },
+                                                      { label: '区间', value: 'between' },
+                                                    ]}
+                                                    onChange={(v) => updateModalRow(r.key, { h_op: v as any })}
                                                   />
-                                                </Space>
-                                              ) : (
-                                                <InputNumber
-                                                  size="small"
-                                                  placeholder="value"
-                                                  value={(r.h_op ?? 'gte') === 'lte' ? (r.h_max ?? null) : (r.h_min ?? null)}
-                                                  onChange={(v) => {
-                                                    const n = v == null ? null : Number(v)
-                                                    if ((r.h_op ?? 'gte') === 'lte') updateModalRow(r.key, { h_max: n })
-                                                    else updateModalRow(r.key, { h_min: n })
-                                                  }}
-                                                />
+                                                  {(r.h_op ?? r.op) === 'between' ? (
+                                                    <Space wrap size={6}>
+                                                      <InputNumber
+                                                        size="small"
+                                                        placeholder="min"
+                                                        value={r.h_min ?? null}
+                                                        onChange={(v) => updateModalRow(r.key, { h_min: v == null ? null : Number(v) })}
+                                                      />
+                                                      <Text type="secondary">到</Text>
+                                                      <InputNumber
+                                                        size="small"
+                                                        placeholder="max"
+                                                        value={r.h_max ?? null}
+                                                        onChange={(v) => updateModalRow(r.key, { h_max: v == null ? null : Number(v) })}
+                                                      />
+                                                    </Space>
+                                                  ) : (
+                                                    <InputNumber
+                                                      size="small"
+                                                      placeholder="value"
+                                                      value={(r.h_op ?? r.op) === 'lte' ? (r.h_max ?? null) : (r.h_min ?? null)}
+                                                      onChange={(v) => {
+                                                        const n = v == null ? null : Number(v)
+                                                        if ((r.h_op ?? r.op) === 'lte') updateModalRow(r.key, { h_max: n })
+                                                        else updateModalRow(r.key, { h_min: n })
+                                                      }}
+                                                    />
+                                                  )}
+                                                </>
                                               )}
                                             </Space>
                                           ) : (

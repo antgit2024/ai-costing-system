@@ -90,6 +90,7 @@ const toBundleTokenDash = (code: string, selector?: string | null): string => {
 
 export default function ProductListingPage() {
   const [mode, setMode] = useState<'single' | 'multi' | 'spec_gen'>('single')
+  const [specGenGeneratingSelector, setSpecGenGeneratingSelector] = useState<string | null>(null)
   const [draft, setDraft] = useState<ProductListingDraft>({
     sku_code: '',
     model_id: null,
@@ -396,6 +397,7 @@ export default function ProductListingPage() {
     },
     onSuccess: () => message.success('套装预演完成'),
     onError: (e: any) => setLastError(getErrorMessage(e)),
+    onSettled: () => setSpecGenGeneratingSelector(null),
   })
 
   const matchedVariants = useMemo(() => {
@@ -834,8 +836,10 @@ export default function ProductListingPage() {
                     defaultOpen
                     showGenerateBom
                     generateBomLoading={bundlePreviewMutation.isPending}
+                    generatingSelector={specGenGeneratingSelector}
                     onGenerateBom={({ selector, phrase }) => {
                       // 关键：spec_text 只写“对客短语”，不要拼 B码；bundlePreviewMutation 会自动拼 token
+                      setSpecGenGeneratingSelector(String(selector))
                       setBundleDraft((d) => ({ ...d, bundle_selector: selector, spec_text: String(phrase || '').trim() }))
                       // 直接预演并在右侧展示最终BOM（原界面不变）
                       bundlePreviewMutation.mutate()

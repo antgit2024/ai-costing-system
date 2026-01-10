@@ -77,6 +77,7 @@ export default function BundlePhraseListPanel(props: {
   showGenerateBom?: boolean
   onGenerateBom?: (args: { selector: string; phrase: string; output: string }) => void
   generateBomLoading?: boolean
+  generatingSelector?: string | null
 }) {
   const {
     bundleCode,
@@ -88,6 +89,7 @@ export default function BundlePhraseListPanel(props: {
     showGenerateBom = false,
     onGenerateBom,
     generateBomLoading = false,
+    generatingSelector = null,
   } = props
 
   const [mode, setMode] = useState<PhraseWriteMode>(defaultMode)
@@ -138,6 +140,12 @@ export default function BundlePhraseListPanel(props: {
       }
     }
     return { ok: missing.length === 0, missing }
+  }
+
+  const isDirtyRow = (r: any) => {
+    const phrase = String(draftBySelector[r.selector] ?? '').trim()
+    const base = String(r.phraseExample ?? '').trim()
+    return normalizePhraseForMatch(phrase) !== normalizePhraseForMatch(base)
   }
 
   const buildOutput = (r: any) => {
@@ -211,21 +219,12 @@ export default function BundlePhraseListPanel(props: {
                   }
                   columns={[
                     {
-                      title: 'selector',
-                      width: 110,
-                      render: (_: any, r: any) => (
-                        <Space size={6} wrap>
-                          <Text code>{String(r.selector)}</Text>
-                          {r.enabled ? <Tag color="green">启用</Tag> : <Tag color="red">停用</Tag>}
-                        </Space>
-                      ),
-                    },
-                    {
                       title: '固定B码',
                       width: 150,
                       render: (_: any, r: any) => (
                         <Space size={6} wrap>
                           <Tag color="blue">{String(r.tokenDash)}</Tag>
+                          {r.enabled ? <Tag color="green">启用</Tag> : <Tag color="red">停用</Tag>}
                           <Button size="small" type="link" onClick={() => copyText(String(r.tokenDash))}>
                             复制
                           </Button>
@@ -233,7 +232,7 @@ export default function BundlePhraseListPanel(props: {
                       ),
                     },
                     {
-                      title: '可变短语（可编辑）',
+                      title: '短语（可编辑 / 输出）',
                       render: (_: any, r: any) => (
                         <Space direction="vertical" size={6} style={{ width: '100%' }}>
                           <Input
@@ -243,6 +242,35 @@ export default function BundlePhraseListPanel(props: {
                             }
                             placeholder="运营可改词（例如把“黄金绒”改成更对客的描述）"
                           />
+                          <Space wrap size={8}>
+                            {(() => {
+                              const v = validateRow(r)
+                              const dirty = isDirtyRow(r)
+                              if (!v.ok) {
+                                return (
+                                  <Space size={6}>
+                                    <CloseCircleFilled style={{ color: '#ff4d4f' }} />
+                                    <Text type="danger">未通过</Text>
+                                    <Text type="secondary" style={{ fontSize: 12 }}>
+                                      {v.missing.slice(0, 2).join('；')}
+                                      {v.missing.length > 2 ? '…' : ''}
+                                    </Text>
+                                  </Space>
+                                )
+                              }
+                              // 用户正在编辑（dirty）时显示灰色“通过”，保存回模板后会变为绿色
+                              return (
+                                <Space size={6}>
+                                  <CheckCircleFilled style={{ color: dirty ? 'rgba(0,0,0,0.25)' : '#52c41a' }} />
+                                  <Text type={dirty ? 'secondary' : undefined}>通过</Text>
+                                </Space>
+                              )
+                            })()}
+                            <Text type="secondary">输出：</Text>
+                            <Text code ellipsis={{ tooltip: true }} style={{ maxWidth: 520 }}>
+                              {buildOutput(r)}
+                            </Text>
+                          </Space>
                           {(r.requiredSegments ?? []).length ? (
                             <Space wrap size={6}>
                               <Text type="secondary">必含片段：</Text>
@@ -257,79 +285,37 @@ export default function BundlePhraseListPanel(props: {
                         </Space>
                       ),
                     },
-                    {
-                      title: '验证',
-                      width: 220,
-                      render: (_: any, r: any) => {
-                        const v = validateRow(r)
-                        return (
-                          <Space direction="vertical" size={4}>
-                            {v.ok ? (
-                              <Space size={6}>
-                                <CheckCircleFilled style={{ color: '#52c41a' }} />
-                                <Text>通过</Text>
-                              </Space>
-                            ) : (
-                              <Space size={6}>
-                                <CloseCircleFilled style={{ color: '#ff4d4f' }} />
-                                <Text type="danger">未通过</Text>
-                              </Space>
-                            )}
-                            {!v.ok ? (
-                              <Text type="secondary" style={{ fontSize: 12 }}>
-                                {v.missing.slice(0, 2).join('；')}
-                                {v.missing.length > 2 ? '…' : ''}
-                              </Text>
-                            ) : null}
-                          </Space>
-                        )
-                      },
-                    },
-                    {
-                      title: '可复制写法（输出）',
-                      width: 360,
-                      render: (_: any, r: any) => {
-                        const out = buildOutput(r)
-                        return (
-                          <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                            <Text code ellipsis={{ tooltip: true }}>
-                              {out}
-                            </Text>
-                            <Space size={8}>
-                              <Button size="small" icon={<CopyOutlined />} onClick={() => copyText(out)}>
-                                复制
-                              </Button>
-                            </Space>
-                          </Space>
-                        )
-                      },
-                    },
                     ...(showGenerateBom
                       ? [
                           {
-                            title: '生成BOM',
-                            width: 130,
+                            title: '操作',
+                            width: 160,
                             render: (_: any, r: any) => {
                               const v = validateRow(r)
                               const phrase = String(draftBySelector[r.selector] ?? '').trim()
                               const out = buildOutput(r)
                               return (
-                                <Button
-                                  size="small"
-                                  type="primary"
-                                  disabled={!v.ok || !onGenerateBom}
-                                  loading={generateBomLoading}
-                                  onClick={() => {
-                                    if (!v.ok) {
-                                      message.warning('请先修正：必含片段校验未通过')
-                                      return
-                                    }
-                                    if (!onGenerateBom) return
-                                    onGenerateBom({ selector: String(r.selector), phrase, output: out })
-                                  }}
-                                >
-                                  生成BOM
-                                </Button>
+                                <Space size={8}>
+                                  <Button size="small" icon={<CopyOutlined />} onClick={() => copyText(out)}>
+                                    复制
+                                  </Button>
+                                  <Button
+                                    size="small"
+                                    type="primary"
+                                    disabled={!v.ok || !onGenerateBom}
+                                    loading={!!generateBomLoading && String(generatingSelector || '') === String(r.selector)}
+                                    onClick={() => {
+                                      if (!v.ok) {
+                                        message.warning('请先修正：必含片段校验未通过')
+                                        return
+                                      }
+                                      if (!onGenerateBom) return
+                                      onGenerateBom({ selector: String(r.selector), phrase, output: out })
+                                    }}
+                                  >
+                                    BOM
+                                  </Button>
+                                </Space>
                               )
                             },
                           } as any,

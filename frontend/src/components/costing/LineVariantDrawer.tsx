@@ -599,8 +599,18 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
         return null
       }
 
+      // Avoid deadlock:
+      // - Preview reads only persisted rules, so we block preview when there are dirty local edits.
+      // - Enabling requires a successful preview.
+      // If a rule is currently enabled and user edited it (dirty), saving must be allowed by auto-disabling it first.
+      const normalizedRows = modalRows.map((r) => (r.enabled && r.dirty ? { ...r, enabled: false } : r))
+      if (normalizedRows.some((r, idx) => r.enabled !== modalRows[idx]?.enabled)) {
+        setModalRows(normalizedRows)
+        message.warning('检测到已启用规则存在未保存改动：已自动关闭“启动”。请保存后预演成功再启用。')
+      }
+
       // validate rows first
-      for (const r of modalRows) {
+      for (const r of normalizedRows) {
         // token 可为空（允许“无条件”规则）；若开启 autoAnchorModelToken，仍会自动追加 MODEL:<code> 作为跨模型护栏
         if (r.trigger_type === 'size') {
           // width
@@ -633,7 +643,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
         }
         const hasChildRows =
           r.trigger_type === 'token'
-            ? modalRows.some(
+            ? normalizedRows.some(
                 (x) =>
                   (x.trigger_type === 'size' || x.trigger_type === 'area' || x.trigger_type === 'perimeter') &&
                   String(x.parent_variant_id ?? '') === String(r.id ?? ''),
@@ -644,13 +654,13 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
       }
 
       // persist rows sequentially
-      for (let i = 0; i < modalRows.length; i++) {
-        const r = modalRows[i]
+      for (let i = 0; i < normalizedRows.length; i++) {
+        const r = normalizedRows[i]
         const conditions = rowToConditions(r.trigger_type, r)
         const items = [itemPayloadFromRow(r.item)]
         const hasChildRows =
           r.trigger_type === 'token'
-            ? modalRows.some(
+            ? normalizedRows.some(
                 (x) =>
                   (x.trigger_type === 'size' || x.trigger_type === 'area' || x.trigger_type === 'perimeter') &&
                   String(x.parent_variant_id ?? '') === String(r.id ?? ''),

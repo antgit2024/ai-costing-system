@@ -767,6 +767,21 @@ export default function BundleTemplatesPage() {
     const k = `${presetModalKey.pIdx}:${presetModalKey.cIdx}`
     const selectedMap = presetSelectedByIdx[k] ?? {}
     const tokenSet = new Set<string>()
+    if (presetApplyMode === 'force') {
+      // 强制模式：如果某个一级含二级，则必须明确选中 1 条子条件（否则无法“强制到某个条件”）
+      for (const [baseLineId, sel] of Object.entries(selectedMap)) {
+        const parentId = String(sel?.parent_variant_id ?? '').trim()
+        if (!parentId) continue
+        const variants = presetVariantsByBaseLine.get(baseLineId) ?? []
+        const children = variants.filter((x: any) => String(x?.metadata?.parent_variant_id ?? '').trim() === parentId)
+        const hasChild = children.length > 0
+        const forcedChildId = String(sel?.forced_child_variant_id ?? '').trim()
+        if (hasChild && !forcedChildId) {
+          message.error('强制模式：一级含二级时必须选择 1 条子条件（请在弹窗里选择子条件）')
+          return
+        }
+      }
+    }
     for (const [baseLineId, sel] of Object.entries(selectedMap)) {
       const parentId = String(sel?.parent_variant_id ?? '').trim()
       if (!parentId) continue
@@ -1169,10 +1184,57 @@ export default function BundleTemplatesPage() {
                         const parentId = String(e?.target?.value ?? '')
                         const k = presetModalKey ? `${presetModalKey.pIdx}:${presetModalKey.cIdx}` : ''
                         if (!k) return
+                        const compRow =
+                          presetModalKey ? (phrasePresets?.[presetModalKey.pIdx]?.components ?? [])?.[presetModalKey.cIdx] : null
+                        const wcm = Number(compRow?.width_cm ?? 0)
+                        const hcm = Number(compRow?.height_cm ?? 0)
                         const children = parentId
                           ? (arr ?? []).filter((x: any) => String(x?.metadata?.parent_variant_id ?? '').trim() === parentId)
                           : []
                         const childIds = children.map((x: any) => String(x?.id)).filter(Boolean)
+                        const pickBestChildId = (): string | null => {
+                          if (!children.length) return null
+                          const toNum = (x: any): number | null => {
+                            if (x == null || x === '') return null
+                            const n = Number(x)
+                            return Number.isFinite(n) ? n : null
+                          }
+                          const between = (val: number | null, pair: any): boolean => {
+                            if (val == null) return false
+                            if (!Array.isArray(pair) || pair.length < 2) return false
+                            const min = toNum(pair[0])
+                            const max = toNum(pair[1])
+                            if (min != null && val < min) return false
+                            if (max != null && val > max) return false
+                            return true
+                          }
+                          const areaM2 = wcm > 0 && hcm > 0 ? (wcm / 100) * (hcm / 100) : null
+                          const perimM = wcm > 0 && hcm > 0 ? (2 * (wcm + hcm)) / 100 : null
+                          const diameterCm = wcm > 0 && hcm > 0 && Math.abs(wcm - hcm) < 1e-6 ? wcm : null
+                          const scored = children
+                            .map((c: any) => {
+                              const cond = (c?.conditions ?? {}) as any
+                              const okW = cond.width_between ? between(wcm || null, cond.width_between) : true
+                              const okH = cond.height_between ? between(hcm || null, cond.height_between) : true
+                              const okA = cond.area_between ? between(areaM2, cond.area_between) : true
+                              const okP = cond.perimeter_between ? between(perimM, cond.perimeter_between) : true
+                              const okD = cond.diameter_between ? between(diameterCm, cond.diameter_between) : true
+                              const matched = okW && okH && okA && okP && okD
+                              return {
+                                id: String(c?.id ?? ''),
+                                matched,
+                                priority: Number(c?.priority ?? 0) || 0,
+                              }
+                            })
+                            .filter((x) => x.id)
+                          const hits = scored.filter((x) => x.matched)
+                          if (hits.length) {
+                            hits.sort((a, b) => b.priority - a.priority)
+                            return hits[0].id
+                          }
+                          return null
+                        }
+                        const best = pickBestChildId()
                         setPresetSelectedByIdx((prev) => ({
                           ...prev,
                           [k]: {
@@ -1180,7 +1242,7 @@ export default function BundleTemplatesPage() {
                             [baseLineId]: {
                               parent_variant_id: parentId ? parentId : null,
                               child_variant_ids: childIds,
-                              forced_child_variant_id: childIds.length ? childIds[0] : null,
+                              forced_child_variant_id: best || (childIds.length ? childIds[0] : null),
                             },
                           },
                         }))

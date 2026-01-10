@@ -1127,7 +1127,20 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
 
                       return (
                         <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                          <Card size="small" title="一级详情（编辑）">
+                          <Card
+                            size="small"
+                            title="一级详情（编辑）"
+                            extra={
+                              <Button
+                                size="small"
+                                type="primary"
+                                loading={modalSaveMutation.isPending}
+                                onClick={() => modalSaveMutation.mutate()}
+                              >
+                                保存
+                              </Button>
+                            }
+                          >
                             <Row gutter={[12, 12]}>
                               <Col span={24}>
                                 <Row gutter={8} align="middle" wrap={false}>
@@ -1173,19 +1186,10 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                                       {hasChild ? <Tag color="orange">存在二级：一级仅作 token 门槛（可空）</Tag> : <Tag color="green">无二级：本级替换生效</Tag>}
                                     </Space>
                                   </Col>
-                                  <Col flex="none">
-                                    <Button
-                                      size="small"
-                                      type="primary"
-                                      loading={modalSaveMutation.isPending}
-                                      onClick={() => modalSaveMutation.mutate()}
-                                    >
-                                      保存
-                                    </Button>
-                                  </Col>
                                 </Row>
                               </Col>
 
+                              {!hasChild ? (
                               <Col span={24}>
                                 <Row gutter={8} align="middle">
                                   <Col flex="260px">
@@ -1264,6 +1268,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                                   </Col>
                                 </Row>
                               </Col>
+                              ) : null}
                             </Row>
                           </Card>
 

@@ -162,7 +162,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
   const [editMode, setEditMode] = useState<'create' | 'edit'>('edit')
   const [modalRows, setModalRows] = useState<ModalRuleRow[]>([])
   const [selectedTokenParentKey, setSelectedTokenParentKey] = useState<string | null>(null)
-  const [autoAnchorModelToken, setAutoAnchorModelToken] = useState(true)
+  const [autoAnchorModelToken] = useState(true)
 
   const [specText, setSpecText] = useState('')
   const [specParsed, setSpecParsed] = useState<SpecParseResponse | null>(null)
@@ -331,8 +331,11 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
 
   const rowToConditions = (trigger: TriggerType, row: ModalRuleRow): any => {
     const withToken = (base: any) => {
-      const anyArr = row.token_any ?? []
-      const allArr0 = row.token_all ?? []
+      // 业务 token 只允许二选一（any vs all），避免两套表达式并存造成误解；
+      // 系统锚定 token（MODEL:xxx）仍由 spec_contains_all 注入，用户无需感知。
+      const mode = inferTokenMode(row)
+      const anyArr = mode === 'any' ? row.token_any ?? [] : []
+      const allArr0 = mode === 'all' ? row.token_all ?? [] : []
       const allArr = (() => {
         if (!autoAnchorModelToken) return allArr0
         if (!modelAnchorToken) return allArr0
@@ -1231,53 +1234,57 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
           destroyOnClose
         >
           <Space direction="vertical" size={12} style={{ width: '100%' }}>
-            <Alert
-              type="info"
-              showIcon
-              message="最稳形态（固定动作）"
-              description={
-                <div style={{ fontSize: 12 }}>
-                  <div>
-                    <b>{STABLE_SHAPE_LABEL}</b>
-                  </div>
-                  <div style={{ color: '#8c8c8c' }}>弹窗内按“同一触发类型”批量维护多条规则，每行=一条规则。</div>
-                  <div style={{ color: '#8c8c8c' }}>重要：预演只会读取“已保存入库”的规则；因此请先点“创建并保存/保存”，再点右侧“预演”。</div>
-                </div>
-              }
-            />
             <Card
               size="small"
               title={
                 <Space wrap>
-                  <span>触发类型</span>
-                  <Select
-                    value={draftTriggerType}
-                    style={{ width: 220 }}
-                    options={[
-                      { label: 'token（包含）', value: 'token' },
-                      { label: '尺寸（宽+高，cm）', value: 'size' },
-                      { label: '宽度（cm）', value: 'width' },
-                      { label: '高度（cm）', value: 'height' },
-                      { label: '面积（m²）', value: 'area' },
-                      { label: '周长（m）', value: 'perimeter' },
-                    ]}
-                    onChange={(v) => handleTriggerTypeChange(v as any)}
-                  />
-                  <Tag color="blue">action=replace_self</Tag>
-                  {(draftTriggerType === 'token' || draftTriggerType === 'size') && modelAnchorToken ? (
-                    <Space size={6}>
-                      <Tag color={autoAnchorModelToken ? 'blue' : 'default'}>自动锚定：{modelAnchorToken}</Tag>
-                      <Switch
-                        checked={autoAnchorModelToken}
-                        onChange={(v) => setAutoAnchorModelToken(v)}
-                        checkedChildren="开"
-                        unCheckedChildren="关"
+                  {draftTriggerType === 'token' ? (
+                    <>
+                      <Tag color="blue">当前物料</Tag>
+                      <Text>
+                        {String((baseLineQuery.data as any)?.materials?.find((x: any) => String(x?.id ?? '') === String(baseLineId))?.material_code ?? '') ||
+                          baseLineLabel ||
+                          baseLineId.slice(0, 8)}
+                      </Text>
+                      <Text type="secondary" ellipsis={{ tooltip: baseLineLabel }} style={{ maxWidth: 360 }}>
+                        {String((baseLineQuery.data as any)?.materials?.find((x: any) => String(x?.id ?? '') === String(baseLineId))?.material_name ?? '') ||
+                          baseLineLabel ||
+                          ''}
+                      </Text>
+                      {(() => {
+                        const base = (baseLineQuery.data as any)?.materials?.find((x: any) => String(x?.id ?? '') === String(baseLineId))
+                        const unit = normalizeUnitText(String(base?.unit_of_measure ?? '')) || String(base?.unit_of_measure ?? '')
+                        const price = base?.bom_unit_price ?? null
+                        if (!unit && price == null) return null
+                        return (
+                          <Tag>
+                            {price != null ? `BOM单价=${price}` : 'BOM单价=-'}/{unit || '单位-'}
+                          </Tag>
+                        )
+                      })()}
+                      <Tag>β={baseLineDefaults.base_quantity ?? 1}</Tag>
+                      <Tag>α={baseLineDefaults.fixed_quantity ?? 0}</Tag>
+                      <Tag>覆盖率={baseLineDefaults.coverage_ratio ?? 1}</Tag>
+                      <Tag>损耗%={baseLineDefaults.loss_rate ?? 0}</Tag>
+                    </>
+                  ) : (
+                    <>
+                      <span>触发类型</span>
+                      <Select
+                        value={draftTriggerType}
+                        style={{ width: 220 }}
+                        options={[
+                          { label: '尺寸（宽+高，cm）', value: 'size' },
+                          { label: '宽度（cm）', value: 'width' },
+                          { label: '高度（cm）', value: 'height' },
+                          { label: '面积（m²）', value: 'area' },
+                          { label: '周长（m）', value: 'perimeter' },
+                        ]}
+                        onChange={(v) => handleTriggerTypeChange(v as any)}
                       />
-                    </Space>
-                  ) : null}
-                  <Text type="secondary">
-                    同一指标多段区间：请点“新增”添加多行规则（每行=一段区间，表示 OR）
-                  </Text>
+                      <Tag color="blue">action=replace_self</Tag>
+                    </>
+                  )}
                 </Space>
               }
               extra={

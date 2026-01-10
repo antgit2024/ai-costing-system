@@ -186,7 +186,9 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     enabled: open && !!versionId && !!baseLineId,
   })
 
-  const variants = (variantsQuery.data ?? []) as LineVariantDetailRead[]
+  // IMPORTANT: keep a stable reference when query data is undefined, otherwise effects depending on `variants`
+  // may loop (data ?? [] creates a new array each render) and can trigger React nested update error #185 in prod.
+  const variants = useMemo(() => ((variantsQuery.data ?? []) as LineVariantDetailRead[]), [variantsQuery.data])
 
   const modelAnchorToken = useMemo(() => {
     const raw = String(modelCode ?? '').trim()

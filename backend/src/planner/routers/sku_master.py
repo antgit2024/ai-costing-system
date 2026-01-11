@@ -80,6 +80,32 @@ def bind_by_model(payload: schemas.SkuMasterBindByModelRequest, db: Session = De
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+@router.post("/bind-by-model/bulk", response_model=schemas.SkuMasterBindByModelBulkResponse)
+def bind_by_model_bulk(payload: schemas.SkuMasterBindByModelBulkRequest, db: Session = Depends(get_db_session)):
+    """
+    Bind all unbound sku masters matched by current filters (server-side).
+    This enables UI "implicit select all" across pages, with an exclusion list for unchecked rows.
+    """
+    try:
+        return sku_master_service.bind_sku_master_by_model_bulk(
+            db,
+            model_id=payload.model_id,
+            requested_by=payload.requested_by,
+            limit=payload.limit,
+            search=payload.search,
+            channel=payload.channel,
+            match_status=payload.match_status,
+            spec_mismatch=payload.spec_mismatch,
+            preparse_state=payload.preparse_state,
+            include_terms=payload.include_terms,
+            exclude_terms=payload.exclude_terms,
+            match_scope=payload.match_scope,
+            excluded_sku_master_ids=payload.excluded_sku_master_ids,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @router.post("/auto-bind/preview", response_model=schemas.SkuMasterAutoBindPreviewResponse)
 def auto_bind_preview(payload: schemas.SkuMasterAutoBindPreviewRequest, db: Session = Depends(get_db_session)):
     return sku_master_service.auto_bind_preview(db, limit=payload.limit, scan_limit=payload.scan_limit)

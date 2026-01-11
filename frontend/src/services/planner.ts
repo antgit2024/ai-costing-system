@@ -1671,6 +1671,38 @@ export const bindSkuMastersByModel = async (
   return response.data
 }
 
+export const bindSkuMastersByModelBulk = async (
+  payload: {
+    model_id: string
+    requested_by?: string
+    limit?: number
+    search?: string
+    channel?: string
+    match_status?: string
+    spec_mismatch?: boolean
+    preparse_state?: string
+    include_terms?: string
+    exclude_terms?: string
+    match_scope?: 'spec' | 'name' | 'auto' | 'spec_or_name'
+    excluded_sku_master_ids?: string[]
+  },
+  opts: PlannerRequestOptions = {},
+): Promise<{
+  batch_candidates: number
+  bound_count: number
+  skipped_already_bound: number
+  skipped_missing_barcode: number
+  skipped_excluded: number
+  errors: Array<Record<string, unknown>>
+  has_more: boolean
+}> => {
+  const response = await plannerClient.post('/sku-master/bind-by-model/bulk', payload, {
+    timeout: opts.timeoutMs,
+    signal: opts.signal,
+  })
+  return response.data
+}
+
 export const autoBindSkuMastersPreview = async (payload: {
   limit?: number
   scan_limit?: number

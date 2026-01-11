@@ -30,6 +30,17 @@
   - 备注：
     - 若系统 python 无 pytest（如 `/opt/aiext/bin/python: No module named pytest`），请使用项目 venv：`./backend/venv/bin/python -m pytest ...`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-11（SKU 主档：人工审核“按筛选条件全选（跨页）”一键跑完）
+  - 产物（前端）：
+    - `/costing/sku-master` → 人工审核新增模式：**按筛选结果全选（跨页）**
+    - 行为：右侧列表在 `未绑定 + 筛选条件` 下，默认视为“全选”；取消勾选会加入“排除列表”；点“一键跑完”将按筛选条件在服务端每轮最多 200 条循环绑定
+    - 防呆：执行前弹窗要求**输入模型名称二次确认**
+  - 产物（后端）：
+    - 新接口：`POST /api/planner/sku-master/bind-by-model/bulk`（按筛选条件批量绑定，支持 `excluded_sku_master_ids`）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_binding_workbench_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-05（Planner：接力清理崩溃遗留的跨域未提交改动，恢复干净工作区；已硬验收 `npm -C frontend run build` 通过）
 - **最近校对（北京时间 GMT+8）**：2026-01-05（Frontend：行级变体“替换物料”选择器新增“同单位置顶 + 仅同单位筛选”，通过 `baseUnit` 透传，减少单位不一致返工；验收 `npm -C frontend run build`）
 - **最近校对（北京时间 GMT+8）**：2026-01-05（Backend：spec/parse 增补短语 token（白名单，先覆盖“背面纯色”），使 TOKEN(any) 规则可命中；验收 `./backend/venv/bin/python -m pytest backend/tests/planner/test_spec_parser_code_tokens.py -q`）

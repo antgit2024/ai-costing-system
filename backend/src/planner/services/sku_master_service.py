@@ -1303,6 +1303,164 @@ def bind_sku_master_by_model(
     }
 
 
+def bind_sku_master_by_model_bulk(
+    db: Session,
+    *,
+    model_id: str,
+    requested_by: Optional[str],
+    limit: int = 200,
+    search: Optional[str] = None,
+    channel: Optional[str] = None,
+    match_status: Optional[str] = None,
+    spec_mismatch: Optional[bool] = None,
+    preparse_state: Optional[str] = None,
+    include_terms: Optional[str] = None,
+    exclude_terms: Optional[str] = None,
+    match_scope: Optional[str] = None,
+    excluded_sku_master_ids: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """
+    Bulk bind for manual workbench: bind *unbound* sku masters matched by filters.
+    Designed for UI "implicit select all across pages", with an exclusion list.
+    """
+    version = _get_published_standard_version_for_model_id(db, model_id)
+    limit2 = max(min(int(limit or 200), 2000), 1)
+
+    excluded_list = list(set([str(x) for x in (excluded_sku_master_ids or []) if str(x).strip()]))
+    skipped_excluded = len(excluded_list)
+
+    q = db.query(models.SkuMaster).filter(models.SkuMaster.is_archived.is_(False))
+
+    if search:
+        s = f"%{search.strip()}%"
+        q = q.filter(
+            (models.SkuMaster.erp_sku_barcode.ilike(s))
+            | (models.SkuMaster.product_name.ilike(s))
+            | (models.SkuMaster.product_code.ilike(s))
+        )
+    if channel:
+        q = q.filter(models.SkuMaster.channel == channel)
+    if match_status:
+        q = q.filter(models.SkuMaster.match_status == match_status)
+
+    # enforce unbound only (server-side) via EXISTS subquery
+    subq = (
+        db.query(models.SkuModelVersionMapping.id)
+        .filter(
+            models.SkuModelVersionMapping.sku_code == models.SkuMaster.erp_sku_barcode,
+            models.SkuModelVersionMapping.is_active.is_(True),
+            models.SkuModelVersionMapping.is_archived.is_(False),
+        )
+    )
+    q = q.filter(~subq.exists())
+
+    if spec_mismatch is True:
+        q = q.filter(models.SkuMaster.metadata_json["spec_mismatch"].as_boolean() == True)  # noqa: E712
+
+    if preparse_state:
+        state = str(preparse_state).strip().lower()
+        ph = models.SkuMaster.metadata_json["preparse_spec_hash"].as_string()
+        if state in ("parsed", "done", "yes", "1", "true"):
+            q = q.filter(ph.isnot(None)).filter(ph != "")
+        elif state in ("unparsed", "none", "no", "0", "false"):
+            q = q.filter((ph.is_(None)) | (ph == ""))
+
+    def _parse_terms(raw: Optional[str]) -> List[str]:
+        if not raw:
+            return []
+        s2 = str(raw)
+        for ch in ("，", ";", "；", "\n", "\t"):
+            s2 = s2.replace(ch, " ")
+        parts = [p.strip() for p in s2.split(" ") if p.strip()]
+        out: List[str] = []
+        seen: set[str] = set()
+        for p in parts:
+            if p in seen:
+                continue
+            seen.add(p)
+            out.append(p)
+        return out
+
+    include_list = _parse_terms(include_terms)
+    exclude_list = _parse_terms(exclude_terms)
+    scope = (match_scope or "auto").strip()
+    if scope not in ("auto", "spec", "name", "spec_or_name"):
+        scope = "auto"
+
+    name_channels = ["小红书", "京东"]
+
+    def _field_expr_for_scope(term: str):
+        pattern = f"%{term}%"
+        spec_hit = models.SkuMaster.spec_text.ilike(pattern)
+        name_hit = models.SkuMaster.product_name.ilike(pattern)
+        if scope == "spec":
+            return spec_hit
+        if scope == "name":
+            return name_hit
+        if scope == "spec_or_name":
+            return spec_hit | name_hit
+        return (models.SkuMaster.channel.in_(name_channels) & name_hit) | (
+            ~models.SkuMaster.channel.in_(name_channels) & spec_hit
+        )
+
+    for t in include_list:
+        q = q.filter(_field_expr_for_scope(t))
+    for t in exclude_list:
+        q = q.filter(~_field_expr_for_scope(t))
+
+    if excluded_list:
+        q = q.filter(~models.SkuMaster.id.in_(excluded_list))
+
+    # Fetch limit+1 to compute has_more without an extra COUNT()
+    rows = (
+        q.order_by(models.SkuMaster.updated_at.desc())
+        .limit(limit2 + 1)
+        .all()
+    )
+    has_more = len(rows) > limit2
+    batch_rows = rows[:limit2]
+
+    bound_count = 0
+    skipped_already_bound = 0
+    skipped_missing_barcode = 0
+    errors: List[Dict[str, Any]] = []
+
+    for row in batch_rows:
+        sku = (row.erp_sku_barcode or "").strip()
+        if not sku:
+            skipped_missing_barcode += 1
+            continue
+        if product_model_service.get_active_sku_binding(db, sku):
+            skipped_already_bound += 1
+            continue
+        try:
+            product_model_service.bind_sku_to_version(
+                db,
+                sku_code=sku,
+                version_id=version.id,
+                source_system="sku_master_manual_bulk",
+                metadata={
+                    "requested_by": requested_by,
+                    "sku_master_id": row.id,
+                    "binding_method": "manual_by_model_bulk",
+                    "skip_prefix_check": True,
+                },
+            )
+            bound_count += 1
+        except Exception as exc:  # noqa: BLE001
+            errors.append({"sku_master_id": row.id, "sku_code": sku, "error": str(exc)})
+
+    return {
+        "batch_candidates": len(batch_rows),
+        "bound_count": bound_count,
+        "skipped_already_bound": skipped_already_bound,
+        "skipped_missing_barcode": skipped_missing_barcode,
+        "skipped_excluded": skipped_excluded,
+        "errors": errors,
+        "has_more": has_more,
+    }
+
+
 def auto_bind_preview(db: Session, *, limit: int, scan_limit: int = 50000) -> Dict[str, Any]:
     limit = max(min(int(limit or 200), 2000), 1)
     scan_limit = max(min(int(scan_limit or 50000), 500000), 100)

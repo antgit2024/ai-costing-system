@@ -2528,6 +2528,40 @@ class SkuMasterBindByModelResponse(BaseModel):
     errors: List[Dict[str, Any]] = Field(default_factory=list)
 
 
+class SkuMasterBindByModelBulkRequest(BaseModel):
+    """
+    Bind all *unbound* SKU masters matched by current filters, in batches (server-side paging).
+    Used by UI "人工审核：按筛选条件一键跑完（跨页）" where the table is implicitly "select all".
+    """
+
+    model_id: str
+    requested_by: Optional[str] = None
+    limit: int = Field(200, ge=1, le=2000)
+
+    # Filters (same semantics as list endpoint)
+    search: Optional[str] = None
+    channel: Optional[str] = None
+    match_status: Optional[str] = None
+    spec_mismatch: Optional[bool] = None
+    preparse_state: Optional[str] = None
+    include_terms: Optional[str] = None
+    exclude_terms: Optional[str] = None
+    match_scope: Optional[str] = None
+
+    # Exclusions: user can uncheck a few rows; we skip them.
+    excluded_sku_master_ids: List[str] = Field(default_factory=list)
+
+
+class SkuMasterBindByModelBulkResponse(BaseModel):
+    batch_candidates: int
+    bound_count: int
+    skipped_already_bound: int
+    skipped_missing_barcode: int
+    skipped_excluded: int
+    errors: List[Dict[str, Any]] = Field(default_factory=list)
+    has_more: bool
+
+
 class SkuMasterAutoBindPreviewRequest(BaseModel):
     limit: int = Field(200, ge=1, le=2000)
     # max rows to scan among unbound sku masters (server-side filter) to find candidates

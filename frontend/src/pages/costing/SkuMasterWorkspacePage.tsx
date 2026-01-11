@@ -27,6 +27,7 @@ import {
   autoBindSkuMastersExecute,
   autoBindSkuMastersPreview,
   bindSkuMastersByModel,
+  bindSkuMastersByModelBulk,
   fetchPublishedStandardModels,
   fetchSkuMaster,
   fetchSkuMasterDetail,
@@ -151,6 +152,8 @@ const SkuMasterWorkspacePage = () => {
   // manual run-all (人工审核：对勾选项分批循环绑定，避免一次性超时)
   const [manualRunAllRunning, setManualRunAllRunning] = useState(false)
   const manualRunAllStopRef = useRef(false)
+  const [manualBulkMode, setManualBulkMode] = useState(true) // 按筛选条件“隐式全选”（跨页）
+  const [manualExcludedIds, setManualExcludedIds] = useState<string[]>([]) // 取消勾选=加入排除
   const [manualRunAllStatus, setManualRunAllStatus] = useState<{
     round: number
     last_bound: number
@@ -447,6 +450,12 @@ const SkuMasterWorkspacePage = () => {
     }))
   }, [candidatesQuery.data])
 
+  const modelLabelById = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const it of modelOptions) m.set(String(it.value), String(it.label))
+    return m
+  }, [modelOptions])
+
   const bindMutation = useMutation({
     mutationFn: async () => {
       if (!selectedModelId) throw new Error('请选择模型')
@@ -466,50 +475,121 @@ const SkuMasterWorkspacePage = () => {
     onError: (e: any) => message.error(e?.message || '绑定失败'),
   })
 
+  // 人工审核：按筛选条件“隐式全选”（跨页）
+  // - 默认勾选本页全部
+  // - 用户在本页取消勾选 -> 加入排除列表（manualExcludedIds）
+  useEffect(() => {
+    if (workbenchTab !== 'manual') return
+    if (!manualBulkMode) return
+    if (autoCandidatesOnly) return
+    if (listTab !== 'unbound') return
+    const pageIds = (filteredItems as any[]).map((x) => String(x?.id)).filter(Boolean)
+    if (!pageIds.length) return
+    const excluded = new Set(manualExcludedIds.map((x) => String(x)))
+    const nextSelected = pageIds.filter((id) => !excluded.has(id))
+    setSelectedRowKeys(nextSelected)
+  }, [workbenchTab, manualBulkMode, autoCandidatesOnly, listTab, filteredItems, manualExcludedIds])
+
+  const handleRowSelectionChange = (keys: any[]) => {
+    const nextSelected = (keys ?? []).map((x) => String(x))
+    if (workbenchTab !== 'manual' || !manualBulkMode || autoCandidatesOnly || listTab !== 'unbound') {
+      setSelectedRowKeys(nextSelected)
+      return
+    }
+    const pageIds = (filteredItems as any[]).map((x) => String(x?.id)).filter(Boolean)
+    const excluded = new Set(manualExcludedIds.map((x) => String(x)))
+    for (const id of pageIds) {
+      if (nextSelected.includes(id)) excluded.delete(id)
+      else excluded.add(id)
+    }
+    setManualExcludedIds(Array.from(excluded))
+    setSelectedRowKeys(nextSelected)
+  }
+
   const handleManualRunAll = () => {
     if (manualRunAllRunning) return
     if (!selectedModelId) {
       message.warning('请先选择目标模型（已发布）')
       return
     }
-    if (!selectedRowKeys.length) {
-      message.warning('请先在右侧列表勾选要绑定的记录')
+    if (autoCandidatesOnly) {
+      message.warning('当前为“命中候选视图”，请先退出候选视图再使用人工审核的一键跑完')
+      return
+    }
+    if (listTab !== 'unbound') {
+      message.warning('请先切到“未绑定”列表再执行（避免误操作）')
       return
     }
 
-    const total = selectedRowKeys.length
+    const modelLabel = modelLabelById.get(String(selectedModelId)) || ''
+    const expected = modelLabel || '确认'
+    const excludedCount = new Set(manualExcludedIds.map((x) => String(x))).size
+    const filterSummary = [
+      `关键词：${search ? `“${search}”` : '（空）'}`,
+      `包含词：${includeTerms ? `“${includeTerms}”` : '（空）'}`,
+      `排除词：${excludeTerms ? `“${excludeTerms}”` : '（空）'}`,
+      `范围：${matchScope}`,
+      `渠道：${channel || '（全部）'}`,
+      `ERP匹配：${matchStatus || '（全部）'}`,
+      excludedCount ? `排除：${excludedCount} 条（取消勾选）` : null,
+    ]
+      .filter(Boolean)
+      .join('；')
+
+    let typed = ''
     Modal.confirm({
-      title: '人工审核：一键跑完（循环绑定）？',
-      content: `将对当前勾选的 ${total} 条记录按 200 条/轮自动循环绑定（不会覆盖已有绑定）。`,
+      title: '确认一键跑完（按筛选条件“全选”绑定）？',
+      content: (
+        <div>
+          <div style={{ marginBottom: 8 }}>
+            你当前筛选条件将直接匹配绑定标准模型：<b>{modelLabel || '（未选模型）'}</b>
+          </div>
+          <div style={{ marginBottom: 8, color: '#666' }}>{filterSummary}</div>
+          <div style={{ marginBottom: 8 }}>
+            为防误操作，请输入模型名称确认：<b>{expected}</b>
+          </div>
+          <Input placeholder="请输入上面的模型名称以确认" onChange={(e) => (typed = String(e.target.value || '').trim())} />
+          <div style={{ marginTop: 8, color: '#999' }}>
+            本模式视为“全选筛选结果（跨页）”，你在本页取消勾选的条目会加入“排除列表”，不会写入绑定。
+          </div>
+        </div>
+      ),
       okText: '开始执行',
       cancelText: '取消',
       onOk: async () => {
+        if (typed !== expected) {
+          message.error('确认输入不一致，已取消执行')
+          return Promise.reject(new Error('confirm mismatch'))
+        }
+
         setManualRunAllRunning(true)
         manualRunAllStopRef.current = false
         setManualRunAllStatus(null)
 
-        const BATCH_SIZE = 200
-        const idsAll = [...selectedRowKeys]
-        let cursor = 0
         let totalBound = 0
         let totalErrors = 0
+        let totalProcessed = 0
 
         try {
           for (let round = 1; round <= 999; round += 1) {
             if (manualRunAllStopRef.current) break
-            const batch = idsAll.slice(cursor, cursor + BATCH_SIZE)
-            if (!batch.length) break
 
-            // 单次请求超时保护（45s），避免“看起来死了”
             const ac = new AbortController()
             const timer = window.setTimeout(() => ac.abort(), 45_000)
             let res: any
             try {
-              res = await bindSkuMastersByModel(
+              res = await bindSkuMastersByModelBulk(
                 {
                   model_id: selectedModelId,
-                  sku_master_ids: batch,
                   requested_by: requestedBy || undefined,
+                  limit: 200,
+                  search: search || undefined,
+                  channel,
+                  match_status: matchStatus,
+                  include_terms: includeTerms || undefined,
+                  exclude_terms: excludeTerms || undefined,
+                  match_scope: matchScope,
+                  excluded_sku_master_ids: manualExcludedIds,
                 },
                 { timeoutMs: 45_000, signal: ac.signal },
               )
@@ -519,9 +599,11 @@ const SkuMasterWorkspacePage = () => {
 
             const bound = Number(res?.bound_count || 0)
             const errors = (res?.errors ?? []).length
+            const processedThisRound = Number(res?.batch_candidates || 0)
+            const hasMore = Boolean(res?.has_more)
             totalBound += bound
             totalErrors += errors
-            cursor += batch.length
+            totalProcessed += processedThisRound
 
             const now = new Date()
             const stamp = `${now.getHours().toString().padStart(2, '0')}:${now
@@ -532,29 +614,31 @@ const SkuMasterWorkspacePage = () => {
               round,
               last_bound: bound,
               total_bound: totalBound,
-              processed: cursor,
-              total,
+              processed: totalProcessed,
+              total: -1,
               errors: totalErrors,
               last_update: stamp,
-              note: '每轮最多 200 条；如需暂停可点“停止”，下次继续只需再次勾选并点击“一键跑完”。',
+              note: hasMore ? '仍有更多候选（跨页）' : '已无更多候选',
             })
 
-            // 本轮无进展：提示并停止，避免无意义循环
+            if (processedThisRound <= 0) break
+            if (!hasMore) break
             if (bound === 0) {
-              message.warning('本轮未产生绑定进展（bound=0），已自动停止；请检查勾选项是否已绑定或模型是否正确')
+              message.warning('本轮未产生绑定进展（bound=0），已自动停止；可能存在缺条码/条件过宽/排除过多')
               break
             }
           }
 
           message.success(`人工审核自动绑定完成：累计bound=${totalBound} errors=${totalErrors}`)
           setSelectedRowKeys([])
+          setManualExcludedIds([])
           setListTab('bound')
           setPage(1)
           setPageSize(DEFAULT_PAGE_SIZE)
           await queryClient.invalidateQueries({ queryKey: ['sku-master', 'list'] })
         } catch (e: any) {
           if (String(e?.name || '').toLowerCase().includes('abort')) {
-            message.error('单次请求超时（45s）已中止：建议减少勾选量或稍后重试（也可分批执行）')
+            message.error('单次请求超时（45s）已中止：请稍后重试（或缩小筛选范围/分批执行）')
           } else {
             message.error(e?.message || '人工审核自动执行失败')
           }
@@ -763,6 +847,35 @@ const SkuMasterWorkspacePage = () => {
                           onChange={(e) => setRequestedBy(e.target.value)}
                           placeholder="操作人/审核人（可选）"
                         />
+                        <Space wrap align="center">
+                          <Tag color={manualBulkMode ? 'green' : 'default'}>
+                            {manualBulkMode ? '按筛选结果全选（跨页）' : '仅按勾选绑定'}
+                          </Tag>
+                          {manualBulkMode && manualExcludedIds.length ? (
+                            <Tag color="orange">已排除 {manualExcludedIds.length}</Tag>
+                          ) : null}
+                          <Button
+                            size="small"
+                            onClick={() => {
+                              setManualBulkMode((v) => !v)
+                              setManualExcludedIds([])
+                              message.info(manualBulkMode ? '已切换为：仅按勾选绑定（并清空排除）' : '已切换为：按筛选结果全选（跨页）')
+                            }}
+                          >
+                            切换模式
+                          </Button>
+                          {manualBulkMode && manualExcludedIds.length ? (
+                            <Button
+                              size="small"
+                              onClick={() => {
+                                setManualExcludedIds([])
+                                message.success('已清空排除列表（本页将重新默认全选）')
+                              }}
+                            >
+                              清空排除
+                            </Button>
+                          ) : null}
+                        </Space>
                         <Button
                           block
                           type="primary"
@@ -770,17 +883,17 @@ const SkuMasterWorkspacePage = () => {
                           loading={bindMutation.isPending}
                           onClick={() => bindMutation.mutate()}
                         >
-                          执行绑定（写入映射）{selectedRowKeys.length ? `（${selectedRowKeys.length}）` : ''}
+                          执行绑定（仅勾选）{selectedRowKeys.length ? `（${selectedRowKeys.length}）` : ''}
                         </Button>
                         <Button
                           block
                           type="primary"
                           danger
-                          disabled={!selectedModelId || selectedRowKeys.length === 0 || manualRunAllRunning || bindMutation.isPending}
+                          disabled={!selectedModelId || manualRunAllRunning || bindMutation.isPending}
                           loading={manualRunAllRunning}
                           onClick={handleManualRunAll}
                         >
-                          一键跑完（人工审核循环绑定）
+                          一键跑完（按筛选条件全选）
                         </Button>
                         {manualRunAllRunning ? (
                           <Button
@@ -797,12 +910,12 @@ const SkuMasterWorkspacePage = () => {
                           <Alert
                             type={manualRunAllRunning ? 'info' : 'success'}
                             showIcon
-                            message={`进度：第${manualRunAllStatus.round}轮 / 本轮绑定${manualRunAllStatus.last_bound} / 累计绑定${manualRunAllStatus.total_bound} / 已处理${manualRunAllStatus.processed}/${manualRunAllStatus.total} / 错误累计${manualRunAllStatus.errors}`}
+                            message={`进度：第${manualRunAllStatus.round}轮 / 本轮绑定${manualRunAllStatus.last_bound} / 累计绑定${manualRunAllStatus.total_bound} / 已处理≈${manualRunAllStatus.processed} / 错误累计${manualRunAllStatus.errors}`}
                             description={`最后更新：${manualRunAllStatus.last_update}${manualRunAllStatus.note ? `；${manualRunAllStatus.note}` : ''}`}
                           />
                         ) : null}
                         <Text type="secondary">
-                          提示：先在右侧筛选/勾选候选记录，再执行绑定；不会覆盖已有绑定。
+                          提示：推荐先切到“未绑定”并用右侧筛选出目标集合；本模式默认全选筛选结果（跨页），取消勾选会加入排除。
                         </Text>
                       </Space>
                     ),
@@ -1050,7 +1163,7 @@ const SkuMasterWorkspacePage = () => {
               dataSource={filteredItems}
               rowSelection={{
                 selectedRowKeys,
-                onChange: (keys) => setSelectedRowKeys((keys ?? []) as string[]),
+                onChange: (keys) => handleRowSelectionChange(keys as any[]),
               }}
               pagination={{
                 current: page,

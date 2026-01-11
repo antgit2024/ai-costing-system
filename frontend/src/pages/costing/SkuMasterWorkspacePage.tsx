@@ -445,7 +445,7 @@ const SkuMasterWorkspacePage = () => {
     const items = (candidatesQuery.data as any)?.items ?? []
     return (items as PublishedStandardModelCandidate[]).map((m) => ({
       // 绑定时总是落到“已发布标准版本”，这里不必展示版本号，降低噪声
-      label: `${m.model_code}  ${m.model_name}`,
+      label: `${m.model_code} ${m.model_name}`,
       value: m.model_id,
     }))
   }, [candidatesQuery.data])
@@ -616,8 +616,12 @@ const SkuMasterWorkspacePage = () => {
       return
     }
 
-    const modelLabel = modelLabelById.get(String(selectedModelId)) || ''
-    const expected = modelLabel || '确认'
+    const _normConfirm = (s: string) => String(s || '').replace(/\s+/g, ' ').trim()
+    const modelLabelRaw = modelLabelById.get(String(selectedModelId)) || ''
+    const modelLabel = _normConfirm(modelLabelRaw)
+    // “请输入模型名称再次确认”：允许输入模型全称（去掉 model_code）或完整 label（含 model_code）
+    const modelNameOnly = _normConfirm(modelLabel.replace(/^\S+\s+/, ''))
+    const expected = modelNameOnly || modelLabel || '确认'
     const excludedCount = new Set(manualExcludedIds.map((x) => String(x))).size
     const filterSummary = [
       `关键词：${search ? `“${search}”` : '（空）'}`,
@@ -652,7 +656,9 @@ const SkuMasterWorkspacePage = () => {
       okText: '开始执行',
       cancelText: '取消',
       onOk: async () => {
-        if (typed !== expected) {
+        const typed2 = _normConfirm(typed)
+        const ok = typed2 === _normConfirm(expected) || typed2 === _normConfirm(modelLabel) || typed2 === _normConfirm(modelNameOnly)
+        if (!ok) {
           message.error('确认输入不一致，已取消执行')
           return Promise.reject(new Error('confirm mismatch'))
         }

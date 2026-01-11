@@ -581,7 +581,18 @@ def list_sku_master(
     for t in exclude_list:
         q = q.filter(~_field_expr_for_scope(t))
     total = q.count()
-    items = q.order_by(models.SkuMaster.updated_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    # Default ordering: ERP source timestamp desc (NULLs last), then updated_at desc.
+    # NOTE: avoid NULLS LAST because sqlite doesn't support it; use (is NULL) ordering for portability.
+    items = (
+        q.order_by(
+            models.SkuMaster.source_updated_at.is_(None),
+            models.SkuMaster.source_updated_at.desc(),
+            models.SkuMaster.updated_at.desc(),
+        )
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
     _attach_active_version_bindings(db, items)
     _attach_parsed_fields(items)
     return total, items

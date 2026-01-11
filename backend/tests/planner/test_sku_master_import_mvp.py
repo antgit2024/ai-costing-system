@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import datetime
 
 from openpyxl import Workbook
 
@@ -248,4 +249,30 @@ def test_sku_master_import_and_shipment_autobackfill_mvp(client, db_session):
     assert kept.metadata_json.get("last_shipment_spec_text") == "NEW_SPEC"
     assert kept.metadata_json.get("spec_mismatch") is True
 
+
+def test_sku_master_list_default_order_by_source_updated_at_desc(client, db_session):
+    # Three rows: newest source_updated_at should appear first; NULL should be last.
+    a = models.SkuMaster(
+        erp_sku_barcode="BC-A",
+        spec_text="A",
+        source_updated_at=datetime.datetime(2026, 1, 10, 10, 0, 0),
+        metadata_json={},
+    )
+    b = models.SkuMaster(
+        erp_sku_barcode="BC-B",
+        spec_text="B",
+        source_updated_at=datetime.datetime(2026, 1, 11, 10, 0, 0),
+        metadata_json={},
+    )
+    c = models.SkuMaster(erp_sku_barcode="BC-C", spec_text="C", source_updated_at=None, metadata_json={})
+    db_session.add_all([a, b, c])
+    db_session.commit()
+
+    resp = client.get(f"{API_PREFIX}/sku-master", params={"page": 1, "page_size": 10})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    items = body["items"]
+    # order should be: b (newest), a, c (NULL last)
+    barcodes = [it["erp_sku_barcode"] for it in items if it["erp_sku_barcode"] in ("BC-A", "BC-B", "BC-C")]
+    assert barcodes[:3] == ["BC-B", "BC-A", "BC-C"]
 

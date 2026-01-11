@@ -8,6 +8,7 @@ import {
   Image,
   Input,
   message,
+  Modal,
   Tabs,
   Row,
   Select,
@@ -37,6 +38,46 @@ const { Title, Text } = Typography
 
 const DEFAULT_PAGE_SIZE = 100
 const PAGE_SIZE_STORAGE_KEY = 'costing_sku_master_page_size_v1'
+
+type ChipPalette = { bg: string; border: string; text: string }
+const MODEL_CHIP_PALETTES: ChipPalette[] = [
+  { bg: '#eff6ff', border: '#60a5fa', text: '#1d4ed8' }, // blue
+  { bg: '#ecfeff', border: '#22d3ee', text: '#0e7490' }, // cyan
+  { bg: '#ecfdf5', border: '#34d399', text: '#047857' }, // green
+  { bg: '#fff7ed', border: '#fb923c', text: '#c2410c' }, // orange
+  { bg: '#f5f3ff', border: '#a78bfa', text: '#6d28d9' }, // purple
+  { bg: '#fdf2f8', border: '#f472b6', text: '#be185d' }, // pink
+]
+
+const hashCode = (s: string): number => {
+  let h = 0
+  for (let i = 0; i < s.length; i += 1) h = (h * 31 + s.charCodeAt(i)) | 0
+  return Math.abs(h)
+}
+
+const renderModelChip = (modelCode?: string | null, modelName?: string | null) => {
+  const code = safeString(modelCode).trim()
+  const name = safeString(modelName).trim()
+  if (!code && !name) return null
+  const key = code || name
+  const p = MODEL_CHIP_PALETTES[hashCode(key) % MODEL_CHIP_PALETTES.length]
+  return (
+    <Tag
+      style={{
+        marginInlineEnd: 0,
+        borderRadius: 999,
+        padding: '0 8px',
+        lineHeight: '20px',
+        fontSize: 12,
+        background: p.bg,
+        borderColor: p.border,
+        color: p.text,
+      }}
+    >
+      {[code, name].filter(Boolean).join(' ')}
+    </Tag>
+  )
+}
 
 const formatTime = (v?: string | null) => {
   if (!v) return '-'
@@ -289,10 +330,9 @@ const SkuMasterWorkspacePage = () => {
             render: (_: any, record: any) => {
               const hit = autoPreviewCandidates.find((x) => x.sku_master_id === record.id)
               if (!hit) return '-'
-              const label = `${hit.model_code} ${hit.model_name}${hit.version_label ? `（${hit.version_label}）` : ''}`
               return (
                 <Space size={6}>
-                  <Tag color="blue">{label}</Tag>
+                  {renderModelChip(hit.model_code, hit.model_name)}
                   {hit.match_method ? <Tag>{hit.match_method}</Tag> : null}
                   {hit.matched_keyword ? <Tag color="purple">{hit.matched_keyword}</Tag> : null}
                 </Space>
@@ -309,14 +349,11 @@ const SkuMasterWorkspacePage = () => {
         const bound = isFilled(v as any)
         const source = safeString((record.metadata_json as any)?.source)
         const srcTag = source === 'shipment_autobackfill' ? <Tag color="gold">发货回写</Tag> : null
-        const modelLabel = record.bound_model_code
-          ? `${record.bound_model_code}${record.bound_model_name ? `(${record.bound_model_name})` : ''}`
-          : ''
         return (
           <Space size={6}>
             {bound ? <Tag color="green">已绑定</Tag> : <Tag color="red">未绑定</Tag>}
             {record.spec_mismatch ? <Tag color="orange">规格差异</Tag> : null}
-            {modelLabel ? <Tag color="blue">{modelLabel}</Tag> : null}
+            {renderModelChip(record.bound_model_code, record.bound_model_name)}
             {srcTag}
           </Space>
         )
@@ -380,7 +417,8 @@ const SkuMasterWorkspacePage = () => {
   const modelOptions = useMemo(() => {
     const items = (candidatesQuery.data as any)?.items ?? []
     return (items as PublishedStandardModelCandidate[]).map((m) => ({
-      label: `${m.model_code}  ${m.model_name}${m.version_label ? `（${m.version_label}）` : ''}`,
+      // 绑定时总是落到“已发布标准版本”，这里不必展示版本号，降低噪声
+      label: `${m.model_code}  ${m.model_name}`,
       value: m.model_id,
     }))
   }, [candidatesQuery.data])
@@ -450,6 +488,26 @@ const SkuMasterWorkspacePage = () => {
     },
     onError: (e: any) => message.error(e?.message || '执行失败'),
   })
+
+  const handleAutoExecuteAll = () => {
+    if (!autoPreviewCandidates.length) {
+      message.warning('请先点一次“候选预览（命中）”生成候选列表')
+      return
+    }
+    const allow = new Set(autoPreviewCandidates.map((x) => x.sku_master_id))
+    const ids = selectedRowKeys.filter((id) => allow.has(id))
+    if (!ids.length) {
+      message.warning('当前未选中候选（可先预览自动全选，或手动勾选右侧候选）')
+      return
+    }
+    Modal.confirm({
+      title: '确认执行自动绑定？',
+      content: `将对“命中候选视图”中当前选中的 ${ids.length} 条记录执行绑定（不会覆盖已有绑定）。`,
+      okText: '确认执行',
+      cancelText: '取消',
+      onOk: () => autoExecuteMutation.mutate(),
+    })
+  }
 
   return (
     <div>
@@ -535,7 +593,7 @@ const SkuMasterWorkspacePage = () => {
                           block
                           type="primary"
                           loading={autoExecuteMutation.isPending}
-                          onClick={() => autoExecuteMutation.mutate()}
+                          onClick={handleAutoExecuteAll}
                         >
                           执行绑定（仅选中候选）
                         </Button>

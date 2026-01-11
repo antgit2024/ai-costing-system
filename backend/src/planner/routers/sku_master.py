@@ -104,6 +104,30 @@ def get_sku_master(sku_id: str, db: Session = Depends(get_db_session)):
     return row
 
 
+@router.get("/by-barcode/{barcode}", response_model=schemas.SkuMasterScanResponse)
+def get_sku_master_by_barcode(
+    barcode: str,
+    channel: str | None = None,
+    limit: int = 20,
+    db: Session = Depends(get_db_session),
+):
+    """
+    Scan/production use case: query sku master by ERP barcode (SSOT).
+    Also returns shop-level SKUs (platform_sku_id dimension) when table/migration exists.
+    """
+    row = sku_master_service.get_by_barcode(db, barcode)
+    if not row:
+        raise HTTPException(status_code=404, detail="SKU master not found")
+    shop_skus = []
+    try:
+        shop_skus = sku_master_service.list_shop_skus_by_barcode(
+            db, erp_sku_barcode=barcode, channel=channel, limit=limit
+        )
+    except Exception:
+        shop_skus = []
+    return {"sku_master": row, "shop_skus": shop_skus}
+
+
 @router.post("/{sku_id}/spec-preparse", response_model=schemas.SkuMasterSpecPreparseSaveResponse)
 def save_spec_preparse(
     sku_id: str,

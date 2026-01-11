@@ -53,6 +53,15 @@
 - **建议**：统一采用 3 种动作语义（见 `DOC/costing/reviews/erp_guardrails_addendum_20251222.md`）：
   - Retry Exceptions / Rerun Batch / Rebuild Snapshot（单行）
 
+### 11) 店铺对接（集成）别一上来就做“深 API 对接”
+
+- **推荐最低成本路径（Phase0）**：先做“店铺数据导出 → 转换为系统发货导入 xlsx → 上传到 `/costing/shipments`”，用最小数据量验证：
+  - SKU 主档是否能覆盖（是否大量 `SKU_NOT_BOUND`）
+  - `spec_text` 是否能解析出尺寸/tokens
+  - BOM/扣库清单是否符合业务口径
+- **原因**：单店深对接成本高（你们反馈 18 万/店），而当前系统已具备 xlsx 导入 + 快照/异常闭环，适合先做可验收的 PoC。
+- **参考简报**：`DOC/agents/briefings/integration_shop_connector_onboarding_mvp.md`
+
 ### 9) 前端报错：Failed to load module script（MIME type: text/html）
 
 - **现象（Chrome 控制台）**：

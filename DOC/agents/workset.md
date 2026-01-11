@@ -114,6 +114,7 @@
 - `DOC/agents/briefings/ops_deploy_retry_exceptions_to_4799.md`（运维闭环：部署“异常队列重试（Retry Exceptions）”到 47.99.89.206）
 - `DOC/agents/briefings/backend_retry_shipment_exceptions_mvp.md`（后端闭环：按批次重试未解决异常（Retry Exceptions）MVP）
 - `DOC/agents/briefings/backend_structure_tagging_and_filtering_mvp.md`（后端闭环：模型结构化落点（结构标准/工艺模块标签）+ 列表筛选 MVP）
+- `DOC/agents/briefings/integration_shop_connector_onboarding_mvp.md`（Integration Agent：店铺对接入职简报（以 SKU 主档/发货导入为中心））
 
 ### 4) 质量门槛（可运行/可验收）
 

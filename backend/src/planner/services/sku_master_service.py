@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from openpyxl import load_workbook
 from openpyxl.utils.datetime import from_excel
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, joinedload
 
 from .. import models
@@ -102,11 +103,18 @@ ALLOWED_COLUMNS = {
     "商品编码（网店）",
     "商品图片（网店）",
     "商品规格（网店）",
+    "货品规格（系统）",
+    "规格编码（网店）",
     "平台商品Id（网店）",
     "平台规格Id（网店）",
     "匹配状态",
     "货品条码（系统）",
     "最后更新时间",
+    "匹配方式",
+    # 可选：若ERP侧后续新增/开放该列，用于回写生产工艺
+    "生产工艺",
+    # 兼容旧列名（用户更正前的写法）
+    "生产工艺注",
 }
 
 PARSER_VERSION = "v1"
@@ -226,6 +234,9 @@ def import_erp_sku_master_xlsx(
     updated = 0
     skipped = 0
     total = 0
+    # Guardrail: shop_sku_mappings might not exist in some deployments before migration runs.
+    # We optimistically try once and disable on first OperationalError ("no such table").
+    has_shop_sku_mappings = True
     # Handle duplicates within the same file/import run deterministically.
     seen: Dict[str, models.SkuMaster] = {}
 
@@ -246,14 +257,50 @@ def import_erp_sku_master_xlsx(
             "channel": _norm_str(_get(row, headers, "销售渠道")),
             "product_name": _norm_str(_get(row, headers, "商品名称（网店）")),
             "product_code": _norm_str(_get(row, headers, "商品编码（网店）")),
-            "spec_text": _norm_str(_get(row, headers, "商品规格（网店）")),
+            # 解析主来源：保持与现状一致（用户确认“货品规格（系统）仍作为解析来源”）
+            # - 优先：商品规格（网店）
+            # - 回退：货品规格（系统）
+            "spec_text": _norm_str(_get(row, headers, "商品规格（网店）"))
+            or _norm_str(_get(row, headers, "货品规格（系统）")),
+            # 额外保留原始规格文本，便于排查“网店规格 vs 系统规格”的差异
+            "shop_spec_text_raw": _norm_str(_get(row, headers, "商品规格（网店）")),
+            "system_spec_text_raw": _norm_str(_get(row, headers, "货品规格（系统）")),
+            # 重点：网店侧规格编码（新品会回填我们系统编码；老品可能为空）
+            "shop_spec_code": _norm_str(_get(row, headers, "规格编码（网店）")),
             "match_status": _norm_str(_get(row, headers, "匹配状态")),
+            "match_method": _norm_str(_get(row, headers, "匹配方式")),
             "source_updated_at": _parse_excel_datetime(_get(row, headers, "最后更新时间")),
+            # 可选：如果ERP下载表未来包含该列，可在这里直接导入；否则可由我们后续回写到ERP
+            "production_process": _norm_str(_get(row, headers, "生产工艺"))
+            or _norm_str(_get(row, headers, "生产工艺注")),
         }
         images = {
             "spec_image": _norm_str(_get(row, headers, "规格图片（网店）")),
             "product_image": _norm_str(_get(row, headers, "商品图片（网店）")),
         }
+
+        # Preserve platform_sku_id dimension (optional; requires migration).
+        if has_shop_sku_mappings:
+            try:
+                _upsert_shop_sku_mapping(
+                    db,
+                    platform_sku_id=payload.get("platform_sku_id"),
+                    channel=payload.get("channel"),
+                    platform_product_id=payload.get("platform_product_id"),
+                    erp_sku_barcode=barcode,
+                    shop_spec_code=payload.get("shop_spec_code"),
+                    production_process=payload.get("production_process"),
+                    match_status=payload.get("match_status"),
+                    match_method=payload.get("match_method"),
+                    source_updated_at=payload.get("source_updated_at"),
+                    requested_by=requested_by,
+                )
+            except OperationalError:
+                # table not present in this deployment -> disable for rest of import
+                has_shop_sku_mappings = False
+            except Exception as exc:  # noqa: BLE001
+                # do not fail the whole import; keep best-effort mapping
+                errors.append({"row": row_idx, "error": f"ShopSkuMapping upsert failed: {exc}"})
 
         existing = seen.get(barcode)
         if not existing:
@@ -277,7 +324,20 @@ def import_erp_sku_master_xlsx(
                 images_json={k: v for k, v in images.items() if v},
                 match_status=payload["match_status"],
                 source_updated_at=payload["source_updated_at"],
-                metadata_json={"source": "erp_import", "requested_by": requested_by},
+                metadata_json={
+                    "source": "erp_import",
+                    "requested_by": requested_by,
+                    # 为后续反向同步预留：这些字段在后续ERP表单里通常不可见
+                    "shop_spec_code": payload.get("shop_spec_code"),
+                    "match_method": payload.get("match_method"),
+                    # 生产工艺：用户确认列名为“生产工艺”（兼容旧名“生产工艺注”）
+                    "production_process": payload.get("production_process"),
+                    # 兼容旧key（如果前端/脚本还在用 production_note）
+                    "production_note": payload.get("production_process"),
+                    # 保留原始规格文本（便于回溯）
+                    "shop_spec_text_raw": payload.get("shop_spec_text_raw"),
+                    "system_spec_text_raw": payload.get("system_spec_text_raw"),
+                },
             )
             _update_erp_parsed_cache(row_obj, requested_by=requested_by)
             db.add(row_obj)
@@ -296,7 +356,19 @@ def import_erp_sku_master_xlsx(
             existing.match_status = payload["match_status"]
             existing.source_updated_at = payload["source_updated_at"]
             meta = dict(existing.metadata_json or {})
-            meta.update({"source": "erp_import", "requested_by": requested_by, "updated_at": _utcnow().isoformat()})
+            meta.update(
+                {
+                    "source": "erp_import",
+                    "requested_by": requested_by,
+                    "updated_at": _utcnow().isoformat(),
+                    "shop_spec_code": payload.get("shop_spec_code"),
+                    "match_method": payload.get("match_method"),
+                    "production_process": payload.get("production_process"),
+                    "production_note": payload.get("production_process"),
+                    "shop_spec_text_raw": payload.get("shop_spec_text_raw"),
+                    "system_spec_text_raw": payload.get("system_spec_text_raw"),
+                }
+            )
             existing.metadata_json = meta
             _update_erp_parsed_cache(existing, requested_by=requested_by)
             seen[barcode] = existing
@@ -304,6 +376,110 @@ def import_erp_sku_master_xlsx(
 
     db.commit()
     return {"total": total, "inserted": inserted, "updated": updated, "skipped": skipped, "errors": errors}
+
+
+def _upsert_shop_sku_mapping(
+    db: Session,
+    *,
+    platform_sku_id: Optional[str],
+    channel: Optional[str],
+    platform_product_id: Optional[str],
+    erp_sku_barcode: Optional[str],
+    shop_spec_code: Optional[str],
+    production_process: Optional[str],
+    match_status: Optional[str],
+    match_method: Optional[str],
+    source_updated_at: Optional[datetime],
+    requested_by: Optional[str],
+) -> None:
+    """
+    Preserve platform_sku_id dimension: unique key is (channel, platform_sku_id, is_archived=false).
+    """
+    psku = (platform_sku_id or "").strip()
+    if not psku:
+        return
+    ch = (channel or "").strip() or None
+    barcode = (erp_sku_barcode or "").strip() or None
+
+    existing = (
+        db.query(models.ShopSkuMapping)
+        .filter(
+            models.ShopSkuMapping.platform_sku_id == psku,
+            models.ShopSkuMapping.channel == ch,
+            models.ShopSkuMapping.is_archived.is_(False),
+        )
+        .first()
+    )
+    meta_patch = {
+        "source": "erp_import",
+        "requested_by": requested_by,
+        "updated_at": _utcnow().isoformat(),
+    }
+    if not existing:
+        row = models.ShopSkuMapping(
+            channel=ch,
+            platform_product_id=platform_product_id,
+            platform_sku_id=psku,
+            erp_sku_barcode=barcode,
+            shop_spec_code=shop_spec_code,
+            production_process=production_process,
+            match_status=match_status,
+            match_method=match_method,
+            source_updated_at=source_updated_at,
+            metadata_json={k: v for k, v in meta_patch.items() if v is not None},
+        )
+        db.add(row)
+        db.flush()
+        return
+
+    existing.platform_product_id = platform_product_id
+    existing.erp_sku_barcode = barcode
+    existing.shop_spec_code = shop_spec_code
+    existing.production_process = production_process
+    existing.match_status = match_status
+    existing.match_method = match_method
+    existing.source_updated_at = source_updated_at
+    meta = dict(existing.metadata_json or {})
+    meta.update({k: v for k, v in meta_patch.items() if v is not None})
+    existing.metadata_json = meta
+
+
+def list_shop_skus_by_barcode(
+    db: Session,
+    *,
+    erp_sku_barcode: str,
+    channel: Optional[str] = None,
+    limit: int = 20,
+) -> List[models.ShopSkuMapping]:
+    """
+    Best-effort query of shop SKU mappings by ERP barcode.
+    If table does not exist (migration not applied), return [].
+    """
+    code = (erp_sku_barcode or "").strip()
+    if not code:
+        return []
+    try:
+        q = db.query(models.ShopSkuMapping).filter(
+            models.ShopSkuMapping.is_archived.is_(False),
+            models.ShopSkuMapping.erp_sku_barcode == code,
+        )
+        if channel:
+            q = q.filter(models.ShopSkuMapping.channel == channel)
+        limit2 = max(min(int(limit or 20), 200), 1)
+        # NOTE: avoid NULLS LAST because sqlite doesn't support it.
+        # Put NULL timestamps at the end by sorting "is NULL" flag first.
+        return (
+            q.order_by(
+                models.ShopSkuMapping.source_updated_at.is_(None),
+                models.ShopSkuMapping.source_updated_at.desc(),
+                models.ShopSkuMapping.updated_at.desc(),
+            )
+            .limit(limit2)
+            .all()
+        )
+    except OperationalError:
+        # migration not applied yet in this deployment
+        return []
 
 
 def list_sku_master(
@@ -424,11 +600,18 @@ def get_by_barcode(db: Session, barcode: str) -> Optional[models.SkuMaster]:
     code = (barcode or "").strip()
     if not code:
         return None
-    return (
+    row = (
         db.query(models.SkuMaster)
         .filter(models.SkuMaster.erp_sku_barcode == code, models.SkuMaster.is_archived.is_(False))
         .first()
     )
+    if not row:
+        return None
+    # Keep behavior consistent with list/detail endpoints:
+    # attach computed binding fields and parsed-cache fields so scan page can show "已绑定模型"
+    _attach_active_version_bindings(db, [row])
+    _attach_parsed_fields([row])
+    return row
 
 
 def ensure_from_shipment(
@@ -446,11 +629,19 @@ def ensure_from_shipment(
     if existing:
         _update_shipment_seen(existing, shipment_spec_text=spec_text, channel=channel, metadata=metadata)
         return existing
+    # 发货时按需同步（更省资源）：
+    # - 发货导入遇到未建档SKU：先创建“最小SKU主档”以便后续绑定/排障/重试异常
+    # - 同时打标 needs_erp_sync，后续可由定时任务或按需接口拉取ERP的完整关联字段进行补齐
+    meta = dict(metadata or {})
+    meta.setdefault("source", "shipment_autobackfill")
+    meta.setdefault("needs_erp_sync", True)
+    meta.setdefault("erp_sync_status", "pending")
+    meta.setdefault("erp_sync_reason", "created_from_shipment_missing_master")
     row = models.SkuMaster(
         erp_sku_barcode=barcode,
         channel=(channel or None),
         spec_text=(spec_text or None),
-        metadata_json=dict(metadata),
+        metadata_json=meta,
     )
     _update_erp_parsed_cache(row, requested_by=str(metadata.get("requested_by") or ""))
     _update_shipment_seen(row, shipment_spec_text=spec_text, channel=channel, metadata=metadata)

@@ -106,6 +106,10 @@ const menuItems: MenuProps['items'] = [
         label: <Link to="/costing/sku-master">SKU 主档 / 商品关联</Link>,
       },
       {
+        key: '/costing/production-scan',
+        label: <Link to="/costing/production-scan">生产扫码看板</Link>,
+      },
+      {
         key: '/costing/spec-matching',
         label: <Link to="/costing/spec-matching">规格匹配工作台（尺寸解析）</Link>,
       },
@@ -126,6 +130,7 @@ interface AppLayoutProps {
 const AppLayout = ({ children }: AppLayoutProps) => {
   const location = useLocation()
   const [taskOpen, setTaskOpen] = useState(false)
+  const hideSidebar = location.pathname.startsWith('/costing/production-scan')
 
   /**
    * 任务角标探针（性能敏感）：
@@ -207,6 +212,9 @@ const AppLayout = ({ children }: AppLayoutProps) => {
       if (location.pathname.startsWith('/costing/sku-master')) {
         return ['/costing/sku-master']
       }
+      if (location.pathname.startsWith('/costing/production-scan')) {
+        return ['/costing/production-scan']
+      }
       if (location.pathname.startsWith('/costing/spec-matching')) {
         return ['/costing/spec-matching']
       }
@@ -217,21 +225,24 @@ const AppLayout = ({ children }: AppLayoutProps) => {
 
   return (
     <>
-      <Layout className="app-layout">
-        <Sider width={240} theme="dark">
-          <div className="sidebar-logo">AI Costing</div>
-          <Menu
-            theme="dark"
-            mode="inline"
-            selectedKeys={selectedKeys}
-            items={menuItems}
-            style={{ borderInlineEnd: 0 }}
-          />
-        </Sider>
+      <Layout className={hideSidebar ? 'app-layout app-layout--mobile' : 'app-layout'}>
+        {!hideSidebar ? (
+          <Sider width={240} theme="dark">
+            <div className="sidebar-logo">饰家如画©智慧工厂</div>
+            <Menu
+              theme="dark"
+              mode="inline"
+              selectedKeys={selectedKeys}
+              items={menuItems}
+              style={{ borderInlineEnd: 0 }}
+            />
+          </Sider>
+        ) : null}
         <Layout>
-          <Header className="app-header">
+          {!hideSidebar ? (
+            <Header className="app-header">
             <div className="app-header-inner">
-              <div>Planner 控制台</div>
+                    <div>饰家如画©智慧工厂</div>
               <Space>
                 <Badge count={runningCount} size="small" className={runningCount ? 'task-badge-blink' : undefined}>
                   <Button icon={<UnorderedListOutlined />} onClick={() => setTaskOpen(true)}>
@@ -240,7 +251,8 @@ const AppLayout = ({ children }: AppLayoutProps) => {
                 </Badge>
               </Space>
             </div>
-          </Header>
+            </Header>
+          ) : null}
           <Content className="app-content">{children}</Content>
         </Layout>
       </Layout>

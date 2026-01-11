@@ -2,6 +2,7 @@
 
 | 日期 | 模块 | 角色 | 任务/问题 | 结论 | 待办 |
 | --- | --- | --- | --- | --- | --- |
+| 2026-01-10 | 店铺对接（Integration Agent 接力） | Planner-Optimization | 用户希望新增一个对接同事/外包可快速上手的 Agent：当前系统已做到“商品关联（SKU 主档）”，但单店对接成本高（18万/店），需先用最小闭环低成本验证。 | ✅ 新增入职简报：`DOC/agents/briefings/integration_shop_connector_onboarding_mvp.md`（聚焦：SKU 主档→发货导入（xlsx）→ spec 解析→BOM 快照/异常队列；给出读哪些文件、如何验收、常见坑）。并回填 `DOC/agents/state.md/workset.md/commands.md`。 | 下一步（可选）：若要把“xlsx 导入”升级为“JSON 直传店铺履约明细”，需单开后端闭环（新增 `POST /shipments/import-json` 或类似），并补幂等键与字段契约。 |
 | 2026-01-06 | 结构标准（口径沉淀：抱枕/桌布） | Planner-Optimization | 用户确认“slot 只做实物区位，不做虚拟/重叠区位”，并给出抱枕现有 slots 与桌布拆分（BODY/EDGE_FINISH 等）希望优化成可直接建模的标准。 | ✅ 新增结构标准口径文档：`DOC/costing/blueprints/structure_standards/pillow_structure_standard_v1.md`（抱枕 slots 去歧义/保留现有拼音短码映射）与 `DOC/costing/blueprints/structure_standards/tablecloth_structure_standard_v1.md`（桌布/桌旗/桌垫同构 5 个一级 slot + 驱动量口径）。 | 下一步：如需“同一 slot 默认只允许绑定 1 个模块”的硬护栏，可单开闭环补前端限制或后端校验。 |
 | 2026-01-03 | 标准模型（结构骨架预览） | Hub Agent（Planner） | 用户希望在标准模型里能看到所选结构标准的“完整骨架”（含可选位），便于新人理解产品结构。 | ✅ 在 `ProductModelEditorDrawer` 版本区块展示“结构骨架”只读预览：启用位（绿色）+ 可选位（灰色提示不参与工艺下拉）。 | 无 |
 | 2026-01-03 | 结构标准（slots 启用/可选位） | Hub Agent（Planner） | 用户希望结构“骨架完整”，但某些位（如印染位）不想出现在工艺模块下拉里误用；需求：slots 默认勾选，可取消勾选仅作为骨架展示。 | ✅ 结构标准 slots 改为逐行“中文名/拼音短码/启用开关”；启用的 slots 写入 `metadata.slots`（参与工艺模块下拉），全部定义写入 `metadata.slot_defs`（用于骨架展示与新人理解）。列表上显示启用 slots，并标注“可选位 N”。 | 无 |

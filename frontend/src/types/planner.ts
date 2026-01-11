@@ -1485,6 +1485,27 @@ export interface SkuMaster {
   updated_at: string
 }
 
+export interface ShopSkuMappingRead {
+  id: string
+  channel?: string | null
+  platform_product_id?: string | null
+  platform_sku_id: string
+  erp_sku_barcode?: string | null
+  shop_spec_code?: string | null
+  production_process?: string | null
+  match_status?: string | null
+  match_method?: string | null
+  source_updated_at?: string | null
+  metadata_json?: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export interface SkuMasterScanResponse {
+  sku_master: SkuMaster
+  shop_skus: ShopSkuMappingRead[]
+}
+
 export interface SkuMasterListResponse extends PaginatedResponse<SkuMaster> {}
 
 export interface SkuMasterImportResponse {

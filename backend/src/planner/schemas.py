@@ -2365,6 +2365,31 @@ class SkuMasterRead(BaseModel):
         allow_population_by_field_name = True
 
 
+class ShopSkuMappingRead(BaseModel):
+    id: str
+    channel: Optional[str] = None
+    platform_product_id: Optional[str] = None
+    platform_sku_id: str
+    erp_sku_barcode: Optional[str] = None
+    shop_spec_code: Optional[str] = None
+    production_process: Optional[str] = None
+    match_status: Optional[str] = None
+    match_method: Optional[str] = None
+    source_updated_at: Optional[datetime] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict, alias="metadata_json")
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        orm_mode = True
+        allow_population_by_field_name = True
+
+
+class SkuMasterScanResponse(BaseModel):
+    sku_master: SkuMasterRead
+    shop_skus: List[ShopSkuMappingRead] = Field(default_factory=list)
+
+
 class PaginatedSkuMasterResponse(BaseModel):
     total: int
     page: int

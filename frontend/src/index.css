@@ -79,6 +79,35 @@ a {
   min-height: calc(100vh - 64px);
 }
 
+/* Mobile / full-screen mode (e.g. production scan page): remove desktop paddings/height assumptions */
+.app-layout--mobile .app-content {
+  padding: 12px 12px 20px;
+  min-height: 100vh;
+}
+
+.production-scan-page {
+  max-width: 860px;
+  margin: 0 auto;
+}
+
+/* Mobile-friendly spacing/typography */
+@media (max-width: 768px) {
+  .production-scan-page h3.ant-typography {
+    font-size: 18px;
+    margin-bottom: 0;
+  }
+  .production-scan-page .ant-card {
+    border-radius: 12px;
+  }
+  .production-scan-page .ant-descriptions-item-label,
+  .production-scan-page .ant-descriptions-item-content {
+    padding: 10px 12px;
+  }
+  .production-scan-page .ant-table {
+    font-size: 12px;
+  }
+}
+
 .sidebar-logo {
   height: 48px;
   display: flex;

@@ -15,6 +15,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     and_,
 )
 from sqlalchemy.orm import Mapped, relationship
@@ -990,4 +991,35 @@ class SkuMaster(Base, TimestampMixin, SoftDeleteMixin):
     match_status: Mapped[str | None] = Column(String(64))
     source_updated_at: Mapped[datetime | None] = Column(DateTime)
     metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict)
+
+
+class ShopSkuMapping(Base, TimestampMixin, SoftDeleteMixin):
+    """
+    Platform/shop SKU mapping (preserve platform_sku_id dimension).
+
+    Why: In real data, one ERP barcode can be reused across multiple platform_sku_id (and even across platform_product_id).
+    We keep `SkuMaster` unique on erp_sku_barcode as SSOT for costing, while this table preserves the many-side rows for
+    reverse-sync and shop-level reconciliation.
+    """
+
+    __tablename__ = "shop_sku_mappings"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    channel: Mapped[str | None] = Column(String(128), index=True)
+    platform_product_id: Mapped[str | None] = Column(String(64), index=True)
+    platform_sku_id: Mapped[str] = Column(String(64), nullable=False, index=True)
+
+    # may be empty in exports; keep nullable (mapping can exist without barcode)
+    erp_sku_barcode: Mapped[str | None] = Column(String(64), index=True)
+
+    shop_spec_code: Mapped[str | None] = Column(String(128))
+    production_process: Mapped[str | None] = Column(Text)
+    match_status: Mapped[str | None] = Column(String(64))
+    match_method: Mapped[str | None] = Column(String(64))
+    source_updated_at: Mapped[datetime | None] = Column(DateTime)
+    metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict)
+
+    __table_args__ = (
+        UniqueConstraint("channel", "platform_sku_id", "is_archived", name="uq_shop_sku_channel_platform_sku_active"),
+    )
 

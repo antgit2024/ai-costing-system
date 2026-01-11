@@ -1,5 +1,23 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-11（Integration/Factory：手机端“商品查询/生产扫码看板”闭环）
+  - 产物（前端）：
+    - 新增页面：`/costing/production-scan`（`frontend/src/pages/costing/ProductionScanPage.tsx`）
+    - 手机端体验：输入条码/拍照扫码→展示规格图片、交易规格、解析尺寸、网店SKU维度信息、物料清单（扣库口径）
+    - 物料清单：单行展示（序号 + 编码胶囊 + 名称 + `用量：x 单位`），虚拟/真实分色（VM* 兜底），点击行弹窗查看物料图片（真实物料用 `Material.images[]`，虚拟物料展示 bindings 图片）
+    - “绑定模型”展示收口：不显示版本号；显示淡绿胶囊（追溯仍以 SKU 主档绑定为准，计算口径以“模型最新已发布标准版”做 preview）
+    - 品牌：浏览器标题与布局标题统一为 `饰家如画©智慧工厂`
+  - 产物（后端/集成补强，本轮已落地到代码与文档）：
+    - SKU 主档导入字段映射补强：`规格编码（网店）/匹配方式/生产工艺` 等写入 `metadata_json`
+    - 引入平台SKU维度映射表（ShopSkuMapping）以支持“同一货品条码关联多个平台规格Id”
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的 4 条 `grep -nF ...` 校验文档存在性
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+  - 下一步（建议）：
+    - 若生产要严格“只用发布标准版计算”，建议后端提供按 `model_code` 取最新 published standard 的专用接口（避免前端二次搜索与歧义）
+    - 扫码页可选：把“规格尺寸”改为同时展示面积/周长（若业务需要），并把“用量”按显示口径做可切换（含损耗/不含损耗）
+
 - **最近校对（北京时间 GMT+8）**：2026-01-05（Planner：接力清理崩溃遗留的跨域未提交改动，恢复干净工作区；已硬验收 `npm -C frontend run build` 通过）
 - **最近校对（北京时间 GMT+8）**：2026-01-05（Frontend：行级变体“替换物料”选择器新增“同单位置顶 + 仅同单位筛选”，通过 `baseUnit` 透传，减少单位不一致返工；验收 `npm -C frontend run build`）
 - **最近校对（北京时间 GMT+8）**：2026-01-05（Backend：spec/parse 增补短语 token（白名单，先覆盖“背面纯色”），使 TOKEN(any) 规则可命中；验收 `./backend/venv/bin/python -m pytest backend/tests/planner/test_spec_parser_code_tokens.py -q`）
@@ -25,6 +43,12 @@
     - “折边/包边/锁边/滚边”属于 `edge_finish` 的不同工艺模块实现，不在结构标准里做二级
     - “印染/印花/热转印/刺绣”属于 `body` 的工艺模块（作用在主体面上），不是独立区位
   - 验收命令（必须，1条）：`grep -nF "结构标准（v1）— 抱枕/靠垫（PILLOW_V1）" DOC/costing/blueprints/structure_standards/pillow_structure_standard_v1.md && grep -nF "结构标准（v1）— 桌布/桌旗/桌垫同构（TABLECLOTH_V1）" DOC/costing/blueprints/structure_standards/tablecloth_structure_standard_v1.md`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-10（Planner-Optimization：新增 Integration Agent 入职简报：店铺对接）
+  - 产物：
+    - `DOC/agents/briefings/integration_shop_connector_onboarding_mvp.md`
+  - 目标：以“SKU 主档（商品关联）→ 发货导入（xlsx）→ spec 解析 → BOM 快照/异常队列”为最小闭环，支撑低成本验证单店对接
+  - 验收命令（必须，1条）：`grep -nF "Integration Agent 入职简报：店铺对接（以“商品关联/SKU 主档”为中心）" DOC/agents/briefings/integration_shop_connector_onboarding_mvp.md`
 
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：工艺模块新建提醒：在“结构适用范围”规则说明区块下方，展示当前所选 slot 的“驱动量/备注”（来自结构标准 slot_defs），用于提醒新建工艺模块的人；验收 `npm -C frontend run build`）
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：标准模型清单编辑：删除工艺模块不再触发 `sync-from-modules`（避免覆盖版本层已替换物料/调参导致“占位回滚”错觉）；改为仅删除该模块关联行并保存版本清单；验收 `npm -C frontend run build`）

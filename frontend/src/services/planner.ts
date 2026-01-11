@@ -105,6 +105,7 @@ import type {
   ShipmentImportBatch,
   ProductModelVersionPatchPayload,
   SkuMaster,
+  SkuMasterScanResponse,
   SkuMasterImportResponse,
   SkuMasterListResponse,
   PublishedStandardModelCandidateListResponse,
@@ -130,6 +131,11 @@ const resolvePlannerApiBase = (raw?: string): string => {
   if (typeof window === 'undefined') return raw
   try {
     const url = new URL(raw, window.location.origin)
+    // On HTTPS pages, never allow an HTTP API base (will be blocked as Mixed Content).
+    // Fall back to same-origin proxy instead.
+    if (window.location.protocol === 'https:' && url.protocol === 'http:') {
+      return '/api/planner'
+    }
     const sameHostAndProto =
       url.hostname === window.location.hostname && url.protocol === window.location.protocol
     const differentPort = url.port !== window.location.port
@@ -1623,6 +1629,17 @@ export const fetchSkuMaster = async (
 
 export const fetchSkuMasterDetail = async (skuId: string): Promise<SkuMaster> => {
   const response = await plannerClient.get(`/sku-master/${skuId}`)
+  return response.data
+}
+
+export const fetchSkuMasterByBarcode = async (
+  barcode: string,
+  params: { channel?: string; limit?: number } = {},
+): Promise<SkuMasterScanResponse> => {
+  const code = String(barcode || '').trim()
+  const response = await plannerClient.get(`/sku-master/by-barcode/${encodeURIComponent(code)}`, {
+    params: sanitizeParams(params as Record<string, unknown>),
+  })
   return response.data
 }
 

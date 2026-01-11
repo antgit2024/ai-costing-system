@@ -40,6 +40,8 @@
   - `grep -nF "ERP 口径补强清单（Guardrails Addendum）— 发货时再解析主链优先" DOC/costing/reviews/erp_guardrails_addendum_20251222.md`
 - 结构标准口径文档存在性（抱枕/桌布）：
   - `grep -nF "结构标准（v1）— 抱枕/靠垫（PILLOW_V1）" DOC/costing/blueprints/structure_standards/pillow_structure_standard_v1.md && grep -nF "结构标准（v1）— 桌布/桌旗/桌垫同构（TABLECLOTH_V1）" DOC/costing/blueprints/structure_standards/tablecloth_structure_standard_v1.md`
+- 店铺对接（Integration Agent 入职简报）存在性：
+  - `grep -nF "Integration Agent 入职简报：店铺对接（以“商品关联/SKU 主档”为中心）" DOC/agents/briefings/integration_shop_connector_onboarding_mvp.md`
 
 ### 2) 本地联调（可选，但强烈建议）
 

@@ -20,6 +20,7 @@ const TaxonomyManagementPage = lazy(() => import('./pages/costing/TaxonomyManage
 const StructureStandardsPage = lazy(() => import('./pages/costing/StructureStandardsPage'))
 const ProductListingPage = lazy(() => import('./pages/costing/ProductListingPage'))
 const BundleTemplatesPage = lazy(() => import('./pages/costing/BundleTemplatesPage'))
+const ProductionScanPage = lazy(() => import('./pages/costing/ProductionScanPage'))
 
 const App = () => {
   return (
@@ -50,6 +51,7 @@ const App = () => {
           <Route path="/costing/product-listing" element={<ProductListingPage />} />
           <Route path="/costing/bundle-templates" element={<BundleTemplatesPage />} />
           <Route path="/costing/sku-master" element={<SkuMasterWorkspacePage />} />
+          <Route path="/costing/production-scan" element={<ProductionScanPage />} />
           <Route path="/costing/spec-matching" element={<SkuSpecMatchingPage />} />
           <Route path="*" element={<Navigate to="/planner" replace />} />
         </Routes>

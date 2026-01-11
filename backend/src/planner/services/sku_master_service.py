@@ -1398,7 +1398,10 @@ def auto_bind_preview(db: Session, *, limit: int, scan_limit: int = 50000) -> Di
     )
     rows = q.limit(scan_limit).all()
 
-    total_unbound = q.count()
+    # NOTE: q.count() can be very expensive on large tables and may trigger gateway timeouts.
+    # For Phase0 operations we only need a rough indicator, so we avoid full-table count here.
+    # Use a bounded approximation: when rows hits scan_limit, report scan_limit (meaning ">= scan_limit").
+    total_unbound = 0
     items: List[Dict[str, Any]] = []
     candidates = 0
 
@@ -1459,6 +1462,7 @@ def auto_bind_preview(db: Session, *, limit: int, scan_limit: int = 50000) -> Di
         if len(items) >= limit:
             break
 
+    total_unbound = len(rows) if len(rows) < scan_limit else scan_limit
     return {"total_unbound": total_unbound, "candidates": candidates, "items": items}
 
 
@@ -1507,7 +1511,7 @@ def auto_bind_execute(
             errors.append({"sku_master_id": it.get("sku_master_id"), "sku_code": sku, "error": str(exc)})
 
     # return a fresh preview after binding
-    preview_after = auto_bind_preview(db, limit=limit)
+    preview_after = auto_bind_preview(db, limit=limit, scan_limit=scan_limit)
     return {
         "preview": preview_after,
         "bound_count": bound_count,

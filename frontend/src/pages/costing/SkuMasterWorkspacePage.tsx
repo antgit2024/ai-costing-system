@@ -526,12 +526,12 @@ const SkuMasterWorkspacePage = () => {
         let totalSkipped = 0
         let totalErrors = 0
         try {
-          // 后端限制：limit<=2000，scan_limit<=500000
+          // 口径：后端 execute 默认 scan_limit=50000（路由层固定）；为避免单次绑定过大导致超时，
+          // 这里每轮只执行小批量（200），循环多轮跑完。
           for (let round = 1; round <= 999; round += 1) {
             if (autoRunAllStopRef.current) break
             const res: any = await autoBindSkuMastersExecute({
-              limit: 2000,
-              scan_limit: 500000,
+              limit: 200,
               requested_by: requestedBy || undefined,
               // 不传 sku_master_ids：由后端按 preview 的 items 批量绑定
             } as any)

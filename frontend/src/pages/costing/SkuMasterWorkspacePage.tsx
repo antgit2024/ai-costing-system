@@ -847,79 +847,86 @@ const SkuMasterWorkspacePage = () => {
         '将自动循环执行：预览→绑定→再预览… 直到没有候选为止（不会覆盖已有绑定）。建议在无人操作时执行。',
       okText: '开始执行',
       cancelText: '取消',
-      onOk: async () => {
+      onOk: () => {
+        // 关键：不要 await（否则 confirm 弹窗会一直“转圈”不关闭）
+        // 点“开始执行”后立即关闭弹窗，后台继续跑；进度/停止在页面里看
+        const reqBy = requestedBy || undefined
         setAutoRunAllRunning(true)
         autoRunAllStopRef.current = false
-        let totalBound = 0
-        let totalSkipped = 0
-        let totalErrors = 0
-        try {
-          // 口径：后端 execute 默认 scan_limit=50000（路由层固定）；为避免单次绑定过大导致超时，
-          // 这里每轮只执行小批量（200），循环多轮跑完。
-          for (let round = 1; round <= 999; round += 1) {
-            if (autoRunAllStopRef.current) break
-            // 前端侧加一个“单次请求超时”保护，避免长时间无反馈造成“看起来死了”的错觉
-            const ac = new AbortController()
-            const timer = window.setTimeout(() => ac.abort(), 45_000)
-            let res: any
-            try {
-              res = await autoBindSkuMastersExecute({
-                limit: 200,
-                requested_by: requestedBy || undefined,
-                // 不传 sku_master_ids：由后端按 preview 的 items 批量绑定
-              } as any)
-            } finally {
-              window.clearTimeout(timer)
+        void (async () => {
+          let totalBound = 0
+          let totalSkipped = 0
+          let totalErrors = 0
+          try {
+            // 口径：后端 execute 默认 scan_limit=50000（路由层固定）；为避免单次绑定过大导致超时，
+            // 这里每轮只执行小批量（200），循环多轮跑完。
+            for (let round = 1; round <= 999; round += 1) {
+              if (autoRunAllStopRef.current) break
+              // 前端侧加一个“单次请求超时”保护，避免长时间无反馈造成“看起来死了”的错觉
+              const ac = new AbortController()
+              const timer = window.setTimeout(() => ac.abort(), 45_000)
+              let res: any
+              try {
+                res = await autoBindSkuMastersExecute({
+                  limit: 200,
+                  requested_by: reqBy,
+                  // 不传 sku_master_ids：由后端按 preview 的 items 批量绑定
+                } as any)
+              } finally {
+                window.clearTimeout(timer)
+              }
+              const bound = Number(res?.bound_count || 0)
+              const skipped = Number(res?.skipped_already_bound || 0)
+              const errors = (res?.errors ?? []).length
+              totalBound += bound
+              totalSkipped += skipped
+              totalErrors += errors
+
+              const nextItems = (res?.preview?.items ?? []) as any[]
+              const now = new Date()
+              const stamp = `${now.getHours().toString().padStart(2, '0')}:${now
+                .getMinutes()
+                .toString()
+                .padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`
+              setAutoRunAllStatus({
+                round,
+                last_bound: bound,
+                total_bound: totalBound,
+                remaining: nextItems.length,
+                last_update: stamp,
+                note: `每轮最多 200 条；如卡住可点“停止”后再点“一键跑完”继续。`,
+              })
+              setAutoPreviewText(
+                `自动执行中：第${round}轮，本轮绑定=${bound}，累计=${totalBound}，剩余候选≈${nextItems.length}`,
+              )
+
+              // 没有候选了，或本轮没有任何绑定进展 -> 结束（避免死循环）
+              if (!nextItems.length) break
+              if (bound === 0) {
+                message.warning('本轮未产生绑定进展（bound=0），已自动停止；可稍后再点“一键跑完”继续')
+                break
+              }
             }
-            const bound = Number(res?.bound_count || 0)
-            const skipped = Number(res?.skipped_already_bound || 0)
-            const errors = (res?.errors ?? []).length
-            totalBound += bound
-            totalSkipped += skipped
-            totalErrors += errors
 
-            const nextItems = (res?.preview?.items ?? []) as any[]
-            const now = new Date()
-            const stamp = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now
-              .getSeconds()
-              .toString()
-              .padStart(2, '0')}`
-            setAutoRunAllStatus({
-              round,
-              last_bound: bound,
-              total_bound: totalBound,
-              remaining: nextItems.length,
-              last_update: stamp,
-              note: `每轮最多 200 条；如卡住可点“停止”后再点“一键跑完”继续。`,
-            })
-            setAutoPreviewText(`自动执行中：第${round}轮，本轮绑定=${bound}，累计=${totalBound}，剩余候选≈${nextItems.length}`)
-
-            // 没有候选了，或本轮没有任何绑定进展 -> 结束（避免死循环）
-            if (!nextItems.length) break
-            if (bound === 0) {
-              message.warning('本轮未产生绑定进展（bound=0），已自动停止；可稍后再点“一键跑完”继续')
-              break
+            message.success(`自动执行完成：累计bound=${totalBound} skipped=${totalSkipped} errors=${totalErrors}`)
+            // 执行完后：回到“已绑定”列表，并刷新
+            setAutoCandidatesOnly(false)
+            setSelectedRowKeys([])
+            setListTab('bound')
+            setPage(1)
+            setPageSize(DEFAULT_PAGE_SIZE)
+            await queryClient.invalidateQueries({ queryKey: ['sku-master', 'list'] })
+          } catch (e: any) {
+            if (String(e?.name || '').toLowerCase().includes('abort')) {
+              message.error('单次请求超时（45s）已中止：请稍后再点“一键跑完”继续（或先降低并发/检查服务负载）')
+            } else {
+              message.error(e?.message || '自动执行失败')
             }
+          } finally {
+            setAutoRunAllRunning(false)
+            autoRunAllStopRef.current = false
           }
-
-          message.success(`自动执行完成：累计bound=${totalBound} skipped=${totalSkipped} errors=${totalErrors}`)
-          // 执行完后：回到“已绑定”列表，并刷新
-          setAutoCandidatesOnly(false)
-          setSelectedRowKeys([])
-          setListTab('bound')
-          setPage(1)
-          setPageSize(DEFAULT_PAGE_SIZE)
-          await queryClient.invalidateQueries({ queryKey: ['sku-master', 'list'] })
-        } catch (e: any) {
-          if (String(e?.name || '').toLowerCase().includes('abort')) {
-            message.error('单次请求超时（45s）已中止：请稍后再点“一键跑完”继续（或先降低并发/检查服务负载）')
-          } else {
-          message.error(e?.message || '自动执行失败')
-          }
-        } finally {
-          setAutoRunAllRunning(false)
-          autoRunAllStopRef.current = false
-        }
+        })()
       },
     })
   }

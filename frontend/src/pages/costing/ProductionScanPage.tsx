@@ -77,7 +77,9 @@ const ProductionScanPage = () => {
 
   const sku = data?.sku_master as SkuMaster | undefined
 
-  const specImage = safe((sku?.images_json as any)?.spec_image) || safe((sku?.images_json as any)?.specImage)
+  // Prefer same-origin proxy (on-demand cached) to avoid direct 3rd-party image dependency in factory.
+  const specImage =
+    sku?.id ? `/api/planner/sku-master/${encodeURIComponent(String(sku.id))}/images/spec` : safe((sku?.images_json as any)?.spec_image)
 
   const shopSkus = data?.shop_skus ?? []
 

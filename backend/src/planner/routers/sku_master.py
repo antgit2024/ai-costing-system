@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
+import httpx
 
 from ..dependencies import get_db_session
 from .. import schemas
 from ..schemas import PaginatedSkuMasterResponse, SkuMasterImportResponse, SkuMasterRead
 from ..services import sku_master_service
+from ..services import sku_master_image_storage
+from ...config import settings
+from .. import models
 
 
 router = APIRouter(prefix="/sku-master", tags=["SKU Master"])
@@ -129,6 +134,80 @@ def get_sku_master(sku_id: str, db: Session = Depends(get_db_session)):
         raise HTTPException(status_code=404, detail="SKU master not found")
     return row
 
+
+def _download_image(url: str) -> tuple[bytes, str | None]:
+    """
+    Isolated for tests (can be monkeypatched).
+    """
+    with httpx.Client(timeout=20.0, follow_redirects=True) as client:
+        resp = client.get(url)
+    resp.raise_for_status()
+    return resp.content, resp.headers.get("content-type")
+
+
+@router.get("/{sku_id}/images/{kind}")
+def get_sku_master_image(
+    sku_id: str,
+    kind: str,
+    force_refresh: int | None = None,
+    db: Session = Depends(get_db_session),
+):
+    """
+    Proxy + on-demand local caching for SKU master images (spec/product).
+    Use this instead of directly loading 3rd-party (e.g. alicdn) URLs on factory scan pages.
+    """
+    kind2 = (kind or "").strip().lower()
+    if kind2 not in ("spec", "product"):
+        raise HTTPException(status_code=400, detail="kind must be spec|product")
+
+    row = db.get(models.SkuMaster, sku_id)
+    if not row or getattr(row, "is_archived", False):
+        raise HTTPException(status_code=404, detail="SKU master not found")
+
+    images = getattr(row, "images_json", {}) or {}
+    if not isinstance(images, dict):
+        images = {}
+    key = "spec_image" if kind2 == "spec" else "product_image"
+    source_url = (images.get(key) or "").strip()
+    if not source_url:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    meta = getattr(row, "metadata_json", {}) or {}
+    if not isinstance(meta, dict):
+        meta = {}
+
+    if settings.planner_persist_sku_images and not force_refresh:
+        ref = sku_master_image_storage.get_local_image_ref(meta, kind2)
+        if ref and ref.path:
+            try:
+                data = sku_master_image_storage.read_local_bytes(ref)
+                return Response(content=data, media_type=ref.content_type or "application/octet-stream")
+            except Exception:
+                # fall back to remote fetch
+                pass
+
+    # Remote fetch (and optionally persist)
+    try:
+        data, ct = _download_image(source_url)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Failed to fetch image: {exc}") from exc
+
+    if settings.planner_persist_sku_images:
+        ref2 = sku_master_image_storage.persist_bytes(
+            sku_master_id=row.id,
+            kind=kind2,
+            source_url=source_url,
+            content=data,
+            content_type=ct,
+        )
+        sku_master_image_storage.set_local_image_ref(meta, kind2, ref2)
+        row.metadata_json = meta
+        db.add(row)
+        db.commit()
+        # best-effort cleanup
+        sku_master_image_storage.maybe_cleanup()
+
+    return Response(content=data, media_type=ct or "application/octet-stream")
 
 @router.get("/by-barcode/{barcode}", response_model=schemas.SkuMasterScanResponse)
 def get_sku_master_by_barcode(

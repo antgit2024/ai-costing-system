@@ -47,6 +47,24 @@ class Settings(BaseSettings):
         env="PLANNER_PERSIST_MATERIAL_IMAGES",
     )
 
+    # Media storage (sku master images: spec/product)
+    planner_persist_sku_images: bool = Field(
+        default=True,
+        env="PLANNER_PERSIST_SKU_IMAGES",
+    )
+    planner_sku_image_cache_ttl_days: int = Field(
+        default=365,
+        env="PLANNER_SKU_IMAGE_CACHE_TTL_DAYS",
+    )
+    planner_sku_image_cache_max_files: int = Field(
+        default=100_000,
+        env="PLANNER_SKU_IMAGE_CACHE_MAX_FILES",
+    )
+    planner_sku_image_cache_cleanup_interval_seconds: int = Field(
+        default=300,
+        env="PLANNER_SKU_IMAGE_CACHE_CLEANUP_INTERVAL_SECONDS",
+    )
+
     # Admin key (very lightweight protection for admin-only maintenance endpoints).
     # If set, mutating endpoints guarded by `require_admin_key` will require header:
     #   X-PLANNER-ADMIN-KEY: <value>

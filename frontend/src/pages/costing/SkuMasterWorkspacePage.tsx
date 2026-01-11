@@ -1410,7 +1410,11 @@ const SkuMasterWorkspacePage = () => {
                   {safeString((detailQuery.data.images_json as any)?.product_image) ? (
                     <Image
                       width={260}
-                      src={safeString((detailQuery.data.images_json as any)?.product_image)}
+                      src={
+                        detailQuery.data?.id
+                          ? `/api/planner/sku-master/${encodeURIComponent(String(detailQuery.data.id))}/images/product`
+                          : safeString((detailQuery.data.images_json as any)?.product_image)
+                      }
                     />
                   ) : (
                     <Text type="secondary">无商品图片</Text>
@@ -1418,7 +1422,11 @@ const SkuMasterWorkspacePage = () => {
                   {safeString((detailQuery.data.images_json as any)?.spec_image) ? (
                     <Image
                       width={260}
-                      src={safeString((detailQuery.data.images_json as any)?.spec_image)}
+                      src={
+                        detailQuery.data?.id
+                          ? `/api/planner/sku-master/${encodeURIComponent(String(detailQuery.data.id))}/images/spec`
+                          : safeString((detailQuery.data.images_json as any)?.spec_image)
+                      }
                     />
                   ) : (
                     <Text type="secondary">无规格图片</Text>

@@ -46,6 +46,21 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-11（SKU 主档列表默认排序：ERP 原始最后更新时间）
   - 变更：
     - `/api/planner/sku-master` 列表默认排序改为：`source_updated_at`（ERP 原始最后更新时间）**倒序**，空值排最后；其次按 `updated_at` 倒序
+
+- **最近校对（北京时间 GMT+8）**：2026-01-11（SKU 主档图片：按需代理 + 本地缓存兜底）
+  - 背景：扫码看图目前直连天猫 `img.alicdn.com`，存在防盗链/网络抖动/链接变更等风险
+  - 产物：
+    - 后端新增图片代理：`GET /api/planner/sku-master/{sku_id}/images/{kind}`（kind=spec|product）
+    - 行为：首次访问拉取远端图片并落盘到 `PLANNER_MEDIA_DIR/sku_master_images/`，后续直接读本地；支持 `force_refresh=1`
+    - 清理：按 TTL（天）+ 最大文件数做 best-effort 清理（LRU-ish by mtime）
+    - 前端：扫码页与 SKU 主档详情抽屉图片统一改为走同源代理 URL（不再直连第三方）
+  - 配置（环境变量）：
+    - `PLANNER_PERSIST_SKU_IMAGES=true|false`
+    - `PLANNER_SKU_IMAGE_CACHE_TTL_DAYS=365`
+    - `PLANNER_SKU_IMAGE_CACHE_MAX_FILES=100000`
+  - 验收命令：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_image_proxy_mvp.py -q`
   - 产物（后端）：
     - 新接口：`POST /api/planner/sku-master/bind-by-model/bulk`（按筛选条件批量绑定，支持 `excluded_sku_master_ids`）
   - 验收命令（必须，全部 0 退出码）：

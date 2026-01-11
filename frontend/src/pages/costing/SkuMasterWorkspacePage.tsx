@@ -139,6 +139,14 @@ const SkuMasterWorkspacePage = () => {
   const [autoCandidatesOnly, setAutoCandidatesOnly] = useState(false)
   const [autoRunAllRunning, setAutoRunAllRunning] = useState(false)
   const autoRunAllStopRef = useRef(false)
+  const [autoRunAllStatus, setAutoRunAllStatus] = useState<{
+    round: number
+    last_bound: number
+    total_bound: number
+    remaining: number
+    last_update: string
+    note?: string
+  } | null>(null)
 
   useEffect(() => {
     try {
@@ -530,11 +538,19 @@ const SkuMasterWorkspacePage = () => {
           // 这里每轮只执行小批量（200），循环多轮跑完。
           for (let round = 1; round <= 999; round += 1) {
             if (autoRunAllStopRef.current) break
-            const res: any = await autoBindSkuMastersExecute({
-              limit: 200,
-              requested_by: requestedBy || undefined,
-              // 不传 sku_master_ids：由后端按 preview 的 items 批量绑定
-            } as any)
+            // 前端侧加一个“单次请求超时”保护，避免长时间无反馈造成“看起来死了”的错觉
+            const ac = new AbortController()
+            const timer = window.setTimeout(() => ac.abort(), 45_000)
+            let res: any
+            try {
+              res = await autoBindSkuMastersExecute({
+                limit: 200,
+                requested_by: requestedBy || undefined,
+                // 不传 sku_master_ids：由后端按 preview 的 items 批量绑定
+              } as any)
+            } finally {
+              window.clearTimeout(timer)
+            }
             const bound = Number(res?.bound_count || 0)
             const skipped = Number(res?.skipped_already_bound || 0)
             const errors = (res?.errors ?? []).length
@@ -543,12 +559,27 @@ const SkuMasterWorkspacePage = () => {
             totalErrors += errors
 
             const nextItems = (res?.preview?.items ?? []) as any[]
-            setAutoPreviewText(
-              `自动执行中：round=${round} 本轮bound=${bound} 累计bound=${totalBound}（剩余候选≈${nextItems.length}）`,
-            )
+            const now = new Date()
+            const stamp = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now
+              .getSeconds()
+              .toString()
+              .padStart(2, '0')}`
+            setAutoRunAllStatus({
+              round,
+              last_bound: bound,
+              total_bound: totalBound,
+              remaining: nextItems.length,
+              last_update: stamp,
+              note: `每轮最多 200 条；如卡住可点“停止”后再点“一键跑完”继续。`,
+            })
+            setAutoPreviewText(`自动执行中：第${round}轮，本轮绑定=${bound}，累计=${totalBound}，剩余候选≈${nextItems.length}`)
 
             // 没有候选了，或本轮没有任何绑定进展 -> 结束（避免死循环）
-            if (!nextItems.length || bound === 0) break
+            if (!nextItems.length) break
+            if (bound === 0) {
+              message.warning('本轮未产生绑定进展（bound=0），已自动停止；可稍后再点“一键跑完”继续')
+              break
+            }
           }
 
           message.success(`自动执行完成：累计bound=${totalBound} skipped=${totalSkipped} errors=${totalErrors}`)
@@ -560,7 +591,11 @@ const SkuMasterWorkspacePage = () => {
           setPageSize(DEFAULT_PAGE_SIZE)
           await queryClient.invalidateQueries({ queryKey: ['sku-master', 'list'] })
         } catch (e: any) {
+          if (String(e?.name || '').toLowerCase().includes('abort')) {
+            message.error('单次请求超时（45s）已中止：请稍后再点“一键跑完”继续（或先降低并发/检查服务负载）')
+          } else {
           message.error(e?.message || '自动执行失败')
+          }
         } finally {
           setAutoRunAllRunning(false)
           autoRunAllStopRef.current = false
@@ -677,6 +712,14 @@ const SkuMasterWorkspacePage = () => {
                           >
                             停止自动执行
                           </Button>
+                        ) : null}
+                        {autoRunAllStatus ? (
+                          <Alert
+                            type={autoRunAllRunning ? 'info' : 'success'}
+                            showIcon
+                            message={`进度：第${autoRunAllStatus.round}轮 / 本轮绑定${autoRunAllStatus.last_bound} / 累计绑定${autoRunAllStatus.total_bound} / 剩余候选≈${autoRunAllStatus.remaining}`}
+                            description={`最后更新：${autoRunAllStatus.last_update}${autoRunAllStatus.note ? `；${autoRunAllStatus.note}` : ''}`}
+                          />
                         ) : null}
                         {autoPreviewText ? <Alert type="info" showIcon message={autoPreviewText} /> : null}
                         {autoCandidatesOnly ? (

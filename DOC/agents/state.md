@@ -18,6 +18,18 @@
     - 若生产要严格“只用发布标准版计算”，建议后端提供按 `model_code` 取最新 published standard 的专用接口（避免前端二次搜索与歧义）
     - 扫码页可选：把“规格尺寸”改为同时展示面积/周长（若业务需要），并把“用量”按显示口径做可切换（含损耗/不含损耗）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-11（SKU 主档：人工审核“一键跑完（循环绑定）”）
+  - 产物（前端）：
+    - `/costing/sku-master` → 左侧“人工审核”新增按钮：**一键跑完（人工审核循环绑定）**
+    - 行为：对当前勾选的 SKU 按 **200 条/轮**循环执行 `bind-by-model`，支持 **停止**，并展示进度心跳（轮次/本轮绑定/累计绑定/已处理/错误累计/最后更新时间）
+  - 产物（前端服务层）：
+    - `frontend/src/services/planner.ts`：`bindSkuMastersByModel(payload, opts?)` 支持可选 `timeoutMs/signal`（用于长任务超时保护与可取消）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q && ./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_binding_workbench_mvp.py -q`
+  - 备注：
+    - 若系统 python 无 pytest（如 `/opt/aiext/bin/python: No module named pytest`），请使用项目 venv：`./backend/venv/bin/python -m pytest ...`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-05（Planner：接力清理崩溃遗留的跨域未提交改动，恢复干净工作区；已硬验收 `npm -C frontend run build` 通过）
 - **最近校对（北京时间 GMT+8）**：2026-01-05（Frontend：行级变体“替换物料”选择器新增“同单位置顶 + 仅同单位筛选”，通过 `baseUnit` 透传，减少单位不一致返工；验收 `npm -C frontend run build`）
 - **最近校对（北京时间 GMT+8）**：2026-01-05（Backend：spec/parse 增补短语 token（白名单，先覆盖“背面纯色”），使 TOKEN(any) 规则可命中；验收 `./backend/venv/bin/python -m pytest backend/tests/planner/test_spec_parser_code_tokens.py -q`）

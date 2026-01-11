@@ -148,6 +148,20 @@ const SkuMasterWorkspacePage = () => {
     note?: string
   } | null>(null)
 
+  // manual run-all (人工审核：对勾选项分批循环绑定，避免一次性超时)
+  const [manualRunAllRunning, setManualRunAllRunning] = useState(false)
+  const manualRunAllStopRef = useRef(false)
+  const [manualRunAllStatus, setManualRunAllStatus] = useState<{
+    round: number
+    last_bound: number
+    total_bound: number
+    processed: number
+    total: number
+    errors: number
+    last_update: string
+    note?: string
+  } | null>(null)
+
   useEffect(() => {
     try {
       localStorage.setItem(PAGE_SIZE_STORAGE_KEY, String(pageSize))
@@ -452,6 +466,106 @@ const SkuMasterWorkspacePage = () => {
     onError: (e: any) => message.error(e?.message || '绑定失败'),
   })
 
+  const handleManualRunAll = () => {
+    if (manualRunAllRunning) return
+    if (!selectedModelId) {
+      message.warning('请先选择目标模型（已发布）')
+      return
+    }
+    if (!selectedRowKeys.length) {
+      message.warning('请先在右侧列表勾选要绑定的记录')
+      return
+    }
+
+    const total = selectedRowKeys.length
+    Modal.confirm({
+      title: '人工审核：一键跑完（循环绑定）？',
+      content: `将对当前勾选的 ${total} 条记录按 200 条/轮自动循环绑定（不会覆盖已有绑定）。`,
+      okText: '开始执行',
+      cancelText: '取消',
+      onOk: async () => {
+        setManualRunAllRunning(true)
+        manualRunAllStopRef.current = false
+        setManualRunAllStatus(null)
+
+        const BATCH_SIZE = 200
+        const idsAll = [...selectedRowKeys]
+        let cursor = 0
+        let totalBound = 0
+        let totalErrors = 0
+
+        try {
+          for (let round = 1; round <= 999; round += 1) {
+            if (manualRunAllStopRef.current) break
+            const batch = idsAll.slice(cursor, cursor + BATCH_SIZE)
+            if (!batch.length) break
+
+            // 单次请求超时保护（45s），避免“看起来死了”
+            const ac = new AbortController()
+            const timer = window.setTimeout(() => ac.abort(), 45_000)
+            let res: any
+            try {
+              res = await bindSkuMastersByModel(
+                {
+                  model_id: selectedModelId,
+                  sku_master_ids: batch,
+                  requested_by: requestedBy || undefined,
+                },
+                { timeoutMs: 45_000, signal: ac.signal },
+              )
+            } finally {
+              window.clearTimeout(timer)
+            }
+
+            const bound = Number(res?.bound_count || 0)
+            const errors = (res?.errors ?? []).length
+            totalBound += bound
+            totalErrors += errors
+            cursor += batch.length
+
+            const now = new Date()
+            const stamp = `${now.getHours().toString().padStart(2, '0')}:${now
+              .getMinutes()
+              .toString()
+              .padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`
+            setManualRunAllStatus({
+              round,
+              last_bound: bound,
+              total_bound: totalBound,
+              processed: cursor,
+              total,
+              errors: totalErrors,
+              last_update: stamp,
+              note: '每轮最多 200 条；如需暂停可点“停止”，下次继续只需再次勾选并点击“一键跑完”。',
+            })
+
+            // 本轮无进展：提示并停止，避免无意义循环
+            if (bound === 0) {
+              message.warning('本轮未产生绑定进展（bound=0），已自动停止；请检查勾选项是否已绑定或模型是否正确')
+              break
+            }
+          }
+
+          message.success(`人工审核自动绑定完成：累计bound=${totalBound} errors=${totalErrors}`)
+          setSelectedRowKeys([])
+          setListTab('bound')
+          setPage(1)
+          setPageSize(DEFAULT_PAGE_SIZE)
+          await queryClient.invalidateQueries({ queryKey: ['sku-master', 'list'] })
+        } catch (e: any) {
+          if (String(e?.name || '').toLowerCase().includes('abort')) {
+            message.error('单次请求超时（45s）已中止：建议减少勾选量或稍后重试（也可分批执行）')
+          } else {
+            message.error(e?.message || '人工审核自动执行失败')
+          }
+        } finally {
+          setManualRunAllRunning(false)
+          manualRunAllStopRef.current = false
+        }
+      },
+    })
+  }
+
   const autoPreviewMutation = useMutation({
     mutationFn: () => autoBindSkuMastersPreview({ limit: 200, scan_limit: 50000 }),
     onSuccess: (res: any) => {
@@ -658,6 +772,35 @@ const SkuMasterWorkspacePage = () => {
                         >
                           执行绑定（写入映射）{selectedRowKeys.length ? `（${selectedRowKeys.length}）` : ''}
                         </Button>
+                        <Button
+                          block
+                          type="primary"
+                          danger
+                          disabled={!selectedModelId || selectedRowKeys.length === 0 || manualRunAllRunning || bindMutation.isPending}
+                          loading={manualRunAllRunning}
+                          onClick={handleManualRunAll}
+                        >
+                          一键跑完（人工审核循环绑定）
+                        </Button>
+                        {manualRunAllRunning ? (
+                          <Button
+                            block
+                            onClick={() => {
+                              manualRunAllStopRef.current = true
+                              message.info('已请求停止：将在本轮执行结束后停止')
+                            }}
+                          >
+                            停止自动执行
+                          </Button>
+                        ) : null}
+                        {manualRunAllStatus ? (
+                          <Alert
+                            type={manualRunAllRunning ? 'info' : 'success'}
+                            showIcon
+                            message={`进度：第${manualRunAllStatus.round}轮 / 本轮绑定${manualRunAllStatus.last_bound} / 累计绑定${manualRunAllStatus.total_bound} / 已处理${manualRunAllStatus.processed}/${manualRunAllStatus.total} / 错误累计${manualRunAllStatus.errors}`}
+                            description={`最后更新：${manualRunAllStatus.last_update}${manualRunAllStatus.note ? `；${manualRunAllStatus.note}` : ''}`}
+                          />
+                        ) : null}
                         <Text type="secondary">
                           提示：先在右侧筛选/勾选候选记录，再执行绑定；不会覆盖已有绑定。
                         </Text>

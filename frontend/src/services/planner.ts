@@ -1651,12 +1651,23 @@ export const fetchPublishedStandardModels = async (params: {
   return response.data
 }
 
-export const bindSkuMastersByModel = async (payload: {
+type PlannerRequestOptions = {
+  timeoutMs?: number
+  signal?: AbortSignal
+}
+
+export const bindSkuMastersByModel = async (
+  payload: {
   model_id: string
   sku_master_ids: string[]
   requested_by?: string
-}): Promise<SkuMasterBindByModelResponse> => {
-  const response = await plannerClient.post('/sku-master/bind-by-model', payload)
+  },
+  opts: PlannerRequestOptions = {},
+): Promise<SkuMasterBindByModelResponse> => {
+  const response = await plannerClient.post('/sku-master/bind-by-model', payload, {
+    timeout: opts.timeoutMs,
+    signal: opts.signal,
+  })
   return response.data
 }
 

@@ -393,6 +393,12 @@ const SkuMasterWorkspacePage = () => {
       render: (v) => formatTime(v),
     },
     {
+      title: '原始最后更新时间（ERP）',
+      dataIndex: 'source_updated_at',
+      width: 170,
+      render: (v) => formatTime(v),
+    },
+    {
       title: '操作',
       key: 'actions',
       width: 90,

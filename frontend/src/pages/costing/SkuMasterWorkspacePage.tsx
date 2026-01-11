@@ -528,83 +528,90 @@ const SkuMasterWorkspacePage = () => {
         content: `将对当前勾选的 ${total} 条记录按 200 条/轮循环绑定（不会覆盖已有绑定）。`,
         okText: '开始执行',
         cancelText: '取消',
-        onOk: async () => {
+        onOk: () => {
+          // 关键：不要 await（否则 confirm 弹窗会一直“转圈”不关闭）
+          // 点“开始执行”后立即关闭弹窗，后台继续跑；进度/停止在页面里看
+          const modelId = selectedModelId
+          const idsAll = [...selectedRowKeys]
+          const reqBy = requestedBy || undefined
+
           setManualRunAllRunning(true)
           manualRunAllStopRef.current = false
           setManualRunAllStatus(null)
 
-          const BATCH_SIZE = 200
-          const idsAll = [...selectedRowKeys]
-          let cursor = 0
-          let totalBound = 0
-          let totalErrors = 0
+          void (async () => {
+            const BATCH_SIZE = 200
+            let cursor = 0
+            let totalBound = 0
+            let totalErrors = 0
 
-          try {
-            for (let round = 1; round <= 999; round += 1) {
-              if (manualRunAllStopRef.current) break
-              const batch = idsAll.slice(cursor, cursor + BATCH_SIZE)
-              if (!batch.length) break
+            try {
+              for (let round = 1; round <= 999; round += 1) {
+                if (manualRunAllStopRef.current) break
+                const batch = idsAll.slice(cursor, cursor + BATCH_SIZE)
+                if (!batch.length) break
 
-              const ac = new AbortController()
-              const timer = window.setTimeout(() => ac.abort(), 45_000)
-              let res: any
-              try {
-                res = await bindSkuMastersByModel(
-                  {
-                    model_id: selectedModelId,
-                    sku_master_ids: batch,
-                    requested_by: requestedBy || undefined,
-                  },
-                  { timeoutMs: 45_000, signal: ac.signal },
-                )
-              } finally {
-                window.clearTimeout(timer)
+                const ac = new AbortController()
+                const timer = window.setTimeout(() => ac.abort(), 45_000)
+                let res: any
+                try {
+                  res = await bindSkuMastersByModel(
+                    {
+                      model_id: modelId as string,
+                      sku_master_ids: batch,
+                      requested_by: reqBy,
+                    },
+                    { timeoutMs: 45_000, signal: ac.signal },
+                  )
+                } finally {
+                  window.clearTimeout(timer)
+                }
+
+                const bound = Number(res?.bound_count || 0)
+                const errors = (res?.errors ?? []).length
+                totalBound += bound
+                totalErrors += errors
+                cursor += batch.length
+
+                const now = new Date()
+                const stamp = `${now.getHours().toString().padStart(2, '0')}:${now
+                  .getMinutes()
+                  .toString()
+                  .padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`
+                setManualRunAllStatus({
+                  round,
+                  last_bound: bound,
+                  total_bound: totalBound,
+                  processed: cursor,
+                  total,
+                  errors: totalErrors,
+                  last_update: stamp,
+                  note: '当页勾选模式：每轮最多 200 条；如需暂停可点“停止”。',
+                })
+
+                if (bound === 0) {
+                  message.warning('本轮未产生绑定进展（bound=0），已自动停止；可能都已绑定或存在异常')
+                  break
+                }
               }
 
-              const bound = Number(res?.bound_count || 0)
-              const errors = (res?.errors ?? []).length
-              totalBound += bound
-              totalErrors += errors
-              cursor += batch.length
-
-              const now = new Date()
-              const stamp = `${now.getHours().toString().padStart(2, '0')}:${now
-                .getMinutes()
-                .toString()
-                .padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`
-              setManualRunAllStatus({
-                round,
-                last_bound: bound,
-                total_bound: totalBound,
-                processed: cursor,
-                total,
-                errors: totalErrors,
-                last_update: stamp,
-                note: '当页勾选模式：每轮最多 200 条；如需暂停可点“停止”。',
-              })
-
-              if (bound === 0) {
-                message.warning('本轮未产生绑定进展（bound=0），已自动停止；可能都已绑定或存在异常')
-                break
+              message.success(`人工审核自动绑定完成：累计bound=${totalBound} errors=${totalErrors}`)
+              setSelectedRowKeys([])
+              setListTab('bound')
+              setPage(1)
+              setPageSize(DEFAULT_PAGE_SIZE)
+              await queryClient.invalidateQueries({ queryKey: ['sku-master', 'list'] })
+            } catch (e: any) {
+              if (String(e?.name || '').toLowerCase().includes('abort')) {
+                message.error('单次请求超时（45s）已中止：请稍后重试（或减少勾选量）')
+              } else {
+                message.error(e?.message || '人工审核自动执行失败')
               }
+            } finally {
+              setManualRunAllRunning(false)
+              manualRunAllStopRef.current = false
             }
-
-            message.success(`人工审核自动绑定完成：累计bound=${totalBound} errors=${totalErrors}`)
-            setSelectedRowKeys([])
-            setListTab('bound')
-            setPage(1)
-            setPageSize(DEFAULT_PAGE_SIZE)
-            await queryClient.invalidateQueries({ queryKey: ['sku-master', 'list'] })
-          } catch (e: any) {
-            if (String(e?.name || '').toLowerCase().includes('abort')) {
-              message.error('单次请求超时（45s）已中止：请稍后重试（或减少勾选量）')
-            } else {
-              message.error(e?.message || '人工审核自动执行失败')
-            }
-          } finally {
-            setManualRunAllRunning(false)
-            manualRunAllStopRef.current = false
-          }
+          })()
         },
       })
       return
@@ -655,7 +662,7 @@ const SkuMasterWorkspacePage = () => {
       ),
       okText: '开始执行',
       cancelText: '取消',
-      onOk: async () => {
+      onOk: () => {
         const typed2 = _normConfirm(typed)
         const ok = typed2 === _normConfirm(expected) || typed2 === _normConfirm(modelLabel) || typed2 === _normConfirm(modelNameOnly)
         if (!ok) {
@@ -663,90 +670,104 @@ const SkuMasterWorkspacePage = () => {
           return Promise.reject(new Error('confirm mismatch'))
         }
 
+        // 关键：不要 await（否则 confirm 弹窗会一直“转圈”不关闭）
+        // 点“开始执行”后立即关闭弹窗，后台继续跑；进度/停止在页面里看
+        const modelId = selectedModelId
+        const reqBy = requestedBy || undefined
+        const fSearch = search || undefined
+        const fChannel = channel
+        const fMatchStatus = matchStatus
+        const fIncludeTerms = includeTerms || undefined
+        const fExcludeTerms = excludeTerms || undefined
+        const fMatchScope = matchScope
+        const excluded = [...manualExcludedIds]
+
         setManualRunAllRunning(true)
         manualRunAllStopRef.current = false
         setManualRunAllStatus(null)
 
-        let totalBound = 0
-        let totalErrors = 0
-        let totalProcessed = 0
+        void (async () => {
+          let totalBound = 0
+          let totalErrors = 0
+          let totalProcessed = 0
 
-        try {
-          for (let round = 1; round <= 999; round += 1) {
-            if (manualRunAllStopRef.current) break
+          try {
+            for (let round = 1; round <= 999; round += 1) {
+              if (manualRunAllStopRef.current) break
 
-            const ac = new AbortController()
-            const timer = window.setTimeout(() => ac.abort(), 45_000)
-            let res: any
-            try {
-              res = await bindSkuMastersByModelBulk(
-                {
-                  model_id: selectedModelId,
-                  requested_by: requestedBy || undefined,
-                  limit: 200,
-                  search: search || undefined,
-                  channel,
-                  match_status: matchStatus,
-                  include_terms: includeTerms || undefined,
-                  exclude_terms: excludeTerms || undefined,
-                  match_scope: matchScope,
-                  excluded_sku_master_ids: manualExcludedIds,
-                },
-                { timeoutMs: 45_000, signal: ac.signal },
-              )
-            } finally {
-              window.clearTimeout(timer)
+              const ac = new AbortController()
+              const timer = window.setTimeout(() => ac.abort(), 45_000)
+              let res: any
+              try {
+                res = await bindSkuMastersByModelBulk(
+                  {
+                    model_id: modelId as string,
+                    requested_by: reqBy,
+                    limit: 200,
+                    search: fSearch,
+                    channel: fChannel,
+                    match_status: fMatchStatus,
+                    include_terms: fIncludeTerms,
+                    exclude_terms: fExcludeTerms,
+                    match_scope: fMatchScope,
+                    excluded_sku_master_ids: excluded,
+                  },
+                  { timeoutMs: 45_000, signal: ac.signal },
+                )
+              } finally {
+                window.clearTimeout(timer)
+              }
+
+              const bound = Number(res?.bound_count || 0)
+              const errors = (res?.errors ?? []).length
+              const processedThisRound = Number(res?.batch_candidates || 0)
+              const hasMore = Boolean(res?.has_more)
+              totalBound += bound
+              totalErrors += errors
+              totalProcessed += processedThisRound
+
+              const now = new Date()
+              const stamp = `${now.getHours().toString().padStart(2, '0')}:${now
+                .getMinutes()
+                .toString()
+                .padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`
+              setManualRunAllStatus({
+                round,
+                last_bound: bound,
+                total_bound: totalBound,
+                processed: totalProcessed,
+                total: -1,
+                errors: totalErrors,
+                last_update: stamp,
+                note: hasMore ? '仍有更多候选（跨页）' : '已无更多候选',
+              })
+
+              if (processedThisRound <= 0) break
+              if (!hasMore) break
+              if (bound === 0) {
+                message.warning('本轮未产生绑定进展（bound=0），已自动停止；可能存在缺条码/条件过宽/排除过多')
+                break
+              }
             }
 
-            const bound = Number(res?.bound_count || 0)
-            const errors = (res?.errors ?? []).length
-            const processedThisRound = Number(res?.batch_candidates || 0)
-            const hasMore = Boolean(res?.has_more)
-            totalBound += bound
-            totalErrors += errors
-            totalProcessed += processedThisRound
-
-            const now = new Date()
-            const stamp = `${now.getHours().toString().padStart(2, '0')}:${now
-              .getMinutes()
-              .toString()
-              .padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`
-            setManualRunAllStatus({
-              round,
-              last_bound: bound,
-              total_bound: totalBound,
-              processed: totalProcessed,
-              total: -1,
-              errors: totalErrors,
-              last_update: stamp,
-              note: hasMore ? '仍有更多候选（跨页）' : '已无更多候选',
-            })
-
-            if (processedThisRound <= 0) break
-            if (!hasMore) break
-            if (bound === 0) {
-              message.warning('本轮未产生绑定进展（bound=0），已自动停止；可能存在缺条码/条件过宽/排除过多')
-              break
+            message.success(`人工审核自动绑定完成：累计bound=${totalBound} errors=${totalErrors}`)
+            setSelectedRowKeys([])
+            setManualExcludedIds([])
+            setListTab('bound')
+            setPage(1)
+            setPageSize(DEFAULT_PAGE_SIZE)
+            await queryClient.invalidateQueries({ queryKey: ['sku-master', 'list'] })
+          } catch (e: any) {
+            if (String(e?.name || '').toLowerCase().includes('abort')) {
+              message.error('单次请求超时（45s）已中止：请稍后重试（或缩小筛选范围/分批执行）')
+            } else {
+              message.error(e?.message || '人工审核自动执行失败')
             }
+          } finally {
+            setManualRunAllRunning(false)
+            manualRunAllStopRef.current = false
           }
-
-          message.success(`人工审核自动绑定完成：累计bound=${totalBound} errors=${totalErrors}`)
-          setSelectedRowKeys([])
-          setManualExcludedIds([])
-          setListTab('bound')
-          setPage(1)
-          setPageSize(DEFAULT_PAGE_SIZE)
-          await queryClient.invalidateQueries({ queryKey: ['sku-master', 'list'] })
-        } catch (e: any) {
-          if (String(e?.name || '').toLowerCase().includes('abort')) {
-            message.error('单次请求超时（45s）已中止：请稍后重试（或缩小筛选范围/分批执行）')
-          } else {
-            message.error(e?.message || '人工审核自动执行失败')
-          }
-        } finally {
-          setManualRunAllRunning(false)
-          manualRunAllStopRef.current = false
-        }
+        })()
       },
     })
   }

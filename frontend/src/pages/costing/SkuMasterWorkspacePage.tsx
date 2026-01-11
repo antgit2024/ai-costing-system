@@ -152,7 +152,7 @@ const SkuMasterWorkspacePage = () => {
   // manual run-all (人工审核：对勾选项分批循环绑定，避免一次性超时)
   const [manualRunAllRunning, setManualRunAllRunning] = useState(false)
   const manualRunAllStopRef = useRef(false)
-  const [manualBulkMode, setManualBulkMode] = useState(true) // 按筛选条件“隐式全选”（跨页）
+  const [manualBulkMode, setManualBulkMode] = useState(false) // 默认：当页勾选模式；可切到“所有页勾选（跨页）”
   const [manualExcludedIds, setManualExcludedIds] = useState<string[]>([]) // 取消勾选=加入排除
   const [manualRunAllStatus, setManualRunAllStatus] = useState<{
     round: number
@@ -516,6 +516,101 @@ const SkuMasterWorkspacePage = () => {
       message.warning('当前为“命中候选视图”，请先退出候选视图再使用人工审核的一键跑完')
       return
     }
+    // 模式A：当页勾选模式（仅处理当前勾选）
+    if (!manualBulkMode) {
+      if (!selectedRowKeys.length) {
+        message.warning('请先在右侧列表勾选要绑定的记录')
+        return
+      }
+      const total = selectedRowKeys.length
+      Modal.confirm({
+        title: '确认一键跑完（当页勾选）？',
+        content: `将对当前勾选的 ${total} 条记录按 200 条/轮循环绑定（不会覆盖已有绑定）。`,
+        okText: '开始执行',
+        cancelText: '取消',
+        onOk: async () => {
+          setManualRunAllRunning(true)
+          manualRunAllStopRef.current = false
+          setManualRunAllStatus(null)
+
+          const BATCH_SIZE = 200
+          const idsAll = [...selectedRowKeys]
+          let cursor = 0
+          let totalBound = 0
+          let totalErrors = 0
+
+          try {
+            for (let round = 1; round <= 999; round += 1) {
+              if (manualRunAllStopRef.current) break
+              const batch = idsAll.slice(cursor, cursor + BATCH_SIZE)
+              if (!batch.length) break
+
+              const ac = new AbortController()
+              const timer = window.setTimeout(() => ac.abort(), 45_000)
+              let res: any
+              try {
+                res = await bindSkuMastersByModel(
+                  {
+                    model_id: selectedModelId,
+                    sku_master_ids: batch,
+                    requested_by: requestedBy || undefined,
+                  },
+                  { timeoutMs: 45_000, signal: ac.signal },
+                )
+              } finally {
+                window.clearTimeout(timer)
+              }
+
+              const bound = Number(res?.bound_count || 0)
+              const errors = (res?.errors ?? []).length
+              totalBound += bound
+              totalErrors += errors
+              cursor += batch.length
+
+              const now = new Date()
+              const stamp = `${now.getHours().toString().padStart(2, '0')}:${now
+                .getMinutes()
+                .toString()
+                .padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`
+              setManualRunAllStatus({
+                round,
+                last_bound: bound,
+                total_bound: totalBound,
+                processed: cursor,
+                total,
+                errors: totalErrors,
+                last_update: stamp,
+                note: '当页勾选模式：每轮最多 200 条；如需暂停可点“停止”。',
+              })
+
+              if (bound === 0) {
+                message.warning('本轮未产生绑定进展（bound=0），已自动停止；可能都已绑定或存在异常')
+                break
+              }
+            }
+
+            message.success(`人工审核自动绑定完成：累计bound=${totalBound} errors=${totalErrors}`)
+            setSelectedRowKeys([])
+            setListTab('bound')
+            setPage(1)
+            setPageSize(DEFAULT_PAGE_SIZE)
+            await queryClient.invalidateQueries({ queryKey: ['sku-master', 'list'] })
+          } catch (e: any) {
+            if (String(e?.name || '').toLowerCase().includes('abort')) {
+              message.error('单次请求超时（45s）已中止：请稍后重试（或减少勾选量）')
+            } else {
+              message.error(e?.message || '人工审核自动执行失败')
+            }
+          } finally {
+            setManualRunAllRunning(false)
+            manualRunAllStopRef.current = false
+          }
+        },
+      })
+      return
+    }
+
+    // 模式B：所有页勾选模式（按筛选条件隐式全选，跨页）
     if (listTab !== 'unbound') {
       message.warning('请先切到“未绑定”列表再执行（避免误操作）')
       return
@@ -538,7 +633,7 @@ const SkuMasterWorkspacePage = () => {
 
     let typed = ''
     Modal.confirm({
-      title: '确认一键跑完（按筛选条件“全选”绑定）？',
+      title: '确认一键跑完（所有页勾选/跨页）？',
       content: (
         <div>
           <div style={{ marginBottom: 8 }}>
@@ -550,7 +645,7 @@ const SkuMasterWorkspacePage = () => {
           </div>
           <Input placeholder="请输入上面的模型名称以确认" onChange={(e) => (typed = String(e.target.value || '').trim())} />
           <div style={{ marginTop: 8, color: '#999' }}>
-            本模式视为“全选筛选结果（跨页）”，你在本页取消勾选的条目会加入“排除列表”，不会写入绑定。
+            所有页勾选模式：视为“全选筛选结果（跨页）”，你在本页取消勾选的条目会加入“排除列表”，不会写入绑定。
           </div>
         </div>
       ),
@@ -849,7 +944,7 @@ const SkuMasterWorkspacePage = () => {
                         />
                         <Space wrap align="center">
                           <Tag color={manualBulkMode ? 'green' : 'default'}>
-                            {manualBulkMode ? '按筛选结果全选（跨页）' : '仅按勾选绑定'}
+                            {manualBulkMode ? '所有页勾选模式（跨页）' : '当页勾选模式'}
                           </Tag>
                           {manualBulkMode && manualExcludedIds.length ? (
                             <Tag color="orange">已排除 {manualExcludedIds.length}</Tag>
@@ -859,7 +954,7 @@ const SkuMasterWorkspacePage = () => {
                             onClick={() => {
                               setManualBulkMode((v) => !v)
                               setManualExcludedIds([])
-                              message.info(manualBulkMode ? '已切换为：仅按勾选绑定（并清空排除）' : '已切换为：按筛选结果全选（跨页）')
+                              message.info(manualBulkMode ? '已切换为：当页勾选模式（并清空排除）' : '已切换为：所有页勾选模式（跨页）')
                             }}
                           >
                             切换模式
@@ -893,7 +988,7 @@ const SkuMasterWorkspacePage = () => {
                           loading={manualRunAllRunning}
                           onClick={handleManualRunAll}
                         >
-                          一键跑完（按筛选条件全选）
+                          一键跑完（{manualBulkMode ? '所有页' : '当页'}）
                         </Button>
                         {manualRunAllRunning ? (
                           <Button
@@ -915,7 +1010,7 @@ const SkuMasterWorkspacePage = () => {
                           />
                         ) : null}
                         <Text type="secondary">
-                          提示：推荐先切到“未绑定”并用右侧筛选出目标集合；本模式默认全选筛选结果（跨页），取消勾选会加入排除。
+                          提示：当页模式=完全手动勾选；所有页模式=按筛选条件跨页全选，取消勾选会加入排除（执行前需模型名二次确认）。
                         </Text>
                       </Space>
                     ),

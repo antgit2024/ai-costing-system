@@ -20,7 +20,7 @@ import {
 } from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 import dayjs from 'dayjs'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import {
@@ -137,6 +137,8 @@ const SkuMasterWorkspacePage = () => {
   const [autoPreviewText, setAutoPreviewText] = useState<string>('')
   const [autoPreviewCandidates, setAutoPreviewCandidates] = useState<SkuMasterAutoBindPreviewItem[]>([])
   const [autoCandidatesOnly, setAutoCandidatesOnly] = useState(false)
+  const [autoRunAllRunning, setAutoRunAllRunning] = useState(false)
+  const autoRunAllStopRef = useRef(false)
 
   useEffect(() => {
     try {
@@ -509,6 +511,64 @@ const SkuMasterWorkspacePage = () => {
     })
   }
 
+  const handleAutoRunAll = () => {
+    if (autoRunAllRunning) return
+    Modal.confirm({
+      title: '一键跑完：自动绑定所有可命中候选？',
+      content:
+        '将自动循环执行：预览→绑定→再预览… 直到没有候选为止（不会覆盖已有绑定）。建议在无人操作时执行。',
+      okText: '开始执行',
+      cancelText: '取消',
+      onOk: async () => {
+        setAutoRunAllRunning(true)
+        autoRunAllStopRef.current = false
+        let totalBound = 0
+        let totalSkipped = 0
+        let totalErrors = 0
+        try {
+          // 后端限制：limit<=2000，scan_limit<=500000
+          for (let round = 1; round <= 999; round += 1) {
+            if (autoRunAllStopRef.current) break
+            const res: any = await autoBindSkuMastersExecute({
+              limit: 2000,
+              scan_limit: 500000,
+              requested_by: requestedBy || undefined,
+              // 不传 sku_master_ids：由后端按 preview 的 items 批量绑定
+            } as any)
+            const bound = Number(res?.bound_count || 0)
+            const skipped = Number(res?.skipped_already_bound || 0)
+            const errors = (res?.errors ?? []).length
+            totalBound += bound
+            totalSkipped += skipped
+            totalErrors += errors
+
+            const nextItems = (res?.preview?.items ?? []) as any[]
+            setAutoPreviewText(
+              `自动执行中：round=${round} 本轮bound=${bound} 累计bound=${totalBound}（剩余候选≈${nextItems.length}）`,
+            )
+
+            // 没有候选了，或本轮没有任何绑定进展 -> 结束（避免死循环）
+            if (!nextItems.length || bound === 0) break
+          }
+
+          message.success(`自动执行完成：累计bound=${totalBound} skipped=${totalSkipped} errors=${totalErrors}`)
+          // 执行完后：回到“已绑定”列表，并刷新
+          setAutoCandidatesOnly(false)
+          setSelectedRowKeys([])
+          setListTab('bound')
+          setPage(1)
+          setPageSize(DEFAULT_PAGE_SIZE)
+          await queryClient.invalidateQueries({ queryKey: ['sku-master', 'list'] })
+        } catch (e: any) {
+          message.error(e?.message || '自动执行失败')
+        } finally {
+          setAutoRunAllRunning(false)
+          autoRunAllStopRef.current = false
+        }
+      },
+    })
+  }
+
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
@@ -597,6 +657,27 @@ const SkuMasterWorkspacePage = () => {
                         >
                           执行绑定（仅选中候选）
                         </Button>
+                        <Button
+                          block
+                          type="primary"
+                          danger
+                          disabled={autoRunAllRunning || autoExecuteMutation.isPending || autoPreviewMutation.isPending}
+                          loading={autoRunAllRunning}
+                          onClick={handleAutoRunAll}
+                        >
+                          一键跑完（自动循环执行）
+                        </Button>
+                        {autoRunAllRunning ? (
+                          <Button
+                            block
+                            onClick={() => {
+                              autoRunAllStopRef.current = true
+                              message.info('已请求停止：将在本轮执行结束后停止')
+                            }}
+                          >
+                            停止自动执行
+                          </Button>
+                        ) : null}
                         {autoPreviewText ? <Alert type="info" showIcon message={autoPreviewText} /> : null}
                         {autoCandidatesOnly ? (
                           <Button

@@ -234,6 +234,25 @@ const getBomDeriveIssue = (record: Material): string | null => {
 const getBomDisplayValue = (record: Material) =>
   typeof record.is_bom_material === 'boolean' ? record.is_bom_material : isBomMaterial(record)
 
+const getUsageClass = (record: Material): 'direct' | 'conditional' | 'indirect' => {
+  const meta = (record.metadata_json as Record<string, any>) ?? {}
+  const raw = String(meta.usage_class ?? '').trim().toLowerCase()
+  if (raw === 'direct' || raw === 'conditional' || raw === 'indirect') return raw as any
+  const bom = getBomDisplayValue(record)
+  return bom ? 'direct' : 'indirect'
+}
+
+const MATERIAL_USAGE_OPTIONS = [
+  { label: '直接BOM物料（产品料/可被变体替换）', value: 'direct' },
+  { label: '条件物料（包装/随订单条件出现，按单扣库）', value: 'conditional' },
+  { label: '间接耗材（不进BOM/周期领用核算）', value: 'indirect' },
+] as const
+
+const getUsageLabel = (v: any) => {
+  const s = String(v ?? '').trim().toLowerCase()
+  return (MATERIAL_USAGE_OPTIONS as unknown as any[]).find((x) => x.value === s)?.label || '未设置'
+}
+
 const getErrorMessage = (error: unknown): string => {
   if (isAxiosError(error)) {
     const detail = error.response?.data?.detail
@@ -326,6 +345,7 @@ const getMaterialTypeLabel = (record: Material): string => {
 
 interface CostFormValues {
   is_bom_material?: boolean
+  usage_class?: 'direct' | 'conditional' | 'indirect'
   bom_unit?: string
   conversion_purchase_to_bom?: number
   inventory_unit?: string
@@ -590,6 +610,7 @@ const MaterialMasterPage = () => {
         : undefined
     costForm.setFieldsValue({
       is_bom_material: getBomDisplayValue(record),
+      usage_class: getUsageClass(record),
       bom_unit: normalizeBomUnit(record.unit) ?? BOM_UNIT_OPTIONS[0].value,
       conversion_purchase_to_bom: parseDecimal(record.conversion_purchase_to_bom),
       inventory_unit: record.purchase_unit || undefined,
@@ -630,6 +651,13 @@ const MaterialMasterPage = () => {
       typeof values.is_bom_material === 'boolean'
         ? values.is_bom_material
         : getBomDisplayValue(editingMaterial)
+    const nextUsage = (values.usage_class as any) || getUsageClass(editingMaterial)
+    // guardrail: non-BOM => indirect; BOM => only direct/conditional
+    const usageClass: 'direct' | 'conditional' | 'indirect' = nextIsBom
+      ? nextUsage === 'indirect'
+        ? 'direct'
+        : nextUsage
+      : 'indirect'
     // 保存校验：计量方式与 BOM 单位必须一致（避免后续算价/扣库口径错配）
     const nextCalcMethod = (values.calculation_method ?? editingMaterial.calculation_method) as any
     const nextBomUnit = normalizeBomUnit(values.bom_unit || normalizeBomUnit(editingMaterial.unit))
@@ -655,6 +683,7 @@ const MaterialMasterPage = () => {
       conversion_bom_to_inventory: conversionInventory,
       unit: values.bom_unit || normalizeBomUnit(editingMaterial.unit),
       metadata_json: {
+        usage_class: usageClass,
         local_description: values.local_description?.trim()
           ? values.local_description.trim()
           : null,
@@ -1288,6 +1317,9 @@ const MaterialMasterPage = () => {
                 <Descriptions.Item label="本地描述">
                   {(metadata as any)?.local_description || '-'}
                 </Descriptions.Item>
+                <Descriptions.Item label="物料用途（本地）">
+                  {getUsageLabel(getUsageClass(editingMaterial))}
+                </Descriptions.Item>
                 <Descriptions.Item label="最近同步">
                   {dayjs(editingMaterial.updated_at).format('YYYY-MM-DD HH:mm')}
                 </Descriptions.Item>
@@ -1407,6 +1439,13 @@ const MaterialMasterPage = () => {
                 </Row>
                 <Form.Item label="是否 BOM 物料" name="is_bom_material" valuePropName="checked">
                   <Switch />
+                </Form.Item>
+                <Form.Item
+                  label="物料用途（本地分类）"
+                  name="usage_class"
+                  extra="专业口径：直接BOM=产品直接料；条件物料=包装/随订单条件出现；间接耗材=不进BOM（周期领用核算）。"
+                >
+                  <Select options={MATERIAL_USAGE_OPTIONS as unknown as any[]} placeholder="请选择" />
                 </Form.Item>
                 <Form.Item
                   label="本地描述"

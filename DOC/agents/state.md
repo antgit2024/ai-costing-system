@@ -1,5 +1,15 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-12（Frontend Agent 接力：恢复包校验 + 防误提交）
+  - 产物：
+    - 防误提交：`.gitignore` 精确忽略本地临时大表单（`DOC/基础表单/绮妙1-10平台商品列表.xlsx`、`DOC/基础表单/ERP品商品下载原始列表.xlsx`），不影响仓库中已版本化的 fixtures/chunks 表单
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的 4 条 `grep -nF ...` 校验文档存在性
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+  - 下一步：
+    - 若确需把上述两个 `.xlsx` 纳入版本化：先确认是否需要“chunk 化”/脱敏，再移除 `.gitignore` 精确忽略并以单独 commit 提交
+
 - **最近校对（北京时间 GMT+8）**：2026-01-11（Integration/Factory：手机端“商品查询/生产扫码看板”闭环）
   - 产物（前端）：
     - 新增页面：`/costing/production-scan`（`frontend/src/pages/costing/ProductionScanPage.tsx`）

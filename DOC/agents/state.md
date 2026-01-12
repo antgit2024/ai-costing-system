@@ -1,5 +1,16 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-12（Structure Standards：code 收口 + 历史中文 code 改码入口）
+  - 产物（前端）：
+    - 结构标准 `code` 强约束：仅允许 `a-z0-9_` 且需以字母开头（长度 3~64）；输入会自动规范化（中文会转拼音）
+    - 编辑结构标准新增 **“改 code（危险）”**：走 taxonomy PATCH name，用于把历史中文 code（如“印染地毯”）改为英文/拼音
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的 4 条 `grep -nF ...` 校验文档存在性
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+  - 备注/风险：
+    - `code` 作为下游引用字符串键（版本/模块可能直接存 code），改码不会自动迁移历史引用；建议仅用于“刚建错/尚未被引用”的条目，或配套做数据迁移
+
 - **最近校对（北京时间 GMT+8）**：2026-01-12（Frontend Agent 接力：恢复包校验 + 防误提交）
   - 产物：
     - 防误提交：`.gitignore` 精确忽略本地临时大表单（`DOC/基础表单/绮妙1-10平台商品列表.xlsx`、`DOC/基础表单/ERP品商品下载原始列表.xlsx`），不影响仓库中已版本化的 fixtures/chunks 表单

@@ -460,6 +460,15 @@ export const deleteStructureStandard = async (id: string): Promise<void> => {
   await archiveTaxonomyItem(id)
 }
 
+// Danger: rename code (taxonomy.name). This may break references that store structure_standard_code as a plain string.
+// Only use when you are sure downstream references have been migrated/are unused.
+export const renameStructureStandardCode = async (id: string, nextCode: string): Promise<StructureStandardRead> => {
+  const name = String(nextCode ?? '').trim()
+  if (!name) throw new Error('code 不能为空')
+  const updated = await updateTaxonomyItem(id, { name })
+  return normalizeStructureStandard(updated)
+}
+
 export const fetchInitiativeById = async (id: string): Promise<Initiative> => {
   const response = await plannerClient.get(`/initiatives/${id}`)
   return response.data

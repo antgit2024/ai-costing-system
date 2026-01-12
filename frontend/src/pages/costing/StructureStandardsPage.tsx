@@ -9,6 +9,7 @@ import {
   deactivateStructureStandard,
   deleteStructureStandard,
   fetchStructureStandards,
+  renameStructureStandardCode,
   updateStructureStandard,
 } from '@/services/planner'
 import type { StructureStandardRead, StructureStandardStatus } from '@/types/planner'
@@ -30,10 +31,14 @@ const normalizeSlots = (raw: any): string[] => {
 
 type SlotRow = { cn?: string; code?: string; enabled?: boolean; remark?: string; driver_quantity?: string }
 
+// code 口径：仅允许英文/数字/下划线（兼容拼音），必须以字母开头
+const STRUCTURE_CODE_RE = /^[a-z][a-z0-9_]{2,63}$/
+
 export default function StructureStandardsPage() {
   const queryClient = useQueryClient()
   const [filtersForm] = Form.useForm()
   const [editorForm] = Form.useForm()
+  const [renameForm] = Form.useForm()
 
   const [filters, setFilters] = useState<{ search?: string; status?: 'all' | StructureStandardStatus }>({
     status: 'all',
@@ -44,6 +49,8 @@ export default function StructureStandardsPage() {
   const [drawerMode, setDrawerMode] = useState<DrawerMode>('create')
   const [activeRecord, setActiveRecord] = useState<StructureStandardRead | null>(null)
   const [saving, setSaving] = useState(false)
+  const [renameOpen, setRenameOpen] = useState(false)
+  const [renaming, setRenaming] = useState(false)
 
   const listQuery = useQuery({
     queryKey: ['structure-standards', filters, pagination],
@@ -106,6 +113,16 @@ export default function StructureStandardsPage() {
       is_active: record.status === 'active',
     })
     setDrawerOpen(true)
+  }
+
+  const openRenameCode = () => {
+    if (!activeRecord) return
+    const suggested = toPinyinCode(activeRecord.code || activeRecord.name || '')
+    renameForm.setFieldsValue({
+      current_code: activeRecord.code,
+      next_code: suggested,
+    })
+    setRenameOpen(true)
   }
 
   const columns: ColumnsType<StructureStandardRead> = useMemo(
@@ -282,7 +299,7 @@ export default function StructureStandardsPage() {
   const handleSave = async () => {
     await editorForm.validateFields()
     const values = editorForm.getFieldsValue()
-    const code = String(values.code ?? '').trim()
+    const code = toPinyinCode(String(values.code ?? ''))
     const name = String(values.name ?? '').trim()
     const rows: SlotRow[] = Array.isArray(values.slot_rows) ? values.slot_rows : []
     const slot_display_names: Record<string, string> = {}
@@ -310,8 +327,8 @@ export default function StructureStandardsPage() {
         message.error('code 必填')
         return
       }
-      if (code.length < 3 || code.length > 64) {
-        message.error('code 长度需在 3~64')
+      if (!STRUCTURE_CODE_RE.test(code)) {
+        message.error('code 仅允许英文/数字/下划线，且需以字母开头（长度 3~64）')
         return
       }
     }
@@ -438,10 +455,33 @@ export default function StructureStandardsPage() {
             name="code"
             rules={[
               { required: true, message: '请输入 code' },
-              { min: 3, max: 64, message: '长度需在 3~64' },
+              {
+                validator: async (_, v) => {
+                  const normalized = toPinyinCode(String(v ?? ''))
+                  if (!normalized) throw new Error('请输入 code')
+                  if (!STRUCTURE_CODE_RE.test(normalized)) {
+                    throw new Error('仅允许英文/数字/下划线，且需以字母开头（长度 3~64）')
+                  }
+                },
+              },
             ]}
+            normalize={(v) => toPinyinCode(String(v ?? ''))}
           >
-            <Input placeholder="例如 pillowcase_v1" disabled={drawerMode === 'edit'} />
+            <Input
+              placeholder="例如 yiran_rug_v1"
+              disabled={drawerMode === 'edit'}
+              addonAfter={
+                drawerMode === 'edit' ? (
+                  <Button size="small" onClick={openRenameCode}>
+                    改 code
+                  </Button>
+                ) : (
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    自动规范化
+                  </Text>
+                )
+              }
+            />
           </Form.Item>
           <Form.Item label="name" name="name" rules={[{ required: true, message: '请输入名称' }]}>
             <Input placeholder="例如 枕套（v1）" />
@@ -541,6 +581,80 @@ export default function StructureStandardsPage() {
           </Form.Item>
         </Form>
       </Drawer>
+
+      <Modal
+        open={renameOpen}
+        title="改 code（危险操作）"
+        okText="确认修改"
+        cancelText="取消"
+        okButtonProps={{ danger: true, loading: renaming }}
+        onCancel={() => setRenameOpen(false)}
+        onOk={async () => {
+          if (!activeRecord) return
+          await renameForm.validateFields()
+          const next = toPinyinCode(String(renameForm.getFieldValue('next_code') ?? ''))
+          if (!STRUCTURE_CODE_RE.test(next)) {
+            message.error('新 code 非法：仅允许英文/数字/下划线，且需以字母开头（长度 3~64）')
+            return
+          }
+          if (next === activeRecord.code) {
+            message.info('code 未变化')
+            setRenameOpen(false)
+            return
+          }
+          setRenaming(true)
+          try {
+            const updated = await renameStructureStandardCode(activeRecord.id, next)
+            setActiveRecord(updated)
+            editorForm.setFieldValue('code', updated.code)
+            message.success('code 已修改（请注意：历史引用可能需要同步迁移）')
+            setRenameOpen(false)
+            queryClient.invalidateQueries({ queryKey: ['structure-standards'] })
+          } catch (err: any) {
+            message.error(err?.response?.data?.detail ?? err?.message ?? '修改失败（可能需要管理员密钥）')
+          } finally {
+            setRenaming(false)
+          }
+        }}
+      >
+        <Alert
+          type="warning"
+          showIcon
+          message="风险提示"
+          description={
+            <div>
+              <div>结构标准 code 是下游引用的字符串键（模型版本/工艺模块可能直接存 code）。</div>
+              <div>
+                若该 code 已被引用，改码后旧引用不会自动迁移，可能导致筛选/推荐失效。建议仅用于“刚建错/尚未被引用”的条目。
+              </div>
+            </div>
+          }
+          style={{ marginBottom: 12 }}
+        />
+        <Form form={renameForm} layout="vertical">
+          <Form.Item label="当前 code" name="current_code">
+            <Input disabled />
+          </Form.Item>
+          <Form.Item
+            label="新 code（英文/拼音）"
+            name="next_code"
+            rules={[
+              { required: true, message: '请输入新 code' },
+              {
+                validator: async (_, v) => {
+                  const normalized = toPinyinCode(String(v ?? ''))
+                  if (!STRUCTURE_CODE_RE.test(normalized)) {
+                    throw new Error('仅允许英文/数字/下划线，且需以字母开头（长度 3~64）')
+                  }
+                },
+              },
+            ]}
+            normalize={(v) => toPinyinCode(String(v ?? ''))}
+          >
+            <Input placeholder="例如 yiran_rug" />
+          </Form.Item>
+        </Form>
+      </Modal>
     </Space>
   )
 }

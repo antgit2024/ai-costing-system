@@ -1,5 +1,13 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-12（Standard Models：班组下拉隐藏ID仅展示名称）
+  - 产物（前端）：
+    - 工序行“班组”下拉选项仅展示班组名称（不显示短ID）；内部 value 仍使用 `team.id` 并写入 `metadata_json.team_id`（不影响工资归属主键）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的 4 条 `grep -nF ...` 校验文档存在性
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-12（Standard Models：班组切换确认不再依赖单价差异）
   - 产物（前端）：
     - 班组切换确认弹窗触发条件改为：只要 `team_id` 发生变化就弹窗确认（避免“同单价但归属变更”导致误记工资）

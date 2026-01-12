@@ -5028,10 +5028,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                 const curId = String(meta?.team_id ?? '').trim()
                                 const labelOf = (it: any) => {
                                   const name = String(it?.name ?? '').trim()
-                                  const id = String(it?.id ?? '').trim()
-                                  if (!name && !id) return '-'
-                                  if (!id) return name
-                                  return `${name} · ${id.slice(0, 8)}`
+                                  return name || '-'
                                 }
                                 if (curId) return (
                               <Select

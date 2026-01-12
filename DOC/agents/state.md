@@ -1,5 +1,13 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-12（Sample Models：新增版本默认“版本名称”）
+  - 产物（前端）：
+    - 打样管理（`/costing/sample-models`）在“新增版本/复制版本”弹窗中，**版本名称输入框默认预填**（写入 `metadata_json.ui_label`，并在前端优先展示），用户可直接编辑再提交
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的 4 条 `grep -nF ...` 校验文档存在性
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-12（Structure Standards：code 收口 + 历史中文 code 改码入口）
   - 产物（前端）：
     - 结构标准 `code` 强约束：仅允许 `a-z0-9_` 且需以字母开头（长度 3~64）；输入会自动规范化（中文会转拼音）

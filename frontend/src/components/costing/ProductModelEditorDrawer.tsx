@@ -2435,10 +2435,26 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   const [versionOpLoading, setVersionOpLoading] = useState(false)
   const [derivingStandardFromSampleId, setDerivingStandardFromSampleId] = useState<string | null>(null)
 
+  const suggestVersionUiLabel = (mode: 'create' | 'copy', sourceId?: string | null): string => {
+    const m = modelQuery.data as any
+    const modelCode = String(m?.model_code ?? m?.code ?? '').trim()
+    const modelName = String(m?.model_name ?? m?.name ?? '').trim()
+    const base = modelCode && modelName ? `${modelCode}:${modelName}` : modelName || modelCode || '版本'
+    if (mode === 'copy') {
+      const sid = String(sourceId ?? '').trim()
+      const src = sid ? (versions ?? []).find((v) => v.id === sid) : null
+      const srcName = src ? getVersionDisplayName(src) : ''
+      return srcName ? `${srcName}（复制）` : `${base}（复制）`
+    }
+    const kindLabel = desiredKind === 'sample' ? '打样' : '标准'
+    const seq = ((filteredVersions ?? []).length || 0) + 1
+    return `${base} ${kindLabel}v${seq}`
+  }
+
   const openCreateVersionModal = () => {
     setVersionOpMode('create')
     setVersionOpSourceId(null)
-    setVersionOpName('')
+    setVersionOpName(suggestVersionUiLabel('create'))
     setVersionOpOpen(true)
   }
 
@@ -2450,9 +2466,19 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     }
     setVersionOpMode('copy')
     setVersionOpSourceId(sid)
-    setVersionOpName('')
+    setVersionOpName(suggestVersionUiLabel('copy', sid))
     setVersionOpOpen(true)
   }
+
+  // If model/versions data arrives later, fill a default name once (do not override user edits).
+  useEffect(() => {
+    if (!versionOpOpen) return
+    if (versionOpName.trim()) return
+    const next =
+      versionOpMode === 'copy' ? suggestVersionUiLabel('copy', versionOpSourceId) : suggestVersionUiLabel('create', null)
+    if (next.trim()) setVersionOpName(next)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [versionOpOpen, modelQuery.data, filteredVersions?.length])
 
   const runVersionOp = async () => {
     if (!modelId) return

@@ -8,6 +8,17 @@
     - Docs：按 `DOC/agents/commands.md` 的 4 条 `grep -nF ...` 校验文档存在性
     - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-12（Materials：物料详情“成本参数”用途口径收口 + 选择器隐藏间接耗材）
+  - 产物（前端）：
+    - `/costing/materials` → “物料详情抽屉 → 成本参数”：将“是否 BOM 物料 + 物料用途（本地分类）”合并为一个三选一：**直接BOM / 条件物料 / 间接耗材**
+      - 保存口径：选择 **间接耗材** → 自动写 `is_bom_material=false`；选择 **直接BOM/条件物料** → 自动写 `is_bom_material=true`，并写入 `metadata_json.usage_class`
+      - 默认回显：历史 `is_bom_material=true` 的物料，会默认回显为“直接BOM”（满足“保留原勾选=直接BOM”）
+    - “物料选择”（真实物料）：在工艺模块 / 虚拟物料 / 模型清单编辑等新增物料入口的选择器里，默认 **不展示间接耗材**
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+  - 备注（Phase0）：
+    - 目前仅做标记与筛选，不改变 BOM 输出/扣库逻辑；条件物料的“条件表达式/生效规则”后续再做闭环。
+
 - **最近校对（北京时间 GMT+8）**：2026-01-12（Standard Models：班组切换确认不再依赖单价差异）
   - 产物（前端）：
     - 班组切换确认弹窗触发条件改为：只要 `team_id` 发生变化就弹窗确认（避免“同单价但归属变更”导致误记工资）

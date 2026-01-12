@@ -237,9 +237,13 @@ const getBomDisplayValue = (record: Material) =>
 const getUsageClass = (record: Material): 'direct' | 'conditional' | 'indirect' => {
   const meta = (record.metadata_json as Record<string, any>) ?? {}
   const raw = String(meta.usage_class ?? '').trim().toLowerCase()
-  if (raw === 'direct' || raw === 'conditional' || raw === 'indirect') return raw as any
   const bom = getBomDisplayValue(record)
-  return bom ? 'direct' : 'indirect'
+  // 口径收口：非 BOM 一律视为间接耗材（避免历史脏数据造成“非BOM但显示条件物料”）
+  if (!bom) return 'indirect'
+  // BOM=true 时，只允许 direct/conditional；若历史写了 indirect，回退为 direct
+  if (raw === 'conditional') return 'conditional'
+  if (raw === 'direct') return 'direct'
+  return 'direct'
 }
 
 const MATERIAL_USAGE_OPTIONS = [
@@ -344,7 +348,6 @@ const getMaterialTypeLabel = (record: Material): string => {
 }
 
 interface CostFormValues {
-  is_bom_material?: boolean
   usage_class?: 'direct' | 'conditional' | 'indirect'
   bom_unit?: string
   conversion_purchase_to_bom?: number
@@ -609,7 +612,6 @@ const MaterialMasterPage = () => {
         ? Number((1 / convPurchase).toFixed(6))
         : undefined
     costForm.setFieldsValue({
-      is_bom_material: getBomDisplayValue(record),
       usage_class: getUsageClass(record),
       bom_unit: normalizeBomUnit(record.unit) ?? BOM_UNIT_OPTIONS[0].value,
       conversion_purchase_to_bom: parseDecimal(record.conversion_purchase_to_bom),
@@ -647,17 +649,11 @@ const MaterialMasterPage = () => {
     const conversionPurchase = toFiniteNumber(values.conversion_purchase_to_bom)
     const conversionInventory = toFiniteNumber(values.conversion_bom_to_inventory)
     const purchaseUnitPrice = toFiniteNumber(editingMaterial.unit_price)
-    const nextIsBom =
-      typeof values.is_bom_material === 'boolean'
-        ? values.is_bom_material
-        : getBomDisplayValue(editingMaterial)
     const nextUsage = (values.usage_class as any) || getUsageClass(editingMaterial)
-    // guardrail: non-BOM => indirect; BOM => only direct/conditional
-    const usageClass: 'direct' | 'conditional' | 'indirect' = nextIsBom
-      ? nextUsage === 'indirect'
-        ? 'direct'
-        : nextUsage
-      : 'indirect'
+    // guardrail: indirect => 非BOM；direct/conditional => BOM
+    const usageClass: 'direct' | 'conditional' | 'indirect' =
+      nextUsage === 'conditional' || nextUsage === 'indirect' ? nextUsage : 'direct'
+    const nextIsBom = usageClass !== 'indirect'
     // 保存校验：计量方式与 BOM 单位必须一致（避免后续算价/扣库口径错配）
     const nextCalcMethod = (values.calculation_method ?? editingMaterial.calculation_method) as any
     const nextBomUnit = normalizeBomUnit(values.bom_unit || normalizeBomUnit(editingMaterial.unit))
@@ -1437,13 +1433,10 @@ const MaterialMasterPage = () => {
                     </Form.Item>
                   </Col>
                 </Row>
-                <Form.Item label="是否 BOM 物料" name="is_bom_material" valuePropName="checked">
-                  <Switch />
-                </Form.Item>
                 <Form.Item
-                  label="物料用途（本地分类）"
+                  label="物料用途"
                   name="usage_class"
-                  extra="专业口径：直接BOM=产品直接料；条件物料=包装/随订单条件出现；间接耗材=不进BOM（周期领用核算）。"
+                  extra="成本口径（Phase0）：只做标记。直接BOM/条件物料=进BOM；间接耗材=不进BOM（周期领用核算）。"
                 >
                   <Select options={MATERIAL_USAGE_OPTIONS as unknown as any[]} placeholder="请选择" />
                 </Form.Item>

@@ -38,6 +38,11 @@ export interface MaterialPickerDrawerProps {
   defaultPageSize?: number
   /** 可选：真实物料查询额外参数（例如 usage_class=conditional） */
   realQueryOverrides?: Partial<MaterialQueryParams>
+  /**
+   * 可选：真实物料是否排除“间接耗材”（usage_class=indirect）。
+   * 默认 true：在“新增物料”场景避免把周期领用耗材混进BOM/模型清单/工艺模块。
+   */
+  excludeIndirectReal?: boolean
 }
 
 export default function MaterialPickerDrawer({
@@ -52,6 +57,7 @@ export default function MaterialPickerDrawer({
   confirmText,
   defaultPageSize = 10,
   realQueryOverrides,
+  excludeIndirectReal = true,
 }: MaterialPickerDrawerProps) {
   const [activeTab, setActiveTab] = useState<MaterialPickerTab>(initialTab)
   const [onlySameUnit, setOnlySameUnit] = useState(false)
@@ -120,10 +126,20 @@ export default function MaterialPickerDrawer({
       is_active: true,
       is_bom_material: onlyBom ? true : undefined,
       ...(realQueryOverrides || {}),
+      // 口径收口（Phase0）：真实物料选择器默认不展示“间接耗材”
+      ...(excludeIndirectReal ? { usage_class: 'direct' } : {}),
       page: realPagination.current,
       page_size: realPagination.pageSize,
     }),
-    [onlyBom, realCategory, realPagination.current, realPagination.pageSize, realQueryOverrides, realSearch],
+    [
+      excludeIndirectReal,
+      onlyBom,
+      realCategory,
+      realPagination.current,
+      realPagination.pageSize,
+      realQueryOverrides,
+      realSearch,
+    ],
   )
 
   const realQuery = useQuery({

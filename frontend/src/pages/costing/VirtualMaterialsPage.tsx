@@ -2261,6 +2261,8 @@ const MaterialSelectModal = ({ open, onClose, onConfirm }: MaterialSelectModalPr
           page_size: pagination.pageSize,
           is_active: true,
           is_bom_material: onlyBom || undefined,
+          // Phase0：真实物料选择器不展示“间接耗材”（周期领用核算）
+          usage_class: 'direct',
         },
         { signal },
       ),

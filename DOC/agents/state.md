@@ -1,5 +1,14 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-12（Standard Models：班组切换确认不再依赖单价差异）
+  - 产物（前端）：
+    - 班组切换确认弹窗触发条件改为：只要 `team_id` 发生变化就弹窗确认（避免“同单价但归属变更”导致误记工资）
+    - 确认后：若班组配置了默认单价则回填；未配置则仅更新归属
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的 4 条 `grep -nF ...` 校验文档存在性
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-12（Standard Models：班组切换确认弹窗取消不改下拉 + 下拉展示短ID）
   - 产物（前端）：
     - 班组切换弹窗点击“取消”时：不更新班组选择、不写入 `team_id`（用户要求：取消=不变更）

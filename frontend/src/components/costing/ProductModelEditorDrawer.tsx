@@ -568,6 +568,12 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
 
     const oldRate = parseMaybeNumber(row.rate_per_minute ?? (row?.metadata_json ?? {})?.rate_per_minute ?? 0)
     const hasDefault = Number.isFinite(defaultRate)
+    const rowMeta0 = ((row?.metadata_json as any) ?? {}) as any
+    const curTeamId = String(rowMeta0?.team_id ?? '').trim() || undefined
+    const curTeamName = String(row?.team_name ?? '').trim() || undefined
+
+    // No change → do nothing
+    if (String(curTeamId ?? '') === String(teamId ?? '')) return
 
     const commit = (rateOverride?: number) => {
       const finalRate = rateOverride != null ? rateOverride : row.rate_per_minute
@@ -588,22 +594,21 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       }
     }
 
-    // 仅设置班组（无默认单价）或默认=当前值 → 无需确认
-    if (!hasDefault || Math.abs(defaultRate - oldRate) < 1e-9) {
-      commit(undefined)
-      return
-    }
-
     Modal.confirm({
-      title: '确认更新单价（元/分）？',
+      title: hasDefault ? '确认更新班组与单价（元/分）？' : '确认更新班组归属？',
       content: (
         <div>
           <div>
-            已选择班组：<Text code>{teamName || teamId || '-'}</Text>
+            当前班组：<Text code>{curTeamName || curTeamId || '-'}</Text>
+          </div>
+          <div style={{ marginTop: 8 }}>
+            目标班组：<Text code>{teamName || teamId || '-'}</Text>
           </div>
           <div style={{ marginTop: 8 }}>
             <Text type="secondary">
-              原单价(元/分)：{Number.isFinite(oldRate) ? oldRate.toFixed(2) : '0.00'}，现修改为：{defaultRate.toFixed(2)}。
+              {hasDefault
+                ? `原单价(元/分)：${Number.isFinite(oldRate) ? oldRate.toFixed(2) : '0.00'}，现修改为：${defaultRate.toFixed(2)}。`
+                : '该班组未配置默认单价，将仅更新“班组归属”（不会自动改单价）。'}
               如需重新修改可进入调参面板手动调整。
             </Text>
           </div>
@@ -611,7 +616,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       ),
       okText: '确认',
       cancelText: '取消',
-      onOk: () => commit(defaultRate),
+      onOk: () => commit(hasDefault ? defaultRate : undefined),
       // 取消：不应改变下拉选择/不应写入 team_id（用户明确要求）
       onCancel: () => {},
     })

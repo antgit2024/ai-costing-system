@@ -539,6 +539,18 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     enabled: open,
   })
 
+  const parseMaybeNumber = (raw: any): number => {
+    if (raw == null) return NaN
+    if (typeof raw === 'number') return Number.isFinite(raw) ? raw : NaN
+    const s = String(raw ?? '').trim()
+    if (!s) return NaN
+    // Extract first number from string like "0.8元/分"
+    const m = s.match(/-?\d+(?:\.\d+)?/)
+    if (!m) return NaN
+    const v = Number.parseFloat(m[0])
+    return Number.isFinite(v) ? v : NaN
+  }
+
   const applyTeamDefaultRateToProcessRow = (rowIndex: number, nextTeamName?: string) => {
     const idx = Number(rowIndex)
     if (!Number.isFinite(idx) || idx < 0) return
@@ -547,14 +559,14 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     const teamName = String(nextTeamName ?? '').trim() || undefined
     const team = teamName ? items.find((it: any) => String(it?.name ?? '').trim() === teamName) : null
     const meta = (team?.metadata ?? team?.metadata_json ?? {}) as any
-    const defaultRate = meta?.rate_per_minute != null ? Number(meta.rate_per_minute) : NaN
+    const defaultRate = parseMaybeNumber(meta?.rate_per_minute)
 
     const next = (processes as any[]).slice()
     const row = next[idx]
     if (!row) return
 
-    const oldRate = Number(row.rate_per_minute ?? 0)
-    const hasDefault = Number.isFinite(defaultRate) && defaultRate > 0
+    const oldRate = parseMaybeNumber(row.rate_per_minute ?? (row?.metadata_json ?? {})?.rate_per_minute ?? 0)
+    const hasDefault = Number.isFinite(defaultRate)
 
     const commit = (rateOverride?: number) => {
       const finalRate = rateOverride != null ? rateOverride : row.rate_per_minute

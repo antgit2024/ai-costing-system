@@ -1,5 +1,13 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-12（Standard Models：班组默认单价回填无变化问题修复）
+  - 产物（前端）：
+    - 班组默认单价 `rate_per_minute` 解析增强：支持从字符串中提取数值（如 `0.8元/分`），并兼容旧单价落在 `row.metadata_json.rate_per_minute` 的情况
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的 4 条 `grep -nF ...` 校验文档存在性
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-12（Standard Models：工序组“班组→默认分钟单价”回填）
   - 产物（前端）：
     - 标准模型管理（`/costing/standard-models`）→ 清单编辑 → 工序组“班组”下拉：切换班组时读取“分类管理→班组管理”的 `默认单价(元/分)`，弹窗提示“原价→新价”，确认后自动回填到该工序行 `rate_per_minute`（调参面板同口径）

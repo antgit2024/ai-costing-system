@@ -1,5 +1,14 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-12（Standard Models：班组归属改为 team_id 主键）
+  - 产物（前端）：
+    - 工序行“班组”下拉选择的 value 改为 taxonomy `team.id`（稳定主键），保存到 `process_row.metadata_json.team_id`
+    - 同时保留 `team_name` 仅用于展示/兼容历史；历史仅有 `team_name` 的行会在 UI 层尝试映射出对应 `team_id`
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的 4 条 `grep -nF ...` 校验文档存在性
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-12（Standard Models：班组默认单价回填无变化问题修复）
   - 产物（前端）：
     - 班组默认单价 `rate_per_minute` 解析增强：支持从字符串中提取数值（如 `0.8元/分`），并兼容旧单价落在 `row.metadata_json.rate_per_minute` 的情况

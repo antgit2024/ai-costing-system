@@ -551,15 +551,16 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     return Number.isFinite(v) ? v : NaN
   }
 
-  const applyTeamDefaultRateToProcessRow = (rowIndex: number, nextTeamName?: string) => {
+  const applyTeamDefaultRateToProcessRow = (rowIndex: number, nextTeamId?: string) => {
     const idx = Number(rowIndex)
     if (!Number.isFinite(idx) || idx < 0) return
 
     const items = (taxonomyTeamQuery.data?.items ?? []) as any[]
-    const teamName = String(nextTeamName ?? '').trim() || undefined
-    const team = teamName ? items.find((it: any) => String(it?.name ?? '').trim() === teamName) : null
+    const teamId = String(nextTeamId ?? '').trim() || undefined
+    const team = teamId ? items.find((it: any) => String(it?.id ?? '').trim() === teamId) : null
     const meta = (team?.metadata ?? team?.metadata_json ?? {}) as any
     const defaultRate = parseMaybeNumber(meta?.rate_per_minute)
+    const teamName = String(team?.name ?? '').trim() || undefined
 
     const next = (processes as any[]).slice()
     const row = next[idx]
@@ -570,9 +571,14 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
 
     const commit = (rateOverride?: number) => {
       const finalRate = rateOverride != null ? rateOverride : row.rate_per_minute
+      const rowMeta = ((row?.metadata_json as any) ?? {}) as any
       next[idx] = {
         ...row,
         team_name: teamName,
+        metadata_json: {
+          ...rowMeta,
+          team_id: teamId,
+        },
         ...(rateOverride != null ? { rate_per_minute: finalRate } : {}),
       }
       setProcesses(next as any)
@@ -593,7 +599,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       content: (
         <div>
           <div>
-            已选择班组：<Text code>{teamName}</Text>
+            已选择班组：<Text code>{teamName || teamId || '-'}</Text>
           </div>
           <div style={{ marginTop: 8 }}>
             <Text type="secondary">
@@ -5010,6 +5016,11 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                             title: '班组',
                             width: 120,
                             render: (_: any, r: any, idx: number) => (
+                              (() => {
+                                const items = (taxonomyTeamQuery.data?.items ?? []) as any[]
+                                const meta = (r?.metadata_json ?? {}) as any
+                                const curId = String(meta?.team_id ?? '').trim()
+                                if (curId) return (
                               <Select
                                 size="small"
                                 className="pm-lines-select"
@@ -5020,12 +5031,32 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                 placeholder="选择班组"
                                 optionFilterProp="label"
                                 style={{ width: '100%' }}
-                                value={r.team_name}
-                                options={(taxonomyTeamQuery.data?.items ?? []).map((it: any) => ({ label: it.name, value: it.name }))}
-                                onChange={(v) => {
-                                  applyTeamDefaultRateToProcessRow(idx, v ?? undefined)
-                                }}
+                                value={curId}
+                                options={items.map((it: any) => ({ label: it.name, value: it.id }))}
+                                onChange={(v) => applyTeamDefaultRateToProcessRow(idx, v ?? undefined)}
                               />
+                                )
+                                // Backward compat: if only team_name exists, map it to id for selection display
+                                const curName = String(r.team_name ?? '').trim()
+                                const mapped = curName ? items.find((it: any) => String(it?.name ?? '').trim() === curName) : null
+                                const fallbackId = String(mapped?.id ?? '').trim() || undefined
+                                return (
+                                  <Select
+                                    size="small"
+                                    className="pm-lines-select"
+                                    popupClassName="pm-lines-select-dropdown"
+                                    getPopupContainer={() => document.body}
+                                    allowClear
+                                    showSearch
+                                    placeholder="选择班组"
+                                    optionFilterProp="label"
+                                    style={{ width: '100%' }}
+                                    value={fallbackId}
+                                    options={items.map((it: any) => ({ label: it.name, value: it.id }))}
+                                    onChange={(v) => applyTeamDefaultRateToProcessRow(idx, v ?? undefined)}
+                                  />
+                                )
+                              })()
                             ),
                           },
                           {

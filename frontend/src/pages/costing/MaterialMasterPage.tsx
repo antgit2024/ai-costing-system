@@ -31,6 +31,7 @@ import {
   Tooltip,
   Typography,
   message,
+  Radio,
 } from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 import dayjs from 'dayjs'
@@ -234,16 +235,21 @@ const getBomDeriveIssue = (record: Material): string | null => {
 const getBomDisplayValue = (record: Material) =>
   typeof record.is_bom_material === 'boolean' ? record.is_bom_material : isBomMaterial(record)
 
-const getUsageClass = (record: Material): 'direct' | 'conditional' | 'indirect' => {
+const getUsageClass = (record: Material): 'direct' | 'conditional' | 'indirect' | undefined => {
   const meta = (record.metadata_json as Record<string, any>) ?? {}
   const raw = String(meta.usage_class ?? '').trim().toLowerCase()
+  if (raw === 'direct' || raw === 'conditional' || raw === 'indirect') return raw as any
+
+  // Phase0：默认不强行给“间接耗材”，避免用户尚未梳理时误导为“已分类”
+  // 兼容你要求的“保留原有勾选值=直接BOM”：
+  // - 本地明确标记 BOM=true → 默认 direct
+  // - 仅来自宜搭的推导 BOM=true → 默认 direct
+  if (record.is_bom_material === true) return 'direct'
   const bom = getBomDisplayValue(record)
-  // 口径收口：非 BOM 一律视为间接耗材（避免历史脏数据造成“非BOM但显示条件物料”）
-  if (!bom) return 'indirect'
-  // BOM=true 时，只允许 direct/conditional；若历史写了 indirect，回退为 direct
-  if (raw === 'conditional') return 'conditional'
-  if (raw === 'direct') return 'direct'
-  return 'direct'
+  if (bom) return 'direct'
+
+  // 未明确分类：保持 undefined（表单默认不选，保存时强制必选）
+  return undefined
 }
 
 const MATERIAL_USAGE_OPTIONS = [
@@ -649,7 +655,11 @@ const MaterialMasterPage = () => {
     const conversionPurchase = toFiniteNumber(values.conversion_purchase_to_bom)
     const conversionInventory = toFiniteNumber(values.conversion_bom_to_inventory)
     const purchaseUnitPrice = toFiniteNumber(editingMaterial.unit_price)
-    const nextUsage = (values.usage_class as any) || getUsageClass(editingMaterial)
+    const nextUsage = values.usage_class as any
+    if (!nextUsage) {
+      message.error('保存失败：请先选择“物料用途”（直接BOM / 条件物料 / 间接耗材）')
+      return
+    }
     // guardrail: indirect => 非BOM；direct/conditional => BOM
     const usageClass: 'direct' | 'conditional' | 'indirect' =
       nextUsage === 'conditional' || nextUsage === 'indirect' ? nextUsage : 'direct'
@@ -1437,8 +1447,13 @@ const MaterialMasterPage = () => {
                   label="物料用途"
                   name="usage_class"
                   extra="成本口径（Phase0）：只做标记。直接BOM/条件物料=进BOM；间接耗材=不进BOM（周期领用核算）。"
+                  rules={[{ required: true, message: '请选择物料用途' }]}
                 >
-                  <Select options={MATERIAL_USAGE_OPTIONS as unknown as any[]} placeholder="请选择" />
+                  <Radio.Group optionType="button" buttonStyle="solid">
+                    <Radio.Button value="direct">直接BOM</Radio.Button>
+                    <Radio.Button value="conditional">条件物料</Radio.Button>
+                    <Radio.Button value="indirect">间接耗材</Radio.Button>
+                  </Radio.Group>
                 </Form.Item>
                 <Form.Item
                   label="本地描述"

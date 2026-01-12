@@ -126,13 +126,10 @@ export default function MaterialPickerDrawer({
       is_active: true,
       is_bom_material: onlyBom ? true : undefined,
       ...(realQueryOverrides || {}),
-      // 口径收口（Phase0）：真实物料选择器默认不展示“间接耗材”
-      ...(excludeIndirectReal ? { usage_class: 'direct' } : {}),
       page: realPagination.current,
       page_size: realPagination.pageSize,
     }),
     [
-      excludeIndirectReal,
       onlyBom,
       realCategory,
       realPagination.current,
@@ -196,7 +193,14 @@ export default function MaterialPickerDrawer({
   const realItems = useMemo(() => {
     const items = (realQuery.data?.items ?? []) as Material[]
     const baseU = normalizedBaseUnit
-    const arr = items.slice()
+    let arr = items.slice()
+    if (excludeIndirectReal) {
+      arr = arr.filter((m) => {
+        const meta = ((m as any)?.metadata_json ?? {}) as Record<string, any>
+        const usage = String(meta?.usage_class ?? '').trim().toLowerCase()
+        return usage !== 'indirect'
+      })
+    }
     const rankOf = (m: Material): number => {
       if (!baseU) return 1
       const u = normalizeUnit(String((m as any)?.unit ?? ''))
@@ -207,7 +211,7 @@ export default function MaterialPickerDrawer({
       return arr.filter((m) => normalizeUnit(String((m as any)?.unit ?? '')) === baseU)
     }
     return arr
-  }, [normalizedBaseUnit, onlySameUnit, realQuery.data?.items])
+  }, [excludeIndirectReal, normalizedBaseUnit, onlySameUnit, realQuery.data?.items])
 
   const virtualItems = useMemo(() => {
     const items = (virtualQuery.data?.items ?? []) as VirtualMaterial[]

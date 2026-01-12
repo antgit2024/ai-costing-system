@@ -2261,8 +2261,6 @@ const MaterialSelectModal = ({ open, onClose, onConfirm }: MaterialSelectModalPr
           page_size: pagination.pageSize,
           is_active: true,
           is_bom_material: onlyBom || undefined,
-          // Phase0：真实物料选择器不展示“间接耗材”（周期领用核算）
-          usage_class: 'direct',
         },
         { signal },
       ),
@@ -2271,7 +2269,13 @@ const MaterialSelectModal = ({ open, onClose, onConfirm }: MaterialSelectModalPr
     staleTime: 0,
   })
 
-  const materials = pickerQuery.data?.items ?? []
+  const materialsRaw = (pickerQuery.data?.items ?? []) as Material[]
+  // Phase0：真实物料选择器不展示“间接耗材”（周期领用核算），但允许“条件物料”
+  const materials = materialsRaw.filter((m) => {
+    const meta = ((m as any)?.metadata_json ?? {}) as Record<string, any>
+    const usage = String(meta?.usage_class ?? '').trim().toLowerCase()
+    return usage !== 'indirect'
+  })
 
   const handleConfirm = () => {
     if (!selectedRows.length) {

@@ -13,6 +13,7 @@
     - `/costing/materials` → “物料详情抽屉 → 成本参数”：将“是否 BOM 物料 + 物料用途（本地分类）”合并为一个三选一：**直接BOM / 条件物料 / 间接耗材**
       - 保存口径：选择 **间接耗材** → 自动写 `is_bom_material=false`；选择 **直接BOM/条件物料** → 自动写 `is_bom_material=true`，并写入 `metadata_json.usage_class`
       - 默认回显：历史 `is_bom_material=true` 的物料，会默认回显为“直接BOM”（满足“保留原勾选=直接BOM”）
+      - 默认交互（修正）：用途默认 **不选**；保存时 **必选**（避免默认落到“间接耗材”造成误导）
     - “物料选择”（真实物料）：在工艺模块 / 虚拟物料 / 模型清单编辑等新增物料入口的选择器里，默认 **不展示间接耗材**
   - 验收命令（必须，全部 0 退出码）：
     - Frontend：`npm -C frontend run build`

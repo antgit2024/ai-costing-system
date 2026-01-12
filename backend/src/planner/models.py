@@ -777,6 +777,27 @@ class BundleTemplate(Base, TimestampMixin, SoftDeleteMixin):
     metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict, nullable=False)
 
 
+class ShippingRule(Base, TimestampMixin, SoftDeleteMixin):
+    """
+    Shipping / conditional material rules.
+
+    This module is intentionally separated from product model variant rules:
+    - Variant rules: product BOM substitution (生产/核算口径)
+    - Shipping rules: order/shipping conditional materials (发货/按单扣库口径)
+    """
+
+    __tablename__ = "shipping_rules"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    rule_name: Mapped[str] = Column(String(255), nullable=False)
+    priority: Mapped[int] = Column(Integer, nullable=False, default=100)
+    is_active: Mapped[bool] = Column(Boolean, nullable=False, default=True)
+    conditions_json: Mapped[Dict[str, Any]] = Column("conditions", JSON, default=dict, nullable=False)
+    outputs_json: Mapped[List[Dict[str, Any]]] = Column("outputs", JSON, default=list, nullable=False)
+    notes: Mapped[str | None] = Column(Text)
+    metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict, nullable=False)
+
+
 class ModelProcessModule(Base, TimestampMixin, SoftDeleteMixin):
     __tablename__ = "model_process_modules"
 

@@ -94,6 +94,10 @@ const menuItems: MenuProps['items'] = [
         label: <Link to="/costing/shipments">发货批次 / BOM快照</Link>,
       },
       {
+        key: '/costing/shipping-rules',
+        label: <Link to="/costing/shipping-rules">发货规则（条件物料）</Link>,
+      },
+      {
         key: '/costing/product-listing',
         label: <Link to="/costing/product-listing">产品上架（测试台）</Link>,
       },

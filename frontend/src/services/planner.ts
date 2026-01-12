@@ -121,6 +121,11 @@ import type {
   PaginatedStructureStandardResponse,
   StructureStandardQueryParams,
   StructureStandardRead,
+  ShippingRule,
+  ShippingRuleEvaluateRequest,
+  ShippingRuleEvaluateResponse,
+  ShippingRuleListResponse,
+  ShippingRuleUpsertRequest,
 } from '@/types/planner'
 
 const resolvePlannerApiBase = (raw?: string): string => {
@@ -707,6 +712,38 @@ export const fetchMaterials = async (
     params: sanitizeParams(params as Record<string, unknown>),
     signal: opts?.signal,
   })
+  return response.data
+}
+
+export const fetchShippingRules = async (params: {
+  search?: string
+  is_active?: boolean
+  page?: number
+  page_size?: number
+}): Promise<ShippingRuleListResponse> => {
+  const response = await plannerClient.get('/shipping-rules', { params: sanitizeParams(params as any) })
+  return response.data
+}
+
+export const createShippingRule = async (payload: ShippingRuleUpsertRequest): Promise<ShippingRule> => {
+  const response = await plannerClient.post('/shipping-rules', payload)
+  return response.data
+}
+
+export const updateShippingRule = async (ruleId: string, payload: ShippingRuleUpsertRequest): Promise<ShippingRule> => {
+  const response = await plannerClient.patch(`/shipping-rules/${ruleId}`, payload)
+  return response.data
+}
+
+export const archiveShippingRule = async (ruleId: string): Promise<{ ok: boolean }> => {
+  const response = await plannerClient.post(`/shipping-rules/${ruleId}/archive`)
+  return response.data
+}
+
+export const evaluateShippingRules = async (
+  payload: ShippingRuleEvaluateRequest,
+): Promise<ShippingRuleEvaluateResponse> => {
+  const response = await plannerClient.post('/shipping-rules/evaluate', payload)
   return response.data
 }
 

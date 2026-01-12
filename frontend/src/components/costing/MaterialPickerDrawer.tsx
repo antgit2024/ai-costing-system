@@ -36,6 +36,8 @@ export interface MaterialPickerDrawerProps {
   confirmText?: string
   /** 可选：默认分页大小（行级变体建议更大些） */
   defaultPageSize?: number
+  /** 可选：真实物料查询额外参数（例如 usage_class=conditional） */
+  realQueryOverrides?: Partial<MaterialQueryParams>
 }
 
 export default function MaterialPickerDrawer({
@@ -49,6 +51,7 @@ export default function MaterialPickerDrawer({
   maxSelection,
   confirmText,
   defaultPageSize = 10,
+  realQueryOverrides,
 }: MaterialPickerDrawerProps) {
   const [activeTab, setActiveTab] = useState<MaterialPickerTab>(initialTab)
   const [onlySameUnit, setOnlySameUnit] = useState(false)
@@ -116,10 +119,11 @@ export default function MaterialPickerDrawer({
       status: 'active',
       is_active: true,
       is_bom_material: onlyBom ? true : undefined,
+      ...(realQueryOverrides || {}),
       page: realPagination.current,
       page_size: realPagination.pageSize,
     }),
-    [onlyBom, realCategory, realPagination.current, realPagination.pageSize, realSearch],
+    [onlyBom, realCategory, realPagination.current, realPagination.pageSize, realQueryOverrides, realSearch],
   )
 
   const realQuery = useQuery({

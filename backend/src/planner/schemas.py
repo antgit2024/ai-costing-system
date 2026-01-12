@@ -467,6 +467,59 @@ class PaginatedMaterialResponse(BaseModel):
     items: List[MaterialRead]
 
 
+class ShippingRuleRead(BaseModel):
+    id: str
+    rule_name: str
+    priority: int
+    is_active: bool
+    conditions: Dict[str, Any] = Field(alias="conditions_json")
+    outputs: List[Dict[str, Any]] = Field(default_factory=list, alias="outputs_json")
+    notes: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict, alias="metadata_json")
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        orm_mode = True
+
+
+class ShippingRuleUpsertRequest(BaseModel):
+    rule_name: Optional[str] = None
+    priority: Optional[int] = None
+    is_active: Optional[bool] = None
+    conditions: Optional[Dict[str, Any]] = None
+    outputs: Optional[List[Dict[str, Any]]] = None
+    notes: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class PaginatedShippingRuleResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: List[ShippingRuleRead]
+
+
+class ShippingRuleEvaluateRequest(BaseModel):
+    shop_code: Optional[str] = None
+    channel: Optional[str] = None
+    shipping_method: Optional[str] = None
+    is_merge: Optional[bool] = None
+    province: Optional[str] = None
+    city: Optional[str] = None
+    weight_kg: Optional[float] = None
+    volume_m3: Optional[float] = None
+    package_count: Optional[int] = None
+    tokens: List[str] = Field(default_factory=list)
+    include_disabled_rules: bool = False
+
+
+class ShippingRuleEvaluateResponse(BaseModel):
+    matched_rules: List[Dict[str, Any]] = Field(default_factory=list)
+    lines: List[Dict[str, Any]] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+
+
 # -----------------------------
 # Taxonomy (admin-maintained dictionaries)
 # -----------------------------

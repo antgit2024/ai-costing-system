@@ -17,6 +17,7 @@ class MaterialFilters:
         category: Optional[str] = None,
         status: Optional[str] = None,
         is_bom_material: Optional[bool] = None,
+        usage_class: Optional[str] = None,
         is_active: Optional[bool] = None,
     ):
         self.search = search
@@ -24,6 +25,7 @@ class MaterialFilters:
         self.category = category
         self.status = status
         self.is_bom_material = is_bom_material
+        self.usage_class = usage_class
         self.is_active = is_active
 
 
@@ -75,6 +77,23 @@ def apply_material_filters(query: Query, filters: MaterialFilters) -> Query:
                 query = query.filter(models.Material.is_bom_material.is_(True))
         else:
             query = query.filter(models.Material.is_bom_material == filters.is_bom_material)
+    if filters.usage_class:
+        # Local classification in metadata_json.usage_class:
+        # - direct / conditional / indirect
+        wanted = filters.usage_class.strip().lower()
+        if wanted in ("direct", "conditional", "indirect"):
+            dialect = ""
+            try:
+                if query.session is not None and query.session.get_bind() is not None:
+                    dialect = str(query.session.get_bind().dialect.name or "")
+            except Exception:  # noqa: BLE001
+                dialect = ""
+            if dialect.startswith("sqlite"):
+                raw = func.coalesce(
+                    func.json_extract(models.Material.metadata_json, "$.usage_class"),
+                    "",
+                )
+                query = query.filter(func.lower(func.trim(func.cast(raw, String))) == wanted)
     if filters.is_active is not None:
         query = query.filter(models.Material.is_active == filters.is_active)
     return query

@@ -261,6 +261,7 @@ def list_materials(
     category: Optional[str] = None,
     status: Optional[str] = None,
     is_bom_material: Optional[bool] = None,
+    usage_class: Optional[str] = None,
     is_active: Optional[bool] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
@@ -272,6 +273,7 @@ def list_materials(
         category=category,
         status=status,
         is_bom_material=is_bom_material,
+        usage_class=usage_class,
         is_active=is_active,
     )
     total, items = material_service.list_materials(db, filters=filters, page=page, page_size=page_size)

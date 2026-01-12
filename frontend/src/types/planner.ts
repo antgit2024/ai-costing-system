@@ -373,6 +373,7 @@ export interface MaterialQueryParams extends Record<string, string | number | bo
   status?: string
   is_active?: boolean
   is_bom_material?: boolean
+  usage_class?: 'direct' | 'conditional' | 'indirect'
 }
 
 export interface MaterialStatusUpdatePayload {
@@ -392,6 +393,62 @@ export interface MaterialExportResponse {
   job_id?: string
   download_url?: string
   message?: string
+}
+
+export interface ShippingRule {
+  id: string
+  rule_name: string
+  priority: number
+  is_active: boolean
+  conditions: Record<string, any>
+  outputs: Record<string, any>[]
+  notes?: string | null
+  metadata?: Record<string, any>
+  created_at: string
+  updated_at: string
+}
+
+export interface ShippingRuleListResponse {
+  total: number
+  page: number
+  page_size: number
+  items: ShippingRule[]
+}
+
+export interface ShippingRuleUpsertRequest {
+  rule_name?: string
+  priority?: number
+  is_active?: boolean
+  conditions?: Record<string, any>
+  outputs?: Record<string, any>[]
+  notes?: string | null
+  metadata?: Record<string, any>
+}
+
+export interface ShippingRuleEvaluateRequest {
+  shop_code?: string
+  channel?: string
+  shipping_method?: string
+  is_merge?: boolean
+  province?: string
+  city?: string
+  weight_kg?: number
+  volume_m3?: number
+  package_count?: number
+  tokens?: string[]
+  include_disabled_rules?: boolean
+}
+
+export interface ShippingRuleEvaluateResponse {
+  matched_rules: { rule_id: string; rule_name: string; priority: number }[]
+  lines: {
+    material_id: string
+    material_code: string
+    material_name: string
+    unit_of_measure?: string | null
+    quantity: number
+  }[]
+  warnings: string[]
 }
 
 export interface MaterialSyncLog {

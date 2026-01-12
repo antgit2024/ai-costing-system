@@ -612,7 +612,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       okText: '确认',
       cancelText: '取消',
       onOk: () => commit(defaultRate),
-      onCancel: () => commit(undefined),
+      // 取消：不应改变下拉选择/不应写入 team_id（用户明确要求）
+      onCancel: () => {},
     })
   }
 
@@ -5020,6 +5021,13 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                 const items = (taxonomyTeamQuery.data?.items ?? []) as any[]
                                 const meta = (r?.metadata_json ?? {}) as any
                                 const curId = String(meta?.team_id ?? '').trim()
+                                const labelOf = (it: any) => {
+                                  const name = String(it?.name ?? '').trim()
+                                  const id = String(it?.id ?? '').trim()
+                                  if (!name && !id) return '-'
+                                  if (!id) return name
+                                  return `${name} · ${id.slice(0, 8)}`
+                                }
                                 if (curId) return (
                               <Select
                                 size="small"
@@ -5032,7 +5040,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                 optionFilterProp="label"
                                 style={{ width: '100%' }}
                                 value={curId}
-                                options={items.map((it: any) => ({ label: it.name, value: it.id }))}
+                                options={items.map((it: any) => ({ label: labelOf(it), value: it.id }))}
                                 onChange={(v) => applyTeamDefaultRateToProcessRow(idx, v ?? undefined)}
                               />
                                 )
@@ -5052,7 +5060,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                     optionFilterProp="label"
                                     style={{ width: '100%' }}
                                     value={fallbackId}
-                                    options={items.map((it: any) => ({ label: it.name, value: it.id }))}
+                                    options={items.map((it: any) => ({ label: labelOf(it), value: it.id }))}
                                     onChange={(v) => applyTeamDefaultRateToProcessRow(idx, v ?? undefined)}
                                   />
                                 )

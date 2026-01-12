@@ -539,6 +539,65 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     enabled: open,
   })
 
+  const applyTeamDefaultRateToProcessRow = (rowIndex: number, nextTeamName?: string) => {
+    const idx = Number(rowIndex)
+    if (!Number.isFinite(idx) || idx < 0) return
+
+    const items = (taxonomyTeamQuery.data?.items ?? []) as any[]
+    const teamName = String(nextTeamName ?? '').trim() || undefined
+    const team = teamName ? items.find((it: any) => String(it?.name ?? '').trim() === teamName) : null
+    const meta = (team?.metadata ?? team?.metadata_json ?? {}) as any
+    const defaultRate = meta?.rate_per_minute != null ? Number(meta.rate_per_minute) : NaN
+
+    const next = (processes as any[]).slice()
+    const row = next[idx]
+    if (!row) return
+
+    const oldRate = Number(row.rate_per_minute ?? 0)
+    const hasDefault = Number.isFinite(defaultRate) && defaultRate > 0
+
+    const commit = (rateOverride?: number) => {
+      const finalRate = rateOverride != null ? rateOverride : row.rate_per_minute
+      next[idx] = {
+        ...row,
+        team_name: teamName,
+        ...(rateOverride != null ? { rate_per_minute: finalRate } : {}),
+      }
+      setProcesses(next as any)
+      // 若调参面板正打开且指向同一行，同步刷新展示值
+      if (tuningOpen && tuningKind === 'process' && tuningIndex === idx && rateOverride != null) {
+        setTuningRatePerMinute(Number(finalRate ?? 0))
+      }
+    }
+
+    // 仅设置班组（无默认单价）或默认=当前值 → 无需确认
+    if (!hasDefault || Math.abs(defaultRate - oldRate) < 1e-9) {
+      commit(undefined)
+      return
+    }
+
+    Modal.confirm({
+      title: '确认更新单价（元/分）？',
+      content: (
+        <div>
+          <div>
+            已选择班组：<Text code>{teamName}</Text>
+          </div>
+          <div style={{ marginTop: 8 }}>
+            <Text type="secondary">
+              原单价(元/分)：{Number.isFinite(oldRate) ? oldRate.toFixed(2) : '0.00'}，现修改为：{defaultRate.toFixed(2)}。
+              如需重新修改可进入调参面板手动调整。
+            </Text>
+          </div>
+        </div>
+      ),
+      okText: '确认',
+      cancelText: '取消',
+      onOk: () => commit(defaultRate),
+      onCancel: () => commit(undefined),
+    })
+  }
+
   const missingStructureMetaModuleIds = useMemo(() => {
     // Some model.modules may not include `module` payload; or may omit metadata_json.
     // We lazily fetch module detail to get metadata_json.structure_tags for the "结构" column rendering/autofill.
@@ -4952,9 +5011,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                 value={r.team_name}
                                 options={(taxonomyTeamQuery.data?.items ?? []).map((it: any) => ({ label: it.name, value: it.name }))}
                                 onChange={(v) => {
-                                  const next = (processes as any[]).slice()
-                                  next[idx] = { ...next[idx], team_name: v ?? undefined }
-                                  setProcesses(next as any)
+                                  applyTeamDefaultRateToProcessRow(idx, v ?? undefined)
                                 }}
                               />
                             ),

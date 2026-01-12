@@ -180,6 +180,20 @@
   - 目标：以“SKU 主档（商品关联）→ 发货导入（xlsx）→ spec 解析 → BOM 快照/异常队列”为最小闭环，支撑低成本验证单店对接
   - 验收命令（必须，1条）：`grep -nF "Integration Agent 入职简报：店铺对接（以“商品关联/SKU 主档”为中心）" DOC/agents/briefings/integration_shop_connector_onboarding_mvp.md`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-12（Planner-Optimization：POD 个性化定制 Phase0 蓝图（先印布））
+  - 产物：
+    - `DOC/costing/blueprints/pod_personalization_print_pipeline_phase0.md`
+    - `DOC/agents/briefings/pod_personalization_phase0_briefing.md`
+    - `DOC/agents/handoff_pod.md`
+  - 备注（重要）：
+    - POD 目前 **不是当前执行主线**，仅为本次讨论的方案沉淀与接力准备；后续正式推进时再按任务单拆分执行。
+    - 预备（后端闭环任务单草案）：`DOC/agents/briefings/backend_pod_personalization_phase0_mvp.md`
+  - 口径要点：
+    - “设计稿/印刷稿”必须快照化（确稿后不可回写历史）
+    - “先印布”必须版本化 PrintTemplate（出血/安全区/裁切线/定位标/ICC/镜像规则）
+    - 小程序接入前提：公网 HTTPS 合法域名；内网“本地服务器”不可直连小程序
+  - 验收命令（必须，1条）：`grep -nF "POD 个性化定制（先印布）— Phase0 落地蓝图（以抱枕为例）" DOC/costing/blueprints/pod_personalization_print_pipeline_phase0.md`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：工艺模块新建提醒：在“结构适用范围”规则说明区块下方，展示当前所选 slot 的“驱动量/备注”（来自结构标准 slot_defs），用于提醒新建工艺模块的人；验收 `npm -C frontend run build`）
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：标准模型清单编辑：删除工艺模块不再触发 `sync-from-modules`（避免覆盖版本层已替换物料/调参导致“占位回滚”错觉）；改为仅删除该模块关联行并保存版本清单；验收 `npm -C frontend run build`）
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend+Backend：版本图片支持删除：新增 `DELETE /api/planner/product-model-versions/{version_id}/images/{image_index}`；标准模型/打样模型“基础信息”Tab 的版本图片缩略图增加删除按钮；验收 `npm -C frontend run build`）

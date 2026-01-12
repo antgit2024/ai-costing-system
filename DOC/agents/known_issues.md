@@ -62,6 +62,14 @@
 - **原因**：单店深对接成本高（你们反馈 18 万/店），而当前系统已具备 xlsx 导入 + 快照/异常闭环，适合先做可验收的 PoC。
 - **参考简报**：`DOC/agents/briefings/integration_shop_connector_onboarding_mvp.md`
 
+### 12) 小程序接入：本地服务器“直接用”通常不可行
+
+- **结论**：小程序端请求必须走“合法域名 + 公网 HTTPS”。纯内网/局域网 IP 的“本地服务器”无法直接被小程序访问。
+- **可行路径**：
+  - 用 Nginx/网关把后端 API 与文件下载 **通过公网域名暴露**（同源 `/api/...` 优先），并配置鉴权/限流
+  - 图片上传优先直传对象存储（OSS/S3），后端只拿 `storage_key` 拉取生成效果图/印刷稿（避免网关带宽瓶颈）
+- **参考蓝图**：`DOC/costing/blueprints/pod_personalization_print_pipeline_phase0.md`
+
 ### 9) 前端报错：Failed to load module script（MIME type: text/html）
 
 - **现象（Chrome 控制台）**：

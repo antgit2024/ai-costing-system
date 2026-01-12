@@ -115,6 +115,12 @@
 - `DOC/agents/briefings/backend_retry_shipment_exceptions_mvp.md`（后端闭环：按批次重试未解决异常（Retry Exceptions）MVP）
 - `DOC/agents/briefings/backend_structure_tagging_and_filtering_mvp.md`（后端闭环：模型结构化落点（结构标准/工艺模块标签）+ 列表筛选 MVP）
 - `DOC/agents/briefings/integration_shop_connector_onboarding_mvp.md`（Integration Agent：店铺对接入职简报（以 SKU 主档/发货导入为中心））
+- `DOC/agents/briefings/pod_personalization_phase0_briefing.md`（POD 个性化定制 Phase0 派单简报：先印布→印刷稿→生产包→回传 ERP）
+- `DOC/agents/briefings/backend_pod_personalization_phase0_mvp.md`（POD Phase0：后端闭环任务单（MVP，备用；当前不执行））
+
+### 3.4) POD/个性化定制（方案蓝图）
+
+- `DOC/costing/blueprints/pod_personalization_print_pipeline_phase0.md`（先印布：效果图→确稿→印刷稿→工厂下载→回传 ERP，含小程序接入前提）
 
 ### 4) 质量门槛（可运行/可验收）
 
@@ -129,6 +135,7 @@
 - `DOC/agents/handoff_frontend.md`（Frontend 新 Agent 接力包：P0 目标/接口索引/验收命令）
 - `DOC/agents/handoff_backend.md`（Backend 新 Agent 接力包：接口契约/验收命令）
 - `DOC/agents/handoff_docs.md`（Docs 新 Agent 接力包：口径/产出格式/风险点）
+- `DOC/agents/handoff_pod.md`（POD/印刷自动化 Agent 接力包：单裁片PDF→RIP自动拼版→打印/切割→回传ERP）
 - `DOC/agents/state.md`（当前状态：阶段、时间口径、提炼件索引、下一步）
 - `DOC/agents/commands.md`（唯一可执行的验收/启动/排错命令清单）
 - `DOC/agents/known_issues.md`（已知问题与规避手册）

@@ -42,6 +42,12 @@
   - `grep -nF "结构标准（v1）— 抱枕/靠垫（PILLOW_V1）" DOC/costing/blueprints/structure_standards/pillow_structure_standard_v1.md && grep -nF "结构标准（v1）— 桌布/桌旗/桌垫同构（TABLECLOTH_V1）" DOC/costing/blueprints/structure_standards/tablecloth_structure_standard_v1.md`
 - 店铺对接（Integration Agent 入职简报）存在性：
   - `grep -nF "Integration Agent 入职简报：店铺对接（以“商品关联/SKU 主档”为中心）" DOC/agents/briefings/integration_shop_connector_onboarding_mvp.md`
+- POD 个性化定制（先印布）蓝图存在性：
+  - `grep -nF "POD 个性化定制（先印布）— Phase0 落地蓝图（以抱枕为例）" DOC/costing/blueprints/pod_personalization_print_pipeline_phase0.md`
+- POD Agent 接力包存在性：
+  - `grep -nF "POD/印刷自动化 Agent 接力包（POD Agent）" DOC/agents/handoff_pod.md`
+- POD Phase0（后端闭环任务单，备用）存在性：
+  - `grep -nF "Backend 闭环任务单：POD 个性化定制 Phase0（先印布）— POD 领域最小对象 + Job + 生产包下载（MVP）" DOC/agents/briefings/backend_pod_personalization_phase0_mvp.md`
 
 ### 2) 本地联调（可选，但强烈建议）
 

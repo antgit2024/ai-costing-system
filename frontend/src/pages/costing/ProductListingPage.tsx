@@ -129,7 +129,7 @@ const toBundleTokenDash = (code: string, selector?: string | null): string => {
 }
 
 export default function ProductListingPage() {
-  const [mode, setMode] = useState<'single' | 'multi' | 'spec_gen'>('single')
+  const [mode, setMode] = useState<'single' | 'multi' | 'spec_gen' | 'sales'>('single')
   const [specGenGeneratingSelector, setSpecGenGeneratingSelector] = useState<string | null>(null)
   const [draft, setDraft] = useState<ProductListingDraft>({
     sku_code: '',
@@ -688,6 +688,7 @@ export default function ProductListingPage() {
                   { key: 'single', label: '模型测试' },
                   { key: 'multi', label: '套装测试' },
                   { key: 'spec_gen', label: '规格生成' },
+                  { key: 'sales', label: '售价测算' },
                 ]}
               />
 
@@ -876,6 +877,158 @@ export default function ProductListingPage() {
                     onChange={(e) => setBundleDraft((d) => ({ ...d, spec_text: e.target.value }))}
                   />
                 </>
+              ) : mode === 'sales' ? (
+                <>
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="售价测算（测试台）：先选标准模型/版本并预演 BOM 得到进厂价，再填写渠道与费用参数反推售价。"
+                  />
+
+                  <Select
+                    showSearch
+                    allowClear
+                    placeholder="选择标准模型（按编码/名称搜索）"
+                    options={modelOptions as any}
+                    value={draft.model_id ?? undefined}
+                    loading={modelsQuery.isLoading}
+                    filterOption={(input, option: any) => {
+                      const raw = option?.raw as ProductModel | undefined
+                      const q = String(input ?? '').trim().toLowerCase()
+                      if (!raw) return false
+                      return String(raw.model_code ?? '').toLowerCase().includes(q) || String(raw.model_name ?? '').toLowerCase().includes(q)
+                    }}
+                    onChange={(v) => {
+                      setDraft((d) => ({ ...d, model_id: (v as string) ?? null, model_version_id: null }))
+                      setBom(null)
+                      setParsed(null)
+                    }}
+                  />
+
+                  <Select
+                    showSearch
+                    allowClear
+                    placeholder="选择已发布标准版本（published standard）"
+                    options={versionOptions as any}
+                    value={draft.model_version_id ?? undefined}
+                    loading={versionsQuery.isLoading}
+                    disabled={!draft.model_id}
+                    onChange={(v) => {
+                      setDraft((d) => ({ ...d, model_version_id: (v as string) ?? null }))
+                      setBom(null)
+                      setParsed(null)
+                    }}
+                  />
+
+                  <Input.TextArea
+                    rows={4}
+                    placeholder="粘贴运营的交易规格（spec_text）"
+                    value={draft.spec_text}
+                    onChange={(e) => setDraft((d) => ({ ...d, spec_text: e.target.value }))}
+                  />
+
+                  <Card size="small" title="销售参数（输入）">
+                    <Space direction="vertical" style={{ width: '100%' }} size={10}>
+                      <Space wrap>
+                        <Select
+                          style={{ width: 160 }}
+                          value={salesDraft.channel}
+                          options={(Object.keys(CHANNEL_PRESETS) as SalesPricingDraft['channel'][]).map((k) => ({
+                            value: k,
+                            label: CHANNEL_PRESETS[k].label,
+                          }))}
+                          onChange={(v) => {
+                            const ch = v as SalesPricingDraft['channel']
+                            const preset = CHANNEL_PRESETS[ch]
+                            setSalesDraft((d) => ({
+                              ...d,
+                              channel: ch,
+                              platform_fee_pct: preset.platform_fee_pct,
+                              payment_fee_pct: preset.payment_fee_pct,
+                            }))
+                          }}
+                        />
+                        <Select
+                          style={{ width: 140 }}
+                          options={CITY_OPTIONS as any}
+                          value={salesDraft.city}
+                          onChange={(v) => setSalesDraft((d) => ({ ...d, city: String(v) }))}
+                        />
+                        <Select
+                          style={{ width: 140 }}
+                          options={COURIER_OPTIONS as any}
+                          value={salesDraft.courier}
+                          onChange={(v) => setSalesDraft((d) => ({ ...d, courier: String(v) }))}
+                        />
+                        <Select
+                          style={{ width: 140 }}
+                          options={CAMPAIGN_OPTIONS as any}
+                          value={salesDraft.campaign}
+                          onChange={(v) => setSalesDraft((d) => ({ ...d, campaign: String(v) }))}
+                        />
+                      </Space>
+
+                      <Space wrap>
+                        <InputNumber
+                          addonBefore="毛利%"
+                          min={0}
+                          max={90}
+                          precision={2}
+                          value={salesDraft.gross_margin_pct}
+                          onChange={(v) => setSalesDraft((d) => ({ ...d, gross_margin_pct: Number(v ?? 0) }))}
+                        />
+                        <InputNumber
+                          addonBefore="平台费%"
+                          min={0}
+                          max={50}
+                          precision={2}
+                          value={salesDraft.platform_fee_pct}
+                          onChange={(v) => setSalesDraft((d) => ({ ...d, platform_fee_pct: Number(v ?? 0) }))}
+                        />
+                        <InputNumber
+                          addonBefore="支付费%"
+                          min={0}
+                          max={10}
+                          precision={2}
+                          value={salesDraft.payment_fee_pct}
+                          onChange={(v) => setSalesDraft((d) => ({ ...d, payment_fee_pct: Number(v ?? 0) }))}
+                        />
+                        <InputNumber
+                          addonBefore="活动折扣%"
+                          min={0}
+                          max={90}
+                          precision={2}
+                          value={salesDraft.promo_discount_pct}
+                          onChange={(v) => setSalesDraft((d) => ({ ...d, promo_discount_pct: Number(v ?? 0) }))}
+                        />
+                      </Space>
+
+                      <Space wrap>
+                        <InputNumber
+                          addonBefore="运费(元)"
+                          min={0}
+                          precision={2}
+                          value={salesDraft.shipping_fee}
+                          onChange={(v) => setSalesDraft((d) => ({ ...d, shipping_fee: Number(v ?? 0) }))}
+                        />
+                        <InputNumber
+                          addonBefore="包装(元)"
+                          min={0}
+                          precision={2}
+                          value={salesDraft.packaging_fee}
+                          onChange={(v) => setSalesDraft((d) => ({ ...d, packaging_fee: Number(v ?? 0) }))}
+                        />
+                        <InputNumber
+                          addonBefore="售后(元)"
+                          min={0}
+                          precision={2}
+                          value={salesDraft.aftersale_fee}
+                          onChange={(v) => setSalesDraft((d) => ({ ...d, aftersale_fee: Number(v ?? 0) }))}
+                        />
+                      </Space>
+                    </Space>
+                  </Card>
+                </>
               ) : (
                 <>
                   <Row gutter={[12, 12]}>
@@ -1009,7 +1162,7 @@ export default function ProductListingPage() {
                 >
                   清空结果
                 </Button>
-                {mode === 'single' ? (
+                {mode === 'single' || mode === 'sales' ? (
                   <>
                     <Button loading={parseMutation.isPending} onClick={() => parseMutation.mutate()}>
                       仅解析（spec/parse）
@@ -1086,6 +1239,36 @@ export default function ProductListingPage() {
                     )}
                   </Descriptions.Item>
                 </Descriptions>
+              ) : mode === 'sales' ? (
+                <Descriptions size="small" column={1} bordered>
+                  <Descriptions.Item label="模型">
+                    {selectedModel ? (
+                      <Space size={8}>
+                        <Text strong>{selectedModel.model_code}</Text>
+                        <Text>{selectedModel.model_name}</Text>
+                      </Space>
+                    ) : (
+                      <Text type="secondary">未选择</Text>
+                    )}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="版本">
+                    {selectedVersion ? (
+                      <Space size={8}>
+                        <Text strong>{selectedVersion.version_label || selectedVersion.id}</Text>
+                        {String(selectedVersion.version_status) === 'published' ? (
+                          <Tag color="green">published</Tag>
+                        ) : (
+                          <Tag color="orange">{String(selectedVersion.version_status || 'draft')}</Tag>
+                        )}
+                      </Space>
+                    ) : (
+                      <Text type="secondary">未选择</Text>
+                    )}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="进厂价（合计成本）">
+                    <Text strong>{formatMoney2(costingSummary?.total_cost)}</Text>
+                  </Descriptions.Item>
+                </Descriptions>
               ) : (
                 <Descriptions size="small" column={1} bordered>
                   <Descriptions.Item label="套装">
@@ -1099,8 +1282,41 @@ export default function ProductListingPage() {
 
         <Col xs={24} lg={14}>
           <Card title="诊断结果（只读）">
-            <Tabs
-              items={[
+            {mode === 'sales' ? (
+              <Space direction="vertical" style={{ width: '100%' }} size={12}>
+                <Alert
+                  type="info"
+                  showIcon
+                  message="售价测算结果（只读）"
+                  description="到手价（成交价）=(进厂价+固定费用)/(1-毛利%-平台费%-支付费%)；标价=到手价/(1-活动折扣%)。"
+                />
+                {!costingSummary ? (
+                  <Alert type="warning" showIcon message="请先在左侧点“解析 + 预演 BOM”生成合计成本（进厂价）。" />
+                ) : salesCalc && (salesCalc as any).error ? (
+                  <Alert type="error" showIcon message="无法计算" description={String((salesCalc as any).error)} />
+                ) : salesCalc ? (
+                  <Card size="small" title="测算结果（建议）">
+                    <Descriptions bordered size="small" column={3}>
+                      <Descriptions.Item label="进厂价/单位成本">{formatMoney2((salesCalc as any).factory_cost)}</Descriptions.Item>
+                      <Descriptions.Item label="到手价（成交价）">
+                        <b>{formatMoney2((salesCalc as any).deal_price)}</b>
+                      </Descriptions.Item>
+                      <Descriptions.Item label="建议标价">
+                        <b>{formatMoney2((salesCalc as any).list_price)}</b>
+                      </Descriptions.Item>
+                      <Descriptions.Item label="毛利额（元）">{formatMoney2((salesCalc as any).profit)}</Descriptions.Item>
+                      <Descriptions.Item label="平台费（元）">{formatMoney2((salesCalc as any).platform_fee)}</Descriptions.Item>
+                      <Descriptions.Item label="支付费（元）">{formatMoney2((salesCalc as any).payment_fee)}</Descriptions.Item>
+                      <Descriptions.Item label="固定费用（元）">{formatMoney2((salesCalc as any).fixed_fees)}</Descriptions.Item>
+                      <Descriptions.Item label="毛利%">{String((salesCalc as any).gross_margin_pct.toFixed(2))}%</Descriptions.Item>
+                      <Descriptions.Item label="活动折扣%">{String((salesCalc as any).promo_discount_pct.toFixed(2))}%</Descriptions.Item>
+                    </Descriptions>
+                  </Card>
+                ) : null}
+              </Space>
+            ) : (
+              <Tabs
+                items={[
                 ...(mode === 'single'
                   ? ([
                       {
@@ -1362,174 +1578,6 @@ export default function ProductListingPage() {
                   ),
                 },
                 {
-                  key: 'sales_pricing',
-                  label: '售价测算',
-                  children: costingSummary ? (
-                    <Space direction="vertical" style={{ width: '100%' }} size={12}>
-                      <Alert
-                        type="info"
-                        showIcon
-                        message="测试台：售价测算（从进厂价推导到手价/标价）"
-                        description="口径：到手价（成交价）=(进厂价+固定费用)/(1-毛利%-平台费%-支付费%)；标价=到手价/(1-活动折扣%)。"
-                      />
-
-                      <Descriptions bordered size="small" column={2}>
-                        <Descriptions.Item label="模型">
-                          {mode === 'single'
-                            ? selectedModel
-                              ? `${selectedModel.model_code}:${selectedModel.model_name}`
-                              : '-'
-                            : bundleDraft.bundle_code
-                              ? `B:${String(bundleDraft.bundle_code)}`
-                              : '-'}
-                        </Descriptions.Item>
-                        <Descriptions.Item label="版本">
-                          {mode === 'single' ? (selectedVersion ? selectedVersion.version_label || selectedVersion.id.slice(0, 8) : '-') : '-'}
-                        </Descriptions.Item>
-                        <Descriptions.Item label="尺寸/数量">
-                          {parsed ? (
-                            <Space size={8} wrap>
-                              <Tag>
-                                {parsed.width_cm != null ? `${parsed.width_cm}cm` : '宽-'}×{parsed.height_cm != null ? `${parsed.height_cm}cm` : '高-'}
-                              </Tag>
-                              <Tag>qty:{(parsed as any).quantity != null ? String((parsed as any).quantity) : '1'}</Tag>
-                            </Space>
-                          ) : (
-                            <Text type="secondary">-（建议先“解析+预演”以自动识别尺寸）</Text>
-                          )}
-                        </Descriptions.Item>
-                        <Descriptions.Item label="购买城市/快递">
-                          <Space wrap>
-                            <Select
-                              style={{ width: 140 }}
-                              options={CITY_OPTIONS as any}
-                              value={salesDraft.city}
-                              onChange={(v) => setSalesDraft((d) => ({ ...d, city: String(v) }))}
-                            />
-                            <Select
-                              style={{ width: 140 }}
-                              options={COURIER_OPTIONS as any}
-                              value={salesDraft.courier}
-                              onChange={(v) => setSalesDraft((d) => ({ ...d, courier: String(v) }))}
-                            />
-                          </Space>
-                        </Descriptions.Item>
-                        <Descriptions.Item label="活动场景">
-                          <Select
-                            style={{ width: 200 }}
-                            options={CAMPAIGN_OPTIONS as any}
-                            value={salesDraft.campaign}
-                            onChange={(v) => setSalesDraft((d) => ({ ...d, campaign: String(v) }))}
-                          />
-                        </Descriptions.Item>
-                      </Descriptions>
-
-                      <Card size="small" title="销售参数">
-                        <Space wrap>
-                          <Select
-                            style={{ width: 160 }}
-                            value={salesDraft.channel}
-                            options={(Object.keys(CHANNEL_PRESETS) as SalesPricingDraft['channel'][]).map((k) => ({
-                              value: k,
-                              label: CHANNEL_PRESETS[k].label,
-                            }))}
-                            onChange={(v) => {
-                              const ch = v as SalesPricingDraft['channel']
-                              const preset = CHANNEL_PRESETS[ch]
-                              setSalesDraft((d) => ({
-                                ...d,
-                                channel: ch,
-                                platform_fee_pct: preset.platform_fee_pct,
-                                payment_fee_pct: preset.payment_fee_pct,
-                              }))
-                            }}
-                          />
-                          <InputNumber
-                            addonBefore="毛利%"
-                            min={0}
-                            max={90}
-                            precision={2}
-                            value={salesDraft.gross_margin_pct}
-                            onChange={(v) => setSalesDraft((d) => ({ ...d, gross_margin_pct: Number(v ?? 0) }))}
-                          />
-                          <InputNumber
-                            addonBefore="平台费%"
-                            min={0}
-                            max={50}
-                            precision={2}
-                            value={salesDraft.platform_fee_pct}
-                            onChange={(v) => setSalesDraft((d) => ({ ...d, platform_fee_pct: Number(v ?? 0) }))}
-                          />
-                          <InputNumber
-                            addonBefore="支付费%"
-                            min={0}
-                            max={10}
-                            precision={2}
-                            value={salesDraft.payment_fee_pct}
-                            onChange={(v) => setSalesDraft((d) => ({ ...d, payment_fee_pct: Number(v ?? 0) }))}
-                          />
-                          <InputNumber
-                            addonBefore="活动折扣%"
-                            min={0}
-                            max={90}
-                            precision={2}
-                            value={salesDraft.promo_discount_pct}
-                            onChange={(v) => setSalesDraft((d) => ({ ...d, promo_discount_pct: Number(v ?? 0) }))}
-                          />
-                        </Space>
-                        <Divider style={{ margin: '12px 0' }} />
-                        <Space wrap>
-                          <InputNumber
-                            addonBefore="运费(元)"
-                            min={0}
-                            precision={2}
-                            value={salesDraft.shipping_fee}
-                            onChange={(v) => setSalesDraft((d) => ({ ...d, shipping_fee: Number(v ?? 0) }))}
-                          />
-                          <InputNumber
-                            addonBefore="包装(元)"
-                            min={0}
-                            precision={2}
-                            value={salesDraft.packaging_fee}
-                            onChange={(v) => setSalesDraft((d) => ({ ...d, packaging_fee: Number(v ?? 0) }))}
-                          />
-                          <InputNumber
-                            addonBefore="售后(元)"
-                            min={0}
-                            precision={2}
-                            value={salesDraft.aftersale_fee}
-                            onChange={(v) => setSalesDraft((d) => ({ ...d, aftersale_fee: Number(v ?? 0) }))}
-                          />
-                        </Space>
-                      </Card>
-
-                      {salesCalc && (salesCalc as any).error ? (
-                        <Alert type="error" showIcon message="无法计算" description={String((salesCalc as any).error)} />
-                      ) : salesCalc ? (
-                        <Card size="small" title="测算结果（建议）">
-                          <Descriptions bordered size="small" column={3}>
-                            <Descriptions.Item label="进厂价/单位成本">{formatMoney2((salesCalc as any).factory_cost)}</Descriptions.Item>
-                            <Descriptions.Item label="到手价（成交价）">
-                              <b>{formatMoney2((salesCalc as any).deal_price)}</b>
-                            </Descriptions.Item>
-                            <Descriptions.Item label="建议标价">
-                              <b>{formatMoney2((salesCalc as any).list_price)}</b>
-                            </Descriptions.Item>
-                            <Descriptions.Item label="毛利额（元）">{formatMoney2((salesCalc as any).profit)}</Descriptions.Item>
-                            <Descriptions.Item label="平台费（元）">{formatMoney2((salesCalc as any).platform_fee)}</Descriptions.Item>
-                            <Descriptions.Item label="支付费（元）">{formatMoney2((salesCalc as any).payment_fee)}</Descriptions.Item>
-                            <Descriptions.Item label="固定费用（元）">{formatMoney2((salesCalc as any).fixed_fees)}</Descriptions.Item>
-                            <Descriptions.Item label="毛利%">{String((salesCalc as any).gross_margin_pct.toFixed(2))}%</Descriptions.Item>
-                            <Descriptions.Item label="活动折扣%">{String((salesCalc as any).promo_discount_pct.toFixed(2))}%</Descriptions.Item>
-                          </Descriptions>
-                        </Card>
-                      ) : null}
-                    </Space>
-                  ) : (
-                    <Alert type="info" showIcon message="暂无进厂价：请先在左侧点“解析 + 预演 BOM”，生成合计成本后再测算售价。" />
-                  ),
-                },
-                {
                   key: 'bundle_components',
                   label: '套装组件命中（debug）',
                   children:
@@ -1630,8 +1678,9 @@ export default function ProductListingPage() {
                       <Text type="secondary">仅套装模式可用</Text>
                     ),
                 },
-              ]}
-            />
+                ]}
+              />
+            )}
           </Card>
         </Col>
       </Row>

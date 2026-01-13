@@ -101,6 +101,9 @@ type SalesPricingDraft = {
   // 进项税额从“进厂价/单位成本（含税）”反推：inputVatBase = factoryCost * vat/(1+vat)
   // 再按该比例抵扣：inputVatCredit = inputVatBase * input_vat_credit_pct
   input_vat_credit_pct: number
+  // 平台扣点/广告费（服务类）按 6% 专票估算进项税（业务确认可抵扣）
+  // 用于：inputVatFromServices = service_fee_gmv_based * serviceVat/(1+serviceVat)
+  service_vat_rate_pct: number
 
   // 标价与活动
   promo_discount_pct: number
@@ -214,6 +217,7 @@ export default function ProductListingPage() {
     vat_rate_pct: 13,
     vat_surcharge_ratio_pct: 12,
     input_vat_credit_pct: 60,
+    service_vat_rate_pct: 6,
     promo_discount_pct: 0,
     pricing_mode: 'solve',
     deal_gmv_input: 85,
@@ -668,6 +672,7 @@ export default function ProductListingPage() {
     const vat = clamp01(Number(salesDraft.vat_rate_pct ?? 0) / 100)
     const surchargeRatio = clamp01(Number(salesDraft.vat_surcharge_ratio_pct ?? 0) / 100)
     const inputVatCreditPct = clamp01(Number(salesDraft.input_vat_credit_pct ?? 0) / 100)
+    const serviceVat = clamp01(Number(salesDraft.service_vat_rate_pct ?? 0) / 100)
 
     // 一般纳税人口径（简化）：税金不再按“销项全额”计入成本，而是按“应纳增值税”计算
     // - 销项增值税：outputVat = netRevenue * vat
@@ -676,8 +681,8 @@ export default function ProductListingPage() {
     // - 应纳增值税：payableVat = max(0, outputVat - inputVatCredit)
     // - 附加税：surcharge = payableVat * surchargeRatio
     const a = vat > 0 ? vat / (1 + vat) : 0
-    const inputVatBase = factoryCost * a
-    const inputVatCredit = inputVatBase * inputVatCreditPct
+    const inputVatBaseGoods = factoryCost * a
+    const inputVatCreditGoods = inputVatBaseGoods * inputVatCreditPct
 
     // Returns: value loss approx = return_rate * unsellable_ratio * factoryCost
     const rr = clamp01(Number(salesDraft.return_rate_pct ?? 0) / 100)
@@ -690,15 +695,22 @@ export default function ProductListingPage() {
 
     // Solve GMV (when pricing_mode=solve):
     // GMV - (pct_costs*GMV) - taxTotal(GMV) - factoryCost - fixedFees - shippingFeeFixed - returnValueLoss = targetNp*GMV
-    // 其中 taxTotal(GMV) = (max(0, a*GMV - inputVatCredit) * (1+surchargeRatio))
+    // 其中 taxTotal(GMV) = (max(0, outputVat(GMV) - inputVatCredits(GMV)) * (1+surchargeRatio))
+    // - outputVat(GMV) = a*GMV
+    // - inputVatCredits(GMV) = 进厂价进项抵扣（常数项） + 平台扣点/广告费(6%专票)进项抵扣（随 GMV 线性）
     // 说明：快递费为按件固定金额；支付费视为已包含在平台扣点中，不再单列
     const pctCosts = pf + ad + fixedPct
     const baseCosts = factoryCost + fixedFees + shippingFeeFixed + returnValueLoss
 
     // 分段闭式解（避免迭代）：
-    // - 若 a*GMV <= inputVatCredit，则应纳增值税=0 ⇒ taxTotal=0（税金段为 0）
-    // - 若 a*GMV > inputVatCredit，则 taxTotal = (a*GMV - inputVatCredit) * (1+surchargeRatio)（线性）
-    const thresholdGmv = a > 0 ? inputVatCredit / a : 0
+    // - 平台扣点/广告费：按 6% 专票估算可抵扣进项税（默认全额可抵扣，业务确认）
+    // - payableVat(GMV) = max(0, (a - k)*GMV - inputVatCreditGoods)
+    const serviceA = serviceVat > 0 ? serviceVat / (1 + serviceVat) : 0
+    const k = (pf + ad) * serviceA
+    const a2 = a - k
+    // - 若 (a2*GMV) <= inputVatCreditGoods，则应纳增值税=0 ⇒ taxTotal=0（税金段为 0）
+    // - 若 (a2*GMV) > inputVatCreditGoods，则 taxTotal = ((a2*GMV - inputVatCreditGoods) * (1+surchargeRatio))（线性）
+    const thresholdGmv = a2 > 0 ? inputVatCreditGoods / a2 : 0
 
     const denom0 = 1 - pctCosts - targetNp
     if (!(denom0 > 0)) {
@@ -706,8 +718,8 @@ export default function ProductListingPage() {
     }
     const solved0 = baseCosts / denom0
 
-    const taxSlope = a * (1 + surchargeRatio)
-    const creditAdj = inputVatCredit * (1 + surchargeRatio)
+    const taxSlope = a2 * (1 + surchargeRatio)
+    const creditAdj = inputVatCreditGoods * (1 + surchargeRatio)
     const denomPos = 1 - pctCosts - taxSlope - targetNp
     const solvedPos = denomPos > 0 ? (baseCosts - creditAdj) / denomPos : NaN
 
@@ -729,15 +741,21 @@ export default function ProductListingPage() {
 
     const netRevenue = vat > 0 ? dealGmv / (1 + vat) : dealGmv
     const outputVat = netRevenue * vat
-    const payableVat = Math.max(0, outputVat - inputVatCredit)
-    const surchargeTax = payableVat * surchargeRatio
-    const taxTotal = payableVat + surchargeTax
-    const taxEffectivePct = dealGmv > 0 ? taxTotal / dealGmv : 0
 
     const platformFee = dealGmv * pf
     const adFee = dealGmv * ad
     const shippingFee = shippingFeeFixed
     const fixedCost = dealGmv * fixedPct
+
+    // 平台扣点/广告费：按 6% 专票估算可抵扣进项税额（默认全额可抵扣，业务确认）
+    const inputVatCreditPlatform = platformFee * serviceA
+    const inputVatCreditAd = adFee * serviceA
+    const inputVatCreditTotal = inputVatCreditGoods + inputVatCreditPlatform + inputVatCreditAd
+
+    const payableVat = Math.max(0, outputVat - inputVatCreditTotal)
+    const surchargeTax = payableVat * surchargeRatio
+    const taxTotal = payableVat + surchargeTax
+    const taxEffectivePct = dealGmv > 0 ? taxTotal / dealGmv : 0
 
     const targetNetProfit = dealGmv * targetNp
 
@@ -776,7 +794,10 @@ export default function ProductListingPage() {
 
       net_revenue_ex_tax: netRevenue,
       vat_output: outputVat,
-      input_vat_credit: inputVatCredit,
+      input_vat_credit: inputVatCreditTotal,
+      input_vat_credit_goods: inputVatCreditGoods,
+      input_vat_credit_platform: inputVatCreditPlatform,
+      input_vat_credit_ad: inputVatCreditAd,
       payable_vat: payableVat,
       tax_surcharge: surchargeTax,
       tax_total: taxTotal,
@@ -803,6 +824,7 @@ export default function ProductListingPage() {
       vat_rate_pct: vat * 100,
       vat_surcharge_ratio_pct: surchargeRatio * 100,
       input_vat_credit_pct: inputVatCreditPct * 100,
+      service_vat_rate_pct: serviceVat * 100,
     }
   }, [costingSummary?.total_cost, salesDraft])
 
@@ -1488,7 +1510,13 @@ export default function ProductListingPage() {
 
                       <Descriptions.Item label="不含税收入">{formatMoney2((salesCalc as any).net_revenue_ex_tax)}</Descriptions.Item>
                       <Descriptions.Item label="增值税(销项)">{formatMoney2((salesCalc as any).vat_output)}</Descriptions.Item>
-                      <Descriptions.Item label="进项可抵扣(估算)">{formatMoney2((salesCalc as any).input_vat_credit)}</Descriptions.Item>
+                      <Descriptions.Item label="进项可抵扣(估算)">
+                        {formatMoney2((salesCalc as any).input_vat_credit)}
+                        <div style={{ fontSize: 12, color: '#888' }}>
+                          进厂:{formatMoney2((salesCalc as any).input_vat_credit_goods)} / 平台(6%):{formatMoney2((salesCalc as any).input_vat_credit_platform)} / 广告(6%):
+                          {formatMoney2((salesCalc as any).input_vat_credit_ad)}
+                        </div>
+                      </Descriptions.Item>
                       <Descriptions.Item label="应纳增值税(估算)">{formatMoney2((salesCalc as any).payable_vat)}</Descriptions.Item>
                       <Descriptions.Item label="附加税">{formatMoney2((salesCalc as any).tax_surcharge)}</Descriptions.Item>
                       <Descriptions.Item label="税金合计">{formatMoney2((salesCalc as any).tax_total)}</Descriptions.Item>

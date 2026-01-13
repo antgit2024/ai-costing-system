@@ -37,6 +37,15 @@
      - Docs：按 `DOC/agents/commands.md` 的 4 条 `grep -nF ...` 校验文档存在性
      - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
 
+ - **最近校对（北京时间 GMT+8）**：2026-01-13（Materials：物料用途新增“真实物料（默认）”）
+   - 产物（前端）：
+     - `/costing/materials` → 物料详情 → 成本参数：物料用途增加第四项 **真实物料（默认）**，用于默认回显
+     - 保存口径：选择“真实物料”时，仍按 direct 落库（`metadata_json.usage_class="direct"`），不引入新的后端枚举
+   - 验收命令（必须，全部 0 退出码）：
+     - Frontend：`npm -C frontend run build`
+     - Docs：按 `DOC/agents/commands.md` 的 4 条 `grep -nF ...` 校验文档存在性
+     - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-12（Standard Models：班组切换确认弹窗取消不改下拉 + 下拉展示短ID）
   - 产物（前端）：
     - 班组切换弹窗点击“取消”时：不更新班组选择、不写入 `team_id`（用户要求：取消=不变更）

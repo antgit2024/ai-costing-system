@@ -235,7 +235,7 @@ const getBomDeriveIssue = (record: Material): string | null => {
 const getBomDisplayValue = (record: Material) =>
   typeof record.is_bom_material === 'boolean' ? record.is_bom_material : isBomMaterial(record)
 
-const getUsageClass = (record: Material): 'real' | 'direct' | 'conditional' | 'indirect' | undefined => {
+const getUsageClass = (record: Material): 'direct' | 'conditional' | 'indirect' | undefined => {
   const meta = (record.metadata_json as Record<string, any>) ?? {}
   const raw = String(meta.usage_class ?? '').trim().toLowerCase()
   if (raw === 'direct' || raw === 'conditional' || raw === 'indirect') return raw as any
@@ -244,18 +244,15 @@ const getUsageClass = (record: Material): 'real' | 'direct' | 'conditional' | 'i
   // 兼容你要求的“保留原有勾选值=直接BOM”：
   // - 本地明确标记 BOM=true → 默认 direct
   // - 仅来自宜搭的推导 BOM=true → 默认 direct
-  // UI 诉求：给一个“真实物料（默认）”的显式入口，避免用户误以为必须立刻区分 direct/conditional/indirect。
-  // 落库仍会写成 direct（见 handleCostFormSubmit），不引入新的后端枚举。
-  if (record.is_bom_material === true) return 'real'
+  if (record.is_bom_material === true) return 'direct'
   const bom = getBomDisplayValue(record)
-  if (bom) return 'real'
+  if (bom) return 'direct'
 
   // 未明确分类：保持 undefined（表单默认不选，保存时强制必选）
   return undefined
 }
 
 const MATERIAL_USAGE_OPTIONS = [
-  { label: '真实物料（默认，不改变扣库口径）', value: 'real' },
   { label: '直接BOM物料（产品料/可被变体替换）', value: 'direct' },
   { label: '条件物料（包装/随订单条件出现，按单扣库）', value: 'conditional' },
   { label: '间接耗材（不进BOM/周期领用核算）', value: 'indirect' },
@@ -357,7 +354,7 @@ const getMaterialTypeLabel = (record: Material): string => {
 }
 
 interface CostFormValues {
-  usage_class?: 'real' | 'direct' | 'conditional' | 'indirect'
+  usage_class?: 'direct' | 'conditional' | 'indirect'
   bom_unit?: string
   conversion_purchase_to_bom?: number
   inventory_unit?: string
@@ -681,7 +678,7 @@ const MaterialMasterPage = () => {
     const purchaseUnitPrice = toFiniteNumber(editingMaterial.unit_price)
     const nextUsage = values.usage_class as any
     if (!nextUsage) {
-      message.error('保存失败：请先选择“物料用途”（真实物料 / 直接BOM / 条件物料 / 间接耗材）')
+      message.error('保存失败：请先选择“物料用途”（直接BOM / 条件物料 / 间接耗材）')
       return
     }
     // guardrail: indirect => 非BOM；direct/conditional => BOM
@@ -1474,7 +1471,6 @@ const MaterialMasterPage = () => {
                   rules={[{ required: true, message: '请选择物料用途' }]}
                 >
                   <Radio.Group optionType="button" buttonStyle="solid">
-                    <Radio.Button value="real">真实物料</Radio.Button>
                     <Radio.Button value="direct">直接BOM</Radio.Button>
                     <Radio.Button value="conditional">条件物料</Radio.Button>
                     <Radio.Button value="indirect">间接耗材</Radio.Button>

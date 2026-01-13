@@ -1,5 +1,13 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-13（Materials：回滚“真实物料”用途选项，恢复三选一）
+  - 产物（前端）：
+    - `/costing/materials` → 物料详情 → 成本参数：物料用途保持三选一 **直接BOM / 条件物料 / 间接耗材**（不新增“真实物料”展示项）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的 4 条 `grep -nF ...` 校验文档存在性
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-12（Standard Models：班组下拉隐藏ID仅展示名称）
   - 产物（前端）：
     - 工序行“班组”下拉选项仅展示班组名称（不显示短ID）；内部 value 仍使用 `team.id` 并写入 `metadata_json.team_id`（不影响工资归属主键）
@@ -32,15 +40,6 @@
  - **最近校对（北京时间 GMT+8）**：2026-01-12（Materials：入库单价显示精度修复，避免“BOM单价实时计算看起来错误”）
    - 产物（前端）：
      - `/costing/materials`：入库单价（<1）显示改为 4 位小数（例如 `0.0650`），避免默认货币格式四舍五入成 `0.07` 导致与实时 BOM 单价计算结果不一致的错觉
-   - 验收命令（必须，全部 0 退出码）：
-     - Frontend：`npm -C frontend run build`
-     - Docs：按 `DOC/agents/commands.md` 的 4 条 `grep -nF ...` 校验文档存在性
-     - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
-
- - **最近校对（北京时间 GMT+8）**：2026-01-13（Materials：物料用途新增“真实物料（默认）”）
-   - 产物（前端）：
-     - `/costing/materials` → 物料详情 → 成本参数：物料用途增加第四项 **真实物料（默认）**，用于默认回显
-     - 保存口径：选择“真实物料”时，仍按 direct 落库（`metadata_json.usage_class="direct"`），不引入新的后端枚举
    - 验收命令（必须，全部 0 退出码）：
      - Frontend：`npm -C frontend run build`
      - Docs：按 `DOC/agents/commands.md` 的 4 条 `grep -nF ...` 校验文档存在性

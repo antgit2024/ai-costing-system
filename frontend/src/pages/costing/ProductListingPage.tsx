@@ -72,13 +72,34 @@ type BundleTestDraft = {
 
 type SalesPricingDraft = {
   channel: 'tmall' | 'jd' | 'xhs' | 'douyin'
-  gross_margin_pct: number
+  // 商品定位（用于预设参数，不落库）
+  product_tier: 'traffic' | 'profit' | 'brand'
+
+  // 目标与比例（均以“含税成交价（GMV）”为分母；毛利/利润按“不含税收入”展示）
+  target_net_profit_pct: number
   platform_fee_pct: number
+  ad_fee_pct: number
+  shipping_fee_pct: number
   payment_fee_pct: number
+  fixed_cost_pct: number
+
+  // 退货：双重成本（物流损耗可并入 shipping_fee_pct；价值折损单列）
+  return_rate_pct: number
+  unsellable_ratio_pct: number
+
+  // 税金：一般纳税人，按不含税收入计
+  vat_rate_pct: number
+  vat_surcharge_ratio_pct: number // 附加税≈增值税的 12%（可调）
+
+  // 标价与活动
   promo_discount_pct: number
-  shipping_fee: number
-  packaging_fee: number
-  aftersale_fee: number
+
+  // 固定金额项（按件）
+  shipping_fee_fixed: number
+  packaging_fee_fixed: number
+  aftersale_fee_fixed: number
+
+  // 场景字段（后续可对接字典/同步）
   city: string
   courier: string
   campaign: string
@@ -86,12 +107,33 @@ type SalesPricingDraft = {
 
 const CHANNEL_PRESETS: Record<
   SalesPricingDraft['channel'],
-  { label: string; platform_fee_pct: number; payment_fee_pct: number }
+  {
+    label: string
+    platform_fee_pct: number
+    payment_fee_pct: number
+    ad_fee_pct: number
+    shipping_fee_pct: number
+  }
 > = {
-  tmall: { label: '天猫', platform_fee_pct: 5, payment_fee_pct: 0.6 },
-  jd: { label: '京东', platform_fee_pct: 6, payment_fee_pct: 0.6 },
-  xhs: { label: '小红书', platform_fee_pct: 5, payment_fee_pct: 0.6 },
-  douyin: { label: '抖店', platform_fee_pct: 5, payment_fee_pct: 0.6 },
+  tmall: { label: '天猫', platform_fee_pct: 9, payment_fee_pct: 0.6, ad_fee_pct: 15, shipping_fee_pct: 10 },
+  jd: { label: '京东', platform_fee_pct: 9, payment_fee_pct: 0.6, ad_fee_pct: 12, shipping_fee_pct: 10 },
+  xhs: { label: '小红书', platform_fee_pct: 9, payment_fee_pct: 0.6, ad_fee_pct: 15, shipping_fee_pct: 10 },
+  douyin: { label: '抖店', platform_fee_pct: 9, payment_fee_pct: 0.6, ad_fee_pct: 18, shipping_fee_pct: 10 },
+}
+
+const TIER_PRESETS: Record<
+  SalesPricingDraft['product_tier'],
+  {
+    label: string
+    target_net_profit_pct: number
+    fixed_cost_pct: number
+    return_rate_pct: number
+    unsellable_ratio_pct: number
+  }
+> = {
+  traffic: { label: '引流款', target_net_profit_pct: 2, fixed_cost_pct: 15, return_rate_pct: 10, unsellable_ratio_pct: 30 },
+  profit: { label: '利润款', target_net_profit_pct: 10, fixed_cost_pct: 18, return_rate_pct: 15, unsellable_ratio_pct: 50 },
+  brand: { label: '形象款', target_net_profit_pct: 15, fixed_cost_pct: 20, return_rate_pct: 12, unsellable_ratio_pct: 40 },
 }
 
 const CITY_OPTIONS = ['上海', '北京', '杭州', '深圳', '广州', '成都', '武汉', '苏州', '南京', '重庆', '西安'].map((x) => ({
@@ -153,13 +195,21 @@ export default function ProductListingPage() {
 
   const [salesDraft, setSalesDraft] = useState<SalesPricingDraft>({
     channel: 'tmall',
-    gross_margin_pct: 35,
     platform_fee_pct: CHANNEL_PRESETS.tmall.platform_fee_pct,
     payment_fee_pct: CHANNEL_PRESETS.tmall.payment_fee_pct,
+    ad_fee_pct: CHANNEL_PRESETS.tmall.ad_fee_pct,
+    shipping_fee_pct: CHANNEL_PRESETS.tmall.shipping_fee_pct,
+    fixed_cost_pct: TIER_PRESETS.profit.fixed_cost_pct,
+    target_net_profit_pct: TIER_PRESETS.profit.target_net_profit_pct,
+    product_tier: 'profit',
+    return_rate_pct: TIER_PRESETS.profit.return_rate_pct,
+    unsellable_ratio_pct: TIER_PRESETS.profit.unsellable_ratio_pct,
+    vat_rate_pct: 13,
+    vat_surcharge_ratio_pct: 12,
     promo_discount_pct: 0,
-    shipping_fee: 8,
-    packaging_fee: 2,
-    aftersale_fee: 0,
+    shipping_fee_fixed: 0,
+    packaging_fee_fixed: 2,
+    aftersale_fee_fixed: 0,
     city: '上海',
     courier: '中通',
     campaign: 'daily',
@@ -593,43 +643,101 @@ export default function ProductListingPage() {
   }, [bom, processLines])
 
   const salesCalc = useMemo(() => {
+    // 进厂价（单位成本，含制造费等）：从 BOM 预演得到
     const factoryCost = toNumberOrNull(costingSummary?.total_cost)
     if (factoryCost == null) return null
 
-    const gm = clamp01(Number(salesDraft.gross_margin_pct ?? 0) / 100)
+    // All % are based on GMV (tax-included deal price)
+    const targetNp = clamp01(Number(salesDraft.target_net_profit_pct ?? 0) / 100)
     const pf = clamp01(Number(salesDraft.platform_fee_pct ?? 0) / 100)
+    const ad = clamp01(Number(salesDraft.ad_fee_pct ?? 0) / 100)
+    const shipPct = clamp01(Number(salesDraft.shipping_fee_pct ?? 0) / 100)
     const payf = clamp01(Number(salesDraft.payment_fee_pct ?? 0) / 100)
-    const disc = clamp01(Number(salesDraft.promo_discount_pct ?? 0) / 100)
+    const fixedPct = clamp01(Number(salesDraft.fixed_cost_pct ?? 0) / 100)
+
+    const vat = clamp01(Number(salesDraft.vat_rate_pct ?? 0) / 100)
+    const surchargeRatio = clamp01(Number(salesDraft.vat_surcharge_ratio_pct ?? 0) / 100)
+
+    // GMV -> net-of-tax revenue
+    // output_vat = net * vat ; surcharge = output_vat * surchargeRatio
+    // => tax_total = net * vat * (1+surchargeRatio) = GMV/(1+vat) * vat * (1+surchargeRatio)
+    const taxEffectivePct = vat > 0 ? (vat * (1 + surchargeRatio)) / (1 + vat) : 0
+
+    // Returns: value loss approx = return_rate * unsellable_ratio * factoryCost
+    const rr = clamp01(Number(salesDraft.return_rate_pct ?? 0) / 100)
+    const uns = clamp01(Number(salesDraft.unsellable_ratio_pct ?? 0) / 100)
+    const returnValueLoss = factoryCost * rr * uns
 
     const fixedFees =
-      Math.max(0, Number(salesDraft.shipping_fee ?? 0)) +
-      Math.max(0, Number(salesDraft.packaging_fee ?? 0)) +
-      Math.max(0, Number(salesDraft.aftersale_fee ?? 0))
+      Math.max(0, Number(salesDraft.shipping_fee_fixed ?? 0)) +
+      Math.max(0, Number(salesDraft.packaging_fee_fixed ?? 0)) +
+      Math.max(0, Number(salesDraft.aftersale_fee_fixed ?? 0))
 
-    const denom = 1 - gm - pf - payf
+    // Solve GMV:
+    // GMV - (pct_costs*GMV) - taxEffectivePct*GMV - factoryCost - fixedFees - returnValueLoss = targetNp*GMV
+    // => GMV*(1 - pct_costs - taxEffectivePct - targetNp) = factoryCost + fixedFees + returnValueLoss
+    const pctCosts = pf + ad + shipPct + payf + fixedPct
+    const denom = 1 - pctCosts - taxEffectivePct - targetNp
     if (!(denom > 0)) {
-      return { error: '费率合计过高：毛利% + 平台费% + 支付费% 必须 < 100%' }
+      return { error: '占比过高：平台/广告/快递/支付/固定成本/税金/目标净利 合计必须 < 100%' }
     }
 
-    // 到手价（成交价）：覆盖进厂价 + 固定费用，并同时满足毛利%与百分比费用
-    const dealPrice = (factoryCost + fixedFees) / denom
-    const platformFee = dealPrice * pf
-    const paymentFee = dealPrice * payf
-    const profit = dealPrice * gm
-    const listPrice = disc > 0 ? dealPrice / (1 - disc) : dealPrice
+    const dealGmv = (factoryCost + fixedFees + returnValueLoss) / denom
+
+    const netRevenue = vat > 0 ? dealGmv / (1 + vat) : dealGmv
+    const outputVat = netRevenue * vat
+    const surchargeTax = outputVat * surchargeRatio
+    const taxTotal = outputVat + surchargeTax
+
+    const platformFee = dealGmv * pf
+    const adFee = dealGmv * ad
+    const shippingFee = dealGmv * shipPct + Math.max(0, Number(salesDraft.shipping_fee_fixed ?? 0))
+    const paymentFee = dealGmv * payf
+    const fixedCost = dealGmv * fixedPct
+
+    const targetNetProfit = dealGmv * targetNp
+
+    // 标价：如果有活动折扣（标价 * (1-折扣)=成交价）
+    const disc = clamp01(Number(salesDraft.promo_discount_pct ?? 0) / 100)
+    const listPrice = disc > 0 ? dealGmv / (1 - disc) : dealGmv
+
+    // 毛利（不含税口径）：(不含税收入 - 产品成本) / 不含税收入
+    const grossProfitExTax = netRevenue - factoryCost
+    const grossMarginExTaxPct = netRevenue > 0 ? (grossProfitExTax / netRevenue) * 100 : 0
 
     return {
       factory_cost: factoryCost,
-      fixed_fees: fixedFees,
-      deal_price: dealPrice,
+      deal_gmv: dealGmv,
       list_price: listPrice,
       promo_discount_pct: disc * 100,
+
+      net_revenue_ex_tax: netRevenue,
+      vat_output: outputVat,
+      tax_surcharge: surchargeTax,
+      tax_total: taxTotal,
+      tax_effective_pct: taxEffectivePct * 100,
+
       platform_fee: platformFee,
+      ad_fee: adFee,
+      shipping_fee: shippingFee,
       payment_fee: paymentFee,
-      profit,
-      gross_margin_pct: gm * 100,
-      platform_fee_pct: pf * 100,
-      payment_fee_pct: payf * 100,
+      fixed_cost: fixedCost,
+      fixed_fees: fixedFees,
+      return_value_loss: returnValueLoss,
+
+      target_net_profit: targetNetProfit,
+      target_net_profit_pct: targetNp * 100,
+      gross_margin_ex_tax_pct: grossMarginExTaxPct,
+
+      pct_platform: pf * 100,
+      pct_ad: ad * 100,
+      pct_ship: shipPct * 100,
+      pct_pay: payf * 100,
+      pct_fixed: fixedPct * 100,
+      return_rate_pct: rr * 100,
+      unsellable_ratio_pct: uns * 100,
+      vat_rate_pct: vat * 100,
+      vat_surcharge_ratio_pct: surchargeRatio * 100,
     }
   }, [costingSummary?.total_cost, salesDraft])
 
@@ -688,7 +796,7 @@ export default function ProductListingPage() {
                   { key: 'single', label: '模型测试' },
                   { key: 'multi', label: '套装测试' },
                   { key: 'spec_gen', label: '规格生成' },
-                  { key: 'sales', label: '售价测算' },
+                  { key: 'sales', label: '利润推演' },
                 ]}
               />
 
@@ -927,11 +1035,31 @@ export default function ProductListingPage() {
                     onChange={(e) => setDraft((d) => ({ ...d, spec_text: e.target.value }))}
                   />
 
-                  <Card size="small" title="销售参数（输入）">
+                  <Card size="small" title="成本构成分析与利润模型推演（输入）">
                     <Space direction="vertical" style={{ width: '100%' }} size={10}>
                       <Space wrap>
                         <Select
-                          style={{ width: 160 }}
+                          style={{ width: 140 }}
+                          value={salesDraft.product_tier}
+                          options={(Object.keys(TIER_PRESETS) as SalesPricingDraft['product_tier'][]).map((k) => ({
+                            value: k,
+                            label: TIER_PRESETS[k].label,
+                          }))}
+                          onChange={(v) => {
+                            const tier = v as SalesPricingDraft['product_tier']
+                            const preset = TIER_PRESETS[tier]
+                            setSalesDraft((d) => ({
+                              ...d,
+                              product_tier: tier,
+                              target_net_profit_pct: preset.target_net_profit_pct,
+                              fixed_cost_pct: preset.fixed_cost_pct,
+                              return_rate_pct: preset.return_rate_pct,
+                              unsellable_ratio_pct: preset.unsellable_ratio_pct,
+                            }))
+                          }}
+                        />
+                        <Select
+                          style={{ width: 140 }}
                           value={salesDraft.channel}
                           options={(Object.keys(CHANNEL_PRESETS) as SalesPricingDraft['channel'][]).map((k) => ({
                             value: k,
@@ -945,86 +1073,37 @@ export default function ProductListingPage() {
                               channel: ch,
                               platform_fee_pct: preset.platform_fee_pct,
                               payment_fee_pct: preset.payment_fee_pct,
+                              ad_fee_pct: preset.ad_fee_pct,
+                              shipping_fee_pct: preset.shipping_fee_pct,
                             }))
                           }}
                         />
-                        <Select
-                          style={{ width: 140 }}
-                          options={CITY_OPTIONS as any}
-                          value={salesDraft.city}
-                          onChange={(v) => setSalesDraft((d) => ({ ...d, city: String(v) }))}
-                        />
-                        <Select
-                          style={{ width: 140 }}
-                          options={COURIER_OPTIONS as any}
-                          value={salesDraft.courier}
-                          onChange={(v) => setSalesDraft((d) => ({ ...d, courier: String(v) }))}
-                        />
-                        <Select
-                          style={{ width: 140 }}
-                          options={CAMPAIGN_OPTIONS as any}
-                          value={salesDraft.campaign}
-                          onChange={(v) => setSalesDraft((d) => ({ ...d, campaign: String(v) }))}
-                        />
+                        <Select style={{ width: 120 }} options={CITY_OPTIONS as any} value={salesDraft.city} onChange={(v) => setSalesDraft((d) => ({ ...d, city: String(v) }))} />
+                        <Select style={{ width: 120 }} options={COURIER_OPTIONS as any} value={salesDraft.courier} onChange={(v) => setSalesDraft((d) => ({ ...d, courier: String(v) }))} />
+                        <Select style={{ width: 120 }} options={CAMPAIGN_OPTIONS as any} value={salesDraft.campaign} onChange={(v) => setSalesDraft((d) => ({ ...d, campaign: String(v) }))} />
                       </Space>
 
                       <Space wrap>
-                        <InputNumber
-                          addonBefore="毛利%"
-                          min={0}
-                          max={90}
-                          precision={2}
-                          value={salesDraft.gross_margin_pct}
-                          onChange={(v) => setSalesDraft((d) => ({ ...d, gross_margin_pct: Number(v ?? 0) }))}
-                        />
-                        <InputNumber
-                          addonBefore="平台费%"
-                          min={0}
-                          max={50}
-                          precision={2}
-                          value={salesDraft.platform_fee_pct}
-                          onChange={(v) => setSalesDraft((d) => ({ ...d, platform_fee_pct: Number(v ?? 0) }))}
-                        />
-                        <InputNumber
-                          addonBefore="支付费%"
-                          min={0}
-                          max={10}
-                          precision={2}
-                          value={salesDraft.payment_fee_pct}
-                          onChange={(v) => setSalesDraft((d) => ({ ...d, payment_fee_pct: Number(v ?? 0) }))}
-                        />
-                        <InputNumber
-                          addonBefore="活动折扣%"
-                          min={0}
-                          max={90}
-                          precision={2}
-                          value={salesDraft.promo_discount_pct}
-                          onChange={(v) => setSalesDraft((d) => ({ ...d, promo_discount_pct: Number(v ?? 0) }))}
-                        />
+                        <InputNumber addonBefore="目标净利%" min={0} max={30} precision={2} value={salesDraft.target_net_profit_pct} onChange={(v) => setSalesDraft((d) => ({ ...d, target_net_profit_pct: Number(v ?? 0) }))} />
+                        <InputNumber addonBefore="广告费%" min={0} max={50} precision={2} value={salesDraft.ad_fee_pct} onChange={(v) => setSalesDraft((d) => ({ ...d, ad_fee_pct: Number(v ?? 0) }))} />
+                        <InputNumber addonBefore="平台扣点%" min={0} max={50} precision={2} value={salesDraft.platform_fee_pct} onChange={(v) => setSalesDraft((d) => ({ ...d, platform_fee_pct: Number(v ?? 0) }))} />
+                        <InputNumber addonBefore="快递费%" min={0} max={50} precision={2} value={salesDraft.shipping_fee_pct} onChange={(v) => setSalesDraft((d) => ({ ...d, shipping_fee_pct: Number(v ?? 0) }))} />
+                        <InputNumber addonBefore="支付费%" min={0} max={10} precision={2} value={salesDraft.payment_fee_pct} onChange={(v) => setSalesDraft((d) => ({ ...d, payment_fee_pct: Number(v ?? 0) }))} />
+                        <InputNumber addonBefore="固定成本%" min={0} max={40} precision={2} value={salesDraft.fixed_cost_pct} onChange={(v) => setSalesDraft((d) => ({ ...d, fixed_cost_pct: Number(v ?? 0) }))} />
                       </Space>
 
                       <Space wrap>
-                        <InputNumber
-                          addonBefore="运费(元)"
-                          min={0}
-                          precision={2}
-                          value={salesDraft.shipping_fee}
-                          onChange={(v) => setSalesDraft((d) => ({ ...d, shipping_fee: Number(v ?? 0) }))}
-                        />
-                        <InputNumber
-                          addonBefore="包装(元)"
-                          min={0}
-                          precision={2}
-                          value={salesDraft.packaging_fee}
-                          onChange={(v) => setSalesDraft((d) => ({ ...d, packaging_fee: Number(v ?? 0) }))}
-                        />
-                        <InputNumber
-                          addonBefore="售后(元)"
-                          min={0}
-                          precision={2}
-                          value={salesDraft.aftersale_fee}
-                          onChange={(v) => setSalesDraft((d) => ({ ...d, aftersale_fee: Number(v ?? 0) }))}
-                        />
+                        <InputNumber addonBefore="退货率%" min={0} max={60} precision={2} value={salesDraft.return_rate_pct} onChange={(v) => setSalesDraft((d) => ({ ...d, return_rate_pct: Number(v ?? 0) }))} />
+                        <InputNumber addonBefore="不可售占比%" min={0} max={100} precision={2} value={salesDraft.unsellable_ratio_pct} onChange={(v) => setSalesDraft((d) => ({ ...d, unsellable_ratio_pct: Number(v ?? 0) }))} />
+                        <InputNumber addonBefore="增值税%" min={0} max={20} precision={2} value={salesDraft.vat_rate_pct} onChange={(v) => setSalesDraft((d) => ({ ...d, vat_rate_pct: Number(v ?? 0) }))} />
+                        <InputNumber addonBefore="附加税/增值税%" min={0} max={50} precision={2} value={salesDraft.vat_surcharge_ratio_pct} onChange={(v) => setSalesDraft((d) => ({ ...d, vat_surcharge_ratio_pct: Number(v ?? 0) }))} />
+                        <InputNumber addonBefore="活动折扣%" min={0} max={90} precision={2} value={salesDraft.promo_discount_pct} onChange={(v) => setSalesDraft((d) => ({ ...d, promo_discount_pct: Number(v ?? 0) }))} />
+                      </Space>
+
+                      <Space wrap>
+                        <InputNumber addonBefore="运费(元)" min={0} precision={2} value={salesDraft.shipping_fee_fixed} onChange={(v) => setSalesDraft((d) => ({ ...d, shipping_fee_fixed: Number(v ?? 0) }))} />
+                        <InputNumber addonBefore="包装(元)" min={0} precision={2} value={salesDraft.packaging_fee_fixed} onChange={(v) => setSalesDraft((d) => ({ ...d, packaging_fee_fixed: Number(v ?? 0) }))} />
+                        <InputNumber addonBefore="售后(元)" min={0} precision={2} value={salesDraft.aftersale_fee_fixed} onChange={(v) => setSalesDraft((d) => ({ ...d, aftersale_fee_fixed: Number(v ?? 0) }))} />
                       </Space>
                     </Space>
                   </Card>
@@ -1287,8 +1366,8 @@ export default function ProductListingPage() {
                 <Alert
                   type="info"
                   showIcon
-                  message="售价测算结果（只读）"
-                  description="到手价（成交价）=(进厂价+固定费用)/(1-毛利%-平台费%-支付费%)；标价=到手价/(1-活动折扣%)。"
+                  message="利润推演结果（只读）"
+                  description="一般纳税人：毛利/利润按不含税收入口径展示。成交价为“含税到手价（GMV）”，税金按增值税及附加估算，退货损失按“退货率×不可售占比×产品成本”估算。"
                 />
                 {!costingSummary ? (
                   <Alert type="warning" showIcon message="请先在左侧点“解析 + 预演 BOM”生成合计成本（进厂价）。" />
@@ -1298,19 +1377,34 @@ export default function ProductListingPage() {
                   <Card size="small" title="测算结果（建议）">
                     <Descriptions bordered size="small" column={3}>
                       <Descriptions.Item label="进厂价/单位成本">{formatMoney2((salesCalc as any).factory_cost)}</Descriptions.Item>
-                      <Descriptions.Item label="到手价（成交价）">
-                        <b>{formatMoney2((salesCalc as any).deal_price)}</b>
+                      <Descriptions.Item label="含税到手价（成交）">
+                        <b>{formatMoney2((salesCalc as any).deal_gmv)}</b>
                       </Descriptions.Item>
                       <Descriptions.Item label="建议标价">
                         <b>{formatMoney2((salesCalc as any).list_price)}</b>
                       </Descriptions.Item>
-                      <Descriptions.Item label="毛利额（元）">{formatMoney2((salesCalc as any).profit)}</Descriptions.Item>
-                      <Descriptions.Item label="平台费（元）">{formatMoney2((salesCalc as any).platform_fee)}</Descriptions.Item>
-                      <Descriptions.Item label="支付费（元）">{formatMoney2((salesCalc as any).payment_fee)}</Descriptions.Item>
-                      <Descriptions.Item label="固定费用（元）">{formatMoney2((salesCalc as any).fixed_fees)}</Descriptions.Item>
-                      <Descriptions.Item label="毛利%">{String((salesCalc as any).gross_margin_pct.toFixed(2))}%</Descriptions.Item>
-                      <Descriptions.Item label="活动折扣%">{String((salesCalc as any).promo_discount_pct.toFixed(2))}%</Descriptions.Item>
+
+                      <Descriptions.Item label="不含税收入">{formatMoney2((salesCalc as any).net_revenue_ex_tax)}</Descriptions.Item>
+                      <Descriptions.Item label="增值税(销项)">{formatMoney2((salesCalc as any).vat_output)}</Descriptions.Item>
+                      <Descriptions.Item label="附加税">{formatMoney2((salesCalc as any).tax_surcharge)}</Descriptions.Item>
+                      <Descriptions.Item label="税金合计">{formatMoney2((salesCalc as any).tax_total)}</Descriptions.Item>
+                      <Descriptions.Item label="税金等效占比(含税)">{String(Number((salesCalc as any).tax_effective_pct ?? 0).toFixed(2))}%</Descriptions.Item>
+                      <Descriptions.Item label="不含税毛利率">{String(Number((salesCalc as any).gross_margin_ex_tax_pct ?? 0).toFixed(2))}%</Descriptions.Item>
+
+                      <Descriptions.Item label="平台费(元)">{formatMoney2((salesCalc as any).platform_fee)}</Descriptions.Item>
+                      <Descriptions.Item label="广告费(元)">{formatMoney2((salesCalc as any).ad_fee)}</Descriptions.Item>
+                      <Descriptions.Item label="快递费(元)">{formatMoney2((salesCalc as any).shipping_fee)}</Descriptions.Item>
+                      <Descriptions.Item label="支付费(元)">{formatMoney2((salesCalc as any).payment_fee)}</Descriptions.Item>
+                      <Descriptions.Item label="固定成本(元)">{formatMoney2((salesCalc as any).fixed_cost)}</Descriptions.Item>
+                      <Descriptions.Item label="固定费用(元)">{formatMoney2((salesCalc as any).fixed_fees)}</Descriptions.Item>
+                      <Descriptions.Item label="退货价值损失(元)">{formatMoney2((salesCalc as any).return_value_loss)}</Descriptions.Item>
+                      <Descriptions.Item label="目标净利(元)">{formatMoney2((salesCalc as any).target_net_profit)}</Descriptions.Item>
+                      <Descriptions.Item label="目标净利%(含税)">{String(Number((salesCalc as any).target_net_profit_pct ?? 0).toFixed(2))}%</Descriptions.Item>
                     </Descriptions>
+                    <Divider style={{ margin: '10px 0' }} />
+                    <Text type="secondary">
+                      反推公式：GMV = (产品成本 + 固定费用 + 退货价值损失) / (1 − 平台费% − 广告费% − 快递费% − 支付费% − 固定成本% − 税金等效% − 目标净利%)
+                    </Text>
                   </Card>
                 ) : null}
               </Space>

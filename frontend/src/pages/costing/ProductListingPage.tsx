@@ -124,10 +124,10 @@ const CHANNEL_PRESETS: Record<
     ad_fee_pct: number
   }
 > = {
-  tmall: { label: '天猫', platform_fee_pct: 9.6, ad_fee_pct: 15 },
-  jd: { label: '京东', platform_fee_pct: 9.6, ad_fee_pct: 12 },
-  xhs: { label: '小红书', platform_fee_pct: 9.6, ad_fee_pct: 15 },
-  douyin: { label: '抖店', platform_fee_pct: 9.6, ad_fee_pct: 18 },
+  tmall: { label: '天猫', platform_fee_pct: 9, ad_fee_pct: 15 },
+  jd: { label: '京东', platform_fee_pct: 9, ad_fee_pct: 12 },
+  xhs: { label: '小红书', platform_fee_pct: 9, ad_fee_pct: 15 },
+  douyin: { label: '抖店', platform_fee_pct: 9, ad_fee_pct: 18 },
 }
 
 const TIER_PRESETS: Record<
@@ -213,7 +213,7 @@ export default function ProductListingPage() {
     unsellable_ratio_pct: TIER_PRESETS.profit.unsellable_ratio_pct,
     vat_rate_pct: 13,
     vat_surcharge_ratio_pct: 12,
-    input_vat_credit_pct: 70,
+    input_vat_credit_pct: 60,
     promo_discount_pct: 0,
     pricing_mode: 'solve',
     deal_gmv_input: 85,

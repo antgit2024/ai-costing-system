@@ -1,5 +1,16 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-13（Product Listing：利润推演口径调整：快递费改按件金额、支付费并入平台扣点）
+  - 产物（前端）：
+    - `/costing/product-listing` → 左侧 Tab “利润推演”：
+      - **快递费**：从“快递费%”改为 **快递费(元/件)**（更贴近低客单价商品）
+      - **支付费**：不再单列输入与拆解（默认视为已包含在平台扣点中）
+      - 反推公式与结果拆解同步更新
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的 4 条 `grep -nF ...` 校验文档存在性
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-13（Materials：回滚“真实物料”用途选项，恢复三选一）
   - 产物（前端）：
     - `/costing/materials` → 物料详情 → 成本参数：物料用途保持三选一 **直接BOM / 条件物料 / 间接耗材**（不新增“真实物料”展示项）

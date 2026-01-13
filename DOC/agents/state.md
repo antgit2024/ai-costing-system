@@ -222,6 +222,25 @@
     - 小程序接入前提：公网 HTTPS 合法域名；内网“本地服务器”不可直连小程序
   - 验收命令（必须，1条）：`grep -nF "POD 个性化定制（先印布）— Phase0 落地蓝图（以抱枕为例）" DOC/costing/blueprints/pod_personalization_print_pipeline_phase0.md`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-13（Planner-Optimization：Rules Agent（规则/培训）接力准备）
+  - 产物：
+    - `DOC/agents/handoff_rules.md`
+    - `DOC/costing/manuals/rules_training_handbook_v1.md`
+  - 目标：
+    - 将测试过程形成的规则沉淀为可培训教程（新人入口 + 规则条目模板）
+    - 将口径变更统一记入 `DOC/agents/task_log.md`，避免后续越做越乱
+  - 验收命令（必须，1条）：`grep -nF "## Rules Agent 接力包（规则/培训专用）" DOC/agents/handoff_rules.md && grep -nF "## 规则与培训手册（v1）— 新人必读入口" DOC/costing/manuals/rules_training_handbook_v1.md`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-13（Models：打样/标准入口强隔离（不再互相“自动出现在对方列表”））
+  - 产物（前端）：
+    - `/costing/standard-models`：只展示“标准入口”或“存在标准版本”的模型（只有推导/创建过标准版本才会出现）
+    - `/costing/sample-models`：只展示“打样入口”或“存在打样版本”的模型
+    - `/costing/materials` → 物料详情 → “模型版本清单引用”：按 `version_kind` 正确跳转（sample→打样页，standard→标准页），避免“打样版本在标准入口打开”
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档 grep/test -d 校验
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：工艺模块新建提醒：在“结构适用范围”规则说明区块下方，展示当前所选 slot 的“驱动量/备注”（来自结构标准 slot_defs），用于提醒新建工艺模块的人；验收 `npm -C frontend run build`）
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：标准模型清单编辑：删除工艺模块不再触发 `sync-from-modules`（避免覆盖版本层已替换物料/调参导致“占位回滚”错觉）；改为仅删除该模块关联行并保存版本清单；验收 `npm -C frontend run build`）
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend+Backend：版本图片支持删除：新增 `DELETE /api/planner/product-model-versions/{version_id}/images/{image_index}`；标准模型/打样模型“基础信息”Tab 的版本图片缩略图增加删除按钮；验收 `npm -C frontend run build`）

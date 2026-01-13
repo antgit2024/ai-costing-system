@@ -67,7 +67,7 @@ import {
 } from '@/constants/calculationMethods'
 import { isAxiosError } from 'axios'
 import GuideDrawer from '@/components/common/GuideDrawer'
-import materialsGuide from '@/guides/materials_guide.md?raw'
+import materialsGuide from '@doc/costing/manuals/guides/materials_guide.md?raw'
 
 const { Title, Text } = Typography
 const { PreviewGroup } = Image
@@ -1718,14 +1718,16 @@ const MaterialMasterPage = () => {
                             <Button
                               type="link"
                               size="small"
-                              onClick={() =>
-                                navigate('/costing/standard-models', {
+                              onClick={() => {
+                                const kind = String(row?.version_kind ?? '').trim().toLowerCase()
+                                const to = kind === 'sample' ? '/costing/sample-models' : '/costing/standard-models'
+                                navigate(to, {
                                   state: {
                                     openModelId: String(row?.model_id ?? ''),
                                     openVersionId: String(row?.version_id ?? ''),
                                   },
                                 })
-                              }
+                              }}
                             >
                               打开
                             </Button>

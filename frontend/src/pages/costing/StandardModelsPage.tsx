@@ -131,8 +131,16 @@ export default function StandardModelsPage() {
   })
 
   const listItems = useMemo(() => {
-    // 标准列表：为了“可见即可删/可见可查”，不再做 entry_context/版本数过滤（需要时可打开“显示已归档”）。
-    return ((((listQuery.data as any)?.items ?? []) as any[]) || []).slice()
+    // 标准列表：只展示“标准入口”或“存在标准版本”的模型。
+    // 目的：确保打样模型不会“自动出现在标准模型列表”，只有推导/创建过标准版本才会出现。
+    const raw = ((((listQuery.data as any)?.items ?? []) as any[]) || []).slice()
+    return raw.filter((r: any) => {
+      const meta: any = r?.metadata_json ?? {}
+      const entry = String(meta?.entry_context ?? '').trim().toLowerCase()
+      const stdCnt = Number((r as any)?.standard_version_count ?? 0)
+      const hasPublishedStd = Boolean((r as any)?.current_published_standard_version_id)
+      return entry === 'standard' || (Number.isFinite(stdCnt) && stdCnt > 0) || hasPublishedStd
+    })
   }, [listQuery.data])
 
   const filteredItems = useMemo(() => {

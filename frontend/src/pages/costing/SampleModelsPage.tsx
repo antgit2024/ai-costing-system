@@ -42,8 +42,16 @@ export default function SampleModelsPage() {
   })
 
   const listItems = useMemo(() => {
-    // 打样列表：为了“可见即可删/可见可查”，不再做 entry_context/版本数过滤（需要时可打开“显示已归档”）。
-    return ((((listQuery.data as any)?.items ?? []) as any[]) || []).slice()
+    // 打样列表：只展示“打样入口”或“存在打样版本”的模型。
+    // 目的：确保标准模型不会“自动出现在打样模型列表”，只有存在打样版本才会出现。
+    const raw = ((((listQuery.data as any)?.items ?? []) as any[]) || []).slice()
+    return raw.filter((r: any) => {
+      const meta: any = r?.metadata_json ?? {}
+      const entry = String(meta?.entry_context ?? '').trim().toLowerCase()
+      const sampleCnt = Number((r as any)?.sample_version_count ?? 0)
+      const hasLatestSample = Boolean(String((r as any)?.latest_sample_version_id ?? '').trim())
+      return entry === 'sample' || (Number.isFinite(sampleCnt) && sampleCnt > 0) || hasLatestSample
+    })
   }, [listQuery.data])
 
   const handleDeleteModel = async (model: ProductModel) => {

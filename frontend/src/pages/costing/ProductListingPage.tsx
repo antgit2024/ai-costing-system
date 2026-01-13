@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { Alert, Button, Card, Col, Descriptions, Divider, Empty, Input, InputNumber, Row, Select, Space, Table, Tabs, Tag, Typography, message } from 'antd'
+import { Alert, Button, Card, Col, Descriptions, Divider, Empty, Input, InputNumber, Radio, Row, Select, Space, Table, Tabs, Tag, Typography, message } from 'antd'
 import { isAxiosError } from 'axios'
 
 import BundlePhraseListPanel from '@/components/costing/BundlePhraseListPanel'
@@ -74,6 +74,13 @@ type SalesPricingDraft = {
   channel: 'tmall' | 'jd' | 'xhs' | 'douyin'
   // 商品定位（用于预设参数，不落库）
   product_tier: 'traffic' | 'profit' | 'brand'
+
+  // 计算模式：
+  // - solve: 反推“券后成交价(GMV)”满足目标净利%
+  // - diagnose: 给定券后成交价/标价，诊断净利率与成本拆解
+  pricing_mode: 'solve' | 'diagnose'
+  deal_gmv_input: number
+  list_price_input: number
 
   // 目标与比例（均以“含税成交价（GMV）”为分母；毛利/利润按“不含税收入”展示）
   target_net_profit_pct: number
@@ -207,6 +214,9 @@ export default function ProductListingPage() {
     vat_rate_pct: 13,
     vat_surcharge_ratio_pct: 12,
     promo_discount_pct: 0,
+    pricing_mode: 'solve',
+    deal_gmv_input: 85,
+    list_price_input: 98.9,
     shipping_fee_fixed: 0,
     packaging_fee_fixed: 2,
     aftersale_fee_fixed: 0,
@@ -673,7 +683,7 @@ export default function ProductListingPage() {
       Math.max(0, Number(salesDraft.packaging_fee_fixed ?? 0)) +
       Math.max(0, Number(salesDraft.aftersale_fee_fixed ?? 0))
 
-    // Solve GMV:
+    // Solve GMV (when pricing_mode=solve):
     // GMV - (pct_costs*GMV) - taxEffectivePct*GMV - factoryCost - fixedFees - returnValueLoss = targetNp*GMV
     // => GMV*(1 - pct_costs - taxEffectivePct - targetNp) = factoryCost + fixedFees + returnValueLoss
     const pctCosts = pf + ad + shipPct + payf + fixedPct
@@ -682,7 +692,11 @@ export default function ProductListingPage() {
       return { error: '占比过高：平台/广告/快递/支付/固定成本/税金/目标净利 合计必须 < 100%' }
     }
 
-    const dealGmv = (factoryCost + fixedFees + returnValueLoss) / denom
+    const solvedDealGmv = (factoryCost + fixedFees + returnValueLoss) / denom
+    const dealGmv =
+      String(salesDraft.pricing_mode) === 'diagnose'
+        ? Math.max(0, Number(salesDraft.deal_gmv_input ?? 0))
+        : solvedDealGmv
 
     const netRevenue = vat > 0 ? dealGmv / (1 + vat) : dealGmv
     const outputVat = netRevenue * vat
@@ -699,17 +713,37 @@ export default function ProductListingPage() {
 
     // 标价：如果有活动折扣（标价 * (1-折扣)=成交价）
     const disc = clamp01(Number(salesDraft.promo_discount_pct ?? 0) / 100)
-    const listPrice = disc > 0 ? dealGmv / (1 - disc) : dealGmv
+    const listPrice =
+      String(salesDraft.pricing_mode) === 'diagnose'
+        ? Math.max(0, Number(salesDraft.list_price_input ?? 0))
+        : disc > 0
+          ? dealGmv / (1 - disc)
+          : dealGmv
+    const effectiveDiscPct = listPrice > 0 ? ((listPrice - dealGmv) / listPrice) * 100 : disc * 100
 
     // 毛利（不含税口径）：(不含税收入 - 产品成本) / 不含税收入
     const grossProfitExTax = netRevenue - factoryCost
     const grossMarginExTaxPct = netRevenue > 0 ? (grossProfitExTax / netRevenue) * 100 : 0
 
+    // 实际净利（诊断模式展示）
+    const actualNetProfit =
+      dealGmv -
+      (factoryCost +
+        fixedFees +
+        returnValueLoss +
+        platformFee +
+        adFee +
+        shippingFee +
+        paymentFee +
+        fixedCost +
+        taxTotal)
+    const actualNetProfitPct = dealGmv > 0 ? (actualNetProfit / dealGmv) * 100 : 0
+
     return {
       factory_cost: factoryCost,
       deal_gmv: dealGmv,
       list_price: listPrice,
-      promo_discount_pct: disc * 100,
+      promo_discount_pct: effectiveDiscPct,
 
       net_revenue_ex_tax: netRevenue,
       vat_output: outputVat,
@@ -728,6 +762,8 @@ export default function ProductListingPage() {
       target_net_profit: targetNetProfit,
       target_net_profit_pct: targetNp * 100,
       gross_margin_ex_tax_pct: grossMarginExTaxPct,
+      actual_net_profit: actualNetProfit,
+      actual_net_profit_pct: actualNetProfitPct,
 
       pct_platform: pf * 100,
       pct_ad: ad * 100,
@@ -1037,6 +1073,39 @@ export default function ProductListingPage() {
 
                   <Card size="small" title="成本构成分析与利润模型推演（输入）">
                     <Space direction="vertical" style={{ width: '100%' }} size={10}>
+                      <Card size="small" title="模式" bodyStyle={{ padding: 12 }}>
+                        <Space wrap>
+                          <Radio.Group
+                            value={salesDraft.pricing_mode}
+                            onChange={(e) => setSalesDraft((d) => ({ ...d, pricing_mode: e.target.value }))}
+                            options={[
+                              { label: '反推售价（满足目标净利%）', value: 'solve' },
+                              { label: '利润诊断（按券后价/标价）', value: 'diagnose' },
+                            ]}
+                            optionType="button"
+                            buttonStyle="solid"
+                          />
+                          {salesDraft.pricing_mode === 'diagnose' ? (
+                            <>
+                              <InputNumber
+                                addonBefore="券后成交价(含税)"
+                                min={0}
+                                precision={2}
+                                value={salesDraft.deal_gmv_input}
+                                onChange={(v) => setSalesDraft((d) => ({ ...d, deal_gmv_input: Number(v ?? 0) }))}
+                              />
+                              <InputNumber
+                                addonBefore="优惠前标价(含税)"
+                                min={0}
+                                precision={2}
+                                value={salesDraft.list_price_input}
+                                onChange={(v) => setSalesDraft((d) => ({ ...d, list_price_input: Number(v ?? 0) }))}
+                              />
+                            </>
+                          ) : null}
+                        </Space>
+                      </Card>
+
                       <Space wrap>
                         <Select
                           style={{ width: 140 }}
@@ -1400,6 +1469,19 @@ export default function ProductListingPage() {
                       <Descriptions.Item label="退货价值损失(元)">{formatMoney2((salesCalc as any).return_value_loss)}</Descriptions.Item>
                       <Descriptions.Item label="目标净利(元)">{formatMoney2((salesCalc as any).target_net_profit)}</Descriptions.Item>
                       <Descriptions.Item label="目标净利%(含税)">{String(Number((salesCalc as any).target_net_profit_pct ?? 0).toFixed(2))}%</Descriptions.Item>
+                      {salesDraft.pricing_mode === 'diagnose' ? (
+                        <>
+                          <Descriptions.Item label="实际净利(元)">
+                            <b>{formatMoney2((salesCalc as any).actual_net_profit)}</b>
+                          </Descriptions.Item>
+                          <Descriptions.Item label="实际净利%(含税)">
+                            <b>{String(Number((salesCalc as any).actual_net_profit_pct ?? 0).toFixed(2))}%</b>
+                          </Descriptions.Item>
+                          <Descriptions.Item label="提示">
+                            <Text type="secondary">诊断模式：净利=GMV-所有成本项合计（含税金与退货价值损失）。</Text>
+                          </Descriptions.Item>
+                        </>
+                      ) : null}
                     </Descriptions>
                     <Divider style={{ margin: '10px 0' }} />
                     <Text type="secondary">

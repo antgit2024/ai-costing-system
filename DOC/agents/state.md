@@ -241,6 +241,17 @@
     - Docs：按 `DOC/agents/commands.md` 的文档 grep/test -d 校验
     - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-13（Sample Lines：本品用量/附加量/总用量口径修正（总用量不含损耗））
+  - 产物（前端）：
+    - `/costing/sample-models` → 打样管理 → 清单编辑：三列口径对齐业务定义
+      - 本品用量：主体用量（用于推导标准主体）
+      - 附加量：总用量 - 本品用量（由调参带来的增量，不含损耗折算）
+      - 总用量：本品用量 + 附加量（不含损耗；损耗仅在“小计/含损耗汇总”中体现）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：`grep -nF "## 标准模型：行级变体（Overlay）运营/实施规范（v0.1）" DOC/costing/manuals/standard_model_variants_ops_rules.md`
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：工艺模块新建提醒：在“结构适用范围”规则说明区块下方，展示当前所选 slot 的“驱动量/备注”（来自结构标准 slot_defs），用于提醒新建工艺模块的人；验收 `npm -C frontend run build`）
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：标准模型清单编辑：删除工艺模块不再触发 `sync-from-modules`（避免覆盖版本层已替换物料/调参导致“占位回滚”错觉）；改为仅删除该模块关联行并保存版本清单；验收 `npm -C frontend run build`）
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend+Backend：版本图片支持删除：新增 `DELETE /api/planner/product-model-versions/{version_id}/images/{image_index}`；标准模型/打样模型“基础信息”Tab 的版本图片缩略图增加删除按钮；验收 `npm -C frontend run build`）

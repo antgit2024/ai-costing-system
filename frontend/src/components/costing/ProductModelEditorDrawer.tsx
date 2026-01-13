@@ -38,6 +38,7 @@ import {
   FileTextOutlined,
   ExclamationCircleOutlined,
   InfoCircleOutlined,
+  QuestionCircleOutlined,
   LockOutlined,
   ReloadOutlined,
   SwapOutlined,
@@ -46,7 +47,11 @@ import {
 } from '@ant-design/icons'
 import { normalizeUnit } from '@/utils/unit'
 import GuideDrawer from '@/components/common/GuideDrawer'
-import derivePerSqmGuide from '@/guides/derive_standard_per_sqm_tablecloth_example.md?raw'
+import derivePerSqmGuide from '@doc/costing/manuals/guides/derive_standard_per_sqm_tablecloth_example.md?raw'
+import sampleLinesGuide from '@doc/costing/manuals/guides/sample_lines_guide.md?raw'
+import standardLinesGuide from '@doc/costing/manuals/guides/standard_lines_guide.md?raw'
+import priceCalculationGuide from '@doc/costing/manuals/guides/price_calculation_guide.md?raw'
+import usageCalculationGuide from '@doc/costing/manuals/guides/usage_calculation_guide.md?raw'
 import LineVariantDrawer from '@/components/costing/LineVariantDrawer'
 import MaterialPickerDrawer, { type MaterialPickerResult, type MaterialPickerTab } from '@/components/costing/MaterialPickerDrawer'
 
@@ -102,7 +107,7 @@ type EntryContext = 'sample' | 'standard'
 
 type MaterialKind = 'real' | 'bom' | 'virtual'
 
-type CalcMethod = 'count' | 'area' | 'perimeter' | 'width' | 'height' | 'long_side' | 'short_side'
+  type CalcMethod = 'count' | 'area' | 'perimeter' | 'width' | 'height' | 'long_side' | 'short_side'
 
 type ModuleLinkDraft = {
   module_id: string
@@ -368,6 +373,9 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   // 备注已合并到“调参面板”（与同一个“应用”按钮一起保存）
 
   const [deriveGuideOpen, setDeriveGuideOpen] = useState(false)
+  const [linesGuideOpen, setLinesGuideOpen] = useState(false)
+  const [priceGuideOpen, setPriceGuideOpen] = useState(false)
+  const [usageGuideOpen, setUsageGuideOpen] = useState(false)
 
   // 调参面板（合并：高级参数/耗损/高级公式；工序同理）
   const [tuningOpen, setTuningOpen] = useState(false)
@@ -1478,10 +1486,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   // 尺寸是否由用户交互修改（而非接口 hydrate / 版本切换）：
   // 只在用户确实改了尺寸时才重算，避免“打开抽屉/切版本时把已保存的本品用量覆盖成 0”。
   const sampleSpecTouchedRef = useRef(false)
-  // 记录：用户是否手工改过“本品用量”（避免调参面板把手工值覆盖回旧公式结果）
-  const manualMaterialUsedQtyTouchedRef = useRef<Set<string>>(new Set())
-  // 记录：用户手工输入的最新“本品用量”（解决：刚输入后立刻点调参面板时，读取到旧值的问题）
-  const manualMaterialUsedQtyValueRef = useRef<Map<string, number>>(new Map())
+  // 主体/附加/总量拆分后：主体用量通过 metadata_json.primary_used_quantity 显式记录（可手工），
+  // 调参面板只改变“附加规则”（余量/按件追加等）并重算总量，不需要再做旧版的“手工本品用量 delta 叠加”。
 
   // 当用户修改“打样尺寸（实际尺寸）”时：按计价方式自动重算“本品用量/本品用时”（基数不变）
   // 说明：该行为与旧抽屉一致，会覆盖依赖尺寸口径的 computed 字段（sample_used_quantity / sample_minutes）。
@@ -1495,11 +1501,13 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       let changed = false
       const next = prev.map((r) => {
         const method = (r.calculation_method as any) ?? 'count'
-        const mq = Math.max(0, measureQty(method, sampleSpec, (r?.metadata_json as any) ?? {}))
+        const meta = ((r?.metadata_json as any) ?? {}) as any
+        const mq = Math.max(0, measureQty(method, sampleSpec, meta))
         const baseQty = Number(r.base_quantity ?? 0)
         const fixedQty = Number(r.fixed_quantity ?? 0)
         const cov = Number(r.coverage_ratio ?? 1)
-        const sampleUsed = fixedQty + mq * baseQty * cov
+        const perCount = Math.max(0, Number(meta.fixed_per_count_quantity ?? 0)) * Number(sampleSpec.quantity || 1)
+        const sampleUsed = fixedQty + perCount + mq * baseQty * cov
         const cur = Number(r.sample_used_quantity ?? 0)
         if (Math.abs(sampleUsed - cur) > 1e-6) changed = true
         return { ...r, sample_used_quantity: sampleUsed }
@@ -1806,30 +1814,11 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       const perCount = Math.max(0, Number(metaNext.fixed_per_count_quantity ?? 0)) * Number(sampleSpec.quantity || 1)
       const stdPerCount = Math.max(0, Number(metaNext.fixed_per_count_quantity ?? 0)) * Number(standardSpec.quantity || 1)
 
-      // 若用户在表格里手工改过“本品用量”，调参面板改“工艺修正”应以当前值为基准叠加变化量，
-      // 而不是回滚到旧基数的公式结果。
-      const rowKey = String(row.id ?? `mat-${idx}`)
-      const manualTouched = manualMaterialUsedQtyTouchedRef.current.has(rowKey)
-      const oldFixed = Number(row.fixed_quantity ?? 0)
-      const oldCov = Number(row.coverage_ratio ?? 1)
-      const oldMqSample = Math.max(0, measureQty(method, sampleSpec, metaCur))
-      const oldMqStandard = Math.max(0, measureQty(method, standardSpec, metaCur))
-      const oldPerCount = Math.max(0, Number(metaCur.fixed_per_count_quantity ?? 0)) * Number(sampleSpec.quantity || 1)
-      const oldStdPerCount = Math.max(0, Number(metaCur.fixed_per_count_quantity ?? 0)) * Number(standardSpec.quantity || 1)
-      const oldSampleComputed = oldFixed + oldPerCount + oldMqSample * baseQty * oldCov
-      const oldStandardComputed = oldFixed + oldStdPerCount + oldMqStandard * baseQty * oldCov
       const newSampleComputed = fixedQty + perCount + mqSample * baseQty * cov
       const newStandardComputed = fixedQty + stdPerCount + mqStandard * baseQty * cov
-
-      const curSampleUsed =
-        manualMaterialUsedQtyValueRef.current.get(rowKey) != null
-          ? Number(manualMaterialUsedQtyValueRef.current.get(rowKey))
-          : Number(row.sample_used_quantity ?? 0)
-      const curStandardUsed = Number(row.standard_used_quantity ?? 0)
-      const sampleUsed = manualTouched ? curSampleUsed + (newSampleComputed - oldSampleComputed) : newSampleComputed
-      const standardUsed = manualTouched
-        ? curStandardUsed + (newStandardComputed - oldStandardComputed)
-        : newStandardComputed
+      // 新口径：调参面板只重算“总用量”，主体用量（primary_used_quantity）若存在则保持不动。
+      const sampleUsed = newSampleComputed
+      const standardUsed = newStandardComputed
 
       // 推导模板（后端：仅从 sample 版本行读取 metadata_json.derive_template）
       const deriveTemplate =
@@ -1859,6 +1848,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
         standard_used_quantity: standardUsed,
         metadata_json: {
           ...metaNext,
+          sample_used_quantity: sampleUsed,
+          standard_used_quantity: standardUsed,
           ...(entryContext === 'sample' ? { derive_template: deriveTemplate } : {}),
         },
       }
@@ -2412,8 +2403,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       const rowMeta = ((m?.metadata_json as any) ?? {})
       const mqSample = Math.max(0, measureQty(v, sampleSpec, rowMeta))
       const mqStandard = Math.max(0, measureQty(v, standardSpec, rowMeta))
-      const sampleUsed = fixedQty + mqSample * baseQty * cov
-      const standardUsed = fixedQty + mqStandard * baseQty * cov
+      const perCount = Math.max(0, Number(rowMeta.fixed_per_count_quantity ?? 0)) * Number(sampleSpec.quantity || 1)
+      const stdPerCount = Math.max(0, Number(rowMeta.fixed_per_count_quantity ?? 0)) * Number(standardSpec.quantity || 1)
+      const sampleUsed = fixedQty + perCount + mqSample * baseQty * cov
+      const standardUsed = fixedQty + stdPerCount + mqStandard * baseQty * cov
       return {
         ...m,
         calculation_method: v,
@@ -2761,9 +2754,19 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
             </Button>
           ) : null}
           {activeTab === 'lines' ? (
-            <Button type="primary" onClick={runSaveLines} loading={savingLines} disabled={!selectedVersionId || !canEditSelectedVersion}>
-              保存清单
-            </Button>
+            <>
+              <Button icon={<QuestionCircleOutlined />} onClick={() => setLinesGuideOpen(true)}>
+                {entryContext === 'sample' ? '打样指南' : '模型指南'}
+              </Button>
+              <Button
+                type="primary"
+                onClick={runSaveLines}
+                loading={savingLines}
+                disabled={!selectedVersionId || !canEditSelectedVersion}
+              >
+                保存清单
+              </Button>
+            </>
           ) : null}
         </Space>
       }
@@ -3691,6 +3694,32 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                     />
                     <InputNumber
                       size="small"
+                      min={0}
+                      precision={2}
+                      value={(() => {
+                        const w = Math.max(0, Number(sampleSpec.width_mm ?? 0) / 10)
+                        const h = Math.max(0, Number(sampleSpec.height_mm ?? 0) / 10)
+                        const q = Math.max(0, Number(sampleSpec.quantity ?? 1))
+                        return (2 * (w + h) * q) / 100
+                      })()}
+                      addonBefore="周长(m)"
+                      disabled
+                    />
+                    <InputNumber
+                      size="small"
+                      min={0}
+                      precision={4}
+                      value={(() => {
+                        const wmm = Math.max(0, Number(sampleSpec.width_mm ?? 0))
+                        const hmm = Math.max(0, Number(sampleSpec.height_mm ?? 0))
+                        const q = Math.max(0, Number(sampleSpec.quantity ?? 1))
+                        return ((wmm * hmm) / 1_000_000) * q
+                      })()}
+                      addonBefore="面积(m²)"
+                      disabled
+                    />
+                    <InputNumber
+                      size="small"
                       min={1}
                       precision={0}
                       value={sampleSpec.quantity}
@@ -3796,7 +3825,15 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                     <Tag color="blue">物料费：{summary.material_cost.toFixed(2)}</Tag>
                     <Tag color="purple">人工费：{summary.labor_cost.toFixed(2)}</Tag>
                     <Tag color="orange">制造费(30%)：{summary.overhead_cost.toFixed(2)}</Tag>
-                    <Tag color="green">合计：{summary.total_cost.toFixed(2)}</Tag>
+                    <Tag color="green">
+                      合计：{summary.total_cost.toFixed(2)}{' '}
+                      <Text
+                        style={{ color: '#1677ff', cursor: 'pointer', marginLeft: 6, fontSize: 12 }}
+                        onClick={() => setPriceGuideOpen(true)}
+                      >
+                        计算指南
+                      </Text>
+                    </Tag>
                   </Space>
                   {null}
                 </Card>
@@ -3882,10 +3919,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                             },
                             render: (_: any, r: any) => {
                               const code = r.module?.module_code ?? '-'
+                              const key = String(r?.module_id ?? '').trim()
+                              const color = key ? getColorForModuleKey(key) : '#595959'
                               return (
-                                <span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>
-                                  {code}
-                                </span>
+                                <CodePill code={String(code)} color={color} size="sm" />
                               )
                             },
                           },
@@ -4030,6 +4067,12 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                         <Space>
                           <Tooltip title="汇总视图仅用于查看（合并相同物料/工序），不影响保存；要编辑请切回明细。">
                             <Space size={6}>
+                              <Text
+                                style={{ color: '#1677ff', cursor: 'pointer', fontSize: 12, marginRight: 6 }}
+                                onClick={() => setUsageGuideOpen(true)}
+                              >
+                                计算说明
+                              </Text>
                               <span className="pm-lines-muted">汇总</span>
                               <Switch size="small" checked={materialSummaryView} onChange={setMaterialSummaryView} />
                             </Space>
@@ -4344,68 +4387,126 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                           },
                           {
                             title: '本品用量',
-                            width: 160,
-                            render: (_: any, r: any, idx: number) => (
-                              <Space size={6} style={{ width: '100%' }} align="center">
-                                <InputNumber
-                                  size="small"
-                                  min={0}
-                                  precision={2}
-                                  value={r.sample_used_quantity}
-                                  onChange={(v) => {
-                                    const next = (materials as any[]).slice()
-                                    const newUsed = Number(v ?? 0)
-                                    const curRow = next[idx] ?? {}
-                                    const metaCur = ((curRow?.metadata_json as any) ?? {}) as any
-                                    const method = (curRow.calculation_method as any) ?? 'count'
-                                    const fixedQty = Number(curRow.fixed_quantity ?? 0)
-                                    const cov = Number(curRow.coverage_ratio ?? 1)
-                                    const mqSample = Math.max(0, measureQty(method, sampleSpec, metaCur))
-                                    const mqStandard = Math.max(0, measureQty(method, standardSpec, metaCur))
-                                    const perCount = Math.max(0, Number(metaCur.fixed_per_count_quantity ?? 0)) * Number(sampleSpec.quantity || 1)
-                                    const stdPerCount =
-                                      Math.max(0, Number(metaCur.fixed_per_count_quantity ?? 0)) * Number(standardSpec.quantity || 1)
-                                    // 关键：用户手工改“本品用量”时，同步反推 β(base_quantity)，否则调参面板仍会按旧 β(例如 0.1) 重算回去。
-                                    const denom = mqSample * Math.max(0, cov)
-                                    const baseNewRaw = denom > 0 ? (newUsed - fixedQty - perCount) / denom : Number(curRow.base_quantity ?? 0)
-                                    const baseNew = Number.isFinite(baseNewRaw) ? Math.max(0, baseNewRaw) : Number(curRow.base_quantity ?? 0)
-                                    const standardUsed = fixedQty + stdPerCount + mqStandard * baseNew * cov
+                            width: 200,
+                            render: (_: any, r: any, idx: number) => {
+                              const metaCur = ((r?.metadata_json as any) ?? {}) as any
+                              const method = (r.calculation_method as any) ?? 'count'
+                              const baseQty = Number(r.base_quantity ?? 0)
+                              const metaNoExtra = {
+                                ...metaCur,
+                                extra_width_mm: 0,
+                                extra_height_mm: 0,
+                                extra_long_side_mm: 0,
+                                extra_short_side_mm: 0,
+                              }
+                              const mqPrimary = Math.max(0, measureQty(method, sampleSpec, metaNoExtra))
+                              // 口径：本品用量=看面/尺寸口径（不包含覆盖率/损耗/折边等调参影响）
+                              const primaryAuto = mqPrimary * baseQty
+                              const primaryValueRaw = metaCur.primary_used_quantity
+                              const primaryValue = Number.isFinite(Number(primaryValueRaw)) ? Number(primaryValueRaw) : primaryAuto
+                              return (
+                                <Space size={6} style={{ width: '100%' }} align="center">
+                                  <InputNumber
+                                    size="small"
+                                    min={0}
+                                    precision={2}
+                                    value={primaryValue}
+                                    onChange={(v) => {
+                                      const next = (materials as any[]).slice()
+                                      const newPrimary = Math.max(0, Number(v ?? 0))
+                                      const curRow = next[idx] ?? {}
+                                      const meta0 = ((curRow?.metadata_json as any) ?? {}) as any
+                                      const method0 = (curRow.calculation_method as any) ?? 'count'
+                                      const fixed0 = Number(curRow.fixed_quantity ?? 0)
+                                      const cov0 = Number(curRow.coverage_ratio ?? 1)
+                                      const base0 = Number(curRow.base_quantity ?? 0)
+                                      const metaNoExtra0 = {
+                                        ...meta0,
+                                        extra_width_mm: 0,
+                                        extra_height_mm: 0,
+                                        extra_long_side_mm: 0,
+                                        extra_short_side_mm: 0,
+                                      }
+                                      const mqPrimary0 = Math.max(0, measureQty(method0, sampleSpec, metaNoExtra0))
+                                      // 口径：主体（看面）反推 β：只用 mqPrimary（不乘覆盖率）
+                                      const denom = mqPrimary0
+                                      const baseNewRaw = denom > 0 ? newPrimary / denom : base0
+                                      const baseNew = Number.isFinite(baseNewRaw) ? Math.max(0, baseNewRaw) : base0
+                                      const mqSample = Math.max(0, measureQty(method0, sampleSpec, meta0))
+                                      const mqStd = Math.max(0, measureQty(method0, standardSpec, meta0))
+                                      const perCount = Math.max(0, Number(meta0.fixed_per_count_quantity ?? 0)) * Number(sampleSpec.quantity || 1)
+                                      const stdPerCount =
+                                        Math.max(0, Number(meta0.fixed_per_count_quantity ?? 0)) * Number(standardSpec.quantity || 1)
+                                      const sampleTotal = fixed0 + perCount + mqSample * baseNew * cov0
+                                      const stdTotal = fixed0 + stdPerCount + mqStd * baseNew * cov0
 
-                                    next[idx] = {
-                                      ...curRow,
-                                      base_quantity: baseNew,
-                                      sample_used_quantity: newUsed,
-                                      standard_used_quantity: standardUsed,
-                                      metadata_json: {
-                                        ...metaCur,
-                                        sample_used_quantity: newUsed,
-                                        standard_used_quantity: standardUsed,
-                                      },
-                                    }
-                                    // 标记该行“本品用量”为用户手工调整过（供调参面板做 delta 叠加，避免回滚旧基数）
-                                    const key = String(next[idx]?.id ?? `mat-${idx}`)
-                                    manualMaterialUsedQtyTouchedRef.current.add(key)
-                                    manualMaterialUsedQtyValueRef.current.set(key, Number(v ?? 0))
-                                    setMaterials(next as any)
-                                  }}
-                                  style={{ width: '100%' }}
-                                />
-                                <Tooltip
-                                  getPopupContainer={() => document.body}
-                                  title={
-                                    <div>
+                                      next[idx] = {
+                                        ...curRow,
+                                        base_quantity: baseNew,
+                                        sample_used_quantity: sampleTotal,
+                                        standard_used_quantity: stdTotal,
+                                        metadata_json: {
+                                          ...meta0,
+                                          primary_used_quantity: newPrimary,
+                                          sample_used_quantity: sampleTotal,
+                                          standard_used_quantity: stdTotal,
+                                        },
+                                      }
+                                      setMaterials(next as any)
+                                    }}
+                                    style={{ width: '100%' }}
+                                  />
+                                  <Tooltip
+                                    getPopupContainer={() => document.body}
+                                    title={
                                       <div>
-                                        默认用量：
-                                        {Number.isFinite(Number(r.standard_used_quantity)) ? Number(r.standard_used_quantity).toFixed(2) : '-'}
+                                        <div style={{ marginBottom: 4 }}>
+                                          总用量（不含损耗）：{Number(r.sample_used_quantity ?? 0).toFixed(2)}
+                                        </div>
+                                        <div style={{ color: '#8c8c8c' }}>{getCalcHint(r.calculation_method, sampleSpec)}</div>
                                       </div>
-                                      <div style={{ color: '#8c8c8c' }}>{getCalcHint(r.calculation_method, sampleSpec)}</div>
-                                    </div>
-                                  }
-                                >
-                                  <InfoCircleOutlined style={{ color: '#8c8c8c', fontSize: 12 }} />
-                                </Tooltip>
-                              </Space>
-                            ),
+                                    }
+                                  >
+                                    <InfoCircleOutlined style={{ color: '#8c8c8c', fontSize: 12 }} />
+                                  </Tooltip>
+                                </Space>
+                              )
+                            },
+                          },
+                          {
+                            title: '附加量',
+                            width: 96,
+                            render: (_: any, r: any) => {
+                              const metaCur = ((r?.metadata_json as any) ?? {}) as any
+                              const method = (r.calculation_method as any) ?? 'count'
+                              const baseQty = Number(r.base_quantity ?? 0)
+                              const metaNoExtra = {
+                                ...metaCur,
+                                extra_width_mm: 0,
+                                extra_height_mm: 0,
+                                extra_long_side_mm: 0,
+                                extra_short_side_mm: 0,
+                              }
+                              const mqPrimary = Math.max(0, measureQty(method, sampleSpec, metaNoExtra))
+                              const primaryAuto = mqPrimary * baseQty
+                              const primaryRaw = metaCur.primary_used_quantity
+                              const primary = Number.isFinite(Number(primaryRaw)) ? Number(primaryRaw) : primaryAuto
+                              const total = Number(r.sample_used_quantity ?? 0)
+                              // 口径（按业务定义）：
+                              // - 本品用量：主体（看面/尺寸口径）
+                              // - 附加量：由调参带来的增量（α/覆盖率/按件追加/余量等），不包含损耗折算
+                              // - 总用量：本品用量 + 附加量（不含损耗）
+                              const addon = total - primary
+                              return <span>{Number.isFinite(addon) ? addon.toFixed(2) : '-'}</span>
+                            },
+                          },
+                          {
+                            title: '总用量',
+                            width: 96,
+                            render: (_: any, r: any) => {
+                              const total = Number(r.sample_used_quantity ?? 0)
+                              return <span>{Number.isFinite(total) ? total.toFixed(2) : '-'}</span>
+                            },
                           },
                           {
                             title: '计量方式',
@@ -4442,8 +4543,11 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                     const rowMeta = ((next[idx]?.metadata_json as any) ?? {})
                                     const mqSample = Math.max(0, measureQty(v, sampleSpec, rowMeta))
                                     const mqStandard = Math.max(0, measureQty(v, standardSpec, rowMeta))
-                                    const sampleUsed = fixedQty + mqSample * baseQty * cov
-                                    const standardUsed = fixedQty + mqStandard * baseQty * cov
+                                    const perCount = Math.max(0, Number(rowMeta.fixed_per_count_quantity ?? 0)) * Number(sampleSpec.quantity || 1)
+                                    const stdPerCount =
+                                      Math.max(0, Number(rowMeta.fixed_per_count_quantity ?? 0)) * Number(standardSpec.quantity || 1)
+                                    const sampleUsed = fixedQty + perCount + mqSample * baseQty * cov
+                                    const standardUsed = fixedQty + stdPerCount + mqStandard * baseQty * cov
                                     next[idx] = {
                                       ...next[idx],
                                       calculation_method: v,
@@ -4462,26 +4566,18 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                           },
                           // 工艺余量/固定追加等高级参数已收敛到“α 调参面板”，避免清单列膨胀
                           {
-                            title: 'BOM单价/单位*扣库',
+                            title: 'BOM单价/单位',
                             width: 190,
                             render: (_: any, r: any) => {
                               const meta = (r.metadata_json as any) ?? {}
                               const unitPrice = meta.bom_unit_price != null ? Number(meta.bom_unit_price) : NaN
                               const unit = normalizeUnit(meta.bom_unit ?? meta.display_unit) || ''
-                              const qty = Number(r.sample_used_quantity ?? 0)
-                              const lossRatePct = Number(r.loss_rate ?? 0)
-
                               const priceText = Number.isFinite(unitPrice) ? unitPrice.toFixed(2) : '-'
                               const unitText = unit || '-'
-                              const used =
-                                Number.isFinite(qty) && Number.isFinite(lossRatePct)
-                                  ? qty * (1 + Math.max(0, lossRatePct) / 100)
-                                  : NaN
-                              const usedText = Number.isFinite(used) ? used.toFixed(2) : '-'
 
                               return (
                                 <span style={{ whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
-                                  {priceText}/{unitText}*{usedText}
+                                  {priceText}/{unitText}
                                 </span>
                               )
                             },
@@ -4770,6 +4866,12 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                         <Space>
                           <Tooltip title="汇总视图仅用于查看（合并相同工序口径），不影响保存；要编辑请看下方明细表。">
                             <Space size={6}>
+                              <Text
+                                style={{ color: '#1677ff', cursor: 'pointer', fontSize: 12, marginRight: 6 }}
+                                onClick={() => setUsageGuideOpen(true)}
+                              >
+                                计算说明
+                              </Text>
                               <span className="pm-lines-muted">汇总</span>
                               <Switch size="small" checked={processSummaryView} onChange={setProcessSummaryView} />
                             </Space>
@@ -5871,6 +5973,30 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
         content={derivePerSqmGuide as string}
         tip="本指南用于培训新同事：从“打样版本”如何配置到“推导标准每平米”的口径与字段填写方式。"
         onClose={() => setDeriveGuideOpen(false)}
+      />
+
+      <GuideDrawer
+        open={linesGuideOpen}
+        title={entryContext === 'sample' ? '打样指南（清单编辑）' : '模型指南（清单编辑）'}
+        content={(entryContext === 'sample' ? sampleLinesGuide : standardLinesGuide) as string}
+        tip="提示：本指南仅用于“清单编辑”Tab，放在“保存清单”前，便于新同事按同一口径操作。"
+        onClose={() => setLinesGuideOpen(false)}
+      />
+
+      <GuideDrawer
+        open={priceGuideOpen}
+        title="计算指南（物料费/人工费/制造费）"
+        content={priceCalculationGuide as string}
+        tip="提示：用于向运营解释成本口径的可信度与边界（含未纳入项）。"
+        onClose={() => setPriceGuideOpen(false)}
+      />
+
+      <GuideDrawer
+        open={usageGuideOpen}
+        title="计算说明（计量方式/本品用量/调参）"
+        content={usageCalculationGuide as string}
+        tip="提示：物料组与工序组共用同一套“用量/计量口径”，请先读本说明再调参。"
+        onClose={() => setUsageGuideOpen(false)}
       />
 
       {/* Module picker */}

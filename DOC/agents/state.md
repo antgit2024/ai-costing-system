@@ -11,6 +11,17 @@
     - Docs：按 `DOC/agents/commands.md` 的 4 条 `grep -nF ...` 校验文档存在性
     - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-13（Product Listing：利润推演税金口径升级为“一般纳税人：销项-进项抵扣”）
+  - 产物（前端）：
+    - `/costing/product-listing` → 左侧 Tab “利润推演”：
+      - 新增输入：**进项可抵扣%**（默认 70%，用于把“进厂价/单位成本”中反推的进项税额按比例抵扣销项）
+      - 税金拆解升级：新增展示 **进项可抵扣(估算)**、**应纳增值税(估算)**；附加税按“应纳增值税×附加比例”计算
+      - 反推售价（solve）同步使用该口径（分段闭式解：应纳税为 0 / >0 两段）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的 4 条 `grep -nF ...` 校验文档存在性
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-13（Materials：回滚“真实物料”用途选项，恢复三选一）
   - 产物（前端）：
     - `/costing/materials` → 物料详情 → 成本参数：物料用途保持三选一 **直接BOM / 条件物料 / 间接耗材**（不新增“真实物料”展示项）

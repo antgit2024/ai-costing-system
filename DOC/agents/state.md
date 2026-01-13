@@ -271,6 +271,17 @@
     - Docs：`grep -nF "title: 计算说明（计量方式/本品用量/调参）（v1）" DOC/costing/manuals/guides/usage_calculation_guide.md`
     - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-13（Product Listing：新增“售价测算”Tab（测试台））
+  - 产物（前端）：
+    - `/costing/product-listing`：右侧诊断结果新增 Tab **售价测算**
+      - 输入：平台（天猫/京东/小红书/抖店）、毛利%、平台费%、支付费%、活动折扣%、城市、快递、运费/包装/售后等固定费用
+      - 输出：建议到手价（成交价）/建议标价 + 费用拆解（基于当前预演得到的合计成本作为进厂价）
+      - 公式：到手价 = (进厂价 + 固定费用) / (1 − 毛利% − 平台费% − 支付费%)；标价 = 到手价 / (1 − 活动折扣%)
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档 grep/test -d 校验
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：工艺模块新建提醒：在“结构适用范围”规则说明区块下方，展示当前所选 slot 的“驱动量/备注”（来自结构标准 slot_defs），用于提醒新建工艺模块的人；验收 `npm -C frontend run build`）
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：标准模型清单编辑：删除工艺模块不再触发 `sync-from-modules`（避免覆盖版本层已替换物料/调参导致“占位回滚”错觉）；改为仅删除该模块关联行并保存版本清单；验收 `npm -C frontend run build`）
 - **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend+Backend：版本图片支持删除：新增 `DELETE /api/planner/product-model-versions/{version_id}/images/{image_index}`；标准模型/打样模型“基础信息”Tab 的版本图片缩略图增加删除按钮；验收 `npm -C frontend run build`）

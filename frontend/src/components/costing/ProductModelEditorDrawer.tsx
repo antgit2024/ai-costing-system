@@ -4461,7 +4461,12 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                     title={
                                       <div>
                                         <div style={{ marginBottom: 4 }}>
-                                          总用量（不含损耗）：{Number(r.sample_used_quantity ?? 0).toFixed(2)}
+                                          总用量（含损耗）：{(() => {
+                                            const totalNoLoss = Number(r.sample_used_quantity ?? 0)
+                                            const lossRatePct = Math.max(0, Number(r.loss_rate ?? 0))
+                                            const totalWithLoss = Number.isFinite(totalNoLoss) ? totalNoLoss * (1 + lossRatePct / 100) : NaN
+                                            return Number.isFinite(totalWithLoss) ? totalWithLoss.toFixed(2) : '-'
+                                          })()}
                                         </div>
                                         <div style={{ color: '#8c8c8c' }}>{getCalcHint(r.calculation_method, sampleSpec)}</div>
                                       </div>
@@ -4491,12 +4496,14 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                               const primaryAuto = mqPrimary * baseQty
                               const primaryRaw = metaCur.primary_used_quantity
                               const primary = Number.isFinite(Number(primaryRaw)) ? Number(primaryRaw) : primaryAuto
-                              const total = Number(r.sample_used_quantity ?? 0)
-                              // 口径（按业务定义）：
-                              // - 本品用量：主体（看面/尺寸口径）
-                              // - 附加量：由调参带来的增量（α/覆盖率/按件追加/余量等），不包含损耗折算
-                              // - 总用量：本品用量 + 附加量（不含损耗）
-                              const addon = total - primary
+                              const totalNoLoss = Number(r.sample_used_quantity ?? 0)
+                              const lossRatePct = Math.max(0, Number(r.loss_rate ?? 0))
+                              // 口径（按你确认的方案A）：
+                              // - 先算“总用量(不含损耗)”：P + 调参增量
+                              // - 再整体上浮损耗：total_with_loss = total_no_loss * (1 + loss_rate)
+                              // - 附加量（含损耗） = total_with_loss - P
+                              const totalWithLoss = Number.isFinite(totalNoLoss) ? totalNoLoss * (1 + lossRatePct / 100) : NaN
+                              const addon = totalWithLoss - primary
                               return <span>{Number.isFinite(addon) ? addon.toFixed(2) : '-'}</span>
                             },
                           },
@@ -4504,8 +4511,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                             title: '总用量',
                             width: 96,
                             render: (_: any, r: any) => {
-                              const total = Number(r.sample_used_quantity ?? 0)
-                              return <span>{Number.isFinite(total) ? total.toFixed(2) : '-'}</span>
+                              const totalNoLoss = Number(r.sample_used_quantity ?? 0)
+                              const lossRatePct = Math.max(0, Number(r.loss_rate ?? 0))
+                              const totalWithLoss = Number.isFinite(totalNoLoss) ? totalNoLoss * (1 + lossRatePct / 100) : NaN
+                              return <span>{Number.isFinite(totalWithLoss) ? totalWithLoss.toFixed(2) : '-'}</span>
                             },
                           },
                           {
@@ -4588,11 +4597,13 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                             render: (_: any, r: any) => {
                               const meta = (r.metadata_json as any) ?? {}
                               const unitPrice = meta.bom_unit_price != null ? Number(meta.bom_unit_price) : NaN
-                              const qty = Number(r.sample_used_quantity ?? 0)
-                              const lossRatePct = Number(r.loss_rate ?? 0)
-                              if (Number.isFinite(unitPrice) && Number.isFinite(qty) && Number.isFinite(lossRatePct)) {
-                                const used = qty * (1 + Math.max(0, lossRatePct) / 100)
-                                return (used * unitPrice).toFixed(2)
+                              const totalNoLoss = Number(r.sample_used_quantity ?? 0)
+                              const lossRatePct = Math.max(0, Number(r.loss_rate ?? 0))
+                              const totalWithLoss = Number.isFinite(totalNoLoss) ? totalNoLoss * (1 + lossRatePct / 100) : NaN
+                              if (Number.isFinite(unitPrice) && Number.isFinite(totalWithLoss)) {
+                                // 小计口径：本品用量 + 附加量(含损耗) = 总用量(含损耗)
+                                // => 小计 = 总用量(含损耗) × 单价（不再额外重复“乘损耗”）
+                                return (totalWithLoss * unitPrice).toFixed(2)
                               }
                               return '-'
                             },

@@ -603,6 +603,27 @@ const MaterialMasterPage = () => {
     }
   }, [])
 
+  // Unit price is stored with up to 4 decimals (DB Numeric(18,4)).
+  // If we always show 2 decimals, 0.065 will be rendered as 0.07 and users may think BOM price "calculation is wrong".
+  const formatCurrencyUnitPrice = useCallback((value?: number, currency?: string) => {
+    if (value === undefined || value === null) {
+      return '-'
+    }
+    const num = Number(value)
+    const abs = Math.abs(num)
+    const digits = abs > 0 && abs < 1 ? 4 : 2
+    try {
+      return new Intl.NumberFormat('zh-CN', {
+        style: 'currency',
+        currency: currency || 'CNY',
+        minimumFractionDigits: digits,
+        maximumFractionDigits: digits,
+      }).format(num)
+    } catch {
+      return `${value}`
+    }
+  }, [])
+
   const openMaterialDrawer = (record: Material) => {
     setEditingMaterial(record)
     setDetailDrawerOpen(true)
@@ -1007,7 +1028,7 @@ const MaterialMasterPage = () => {
       width: 180,
       render: (_, record) => (
         <Space direction="vertical" size={0}>
-          <Text>{formatCurrency(record.unit_price, record.currency)}</Text>
+          <Text>{formatCurrencyUnitPrice(record.unit_price, record.currency)}</Text>
           <Text type="secondary">
             {record.purchase_unit || record.unit || '-'}
           </Text>
@@ -1299,7 +1320,7 @@ const MaterialMasterPage = () => {
                   })()}
                 </Descriptions.Item>
                 <Descriptions.Item label="入库单价/单位">
-                  {formatCurrency(editingMaterial.unit_price, editingMaterial.currency)} / {purchaseUnitLabel}
+                  {formatCurrencyUnitPrice(editingMaterial.unit_price, editingMaterial.currency)} / {purchaseUnitLabel}
                 </Descriptions.Item>
                 <Descriptions.Item label="入库→BOM 换算">
                   {livePurchaseToBom != null && Number.isFinite(Number(livePurchaseToBom)) ? (
@@ -1384,7 +1405,7 @@ const MaterialMasterPage = () => {
                         <Form.Item label="入库单价/单位" style={{ marginBottom: 8 }}>
                           <Input
                             disabled
-                            value={`${formatCurrency(editingMaterial.unit_price, editingMaterial.currency)} / ${
+                            value={`${formatCurrencyUnitPrice(editingMaterial.unit_price, editingMaterial.currency)} / ${
                               editingMaterial.purchase_unit || '-'
                             }`}
                           />

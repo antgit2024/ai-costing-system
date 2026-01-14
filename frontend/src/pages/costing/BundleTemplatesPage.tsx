@@ -188,8 +188,9 @@ const buildAttributeFormula = (args: {
   componentRows: any[]
   presetSelectedByIdx: Record<string, Record<string, any>>
   fallbackTokenOverrides: Record<string, string>
+  variantTokenOptionsByVersionBaseLine: Record<string, Record<string, string[]>>
 }): string => {
-  const { presetIndex, componentRows, presetSelectedByIdx, fallbackTokenOverrides } = args
+  const { presetIndex, componentRows, presetSelectedByIdx, fallbackTokenOverrides, variantTokenOptionsByVersionBaseLine } = args
   if (!Array.isArray(componentRows) || componentRows.length <= 0) return ''
 
   const parts: string[] = []
@@ -199,32 +200,61 @@ const buildAttributeFormula = (args: {
     const k = `${presetIndex}:${cIdx}`
     const sel = (presetSelectedByIdx?.[k] ?? {}) as Record<string, any>
 
-    const rawIds: string[] = []
-    for (const [baseLineId, v] of Object.entries(sel)) {
-      const parent = String((v as any)?.parent_variant_id ?? '').trim()
-      const forced = String((v as any)?.forced_child_variant_id ?? '').trim()
-      if (!parent && !forced) continue
-      rawIds.push(String(baseLineId))
+    // 互斥组选项生成规则（确定性）：
+    // - 以 base_line_id 为原子：默认选项来自兜底 TOKEN（fallback_token_overrides）
+    // - 可选项来自该 base_line_id 关联的变体规则中出现过的 TOKEN（extractTokensForVariant）
+    // - 多个 base_line_id 若“选项集”完全相同，则合并为同一个互斥组（用于表达“同一个TOKEN可替换多处”）
+    const rawBaseLineIds: string[] = []
+    for (const baseLineId of Object.keys(sel ?? {})) {
+      const id = String(baseLineId ?? '').trim()
+      if (id) rawBaseLineIds.push(id)
     }
-    if (!rawIds.length) {
-      const fm = rr?.force_variant_by_base_line && typeof rr.force_variant_by_base_line === 'object' ? rr.force_variant_by_base_line : {}
-      rawIds.push(...Object.keys(fm ?? {}).map((x) => String(x)))
+    const fm = rr?.force_variant_by_base_line && typeof rr.force_variant_by_base_line === 'object' ? rr.force_variant_by_base_line : {}
+    for (const baseLineId of Object.keys(fm ?? {})) {
+      const id = String(baseLineId ?? '').trim()
+      if (id) rawBaseLineIds.push(id)
     }
-    const seen = new Set<string>()
-    const uniqIds = rawIds
-      .map((x) => String(x))
-      .filter(Boolean)
-      .filter((x) => (seen.has(x) ? false : (seen.add(x), true)))
+    const seenId = new Set<string>()
+    const uniqBaseLineIds = rawBaseLineIds.filter((x) => (seenId.has(x) ? false : (seenId.add(x), true)))
 
-    const inner = uniqIds
-      .map((baseLineId) => {
-        const overrideKey = `${versionId}:${baseLineId}`
-        const tokenAlias = String(fallbackTokenOverrides?.[overrideKey] ?? '').trim()
-        return formatTokenBrace(tokenAlias)
-      })
+    const groupsInOrder: Array<{ key: string; options: string[] }> = []
+    const seenGroupKey = new Set<string>()
+
+    for (const baseLineId of uniqBaseLineIds) {
+      const overrideKey = `${versionId}:${baseLineId}`
+      const defaultToken = String(fallbackTokenOverrides?.[overrideKey] ?? '').trim()
+      const alt = (variantTokenOptionsByVersionBaseLine?.[versionId] ?? {})?.[baseLineId] ?? []
+      const altTokens = Array.isArray(alt) ? alt.map((x) => String(x ?? '').trim()).filter(Boolean) : []
+
+      const seenOpt = new Set<string>()
+      const opts: string[] = []
+      // 默认选项永远排在第一位：可能是空（输出 {}）
+      opts.push(defaultToken)
+      seenOpt.add(normalizeSingleToken(defaultToken))
+      // 其它选项按字面排序，保持稳定
+      const rest = altTokens
+        .map((x) => normalizeSingleToken(x))
+        .filter((x) => x && !seenOpt.has(x))
+        .sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
+      for (const t of rest) {
+        seenOpt.add(t)
+        opts.push(t)
+      }
+
+      // 若该 baseLine 既没有默认token也没有候选token，则不形成组
+      if (!opts.some((x) => !!String(x).trim())) continue
+
+      const key = opts.map((x) => (normalizeSingleToken(x) ? normalizeSingleToken(x) : '__EMPTY__')).join('|')
+      if (seenGroupKey.has(key)) continue
+      seenGroupKey.add(key)
+      groupsInOrder.push({ key, options: opts })
+    }
+
+    const componentFormula = groupsInOrder
+      .map((g) => `[${g.options.map((t) => formatTokenBrace(t)).join('')}]`)
       .join('')
 
-    parts.push(`[${inner}]`)
+    if (componentFormula) parts.push(componentFormula)
   }
   return parts.join('+')
 }
@@ -433,6 +463,31 @@ export default function BundleTemplatesPage() {
     },
     enabled: selectedVersionIds.length > 0,
   })
+
+  const variantTokenOptionsByVersionBaseLine = useMemo(() => {
+    // version_id -> base_line_id -> token options
+    const out: Record<string, Record<string, string[]>> = {}
+    for (const x of (variantsSummaryQuery.data ?? []) as any[]) {
+      const versionId = String((x as any)?.version_id ?? '').trim()
+      if (!versionId) continue
+      const items = Array.isArray((x as any)?.items) ? (x as any).items : []
+      const byBase: Record<string, Set<string>> = {}
+      for (const v of items) {
+        const baseLineId = String((v as any)?.base_line_id ?? '').trim()
+        if (!baseLineId) continue
+        const tokens = extractTokensForVariant(v)
+        if (!tokens.length) continue
+        if (!byBase[baseLineId]) byBase[baseLineId] = new Set<string>()
+        for (const t of tokens) byBase[baseLineId].add(String(t))
+      }
+      const inner: Record<string, string[]> = {}
+      for (const [baseLineId, set] of Object.entries(byBase)) {
+        inner[baseLineId] = Array.from(set).sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
+      }
+      out[versionId] = inner
+    }
+    return out
+  }, [variantsSummaryQuery.data])
 
   // NOTE: 旧“映射组(目标模型+变体映射)”已废弃，不再需要按版本提取候选词。
 
@@ -2413,7 +2468,7 @@ export default function BundleTemplatesPage() {
                               saveMutation.mutate()
                             }}
                           >
-                            保存当前短语
+                            保存当前属性
                           </Button>
                         </Space>
                       </Space>
@@ -2494,6 +2549,7 @@ export default function BundleTemplatesPage() {
                             componentRows: rows,
                             presetSelectedByIdx,
                             fallbackTokenOverrides,
+                            variantTokenOptionsByVersionBaseLine,
                           })
                           return (
                             <Space wrap size={6}>

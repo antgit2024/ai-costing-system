@@ -228,7 +228,7 @@ export default function BundlePhraseListPanel(props: {
                       width: 150,
                       render: (_: any, r: any) => (
                         <Space size={6} wrap>
-                          <Tag color="blue">{String(r.tokenDash)}</Tag>
+                          <Tag color={tokenPrefix === 'Z' ? 'volcano' : 'blue'}>{String(r.tokenDash)}</Tag>
                           {r.enabled ? <Tag color="green">启用</Tag> : <Tag color="red">停用</Tag>}
                           <Button size="small" type="link" onClick={() => copyText(String(r.tokenDash))}>
                             复制

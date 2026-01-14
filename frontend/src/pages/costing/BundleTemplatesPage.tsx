@@ -4,7 +4,6 @@ import {
   Alert,
   Button,
   Card,
-  Checkbox,
   Col,
   Collapse,
   Drawer,
@@ -2129,14 +2128,7 @@ export default function BundleTemplatesPage() {
         }
       >
         <Space direction="vertical" style={{ width: '100%' }} size={12}>
-          {createdTokenHint ? (
-            <Alert
-              type="success"
-              showIcon
-              message={`编码已生成：${createdTokenHint}`}
-              description="把短码（例如 B-XXXXAA）放进交易规格即可走合并器预演。"
-            />
-          ) : null}
+          {/* 降噪：不在编辑页重复提示“把短码放进交易规格” */}
 
           <Form layout="vertical" form={form}>
             <Row gutter={12}>
@@ -2435,22 +2427,41 @@ export default function BundleTemplatesPage() {
                       />
                       <Space wrap align="center" size={10}>
                         <Text type="secondary">模式：</Text>
-                        <Radio.Group
-                          value={String((r as any)?.mode ?? 'parse') === 'force' ? 'force' : 'parse'}
-                          disabled={disabled}
-                          optionType="button"
-                          buttonStyle="solid"
-                          onChange={(e) => {
-                            const v = (e?.target?.value as any) ?? 'parse'
-                            setPhrasePresets((prev) =>
-                              (prev ?? []).map((x, i) => (i === idx ? { ...x, mode: v === 'force' ? 'force' : 'parse' } : x)),
-                            )
-                          }}
-                          options={[
-                            { label: 'B（解析型）', value: 'parse' },
-                            { label: 'Z（指定型）', value: 'force' },
-                          ]}
-                        />
+                        {(() => {
+                          const hasAnyFilterSelection = Object.entries(presetSelectedByIdx ?? {}).some(([kk, mm]) => {
+                            if (!String(kk).startsWith(`${idx}:`)) return false
+                            const entries = Object.values((mm ?? {}) as any)
+                            return entries.some((s: any) => !!String(s?.parent_variant_id ?? '').trim())
+                          })
+                          const hasAnyForceMap = Array.isArray((r as any)?.components)
+                            ? ((r as any).components as any[]).some((cc: any) => {
+                                const fm = cc?.force_variant_by_base_line && typeof cc.force_variant_by_base_line === 'object' ? cc.force_variant_by_base_line : {}
+                                return Object.keys(fm ?? {}).length > 0
+                              })
+                            : false
+                          const isModeLocked = hasAnyFilterSelection || hasAnyForceMap
+                          return (
+                            <>
+                              <Radio.Group
+                                value={String((r as any)?.mode ?? 'parse') === 'force' ? 'force' : 'parse'}
+                                disabled={disabled || isModeLocked}
+                                optionType="button"
+                                buttonStyle="solid"
+                                onChange={(e) => {
+                                  const v = (e?.target?.value as any) ?? 'parse'
+                                  setPhrasePresets((prev) =>
+                                    (prev ?? []).map((x, i) => (i === idx ? { ...x, mode: v === 'force' ? 'force' : 'parse' } : x)),
+                                  )
+                                }}
+                                options={[
+                                  { label: 'B（解析型）', value: 'parse' },
+                                  { label: 'Z（指定型）', value: 'force' },
+                                ]}
+                              />
+                              {isModeLocked ? <Tag color="orange">已锁定（已筛选/已强制）</Tag> : null}
+                            </>
+                          )
+                        })()}
                         <Text type="secondary">
                           运营短码：
                           <Text code style={{ marginLeft: 6 }}>
@@ -2458,7 +2469,7 @@ export default function BundleTemplatesPage() {
                           </Text>
                         </Text>
                       </Space>
-                      <Text type="secondary">提示：在“筛选”里可选模式：变体（解析命中）/ 指定（强制命中）。</Text>
+                      {/* 降噪：筛选弹窗模式已由 selector(B/Z) 锁死 */}
                       <BundlePhraseListPanel
                         bundleCode={currentBundleToken}
                         phrasePresets={phrasePresets as any}
@@ -2497,15 +2508,6 @@ export default function BundleTemplatesPage() {
                           const sel = (presetSelectedByIdx[k] ?? {}) as Record<string, VariantPresetSelection>
                           const selectedEntries = Object.entries(sel).filter(([, v]) => !!String(v?.parent_variant_id ?? '').trim())
                           if (!versionId) return null
-
-                          const injectedFromSpec = String(rr?.spec_text ?? '')
-                            .split(/[，,、\n\r\t ]+/g)
-                            .map((x) => String(x).trim())
-                            .filter(Boolean)
-                          const injectedFromTokens = Array.isArray(rr?.tokens)
-                            ? (rr.tokens as any[]).map((x) => String(x).trim()).filter(Boolean)
-                            : []
-                          const injectedAll = Array.from(new Set([...injectedFromSpec, ...injectedFromTokens]))
 
                           const forceMap = rr?.force_variant_by_base_line && typeof rr.force_variant_by_base_line === 'object' ? rr.force_variant_by_base_line : {}
                           const isForce = Object.keys(forceMap ?? {}).length > 0
@@ -2584,73 +2586,12 @@ export default function BundleTemplatesPage() {
                                       >
                                         一键选必要关键行
                                       </Button>
-                                      <Text type="secondary">当前已选：{(keyLinesByIdx?.[k] ?? []).length} 行</Text>
+                                      <Text type="secondary">当前关键行已选：{(keyLinesByIdx?.[k] ?? []).length} 行</Text>
                                     </Space>
-                                    {tokenDepBaseLineIds.length ? (
-                                      <Space wrap size={8}>
-                                        <Text type="secondary">依赖触发词的行：</Text>
-                                        {tokenDepBaseLineIds.map((id) => {
-                                          const base = baseMap.get(String(id))
-                                          const name = String(base?.material_name ?? base?.material_code ?? id).trim()
-                                          const checked = (keyLinesByIdx?.[k] ?? []).includes(String(id))
-                                          return (
-                                            <Checkbox
-                                              key={`zl-${k}-${id}`}
-                                              checked={checked}
-                                              onChange={(e) => {
-                                                const on = e.target.checked
-                                                setKeyLinesByIdx((prev) => {
-                                                  const cur = new Set((prev?.[k] ?? []).map((x) => String(x)))
-                                                  if (on) cur.add(String(id))
-                                                  else cur.delete(String(id))
-                                                  return { ...(prev ?? {}), [k]: Array.from(cur) }
-                                                })
-                                              }}
-                                            >
-                                              {name}
-                                            </Checkbox>
-                                          )
-                                        })}
-                                      </Space>
-                                    ) : (
-                                      <Text type="secondary">该版本暂无“依赖触发词”的变体规则（仅尺寸/面积等条件）。如仍要强制，可手动勾选关键行。</Text>
-                                    )}
                                   </Space>
                                 </Card>
                               ) : null}
-                              <Alert
-                                type={injectedAll.length ? 'success' : 'warning'}
-                                showIcon
-                                message={
-                                  injectedAll.length
-                                    ? '该组件已写入触发词（运营只需 B-XXXXAA，无需在规格里再输入“雪尼尔/棉麻布”等）'
-                                    : '该组件未写入触发词：若该版本存在“材质/面料”等TOKEN变体规则，可能仍依赖运营在规格里写词（不推荐）'
-                                }
-                                description={
-                                  injectedAll.length ? (
-                                    <Space wrap size={6}>
-                                      <Text type="secondary">已注入：</Text>
-                                      {injectedAll.slice(0, 12).map((t) => (
-                                        <Tag key={`inj-${k}-${t}`} color="green">
-                                          {t}
-                                        </Tag>
-                                      ))}
-                                      {injectedAll.length > 12 ? <Text type="secondary">…</Text> : null}
-                                    </Space>
-                                  ) : (
-                                    <Text type="secondary">
-                                      建议：点“筛选 → 变体（解析命中）”让系统把触发词写入模板组件；或用“指定（强制命中）”把规则钉死。
-                                    </Text>
-                                  )
-                                }
-                              />
-
-                              {!selectedEntries.length ? (
-                                <Text type="secondary">
-                                  当前未为任何物料行选择变体规则（仅靠自然命中）。若你们约定“运营只用 B-XXXXAA 不写词”，建议至少对“面料/材质”
-                                  等关键行做一次筛选并写入触发词或强制命中。
-                                </Text>
-                              ) : null}
+                              {/* 降噪：不在此处展示“已注入触发词”与教学文案；由 Z/B 模式与预演承担验证 */}
                               {/* 默认兜底：第一条与其它行同格式（TOKEN 可输入，兜底物料原名只读） */}
                               {!isForce ? (() => {
                                 const seen = new Set<string>()

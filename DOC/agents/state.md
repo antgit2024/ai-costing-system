@@ -31,6 +31,16 @@
     - Frontend：`npm -C frontend run build`
     - Backend：`backend/venv/bin/python -m pytest backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py -q`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-14（套装模板：UI降噪 + Z/B短码颜色区分 + 模式锁定）
+  - 产物（前端）：
+    - `/costing/bundle-templates`：
+      - 删除多余提示：不再展示“编码已生成/把短码放进规格/已注入触发词/依赖触发词行列表”等噪声块
+      - 左侧短语列表：`Z-XXXXAA` 与 `B-XXXXAA` 使用不同颜色 Tag 区分
+      - selector 模式（B/Z）：一旦该 selector 已经做过“筛选/强制映射”，模式切换自动锁死，避免配置语义翻车
+  - 验收命令：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`backend/venv/bin/python -m pytest backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-14（套装模板：一键清理“变体改了导致空规则/清不掉”的失效绑定）
   - 产物（前端）：
     - `/costing/bundle-templates` 编辑页：

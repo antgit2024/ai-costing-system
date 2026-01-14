@@ -98,6 +98,15 @@
     - Frontend：`npm -C frontend run build`
     - Backend：`backend/venv/bin/python -m pytest backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py -q`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-14（套装模板：属性名称去掉 selector 前缀 + 短码胶囊样式补强）
+  - 产物（前端）：
+    - 列表页“属性名称”：
+      - 运营短语不再显示 `AC:` 这类 selector 前缀（只显示短语正文）
+      - 短码胶囊：增加圆角+边框线，并统一最小宽度，视觉更像“胶囊”且对齐
+  - 验收命令：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`backend/venv/bin/python -m pytest backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-14（套装模板：一键清理“变体改了导致空规则/清不掉”的失效绑定）
   - 产物（前端）：
     - `/costing/bundle-templates` 编辑页：

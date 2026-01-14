@@ -1860,11 +1860,24 @@ export default function BundleTemplatesPage() {
                               ? `Z-${String(codeRaw).toUpperCase()}${String(sel).toUpperCase()}`
                               : toBundleTokenDash(codeRaw, sel)
                           const phrase = String(p?.phrase ?? '').trim()
-                          const label = phrase ? `${sel}: ${phrase}` : `${sel}: -`
+                          // 运营短语不需要展示 selector 前缀（例如 “AC:”）
+                          const label = phrase || '-'
                           return (
                             <div key={`${t}-${label}`} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
                               {/* 短码胶囊：有底色和外框色 */}
-                              <Tag color={prefix === 'Z' ? 'volcano' : 'blue'} style={{ marginInlineEnd: 0 }}>
+                              <Tag
+                                color={prefix === 'Z' ? 'volcano' : 'blue'}
+                                style={{
+                                  marginInlineEnd: 0,
+                                  borderRadius: 999,
+                                  borderWidth: 1,
+                                  borderStyle: 'solid',
+                                  borderColor: prefix === 'Z' ? '#ffccc7' : '#91caff',
+                                  minWidth: 120,
+                                  textAlign: 'center',
+                                  fontWeight: 700,
+                                }}
+                              >
                                 {t}
                               </Tag>
                               {/* 运营短语：不截断，不显示复制图标 */}

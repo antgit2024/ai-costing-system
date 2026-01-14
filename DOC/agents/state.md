@@ -64,6 +64,16 @@
     - Frontend：`npm -C frontend run build`
     - Backend：`backend/venv/bin/python -m pytest backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py -q`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-14（套装模板：进一步降噪（不展示一级/子规则ID）+ 胶囊颜色统一）
+  - 产物（前端）：
+    - `/costing/bundle-templates`：
+      - FORCE 行不再展示“一级/子规则 id”（对运营无意义，避免干扰）
+      - 兜底物料行统一为灰色胶囊 Tag（`color=default`），替换后物料统一为红色胶囊 Tag（`color=red`）
+      - TOKEN 分支展示也按同样胶囊风格呈现（灰兜底 → 红替换）
+  - 验收命令：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`backend/venv/bin/python -m pytest backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-14（套装模板：一键清理“变体改了导致空规则/清不掉”的失效绑定）
   - 产物（前端）：
     - `/costing/bundle-templates` 编辑页：

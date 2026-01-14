@@ -2493,8 +2493,6 @@ export default function BundleTemplatesPage() {
                                 const slot = getLineStructureLabel(base, versionId)
                                 const rawName = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
                                 const tokens = extractTokensForVariant(v)
-                                const effect =
-                                  v?.action === 'remove_self' ? '移除' : v?.action === 'add_siblings' ? '新增物料' : '替换物料'
                                 const produced = Array.isArray(v?.items) ? v.items : []
                                 const producedOne = produced[0]
                                 const producedLabel = String(
@@ -2526,7 +2524,7 @@ export default function BundleTemplatesPage() {
                                           >
                                             强制替换
                                           </Tag>
-                                          <Tag color="green">
+                                          <Tag color="default">
                                             {slot ? `${slot}：` : ''}
                                             {rawName}
                                           </Tag>
@@ -2561,18 +2559,15 @@ export default function BundleTemplatesPage() {
                                           ) : (
                                             <Text type="secondary">（无 TOKEN）</Text>
                                           )}
-                                          <Text type="secondary">兜底物料：</Text>
-                                          <Text strong title={rawName}>
+                                          <Tag color="default">
                                             {slot ? `${slot}：` : ''}
                                             {rawName}
-                                          </Text>
+                                          </Tag>
                                           <Text type="secondary">→</Text>
-                                          <Text type="secondary">{effect}</Text>
-                                          <Tag color="green">{producedLabel || '-'}</Tag>
+                                          <Tag color="red">{producedLabel || '-'}</Tag>
                                         </>
                                       )}
-                                      {isForce && parentId ? <Tag color="orange">一级:{parentId.slice(0, 8)}…</Tag> : null}
-                                      {isForce && forcedChildId ? <Tag color="volcano">子:{forcedChildId.slice(0, 8)}…</Tag> : null}
+                                      {/* 降噪：一级/子规则 id 仅用于排障，不对运营展示 */}
                                     </Space>
                                   </div>
                                 )

@@ -1,5 +1,17 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-14（Frontend Agent 接力校验：仅阅读接力包 + 硬验收 + 落地提交）
+  - 本轮范围：不做功能改动，仅完成接力校验与流程落地（避免“正确版本只在工作区”）
+  - 本轮产物：
+    - 已核对 `DOC/agents/handoff_frontend.md`（前端编辑器/两入口/接口单一真相/验收门槛）
+    - 更新恢复包：补充本条记录到 `DOC/agents/state.md`
+  - 硬验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档 grep/test -d 校验
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+  - 下一步（建议）：
+    - 若有具体前端需求，请指明页面/功能点；我将按 `DOC/agents/handoff_frontend.md` 的 workset 优先在 `frontend/src/components/costing/ProductModelEditorDrawer.tsx` / `frontend/src/services/planner.ts` 范围内小步闭环
+
 - **最近校对（北京时间 GMT+8）**：2026-01-14（套装模板制度化：Z/B 双前缀 + Z关键行强制覆盖 + 后端Z解析）
   - 产物（后端）：
     - `/bom/generate-by-spec` 支持识别 `Z-XXXXAA` / `Z:CODE:AA`（指定型入口），并在 trace 增加：

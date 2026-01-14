@@ -131,6 +131,25 @@ type SalesPricingPreset = {
   data: SalesPricingDraft
 }
 
+type StorePreviewDraft = {
+  monthly_gmv: number
+  target_net_profit_pct: number
+  fixed_cost_pct: number
+  ad_fee_pct: number
+  platform_fee_pct: number
+  platform_promo_pct: number
+  shipping_fee_pct: number
+
+  // 结构（按 GMV 占比）
+  traffic_share_pct: number
+  profit_share_pct: number
+  brand_share_pct: number
+
+  // 角色贡献毛利目标（贡献毛利=GMV-变动成本-产品成本-税费/退货等；此处先用“目标贡献毛利率%”表达）
+  traffic_cm_pct: number
+  brand_cm_pct: number
+}
+
 const SALES_PRICING_PRESETS_STORAGE_KEY = 'ai_costing_sales_pricing_presets_v1'
 
 const loadSalesPricingPresets = (): SalesPricingPreset[] => {
@@ -224,7 +243,7 @@ const toBundleTokenDash = (code: string, selector?: string | null): string => {
 }
 
 export default function ProductListingPage() {
-  const [mode, setMode] = useState<'single' | 'multi' | 'spec_gen' | 'sales'>('single')
+  const [mode, setMode] = useState<'single' | 'multi' | 'spec_gen' | 'sales' | 'store'>('single')
   const [specGenGeneratingSelector, setSpecGenGeneratingSelector] = useState<string | null>(null)
   const [salesModelKind, setSalesModelKind] = useState<'sample' | 'standard'>('standard')
   const [draft, setDraft] = useState<ProductListingDraft>({
@@ -272,6 +291,23 @@ export default function ProductListingPage() {
     city: '上海',
     courier: '中通',
     campaign: 'daily',
+  })
+
+  const [storeDraft, setStoreDraft] = useState<StorePreviewDraft>({
+    monthly_gmv: 600_000,
+    target_net_profit_pct: 8,
+    fixed_cost_pct: 15,
+    ad_fee_pct: 15,
+    platform_fee_pct: 6.1,
+    platform_promo_pct: 10,
+    shipping_fee_pct: 10,
+
+    traffic_share_pct: 30,
+    profit_share_pct: 60,
+    brand_share_pct: 10,
+
+    traffic_cm_pct: 5,
+    brand_cm_pct: 40,
   })
 
   const [salesPresets, setSalesPresets] = useState<SalesPricingPreset[]>(() => loadSalesPricingPresets())
@@ -719,6 +755,73 @@ export default function ProductListingPage() {
     }
   }, [bom, processLines])
 
+  const storeCalc = useMemo(() => {
+    const gmv = Math.max(0, Number(storeDraft.monthly_gmv ?? 0))
+    if (!gmv) return null
+    const targetNp = clamp01(Number(storeDraft.target_net_profit_pct ?? 0) / 100)
+    const fixedPct = clamp01(Number(storeDraft.fixed_cost_pct ?? 0) / 100)
+    const adPct = clamp01(Number(storeDraft.ad_fee_pct ?? 0) / 100)
+    const platformPct = clamp01(Number(storeDraft.platform_fee_pct ?? 0) / 100)
+    const promoPct = clamp01(Number(storeDraft.platform_promo_pct ?? 0) / 100)
+    const shipPct = clamp01(Number(storeDraft.shipping_fee_pct ?? 0) / 100)
+
+    const variablePct = platformPct + promoPct + shipPct
+    const targetNetProfit = gmv * targetNp
+    const fixedCost = gmv * fixedPct
+    const adCost = gmv * adPct
+    const variableCost = gmv * variablePct
+
+    // 贡献毛利（店铺级）要求：覆盖 固定成本 + 广告费 + 目标净利
+    const requiredCm = fixedCost + adCost + targetNetProfit
+    const requiredCmPct = requiredCm / gmv
+
+    // 在仅考虑“平台/活动/快递”为变动费的简化下，可承受的“产品成本总额”
+    const productCostBudget = gmv - variableCost - requiredCm
+    const productCostBudgetPct = productCostBudget / gmv
+
+    const trafficShare = clamp01(Number(storeDraft.traffic_share_pct ?? 0) / 100)
+    const profitShare = clamp01(Number(storeDraft.profit_share_pct ?? 0) / 100)
+    const brandShare = clamp01(Number(storeDraft.brand_share_pct ?? 0) / 100)
+    const shareSum = trafficShare + profitShare + brandShare
+
+    const trafficCm = Number(storeDraft.traffic_cm_pct ?? 0) / 100
+    const brandCm = Number(storeDraft.brand_cm_pct ?? 0) / 100
+    const profitCmRequired =
+      profitShare > 0
+        ? (requiredCmPct - trafficShare * trafficCm - brandShare * brandCm) / profitShare
+        : NaN
+
+    return {
+      monthly_gmv: gmv,
+      target_net_profit: targetNetProfit,
+      target_net_profit_pct: targetNp * 100,
+      fixed_cost: fixedCost,
+      fixed_cost_pct: fixedPct * 100,
+      ad_cost: adCost,
+      ad_cost_pct: adPct * 100,
+      variable_cost: variableCost,
+      variable_cost_pct: variablePct * 100,
+      variable_breakdown_pct: {
+        platform_fee_pct: platformPct * 100,
+        platform_promo_pct: promoPct * 100,
+        shipping_fee_pct: shipPct * 100,
+      },
+      required_cm: requiredCm,
+      required_cm_pct: requiredCmPct * 100,
+      product_cost_budget: productCostBudget,
+      product_cost_budget_pct: productCostBudgetPct * 100,
+      mix: {
+        traffic_share_pct: trafficShare * 100,
+        profit_share_pct: profitShare * 100,
+        brand_share_pct: brandShare * 100,
+        share_sum_pct: shareSum * 100,
+        traffic_cm_pct: trafficCm * 100,
+        brand_cm_pct: brandCm * 100,
+        profit_cm_required_pct: profitCmRequired * 100,
+      },
+    }
+  }, [storeDraft])
+
   const salesCalc = useMemo(() => {
     // 进厂价（单位成本，含制造费等）：从 BOM 预演得到
     const currentFactoryCost = toNumberOrNull(costingSummary?.total_cost)
@@ -1067,6 +1170,7 @@ export default function ProductListingPage() {
                   { key: 'multi', label: '套装测试' },
                   { key: 'spec_gen', label: '规格生成' },
                   { key: 'sales', label: '利润推演' },
+                  { key: 'store', label: '店铺预演' },
                 ]}
               />
 
@@ -1076,7 +1180,178 @@ export default function ProductListingPage() {
                 onChange={(e) => setDraft((d) => ({ ...d, sku_code: e.target.value }))}
               />
 
-              {mode === 'single' ? (
+              {mode === 'store' ? (
+                <Card size="small" title="店铺预演（组合模型）">
+                  <Space direction="vertical" style={{ width: '100%' }} size={10}>
+                    <Alert
+                      type="info"
+                      showIcon
+                      message="口径：店铺独立核算（组合层），用于推导“所需贡献毛利/利润款要求/引流亏损池”。"
+                      description="说明：此处不把固定成本/广告费机械摊到每个SKU，而是用“全店贡献毛利”覆盖固定+广告+目标净利；再通过角色结构（引流/利润/形象）反推利润款需要的贡献毛利率。"
+                    />
+
+                    <Card size="small" title="店铺参数（按 GMV 占比）" bodyStyle={{ padding: 12 }}>
+                      <Space wrap>
+                        <InputNumber
+                          addonBefore="月GMV(元)"
+                          min={0}
+                          precision={0}
+                          value={storeDraft.monthly_gmv}
+                          onChange={(v) => setStoreDraft((d) => ({ ...d, monthly_gmv: Number(v ?? 0) }))}
+                        />
+                        <InputNumber
+                          addonBefore="目标净利%"
+                          min={0}
+                          max={20}
+                          precision={2}
+                          value={storeDraft.target_net_profit_pct}
+                          onChange={(v) => setStoreDraft((d) => ({ ...d, target_net_profit_pct: Number(v ?? 0) }))}
+                        />
+                        <InputNumber
+                          addonBefore="固定成本%"
+                          min={0}
+                          max={40}
+                          precision={2}
+                          value={storeDraft.fixed_cost_pct}
+                          onChange={(v) => setStoreDraft((d) => ({ ...d, fixed_cost_pct: Number(v ?? 0) }))}
+                        />
+                        <InputNumber
+                          addonBefore="广告费%"
+                          min={0}
+                          max={40}
+                          precision={2}
+                          value={storeDraft.ad_fee_pct}
+                          onChange={(v) => setStoreDraft((d) => ({ ...d, ad_fee_pct: Number(v ?? 0) }))}
+                        />
+                        <InputNumber
+                          addonBefore="平台扣款%"
+                          min={0}
+                          max={30}
+                          precision={2}
+                          value={storeDraft.platform_fee_pct}
+                          onChange={(v) => setStoreDraft((d) => ({ ...d, platform_fee_pct: Number(v ?? 0) }))}
+                        />
+                        <InputNumber
+                          addonBefore="平台活动%"
+                          min={0}
+                          max={40}
+                          precision={2}
+                          value={storeDraft.platform_promo_pct}
+                          onChange={(v) => setStoreDraft((d) => ({ ...d, platform_promo_pct: Number(v ?? 0) }))}
+                        />
+                        <InputNumber
+                          addonBefore="快递费%"
+                          min={0}
+                          max={40}
+                          precision={2}
+                          value={storeDraft.shipping_fee_pct}
+                          onChange={(v) => setStoreDraft((d) => ({ ...d, shipping_fee_pct: Number(v ?? 0) }))}
+                        />
+                      </Space>
+                    </Card>
+
+                    <Card size="small" title="结构与角色假设（按 GMV）" bodyStyle={{ padding: 12 }}>
+                      <Space direction="vertical" style={{ width: '100%' }} size={8}>
+                        <Space wrap>
+                          <InputNumber
+                            addonBefore="引流占比%"
+                            min={0}
+                            max={100}
+                            precision={2}
+                            value={storeDraft.traffic_share_pct}
+                            onChange={(v) => setStoreDraft((d) => ({ ...d, traffic_share_pct: Number(v ?? 0) }))}
+                          />
+                          <InputNumber
+                            addonBefore="利润占比%"
+                            min={0}
+                            max={100}
+                            precision={2}
+                            value={storeDraft.profit_share_pct}
+                            onChange={(v) => setStoreDraft((d) => ({ ...d, profit_share_pct: Number(v ?? 0) }))}
+                          />
+                          <InputNumber
+                            addonBefore="形象占比%"
+                            min={0}
+                            max={100}
+                            precision={2}
+                            value={storeDraft.brand_share_pct}
+                            onChange={(v) => setStoreDraft((d) => ({ ...d, brand_share_pct: Number(v ?? 0) }))}
+                          />
+                        </Space>
+                        <Space wrap>
+                          <InputNumber
+                            addonBefore="引流目标贡献毛利%"
+                            min={-30}
+                            max={50}
+                            precision={2}
+                            value={storeDraft.traffic_cm_pct}
+                            onChange={(v) => setStoreDraft((d) => ({ ...d, traffic_cm_pct: Number(v ?? 0) }))}
+                          />
+                          <InputNumber
+                            addonBefore="形象目标贡献毛利%"
+                            min={0}
+                            max={80}
+                            precision={2}
+                            value={storeDraft.brand_cm_pct}
+                            onChange={(v) => setStoreDraft((d) => ({ ...d, brand_cm_pct: Number(v ?? 0) }))}
+                          />
+                        </Space>
+                        <Text type="secondary">
+                          说明：这里的“贡献毛利%”指单品在扣除【平台扣款/活动/快递/产品成本（及退货税费等）】后的剩余比例，用于覆盖【广告费+固定成本+净利】。
+                        </Text>
+                      </Space>
+                    </Card>
+
+                    <Card size="small" title="结果（只读）">
+                      {!storeCalc ? (
+                        <Text type="secondary">请先填写月GMV</Text>
+                      ) : (
+                        <Descriptions bordered size="small" column={2}>
+                          <Descriptions.Item label="月GMV">{formatMoney2((storeCalc as any).monthly_gmv)}</Descriptions.Item>
+                          <Descriptions.Item label="目标净利润">{formatMoney2((storeCalc as any).target_net_profit)}</Descriptions.Item>
+
+                          <Descriptions.Item label="固定成本">{formatMoney2((storeCalc as any).fixed_cost)}</Descriptions.Item>
+                          <Descriptions.Item label="广告费">{formatMoney2((storeCalc as any).ad_cost)}</Descriptions.Item>
+
+                          <Descriptions.Item label="平台+活动+快递(合计)">
+                            {formatMoney2((storeCalc as any).variable_cost)}（{String(Number((storeCalc as any).variable_cost_pct ?? 0).toFixed(2))}%）
+                          </Descriptions.Item>
+                          <Descriptions.Item label="变动费拆分(%)">
+                            平台{String(Number((storeCalc as any).variable_breakdown_pct?.platform_fee_pct ?? 0).toFixed(2))}% / 活动
+                            {String(Number((storeCalc as any).variable_breakdown_pct?.platform_promo_pct ?? 0).toFixed(2))}% / 快递
+                            {String(Number((storeCalc as any).variable_breakdown_pct?.shipping_fee_pct ?? 0).toFixed(2))}%
+                          </Descriptions.Item>
+
+                          <Descriptions.Item label="全店所需贡献毛利(元)">
+                            <b>{formatMoney2((storeCalc as any).required_cm)}</b>
+                          </Descriptions.Item>
+                          <Descriptions.Item label="全店所需贡献毛利率(%)">
+                            <b>{String(Number((storeCalc as any).required_cm_pct ?? 0).toFixed(2))}%</b>
+                          </Descriptions.Item>
+
+                          <Descriptions.Item label="产品成本预算(元)">
+                            <b>{formatMoney2((storeCalc as any).product_cost_budget)}</b>
+                          </Descriptions.Item>
+                          <Descriptions.Item label="产品成本预算占比(%)">
+                            <b>{String(Number((storeCalc as any).product_cost_budget_pct ?? 0).toFixed(2))}%</b>
+                          </Descriptions.Item>
+
+                          <Descriptions.Item label="结构占比合计(%)">
+                            {String(Number((storeCalc as any).mix?.share_sum_pct ?? 0).toFixed(2))}%
+                          </Descriptions.Item>
+                          <Descriptions.Item label="利润款需达到的贡献毛利率(%)">
+                            <b>{String(Number((storeCalc as any).mix?.profit_cm_required_pct ?? 0).toFixed(2))}%</b>
+                          </Descriptions.Item>
+                        </Descriptions>
+                      )}
+                      <Divider style={{ margin: '10px 0' }} />
+                      <Text type="secondary">
+                        操作建议：先用这里把“利润款需要多高贡献毛利率”算清楚；具体到单个SKU时，再去“利润推演 → 目标成本（给定市场售价）”输入市场价，算可承受进厂价与降本缺口。
+                      </Text>
+                    </Card>
+                  </Space>
+                </Card>
+              ) : mode === 'single' ? (
                 <>
                   <Select
                     showSearch

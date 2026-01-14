@@ -608,17 +608,17 @@ export default function BundleTemplatesPage() {
     const src = phrasePresets[pIdx]
     if (!src) return
 
-    // 口径：复制（粘贴出来的新记录）需要继承“模式(B/Z)”与“编码(selector)”。
-    // 为避免出现“同编码多条启用”导致命中歧义，复制出来的记录默认停用，供用户编辑后再手动启用。
-    const srcSelector = String(src?.selector ?? '').trim().toUpperCase() || toSelector2(pIdx)
+    // 口径：复制出来应是“新编码（新 selector）”，但其它内容保持一致，并继承原记录的 B/Z 模式。
+    const used = new Set((phrasePresets ?? []).map((x) => String(x?.selector ?? '').trim().toUpperCase()).filter(Boolean))
+    const nextSelector = allocateNextSelector2(used)
     const srcMode = String((src as any)?.mode ?? 'parse').trim() === 'force' ? 'force' : 'parse'
 
     const newIdx = phrasePresets.length
     const copied: PhrasePresetRow = {
-      selector: srcSelector,
+      selector: nextSelector,
       mode: srcMode as any,
       phrase: String(src.phrase ?? '').trim() ? `${String(src.phrase ?? '').trim()}（复制）` : '',
-      enabled: false,
+      enabled: src.enabled !== false,
       components: Array.isArray(src.components) ? src.components.map((c) => ({ ...c })) : [],
     }
     setPhrasePresets((prev) => [...(prev ?? []), copied])
@@ -635,7 +635,7 @@ export default function BundleTemplatesPage() {
       return out
     })
     setActivePresetIndex(newIdx)
-    message.success(`已复制属性 ${srcSelector}（默认停用）`)
+    message.success(`已复制属性（新编码 ${nextSelector}）`)
   }
 
   const deletePhrasePreset = (pIdx: number) => {

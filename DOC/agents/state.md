@@ -3,8 +3,8 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-14（Bundle Templates：属性复制继承B/Z模式+编码；抽屉文案“短语”→“属性”】【/costing/bundle-templates】）
   - 产物（前端）：
     - 页面：`/costing/bundle-templates`（`frontend/src/pages/costing/BundleTemplatesPage.tsx`）
-    - 修复：左侧列表“复制”按钮复制出来的新记录 **继承原记录的模式（B/Z）与 selector 编码**，避免“粘贴后模式/编码丢失”的误解
-    - 防呆：复制出来的新记录默认 **停用**；同时启用按钮增加护栏——同一 selector 编码仅允许 1 条启用，避免命中歧义
+    - 修复：左侧列表“复制”按钮复制出来的新记录 **生成新编码（新 selector）**，并 **继承原记录的模式（B/Z）** 与其它配置，避免“复制后模式丢失/编码不对”的误解
+    - 防呆：启用按钮增加护栏——同一 selector 编码仅允许 1 条启用（理论上 selector 应唯一，但用于兜底防止异常数据导致命中歧义）
     - 文案：抽屉 UI 中“短语”统一改为“属性”（列表/编辑/空态/提示/占位符等）
   - 验收命令（必须，全部 0 退出码）：
     - Frontend：`npm -C frontend run build`

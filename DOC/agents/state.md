@@ -54,6 +54,16 @@
     - Frontend：`npm -C frontend run build`
     - Backend：`backend/venv/bin/python -m pytest backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py -q`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-14（套装模板：移除“Z模式关键行”区块 + FORCE 胶囊样式优化）
+  - 产物（前端）：
+    - `/costing/bundle-templates`：
+      - 删除“Z模式关键行（必须强制覆盖）”UI 区块（避免运营困惑）
+      - Z 模式校验改为自动约束：凡是“依赖触发词”的物料行必须存在强制映射且规则可用（不需要人工维护关键行）
+      - FORCE 展示样式优化：兜底物料行使用绿色胶囊 Tag，替换后物料使用红色胶囊 Tag
+  - 验收命令：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`backend/venv/bin/python -m pytest backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-14（套装模板：一键清理“变体改了导致空规则/清不掉”的失效绑定）
   - 产物（前端）：
     - `/costing/bundle-templates` 编辑页：

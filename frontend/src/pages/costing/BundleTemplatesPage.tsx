@@ -217,8 +217,6 @@ export default function BundleTemplatesPage() {
     forced_child_variant_id?: string | null
   }
   const [presetSelectedByIdx, setPresetSelectedByIdx] = useState<Record<string, Record<string, VariantPresetSelection>>>({})
-  // Z模式关键行（按组件行）：key = `${pIdx}:${cIdx}` -> base_line_ids[]
-  const [keyLinesByIdx, setKeyLinesByIdx] = useState<Record<string, string[]>>({})
   const [presetModalOpen, setPresetModalOpen] = useState(false)
   const [presetModalKey, setPresetModalKey] = useState<{ pIdx: number; cIdx: number } | null>(null)
   const [presetApplyMode, setPresetApplyMode] = useState<'variant' | 'force'>('variant')
@@ -631,18 +629,6 @@ export default function BundleTemplatesPage() {
       }
       return out
     })
-    // copy key lines (by component index)
-    setKeyLinesByIdx((prev) => {
-      const out: Record<string, string[]> = { ...(prev ?? {}) }
-      for (const [k, v] of Object.entries(prev ?? {})) {
-        if (!k.startsWith(`${pIdx}:`)) continue
-        const cIdxStr = k.split(':')[1]
-        const cIdx = Number(cIdxStr)
-        if (!Number.isFinite(cIdx)) continue
-        out[`${newIdx}:${cIdx}`] = [...((v ?? []) as any)]
-      }
-      return out
-    })
     setActivePresetIndex(newIdx)
   }
 
@@ -684,25 +670,6 @@ export default function BundleTemplatesPage() {
             if (pi === pIdx) continue // drop deleted preset mappings
             const npi = pi > pIdx ? pi - 1 : pi
             out[`${npi}:${ci}`] = v
-          }
-          return out
-        })
-        // Remap keyLinesByIdx keys because they are index-based `${pIdx}:${cIdx}`
-        setKeyLinesByIdx((prev) => {
-          const out: Record<string, string[]> = {}
-          for (const [k, v] of Object.entries(prev ?? {})) {
-            const parts = String(k).split(':')
-            const pStr = parts[0]
-            const cStr = parts[1]
-            const pi = Number(pStr)
-            const ci = Number(cStr)
-            if (!Number.isFinite(pi) || !Number.isFinite(ci)) {
-              out[k] = v as any
-              continue
-            }
-            if (pi === pIdx) continue
-            const npi = pi > pIdx ? pi - 1 : pi
-            out[`${npi}:${ci}`] = [...((v ?? []) as any)]
           }
           return out
         })
@@ -753,35 +720,6 @@ export default function BundleTemplatesPage() {
         }
         const np = mapIdx(p)
         out[`${np}:${c}`] = v
-      }
-      return out
-    })
-    // Remap keyLinesByIdx keys because they are index-based `${pIdx}:${cIdx}`
-    setKeyLinesByIdx((prev) => {
-      const out: Record<string, string[]> = {}
-      if (!prev || typeof prev !== 'object') return out
-      const keys = Object.entries(prev)
-      const mapIdx = (i: number): number => {
-        if (i === fromIdx) return toIdx
-        if (fromIdx < toIdx) {
-          if (i > fromIdx && i <= toIdx) return i - 1
-          return i
-        }
-        if (i >= toIdx && i < fromIdx) return i + 1
-        return i
-      }
-      for (const [k, v] of keys) {
-        const parts = String(k).split(':')
-        const pStr = parts[0]
-        const cStr = parts[1]
-        const p = Number(pStr)
-        const c = Number(cStr)
-        if (!Number.isFinite(p) || !Number.isFinite(c)) {
-          out[k] = v as any
-          continue
-        }
-        const np = mapIdx(p)
-        out[`${np}:${c}`] = [...((v ?? []) as any)]
       }
       return out
     })
@@ -927,7 +865,7 @@ export default function BundleTemplatesPage() {
         }
       }
 
-      // Z 模式：关键行必须强制覆盖（并且覆盖所有“依赖触发词”的行）
+      // Z 模式：必须强制覆盖所有“依赖触发词”的行（无需“关键行”概念/手动维护）
       if (presetMode === 'force' && versionId) {
         // 该版本中所有“依赖触发词”的 base_line_id 集合
         const tokenDepBaseLineIds = new Set<string>()
@@ -947,35 +885,24 @@ export default function BundleTemplatesPage() {
           if (hasTokenCond) tokenDepBaseLineIds.add(baseId)
         }
 
-        const keyLines = new Set((keyLinesByIdx?.[compKey] ?? []).map((x) => String(x)).filter(Boolean))
-        const missingKeyLines = Array.from(tokenDepBaseLineIds).filter((x) => !keyLines.has(x))
-        if (missingKeyLines.length) {
-          okThisComp = false
-          issues.push({
-            level: 'error',
-            message: `组件${cIdx + 1}：Z 模式下必须把所有“依赖触发词”的物料行纳入【关键行】并强制指定（缺少 ${missingKeyLines.length} 行）`,
-          })
-        }
-
-        // 关键行必须存在强制映射
-        for (const baseLineId of keyLines) {
+        for (const baseLineId of tokenDepBaseLineIds) {
           const base = baseMap.get(String(baseLineId))
           const baseName = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
           const forcedVariantId = String(forceMapForComp?.[String(baseLineId)] ?? '').trim()
           if (!forcedVariantId) {
             okThisComp = false
-            issues.push({ level: 'error', message: `组件${cIdx + 1}：关键行「${baseName}」未强制指定规则（Z 模式要求关键行必须强制覆盖）` })
+            issues.push({ level: 'error', message: `组件${cIdx + 1}：Z 模式下「${baseName}」依赖触发词但未强制指定（请在“筛选”里选中对应规则并保存）` })
             continue
           }
           const vv = variantsById.get(forcedVariantId)
           if (!vv) {
             okThisComp = false
-            issues.push({ level: 'error', message: `组件${cIdx + 1}：关键行「${baseName}」强制规则已不存在/已变更（请重新筛选）` })
+            issues.push({ level: 'error', message: `组件${cIdx + 1}：Z 模式下「${baseName}」强制规则已不存在/已变更（请重新筛选）` })
             continue
           }
           if (vv?.enabled === false) {
             okThisComp = false
-            issues.push({ level: 'error', message: `组件${cIdx + 1}：关键行「${baseName}」强制规则已禁用（Z 模式不允许）` })
+            issues.push({ level: 'error', message: `组件${cIdx + 1}：Z 模式下「${baseName}」强制规则已禁用（不允许）` })
             continue
           }
         }
@@ -1142,25 +1069,6 @@ export default function BundleTemplatesPage() {
       }
       return out
     })
-    // shift key lines for this preset, and clone for the copied row
-    setKeyLinesByIdx((prev) => {
-      const out: Record<string, string[]> = {}
-      const prefix = `${pIdx}:`
-      for (const [k, v] of Object.entries(prev ?? {})) {
-        if (!k.startsWith(prefix)) {
-          out[k] = v as any
-          continue
-        }
-        const cIdxStr = k.slice(prefix.length)
-        const oldC = Number(cIdxStr)
-        if (!Number.isFinite(oldC)) continue
-        if (oldC <= cIdx) out[`${pIdx}:${oldC}`] = [...((v ?? []) as any)]
-        else out[`${pIdx}:${oldC + 1}`] = [...((v ?? []) as any)]
-      }
-      const srcKey = `${pIdx}:${cIdx}`
-      if ((prev ?? {})[srcKey]) out[`${pIdx}:${cIdx + 1}`] = [...(((prev ?? {})[srcKey] ?? []) as any)]
-      return out
-    })
   }
 
   const deleteComponentRow = (pIdx: number, cIdx: number) => {
@@ -1182,23 +1090,6 @@ export default function BundleTemplatesPage() {
         if (oldC < cIdx) out[`${pIdx}:${oldC}`] = v
         else if (oldC > cIdx) out[`${pIdx}:${oldC - 1}`] = v
         // oldC === cIdx => drop
-      }
-      return out
-    })
-    // shift key lines down
-    setKeyLinesByIdx((prev) => {
-      const out: Record<string, string[]> = {}
-      const prefix = `${pIdx}:`
-      for (const [k, v] of Object.entries(prev ?? {})) {
-        if (!k.startsWith(prefix)) {
-          out[k] = v as any
-          continue
-        }
-        const cIdxStr = k.slice(prefix.length)
-        const oldC = Number(cIdxStr)
-        if (!Number.isFinite(oldC)) continue
-        if (oldC < cIdx) out[`${pIdx}:${oldC}`] = [...((v ?? []) as any)]
-        else if (oldC > cIdx) out[`${pIdx}:${oldC - 1}`] = [...((v ?? []) as any)]
       }
       return out
     })
@@ -1309,7 +1200,6 @@ export default function BundleTemplatesPage() {
     form.setFieldsValue({ name: '', category: '', tags: [], shared_trigger_text: '' })
     setModelPoolVersionIds([])
     setPresetSelectedByIdx({})
-    setKeyLinesByIdx({})
     setPhrasePresets([])
     setFallbackTokenOverrides({})
     setActivePresetIndex(0)
@@ -1354,17 +1244,6 @@ export default function BundleTemplatesPage() {
       setPresetSelectedByIdx({})
     }
 
-    const kl = (row?.metadata ?? {})?.phrase_key_lines_by_component
-    if (kl && typeof kl === 'object') {
-      const out2: Record<string, string[]> = {}
-      for (const [k, v] of Object.entries(kl as any)) {
-        if (!k || !Array.isArray(v)) continue
-        out2[String(k)] = (v as any[]).map((x) => String(x)).filter(Boolean)
-      }
-      setKeyLinesByIdx(out2)
-    } else {
-      setKeyLinesByIdx({})
-    }
     const fo = (row?.metadata ?? {})?.fallback_token_overrides ?? (row?.metadata ?? {})?.fallback_display_overrides
     if (fo && typeof fo === 'object') setFallbackTokenOverrides(fo as any)
     else setFallbackTokenOverrides({})
@@ -1470,7 +1349,6 @@ export default function BundleTemplatesPage() {
         shared_trigger_text: String(values.shared_trigger_text ?? '').trim() || undefined,
         model_pool_version_ids: modelPoolVersionIds,
         phrase_variant_presets: presetSelectedByIdx,
-        phrase_key_lines_by_component: keyLinesByIdx,
         fallback_token_overrides: fallbackTokenOverrides,
         // keep legacy field for older clients
         fallback_display_overrides: fallbackTokenOverrides,
@@ -2512,7 +2390,6 @@ export default function BundleTemplatesPage() {
                         expandedRowRender: (rr: any, mi: number) => {
                           const versionId = String(rr?.model_version_id ?? '').trim()
                           const k = `${idx}:${mi}`
-                          const presetMode = String((phrasePresets?.[idx] as any)?.mode ?? 'parse') === 'force' ? 'force' : 'parse'
                           const sel = (presetSelectedByIdx[k] ?? {}) as Record<string, VariantPresetSelection>
                           const selectedEntries = Object.entries(sel).filter(([, v]) => !!String(v?.parent_variant_id ?? '').trim())
                           if (!versionId) return null
@@ -2530,27 +2407,6 @@ export default function BundleTemplatesPage() {
                           }
 
                           const baseMap = baseLineMapByVersion.get(versionId) ?? new Map<string, any>()
-
-                          // token-dependent base lines for this version (need to be included as Z关键行)
-                          const tokenDepBaseLineIds = (() => {
-                            const out = new Set<string>()
-                            for (const v of variants) {
-                              const baseId = String(v?.base_line_id ?? '').trim()
-                              if (!baseId) continue
-                              const cond = (v?.conditions ?? {}) as any
-                              const anyTokens = Array.isArray(cond?.spec_contains_any) ? cond.spec_contains_any : []
-                              const allTokens = Array.isArray(cond?.spec_contains_all) ? cond.spec_contains_all : []
-                              const hasTokenCond = [...anyTokens, ...allTokens].some((x) => {
-                                const s = String(x ?? '').trim()
-                                if (!s) return false
-                                const up = s.toUpperCase()
-                                if (up.startsWith('MODEL:') || up.startsWith('M:') || up.startsWith('BOUND_VERSION:') || up.startsWith('SKU:')) return false
-                                return true
-                              })
-                              if (hasTokenCond) out.add(baseId)
-                            }
-                            return Array.from(out)
-                          })()
 
                             const extractTokensForVariant = (v: any): string[] => {
                               const cond = (v?.conditions ?? {}) as any
@@ -2578,27 +2434,7 @@ export default function BundleTemplatesPage() {
 
                           return (
                             <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                              {presetMode === 'force' ? (
-                                <Card size="small" style={{ marginBottom: 6 }} bodyStyle={{ padding: 10 }} title="Z模式关键行（必须强制覆盖）">
-                                  <Space direction="vertical" style={{ width: '100%' }} size={6}>
-                                    <Text type="secondary">
-                                      规则：Z 表示运营无需查/写触发词，因此所有“依赖触发词”的物料行必须纳入关键行，并配置强制映射（否则不允许保存）。
-                                    </Text>
-                                    <Space wrap size={10}>
-                                      <Button
-                                        size="small"
-                                        onClick={() => {
-                                          setKeyLinesByIdx((prev) => ({ ...(prev ?? {}), [k]: tokenDepBaseLineIds }))
-                                          message.success('已一键选中必要关键行（依赖触发词）')
-                                        }}
-                                      >
-                                        一键选必要关键行
-                                      </Button>
-                                      <Text type="secondary">当前关键行已选：{(keyLinesByIdx?.[k] ?? []).length} 行</Text>
-                                    </Space>
-                                  </Space>
-                                </Card>
-                              ) : null}
+                              {/* 降噪：不展示“Z模式关键行”区块；Z 模式的强制覆盖由校验自动约束 */}
                               {/* 降噪：不在此处展示“已注入触发词”与教学文案；由 Z/B 模式与预演承担验证 */}
                               {/* 默认兜底：第一条与其它行同格式（TOKEN 可输入，兜底物料原名只读） */}
                               {!isForce ? (() => {
@@ -2690,13 +2526,12 @@ export default function BundleTemplatesPage() {
                                           >
                                             强制替换
                                           </Tag>
-                                          <Text type="secondary">兜底物料：</Text>
-                                          <Text strong title={rawName}>
+                                          <Tag color="green">
                                             {slot ? `${slot}：` : ''}
                                             {rawName}
-                                          </Text>
+                                          </Tag>
                                           <Text type="secondary">→</Text>
-                                          <Tag color="green">{producedLabel || '-'}</Tag>
+                                          <Tag color="red">{producedLabel || '-'}</Tag>
                                         </>
                                       ) : (
                                         <>

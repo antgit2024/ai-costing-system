@@ -1,5 +1,14 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-14（Product Listing：利润推演 Tab 模型选择块三列化（打样/标准））
+  - 产物（前端）：
+    - `/costing/product-listing` → Tab「利润推演」：
+      - 模型选择块拆为三列：**类型（打样/标准） / 模型名称 / 版本名称**
+      - 标准模型：版本下拉默认 **仅 published**，并在版本选择右侧提供“**全部/仅发布**”切换
+      - 打样模型：版本下拉始终展示全部（不做 published 限制）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-14（Product Listing：利润推演 Tab 行内布局再收口 + 诊断模式锁定目标净利%）
   - 产物（前端）：
     - `/costing/product-listing` → Tab「利润推演」：

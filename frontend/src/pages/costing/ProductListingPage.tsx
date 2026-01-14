@@ -225,6 +225,7 @@ const toBundleTokenDash = (code: string, selector?: string | null): string => {
 export default function ProductListingPage() {
   const [mode, setMode] = useState<'single' | 'multi' | 'spec_gen' | 'sales'>('single')
   const [specGenGeneratingSelector, setSpecGenGeneratingSelector] = useState<string | null>(null)
+  const [salesModelKind, setSalesModelKind] = useState<'sample' | 'standard'>('standard')
   const [draft, setDraft] = useState<ProductListingDraft>({
     sku_code: '',
     model_id: null,
@@ -295,6 +296,10 @@ export default function ProductListingPage() {
 
   const standardVersions = useMemo(() => {
     return versions.filter((v) => String(v.version_kind) === 'standard')
+  }, [versions])
+
+  const sampleVersions = useMemo(() => {
+    return versions.filter((v) => String(v.version_kind) === 'sample')
   }, [versions])
 
   const selectableStandardVersions = useMemo(() => {
@@ -452,6 +457,15 @@ export default function ProductListingPage() {
     () => selectableStandardVersions.find((v) => v.id === draft.model_version_id) ?? null,
     [selectableStandardVersions, draft.model_version_id],
   )
+
+  const salesSelectableVersions = useMemo(() => {
+    if (salesModelKind === 'sample') return sampleVersions
+    return selectableStandardVersions
+  }, [salesModelKind, sampleVersions, selectableStandardVersions])
+
+  const salesSelectedVersion = useMemo(() => {
+    return salesSelectableVersions.find((v) => v.id === draft.model_version_id) ?? null
+  }, [salesSelectableVersions, draft.model_version_id])
 
   const bundleTokenInSpec = useMemo(() => {
     const t = String(draft.spec_text || '')
@@ -940,6 +954,25 @@ export default function ProductListingPage() {
     [selectableStandardVersions],
   )
 
+  const sampleVersionOptions = useMemo(
+    () =>
+      sampleVersions.map((v) => ({
+        value: v.id,
+        label: (
+          <Space size={8}>
+            <Text strong>{v.version_label || v.id.slice(0, 8)}</Text>
+            <Tag color={String(v.version_status) === 'published' ? 'green' : 'orange'}>{String(v.version_status || 'draft')}</Tag>
+          </Space>
+        ),
+      })),
+    [sampleVersions],
+  )
+
+  const salesVersionOptions = useMemo(() => {
+    if (salesModelKind === 'sample') return sampleVersionOptions
+    return versionOptions
+  }, [salesModelKind, sampleVersionOptions, versionOptions])
+
   return (
     <div style={{ padding: 16 }}>
       <Row gutter={[16, 16]}>
@@ -1158,40 +1191,77 @@ export default function ProductListingPage() {
                     message="售价测算（测试台）：先选标准模型/版本并预演 BOM 得到进厂价，再填写渠道与费用参数反推售价。"
                   />
 
-                  <Select
-                    showSearch
-                    allowClear
-                    placeholder="选择标准模型（按编码/名称搜索）"
-                    options={modelOptions as any}
-                    value={draft.model_id ?? undefined}
-                    loading={modelsQuery.isLoading}
-                    filterOption={(input, option: any) => {
-                      const raw = option?.raw as ProductModel | undefined
-                      const q = String(input ?? '').trim().toLowerCase()
-                      if (!raw) return false
-                      return String(raw.model_code ?? '').toLowerCase().includes(q) || String(raw.model_name ?? '').toLowerCase().includes(q)
-                    }}
-                    onChange={(v) => {
-                      setDraft((d) => ({ ...d, model_id: (v as string) ?? null, model_version_id: null }))
-                      setBom(null)
-                      setParsed(null)
-                    }}
-                  />
-
-                  <Select
-                    showSearch
-                    allowClear
-                    placeholder="选择已发布标准版本（published standard）"
-                    options={versionOptions as any}
-                    value={draft.model_version_id ?? undefined}
-                    loading={versionsQuery.isLoading}
-                    disabled={!draft.model_id}
-                    onChange={(v) => {
-                      setDraft((d) => ({ ...d, model_version_id: (v as string) ?? null }))
-                      setBom(null)
-                      setParsed(null)
-                    }}
-                  />
+                  <Row gutter={[12, 12]}>
+                    <Col xs={24} lg={6}>
+                      <Select
+                        value={salesModelKind}
+                        style={{ width: '100%' }}
+                        options={[
+                          { value: 'sample', label: '打样模型' },
+                          { value: 'standard', label: '标准模型' },
+                        ]}
+                        onChange={(v) => {
+                          setSalesModelKind(v as any)
+                          setDraft((d) => ({ ...d, model_version_id: null }))
+                          setBom(null)
+                          setParsed(null)
+                        }}
+                      />
+                    </Col>
+                    <Col xs={24} lg={9}>
+                      <Select
+                        showSearch
+                        allowClear
+                        placeholder="模型名称"
+                        options={modelOptions as any}
+                        value={draft.model_id ?? undefined}
+                        loading={modelsQuery.isLoading}
+                        style={{ width: '100%' }}
+                        filterOption={(input, option: any) => {
+                          const raw = option?.raw as ProductModel | undefined
+                          const q = String(input ?? '').trim().toLowerCase()
+                          if (!raw) return false
+                          return String(raw.model_code ?? '').toLowerCase().includes(q) || String(raw.model_name ?? '').toLowerCase().includes(q)
+                        }}
+                        onChange={(v) => {
+                          setDraft((d) => ({ ...d, model_id: (v as string) ?? null, model_version_id: null }))
+                          setBom(null)
+                          setParsed(null)
+                        }}
+                      />
+                    </Col>
+                    <Col xs={24} lg={9}>
+                      <Space.Compact style={{ width: '100%' }}>
+                        <Select
+                          showSearch
+                          allowClear
+                          placeholder="版本名称"
+                          options={salesVersionOptions as any}
+                          value={draft.model_version_id ?? undefined}
+                          loading={versionsQuery.isLoading}
+                          disabled={!draft.model_id}
+                          style={{ width: '100%' }}
+                          onChange={(v) => {
+                            setDraft((d) => ({ ...d, model_version_id: (v as string) ?? null }))
+                            setBom(null)
+                            setParsed(null)
+                          }}
+                        />
+                        {salesModelKind === 'standard' ? (
+                          <Button
+                            onClick={() => {
+                              setShowAllStandardVersions((x) => !x)
+                              setDraft((d) => ({ ...d, model_version_id: null }))
+                              setBom(null)
+                              setParsed(null)
+                            }}
+                          >
+                            {showAllStandardVersions ? '仅发布' : '全部'}
+                          </Button>
+                        ) : null}
+                      </Space.Compact>
+                    </Col>
+                  </Row>
 
                   <Input.TextArea
                     rows={4}
@@ -1663,13 +1733,13 @@ export default function ProductListingPage() {
                     )}
                   </Descriptions.Item>
                   <Descriptions.Item label="版本">
-                    {selectedVersion ? (
+                    {salesSelectedVersion ? (
                       <Space size={8}>
-                        <Text strong>{selectedVersion.version_label || selectedVersion.id}</Text>
-                        {String(selectedVersion.version_status) === 'published' ? (
+                        <Text strong>{salesSelectedVersion.version_label || salesSelectedVersion.id}</Text>
+                        {String(salesSelectedVersion.version_status) === 'published' ? (
                           <Tag color="green">published</Tag>
                         ) : (
-                          <Tag color="orange">{String(selectedVersion.version_status || 'draft')}</Tag>
+                          <Tag color="orange">{String(salesSelectedVersion.version_status || 'draft')}</Tag>
                         )}
                       </Space>
                     ) : (

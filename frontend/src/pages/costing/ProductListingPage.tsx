@@ -1238,26 +1238,6 @@ export default function ProductListingPage() {
                       <Space wrap>
                         <Select
                           style={{ width: 140 }}
-                          value={salesDraft.product_tier}
-                          options={(Object.keys(TIER_PRESETS) as SalesPricingDraft['product_tier'][]).map((k) => ({
-                            value: k,
-                            label: TIER_PRESETS[k].label,
-                          }))}
-                          onChange={(v) => {
-                            const tier = v as SalesPricingDraft['product_tier']
-                            const preset = TIER_PRESETS[tier]
-                            setSalesDraft((d) => ({
-                              ...d,
-                              product_tier: tier,
-                              target_net_profit_pct: preset.target_net_profit_pct,
-                              fixed_cost_pct: preset.fixed_cost_pct,
-                              return_rate_pct: preset.return_rate_pct,
-                              unsellable_ratio_pct: preset.unsellable_ratio_pct,
-                            }))
-                          }}
-                        />
-                        <Select
-                          style={{ width: 140 }}
                           value={salesDraft.channel}
                           options={(Object.keys(CHANNEL_PRESETS) as SalesPricingDraft['channel'][]).map((k) => ({
                             value: k,
@@ -1277,18 +1257,37 @@ export default function ProductListingPage() {
                         <Select style={{ width: 120 }} options={CITY_OPTIONS as any} value={salesDraft.city} onChange={(v) => setSalesDraft((d) => ({ ...d, city: String(v) }))} />
                         <Select style={{ width: 120 }} options={COURIER_OPTIONS as any} value={salesDraft.courier} onChange={(v) => setSalesDraft((d) => ({ ...d, courier: String(v) }))} />
                         <Select style={{ width: 120 }} options={CAMPAIGN_OPTIONS as any} value={salesDraft.campaign} onChange={(v) => setSalesDraft((d) => ({ ...d, campaign: String(v) }))} />
-                        <Tag color="geekblue">税率 {String(Number(salesDraft.vat_rate_pct ?? 0).toFixed(2))}%</Tag>
-                        <Tag>{salesDraft.taxpayer_kind === 'small' ? '小规模' : '一般纳税人'}</Tag>
                       </Space>
 
                       {/* 单独一行：目标净利% + 预设选择/新建/保存 */}
                       <Space wrap>
+                        <Select
+                          style={{ width: 140 }}
+                          value={salesDraft.product_tier}
+                          options={(Object.keys(TIER_PRESETS) as SalesPricingDraft['product_tier'][]).map((k) => ({
+                            value: k,
+                            label: TIER_PRESETS[k].label,
+                          }))}
+                          onChange={(v) => {
+                            const tier = v as SalesPricingDraft['product_tier']
+                            const preset = TIER_PRESETS[tier]
+                            setSalesDraft((d) => ({
+                              ...d,
+                              product_tier: tier,
+                              target_net_profit_pct: preset.target_net_profit_pct,
+                              fixed_cost_pct: preset.fixed_cost_pct,
+                              return_rate_pct: preset.return_rate_pct,
+                              unsellable_ratio_pct: preset.unsellable_ratio_pct,
+                            }))
+                          }}
+                        />
                         <InputNumber
                           addonBefore="目标净利%"
                           min={0}
                           max={30}
                           precision={2}
                           value={salesDraft.target_net_profit_pct}
+                          disabled={salesDraft.pricing_mode === 'diagnose'}
                           onChange={(v) => setSalesDraft((d) => ({ ...d, target_net_profit_pct: Number(v ?? 0) }))}
                         />
                         <Select
@@ -1344,38 +1343,38 @@ export default function ProductListingPage() {
                       </Space>
 
                       <Divider style={{ margin: '4px 0' }} />
-                      <Text strong>平台相关</Text>
-                      <Space wrap>
+                      <Space wrap align="center">
+                        <Text strong style={{ minWidth: 72 }}>平台相关</Text>
                         <InputNumber addonBefore="广告费%" min={0} max={50} precision={2} value={salesDraft.ad_fee_pct} onChange={(v) => setSalesDraft((d) => ({ ...d, ad_fee_pct: Number(v ?? 0) }))} />
                         <InputNumber addonBefore="平台扣点%" min={0} max={50} precision={2} value={salesDraft.platform_fee_pct} onChange={(v) => setSalesDraft((d) => ({ ...d, platform_fee_pct: Number(v ?? 0) }))} />
                         <InputNumber addonBefore="活动折扣%" min={0} max={90} precision={2} value={salesDraft.promo_discount_pct} onChange={(v) => setSalesDraft((d) => ({ ...d, promo_discount_pct: Number(v ?? 0) }))} />
                       </Space>
 
                       <Divider style={{ margin: '4px 0' }} />
-                      <Text strong>发货成本</Text>
-                      <Space wrap>
+                      <Space wrap align="center">
+                        <Text strong style={{ minWidth: 72 }}>发货成本</Text>
                         <InputNumber addonBefore="包装(元)" min={0} precision={2} value={salesDraft.packaging_fee_fixed} onChange={(v) => setSalesDraft((d) => ({ ...d, packaging_fee_fixed: Number(v ?? 0) }))} />
                         <InputNumber addonBefore="快递费(元/件)" min={0} precision={2} value={salesDraft.shipping_fee_fixed} onChange={(v) => setSalesDraft((d) => ({ ...d, shipping_fee_fixed: Number(v ?? 0) }))} />
                       </Space>
 
                       <Divider style={{ margin: '4px 0' }} />
-                      <Text strong>售后预估</Text>
-                      <Space wrap>
+                      <Space wrap align="center">
+                        <Text strong style={{ minWidth: 72 }}>售后预估</Text>
                         <InputNumber addonBefore="退货率%" min={0} max={60} precision={2} value={salesDraft.return_rate_pct} onChange={(v) => setSalesDraft((d) => ({ ...d, return_rate_pct: Number(v ?? 0) }))} />
                         <InputNumber addonBefore="不可售占比%" min={0} max={100} precision={2} value={salesDraft.unsellable_ratio_pct} onChange={(v) => setSalesDraft((d) => ({ ...d, unsellable_ratio_pct: Number(v ?? 0) }))} />
                         <InputNumber addonBefore="售后(元)" min={0} precision={2} value={salesDraft.aftersale_fee_fixed} onChange={(v) => setSalesDraft((d) => ({ ...d, aftersale_fee_fixed: Number(v ?? 0) }))} />
                       </Space>
 
                       <Divider style={{ margin: '4px 0' }} />
-                      <Text strong>管理费用</Text>
-                      <Space wrap>
+                      <Space wrap align="center">
+                        <Text strong style={{ minWidth: 72 }}>管理费用</Text>
                         <InputNumber addonBefore="固定成本%" min={0} max={40} precision={2} value={salesDraft.fixed_cost_pct} onChange={(v) => setSalesDraft((d) => ({ ...d, fixed_cost_pct: Number(v ?? 0) }))} />
                         <InputNumber addonBefore="销售提成%" min={0} max={20} precision={2} value={salesDraft.sales_commission_pct} onChange={(v) => setSalesDraft((d) => ({ ...d, sales_commission_pct: Number(v ?? 0) }))} />
                       </Space>
 
                       <Divider style={{ margin: '4px 0' }} />
-                      <Text strong>交纳税费</Text>
-                      <Space wrap>
+                      <Space wrap align="center">
+                        <Text strong style={{ minWidth: 72 }}>交纳税费</Text>
                         <Select
                           style={{ width: 140 }}
                           value={salesDraft.taxpayer_kind}

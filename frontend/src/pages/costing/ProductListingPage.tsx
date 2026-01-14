@@ -82,8 +82,8 @@ type SalesPricingDraft = {
   // - solve: 反推“券后成交价(GMV)”满足目标净利%
   // - diagnose: 给定券后成交价/标价，诊断净利率与成本拆解
   pricing_mode: 'solve' | 'diagnose'
-  deal_gmv_input: number
-  list_price_input: number
+  deal_gmv_input: number | null
+  list_price_input: number | null
 
   // 目标与比例（均以“含税成交价（GMV）”为分母；毛利/利润按“不含税收入”展示）
   target_net_profit_pct: number
@@ -263,8 +263,8 @@ export default function ProductListingPage() {
     service_vat_rate_pct: 6,
     promo_discount_pct: 0,
     pricing_mode: 'solve',
-    deal_gmv_input: 85,
-    list_price_input: 98.9,
+    deal_gmv_input: null,
+    list_price_input: null,
     shipping_fee_fixed: 8,
     packaging_fee_fixed: 2,
     aftersale_fee_fixed: 0,
@@ -804,10 +804,21 @@ export default function ProductListingPage() {
     }
 
     const solvedDealGmv = taxpayerKind === 'small' ? solveSmall() : solveGeneral()
-    const dealGmv =
-      String(salesDraft.pricing_mode) === 'diagnose'
-        ? Math.max(0, Number(salesDraft.deal_gmv_input ?? 0))
-        : solvedDealGmv ?? NaN
+
+    const isDiagnose = String(salesDraft.pricing_mode) === 'diagnose'
+    const dealInput = toNumberOrNull(salesDraft.deal_gmv_input)
+    const listInput = toNumberOrNull(salesDraft.list_price_input)
+
+    // 诊断模式输入口径（以券后成交价为主）：
+    // - 只填券后：可运行（券前=券后，折扣=0）
+    // - 券后+券前都填：自动计算折扣
+    // - 只填券前：自动视为“无折扣”，券后=券前
+    let dealDiagnose: number | null = dealInput
+    let listDiagnose: number | null = listInput
+    if (dealDiagnose == null && listDiagnose != null) dealDiagnose = listDiagnose
+    if (dealDiagnose != null && listDiagnose == null) listDiagnose = dealDiagnose
+
+    const dealGmv = isDiagnose ? Math.max(0, Number(dealDiagnose ?? 0)) : solvedDealGmv ?? NaN
     if (!Number.isFinite(dealGmv) || dealGmv <= 0) {
       return { error: '无法反推出合理成交价：税率/抵扣/费率组合导致解无效，请调整参数。' }
     }
@@ -849,12 +860,11 @@ export default function ProductListingPage() {
 
     // 标价：如果有活动折扣（标价 * (1-折扣)=成交价）
     const disc = clamp01(Number(salesDraft.promo_discount_pct ?? 0) / 100)
-    const listPrice =
-      String(salesDraft.pricing_mode) === 'diagnose'
-        ? Math.max(0, Number(salesDraft.list_price_input ?? 0))
-        : disc > 0
-          ? dealGmv / (1 - disc)
-          : dealGmv
+    const listPrice = isDiagnose
+      ? Math.max(0, Number(listDiagnose ?? dealGmv))
+      : disc > 0
+        ? dealGmv / (1 - disc)
+        : dealGmv
     const effectiveDiscPct = listPrice > 0 ? ((listPrice - dealGmv) / listPrice) * 100 : disc * 100
 
     // 毛利（不含税口径）：(不含税收入 - 产品成本) / 不含税收入
@@ -1291,14 +1301,16 @@ export default function ProductListingPage() {
                                 min={0}
                                 precision={2}
                                 value={salesDraft.deal_gmv_input}
-                                onChange={(v) => setSalesDraft((d) => ({ ...d, deal_gmv_input: Number(v ?? 0) }))}
+                                placeholder="必填（或仅填券前）"
+                                onChange={(v) => setSalesDraft((d) => ({ ...d, deal_gmv_input: v == null ? null : Number(v) }))}
                               />
                               <InputNumber
                                 addonBefore="优惠前标价(含税)"
                                 min={0}
                                 precision={2}
                                 value={salesDraft.list_price_input}
-                                onChange={(v) => setSalesDraft((d) => ({ ...d, list_price_input: Number(v ?? 0) }))}
+                                placeholder="可选（用于自动算折扣）"
+                                onChange={(v) => setSalesDraft((d) => ({ ...d, list_price_input: v == null ? null : Number(v) }))}
                               />
                             </Space>
                           ) : null}

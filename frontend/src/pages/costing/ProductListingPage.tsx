@@ -1452,7 +1452,14 @@ export default function ProductListingPage() {
                             { value: 'general', label: '一般纳税人' },
                             { value: 'small', label: '小规模' },
                           ]}
-                          onChange={(v) => setSalesDraft((d) => ({ ...d, taxpayer_kind: v as any }))}
+                          onChange={(v) =>
+                            setSalesDraft((d) => ({
+                              ...d,
+                              taxpayer_kind: v as any,
+                              // 默认税率联动：小规模=3%，一般纳税人=13%
+                              vat_rate_pct: v === 'small' ? 3 : 13,
+                            }))
+                          }
                         />
                         <InputNumber addonBefore="增值税%" min={0} max={20} precision={2} value={salesDraft.vat_rate_pct} onChange={(v) => setSalesDraft((d) => ({ ...d, vat_rate_pct: Number(v ?? 0) }))} />
                         <InputNumber addonBefore="附加税/增值税%" min={0} max={50} precision={2} value={salesDraft.vat_surcharge_ratio_pct} onChange={(v) => setSalesDraft((d) => ({ ...d, vat_surcharge_ratio_pct: Number(v ?? 0) }))} />

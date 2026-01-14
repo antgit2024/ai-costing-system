@@ -1,5 +1,13 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-14（Product Listing：税制切换默认税率联动）
+  - 产物（前端）：
+    - `/costing/product-listing` → Tab「利润推演」：
+      - 选择 **小规模**：自动将“增值税%”设置为 **3%**
+      - 切回 **一般纳税人**：自动将“增值税%”设置为 **13%**
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-14（Product Listing：利润推演 Tab 模型选择块三列化（打样/标准））
   - 产物（前端）：
     - `/costing/product-listing` → Tab「利润推演」：

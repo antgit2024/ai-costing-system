@@ -1,5 +1,13 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-14（套装模板：一键清理“变体改了导致空规则/清不掉”的失效绑定）
+  - 产物（前端）：
+    - `/costing/bundle-templates` 编辑页：
+      - 新增按钮：**清理失效规则**（按当前已加载的变体规则，清除失效的 `parent_variant_id / forced_child_variant_id / force_variant_by_base_line`）
+      - 文案口径明确区分：触发词（参与匹配） vs 对客TOKEN（展示用途，不参与匹配）
+  - 验收命令：
+    - Frontend：`npm -C frontend run build`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-14（套装模板：明确“运营只用 B-XXXXAA”并可视化/预警触发词依赖）
   - 产物（前端）：
     - `/costing/bundle-templates` 编辑页：

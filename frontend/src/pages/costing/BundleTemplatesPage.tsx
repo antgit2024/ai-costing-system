@@ -800,6 +800,7 @@ export default function BundleTemplatesPage() {
         .map((x) => String(x).trim())
         .filter(Boolean)
       const injectedFromTokens = Array.isArray(rr?.tokens) ? (rr.tokens as any[]).map((x) => String(x).trim()).filter(Boolean) : []
+      // “触发词（参与匹配）”：来自组件行 spec_text/tokens（会被后端解析并注入 component.tokens）
       const injectedAll = new Set<string>([...injectedFromSpec, ...injectedFromTokens])
       const forceMapForComp =
         rr?.force_variant_by_base_line && typeof rr.force_variant_by_base_line === 'object' ? (rr.force_variant_by_base_line as any) : {}
@@ -892,6 +893,81 @@ export default function BundleTemplatesPage() {
       baseLineOk,
     })
     message.success(hasError ? '检验完成：存在问题（红色）' : '检验通过（绿色）')
+  }
+
+  const cleanupInvalidSelectionsForPreset = (pIdx: number) => {
+    const p = phrasePresets?.[pIdx]
+    if (!p) return
+    const rows = Array.isArray((p as any)?.components) ? ((p as any).components as any[]) : []
+
+    // Build variantsById per version from current query cache (best-effort, no extra request)
+    const variantsByVersionId = new Map<string, Map<string, any>>()
+    for (const x of (variantsSummaryQuery.data ?? []) as any[]) {
+      const vid = String((x as any)?.version_id ?? '').trim()
+      if (!vid) continue
+      const items = Array.isArray((x as any)?.items) ? (x as any).items : []
+      const m = new Map<string, any>()
+      for (const v of items) if (v?.id) m.set(String(v.id), v)
+      variantsByVersionId.set(vid, m)
+    }
+
+    // 1) 清理 presetSelectedByIdx 中失效的 parent/forced 规则
+    setPresetSelectedByIdx((prev) => {
+      const out = { ...(prev ?? {}) } as Record<string, Record<string, VariantPresetSelection>>
+      for (let cIdx = 0; cIdx < rows.length; cIdx++) {
+        const compKey = `${pIdx}:${cIdx}`
+        const rr = rows[cIdx]
+        const versionId = String(rr?.model_version_id ?? '').trim()
+        const vb = variantsByVersionId.get(versionId) ?? new Map<string, any>()
+        const sel = (out[compKey] ?? {}) as Record<string, VariantPresetSelection>
+        const nextSel: Record<string, VariantPresetSelection> = {}
+        let changed = false
+        for (const [baseLineId, s] of Object.entries(sel)) {
+          const parentId = String(s?.parent_variant_id ?? '').trim()
+          if (parentId && !vb.get(parentId)) {
+            changed = true
+            continue
+          }
+          const forcedChildId = String(s?.forced_child_variant_id ?? '').trim()
+          if (forcedChildId && !vb.get(forcedChildId)) {
+            changed = true
+            nextSel[baseLineId] = { ...(s as any), forced_child_variant_id: null }
+            continue
+          }
+          nextSel[baseLineId] = s
+        }
+        if (changed) out[compKey] = nextSel
+      }
+      return out
+    })
+
+    // 2) 清理组件行 force_variant_by_base_line 中失效的 variant_id
+    setPhrasePresets((prev) =>
+      (prev ?? []).map((pp, pi) => {
+        if (pi !== pIdx) return pp
+        const nextComponents = (rows ?? []).map((rr) => {
+          const versionId = String(rr?.model_version_id ?? '').trim()
+          const vb = variantsByVersionId.get(versionId) ?? new Map<string, any>()
+          const fm = rr?.force_variant_by_base_line && typeof rr.force_variant_by_base_line === 'object' ? rr.force_variant_by_base_line : {}
+          if (!fm || typeof fm !== 'object') return rr
+          let changed = false
+          const nextFm: Record<string, string> = {}
+          for (const [baseLineId, variantId] of Object.entries(fm as any)) {
+            const vid = String(variantId ?? '').trim()
+            if (!vid) continue
+            if (!vb.get(vid)) {
+              changed = true
+              continue
+            }
+            nextFm[String(baseLineId)] = vid
+          }
+          return changed ? { ...rr, force_variant_by_base_line: Object.keys(nextFm).length ? nextFm : undefined } : rr
+        })
+        return { ...pp, components: nextComponents }
+      }),
+    )
+
+    message.success('已清理失效规则（请重新点“检验结果”确认）')
   }
 
   // NOTE: auto phrase builder removed (it was too visually noisy); keep UI structured with locked tokens + editable fallback names.
@@ -2090,6 +2166,13 @@ export default function BundleTemplatesPage() {
                             }
                           >
                             检验结果
+                          </Button>
+                          <Button
+                            danger
+                            disabled={disabled}
+                            onClick={() => cleanupInvalidSelectionsForPreset(idx)}
+                          >
+                            清理失效规则
                           </Button>
                           <Button
                             type="primary"

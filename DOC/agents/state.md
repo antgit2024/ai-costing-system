@@ -74,6 +74,19 @@
     - Frontend：`npm -C frontend run build`
     - Backend：`backend/venv/bin/python -m pytest backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py -q`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-14（套装模板：模式默认指定型 + 列表短码分色 + 运营短语不截断 + 模型多选换行）
+  - 产物（前端）：
+    - `/costing/bundle-templates`：
+      - 抽屉：模式选择“指定型(Z)”排在前面；新建短语默认模式为指定型
+      - 列表页：
+        - 编码列更窄（缩小约 1/3）
+        - “短码(B/Z)”列按 selector 模式输出并分色（B蓝/Z橙红）
+        - “运营短语”不再省略号截断，全文展示
+      - 模型池多选框：选中模型标签支持换行显示（不再一行挤爆）
+  - 验收命令：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`backend/venv/bin/python -m pytest backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-14（套装模板：一键清理“变体改了导致空规则/清不掉”的失效绑定）
   - 产物（前端）：
     - `/costing/bundle-templates` 编辑页：

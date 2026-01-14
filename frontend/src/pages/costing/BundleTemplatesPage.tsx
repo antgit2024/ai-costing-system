@@ -1328,7 +1328,8 @@ export default function BundleTemplatesPage() {
           phrase: '',
           // 新建默认停用，避免“未填完就阻塞保存/误上线上线”
           enabled: false,
-          mode: 'parse',
+          // 默认：指定型（Z），符合运营心智：默认“不走解析”
+          mode: 'force',
           components: [{ model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '', tokens: [] }],
         } as PhrasePresetRow,
       ]
@@ -1832,7 +1833,8 @@ export default function BundleTemplatesPage() {
                 },
               }}
               columns={[
-                { title: '编码', dataIndex: 'code', width: 110, render: (v) => <Text code>{String(v)}</Text> },
+                // 列宽缩小（原 110）：编码列更紧凑
+                { title: '编码', dataIndex: 'code', width: 70, render: (v) => <Text code>{String(v)}</Text> },
                 { title: '名称', dataIndex: 'name', width: 180, render: (v) => String(v ?? '').trim() || '-' },
                 {
                   title: '分类',
@@ -1840,8 +1842,9 @@ export default function BundleTemplatesPage() {
                   render: (_: any, r: any) => String(r?.metadata?.category ?? '').trim() || '-',
                 },
                 {
-                  title: '解析短码',
-                  width: 170,
+                  title: '短码(B/Z)',
+                  // 列宽缩小（原 170）
+                  width: 115,
                   render: (_: any, r: any) => {
                     const codeRaw = String(r?.code ?? '').trim()
                     if (!codeRaw) return <Text type="secondary">-</Text>
@@ -1852,11 +1855,18 @@ export default function BundleTemplatesPage() {
                       <Space direction="vertical" size={2}>
                         {pp.slice(0, 8).map((p: any, idx: number) => {
                           const sel = String(p?.selector ?? '').trim().toUpperCase() || toSelector2(idx)
-                          const t = sel ? toBundleTokenDash(codeRaw, sel) : token
+                          const prefix = String(p?.mode ?? '').trim() === 'force' ? 'Z' : 'B'
+                          const t = sel
+                            ? prefix === 'Z'
+                              ? `Z-${String(codeRaw).toUpperCase()}${String(sel).toUpperCase()}`
+                              : toBundleTokenDash(codeRaw, sel)
+                            : token
                           return (
-                            <Text key={t} code copyable={{ text: t }}>
-                              {t}
-                            </Text>
+                            <Tag key={t} color={prefix === 'Z' ? 'volcano' : 'blue'} style={{ marginInlineEnd: 0 }}>
+                              <Text copyable={{ text: t }} style={{ color: 'inherit' }}>
+                                {t}
+                              </Text>
+                            </Tag>
                           )
                         })}
                         {pp.length > 8 ? <Text type="secondary">+{pp.length - 8}</Text> : null}
@@ -1866,7 +1876,7 @@ export default function BundleTemplatesPage() {
                 },
                 {
                   title: '运营短语',
-                  width: 240,
+                  width: 260,
                   render: (_: any, r: any) => {
                     const pp = Array.isArray(r?.metadata?.phrase_presets) ? r.metadata.phrase_presets : []
                     if (!pp.length) return <Text type="secondary">-</Text>
@@ -1879,7 +1889,7 @@ export default function BundleTemplatesPage() {
                           return (
                             <Text
                               key={`${idx}-${label}`}
-                              ellipsis={{ tooltip: label }}
+                              style={{ whiteSpace: 'normal' }}
                               copyable={phrase ? { text: phrase } : false}
                             >
                               {label}
@@ -2029,6 +2039,7 @@ export default function BundleTemplatesPage() {
 
             <Form.Item label="模型选择（缩小范围，多选）">
               <Select
+                className="bt-model-pool-select"
                 mode="multiple"
                 showSearch
                 allowClear
@@ -2076,6 +2087,16 @@ export default function BundleTemplatesPage() {
                 }
                 .bt-phrase-card-icon-btn.ant-btn[disabled] {
                   color: rgba(0,0,0,0.25);
+                }
+                /* Model pool select: allow wrapping tags onto multiple lines */
+                .bt-model-pool-select .ant-select-selector {
+                  height: auto !important;
+                  padding-top: 4px !important;
+                  padding-bottom: 4px !important;
+                  flex-wrap: wrap !important;
+                }
+                .bt-model-pool-select .ant-select-selection-overflow {
+                  flex-wrap: wrap !important;
                 }
               `}</style>
               <List
@@ -2179,8 +2200,8 @@ export default function BundleTemplatesPage() {
                           </Space>
                         </div>
 
-                        {/* 第二行：纯短语 */}
-                        <Text style={{ color: 'rgba(0,0,0,0.88)' }} ellipsis={{ tooltip: true }}>
+                        {/* 第二行：纯短语（运营短语不截短，全显示） */}
+                        <Text style={{ color: 'rgba(0,0,0,0.88)', whiteSpace: 'normal' }}>
                           {phraseText}
                         </Text>
                       </Space>
@@ -2340,8 +2361,9 @@ export default function BundleTemplatesPage() {
                                   )
                                 }}
                                 options={[
-                                  { label: 'B（解析型）', value: 'parse' },
+                                  // 调整顺序：指定型在前；默认新建短语也为指定型
                                   { label: 'Z（指定型）', value: 'force' },
+                                  { label: 'B（解析型）', value: 'parse' },
                                 ]}
                               />
                               {isModeLocked ? <Tag color="orange">已锁定（已筛选/已强制）</Tag> : null}

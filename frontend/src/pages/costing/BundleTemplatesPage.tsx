@@ -605,15 +605,20 @@ export default function BundleTemplatesPage() {
   }
 
   const copyPhrasePreset = (pIdx: number) => {
-    const used = new Set((phrasePresets ?? []).map((x) => String(x?.selector ?? '').trim().toUpperCase()).filter(Boolean))
-    const nextSelector = allocateNextSelector2(used)
     const src = phrasePresets[pIdx]
     if (!src) return
+
+    // 口径：复制（粘贴出来的新记录）需要继承“模式(B/Z)”与“编码(selector)”。
+    // 为避免出现“同编码多条启用”导致命中歧义，复制出来的记录默认停用，供用户编辑后再手动启用。
+    const srcSelector = String(src?.selector ?? '').trim().toUpperCase() || toSelector2(pIdx)
+    const srcMode = String((src as any)?.mode ?? 'parse').trim() === 'force' ? 'force' : 'parse'
+
     const newIdx = phrasePresets.length
     const copied: PhrasePresetRow = {
-      selector: nextSelector,
+      selector: srcSelector,
+      mode: srcMode as any,
       phrase: String(src.phrase ?? '').trim() ? `${String(src.phrase ?? '').trim()}（复制）` : '',
-      enabled: src.enabled !== false,
+      enabled: false,
       components: Array.isArray(src.components) ? src.components.map((c) => ({ ...c })) : [],
     }
     setPhrasePresets((prev) => [...(prev ?? []), copied])
@@ -630,6 +635,7 @@ export default function BundleTemplatesPage() {
       return out
     })
     setActivePresetIndex(newIdx)
+    message.success(`已复制属性 ${srcSelector}（默认停用）`)
   }
 
   const deletePhrasePreset = (pIdx: number) => {
@@ -640,12 +646,12 @@ export default function BundleTemplatesPage() {
     const tokenDash = codeOnly ? toBundleTokenDash(codeOnly, selector) : selector
 
     Modal.confirm({
-      title: `删除短语 ${selector}？`,
+      title: `删除属性 ${selector}？`,
       content: (
         <div>
           <div>删除后不可恢复。</div>
           <div>
-            如果线上/订单已经有人在用这个编码（例如 <Text code>{tokenDash}</Text>），删除会导致无法命中；这种情况更建议“停用”。
+            如果线上/订单已经有人在用这个编码（例如 <Text code>{tokenDash}</Text>），删除会导致无法命中；这种情况更建议“停用”该属性。
           </div>
         </div>
       ),
@@ -736,8 +742,8 @@ export default function BundleTemplatesPage() {
 
   const validateActivePreset = (): { ok: boolean; reason?: string } => {
     const p = phrasePresets?.[activePresetIndex]
-    if (!p) return { ok: false, reason: '请先新建一条短语' }
-    if (p?.enabled === false) return { ok: false, reason: '该短语已停用，请先启用再保存' }
+    if (!p) return { ok: false, reason: '请先新建一条属性' }
+    if (p?.enabled === false) return { ok: false, reason: '该属性已停用，请先启用再保存' }
     const rows = Array.isArray(p?.components) ? p.components : []
     const valid = rows.filter((c: any) => String(c?.model_version_id ?? '').trim() && Number(c?.width_cm) > 0 && Number(c?.height_cm) > 0 && Number(c?.quantity) > 0)
     if (!valid.length) return { ok: false, reason: '请至少填写 1 条完整组件行（模型/宽/高/数量）' }
@@ -748,7 +754,7 @@ export default function BundleTemplatesPage() {
     const pIdx = activePresetIndex
     const p = phrasePresets?.[pIdx]
     if (!p) {
-      message.warning('请先选择一个短语')
+      message.warning('请先选择一个属性')
       return
     }
     const issues: { level: 'error' | 'warn'; message: string }[] = []
@@ -1416,21 +1422,27 @@ export default function BundleTemplatesPage() {
   const validateAllEnabledPresetsBeforeSave = (): { ok: boolean; issues: { level: 'error' | 'warn'; message: string }[] } => {
     const issues: { level: 'error' | 'warn'; message: string }[] = []
     const presets = phrasePresets ?? []
+    const enabledSelectorCounts = new Map<string, number>()
     for (let pIdx = 0; pIdx < presets.length; pIdx++) {
       const p = presets[pIdx] as any
       const selector = String(p?.selector ?? '').trim().toUpperCase() || `#${pIdx + 1}`
       if (p?.enabled === false) continue
+      enabledSelectorCounts.set(selector, (enabledSelectorCounts.get(selector) ?? 0) + 1)
       const rows = Array.isArray(p?.components) ? p.components : []
       const valid = rows.filter((c: any) => String(c?.model_version_id ?? '').trim() && Number(c?.width_cm) > 0 && Number(c?.height_cm) > 0 && Number(c?.quantity) > 0)
       if (!String(p?.phrase ?? '').trim()) {
-        issues.push({ level: 'error', message: `短语 ${selector}：短语备注不能为空（用于识别/管理；若暂不使用请在左侧停用该短语）` })
+        issues.push({ level: 'error', message: `属性 ${selector}：属性备注不能为空（用于识别/管理；若暂不使用请在左侧停用该属性）` })
       }
       if (!valid.length) {
         issues.push({
           level: 'error',
-          message: `短语 ${selector}：已启用但未配置完整组件行（模型/宽/高/数量）；请补齐至少1行或在左侧停用该短语`,
+          message: `属性 ${selector}：已启用但未配置完整组件行（模型/宽/高/数量）；请补齐至少1行或在左侧停用该属性`,
         })
       }
+    }
+    for (const [sel, cnt] of enabledSelectorCounts.entries()) {
+      if (cnt <= 1) continue
+      issues.push({ level: 'error', message: `属性 ${sel}：存在 ${cnt} 条“启用”的同编码属性（会导致命中歧义）；请确保同一编码仅启用 1 条` })
     }
     const hasError = issues.some((x) => x.level === 'error')
     return { ok: !hasError, issues }
@@ -2052,13 +2064,13 @@ export default function BundleTemplatesPage() {
           {/* 已按运营心智收口：不再展示“全局字段映射/可变词列表”，避免误会与绕圈。 */}
 
           <div style={{ display: 'flex', gap: 12, width: '100%', alignItems: 'stretch' }}>
-            {/* 左侧：短语列表 + 新建/复制/停用 */}
+            {/* 左侧：属性列表 + 新建/复制/停用 */}
             <Card
               size="small"
               style={{ flex: '0 0 380px', minWidth: 340 }}
               title={
                 <Space size={8}>
-                  <Text strong>短语列表</Text>
+                  <Text strong>属性列表</Text>
                   <Tag>{phrasePresets.length}</Tag>
                 </Space>
               }
@@ -2097,7 +2109,7 @@ export default function BundleTemplatesPage() {
                 }
               `}</style>
               <List
-                locale={{ emptyText: '暂无短语：点击右上角“新建”添加第一条' }}
+                locale={{ emptyText: '暂无属性：点击右上角“新建”添加第一条' }}
                 dataSource={phrasePresets}
                 renderItem={(p: any, idx: number) => {
                   const sel = String(p?.selector ?? '').trim().toUpperCase() || toSelector2(idx)
@@ -2189,6 +2201,22 @@ export default function BundleTemplatesPage() {
                               title={enabled ? '停用' : '启用'}
                               onClick={(e) => {
                                 e.stopPropagation()
+                                // 防呆：同一 selector 编码只允许启用 1 条（避免命中歧义）
+                                const cur = phrasePresets?.[idx] as any
+                                const sel = String(cur?.selector ?? '').trim().toUpperCase() || toSelector2(idx)
+                                const willEnable = !(cur?.enabled !== false)
+                                if (willEnable) {
+                                  const conflict = (phrasePresets ?? []).some((x: any, i2: number) => {
+                                    if (i2 === idx) return false
+                                    if (x?.enabled === false) return false
+                                    const s2 = String(x?.selector ?? '').trim().toUpperCase() || toSelector2(i2)
+                                    return s2 === sel
+                                  })
+                                  if (conflict) {
+                                    message.warning(`属性 ${sel} 已有启用项，请先停用其它同编码属性`)
+                                    return
+                                  }
+                                }
                                 setPhrasePresets((prev) =>
                                   (prev ?? []).map((x, i) => (i !== idx ? x : { ...x, enabled: x.enabled === false ? true : false })),
                                 )
@@ -2208,18 +2236,18 @@ export default function BundleTemplatesPage() {
               />
             </Card>
 
-            {/* 右侧：当前选中短语的组件行编辑 */}
+            {/* 右侧：当前选中属性的组件行编辑 */}
             <Card
               size="small"
               style={{ flex: 1, minWidth: 0 }}
-              title={<Text strong>短语编辑</Text>}
+              title={<Text strong>属性编辑</Text>}
               bodyStyle={{ padding: 8 }}
             >
               {(phrasePresets ?? []).length <= 0 ? (
                 <Empty
                   description={
                     <span>
-                      先在左侧新建一条短语，再在右侧为该短语添加组件行（模型/尺寸/数量/筛选/复制）。
+                      先在左侧新建一条属性，再在右侧为该属性添加组件行（模型/尺寸/数量/筛选/复制）。
                     </span>
                   }
                 />
@@ -2271,7 +2299,7 @@ export default function BundleTemplatesPage() {
                               // 强校验：避免“保存了但不敢用/容易出问题”
                               const v = validateActivePreset()
                               if (!v.ok) {
-                                message.warning(v.reason || '请完善当前短语')
+                                message.warning(v.reason || '请完善当前属性')
                                 return
                               }
                               // 额外：全局校验（启用的短语必须有备注与至少1条组件行）
@@ -2322,7 +2350,7 @@ export default function BundleTemplatesPage() {
                         />
                       ) : null}
                       <Input
-                        placeholder="短语备注（黑色可编辑，可选）：例如 黄金绒双面30X50+PP棉枕芯"
+                        placeholder="属性备注（黑色可编辑，可选）：例如 黄金绒双面30X50+PP棉枕芯"
                         disabled={disabled}
                         value={String(r?.phrase ?? '')}
                         onChange={(e) =>
@@ -2393,7 +2421,7 @@ export default function BundleTemplatesPage() {
                         <Alert
                           type="warning"
                           showIcon
-                          message="该短语已停用"
+                          message="该属性已停用"
                           description="停用状态下不会参与命中解析；如需编辑请先在左侧启用。"
                         />
                       ) : null}

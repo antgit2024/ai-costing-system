@@ -1,5 +1,13 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-14（全站：制造费用 UI 展示 30% → 23%）
+  - 产物（前端）：
+    - 统一将前端 UI 中“制造费/制造费用/管理费”相关的 **30% 文案**改为 **23%**
+    - 覆盖页面/区域：`/costing/product-listing` 的 BOM 汇总、`/costing/shipment-monitor` 的 BOM 汇总、`/costing/costing-models` 的打样汇总标签、以及内置指南 `frontend/src/guides/product_model_guide.md`
+    - 说明：本次仅改 **展示文案**，不改后端/前端实际计算字段（如 `overhead_rate=0.3` 等仍保持原样）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-14（Standard Models：抽屉宽度 +100px（仅右侧变宽））
   - 产物（前端）：
     - `ProductModelEditorDrawer`：标准模型（`entryContext="standard"`）抽屉宽度从 1320 调整为 **1420**（+100px）

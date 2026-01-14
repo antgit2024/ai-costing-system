@@ -2699,7 +2699,7 @@ const CostingModelsPage = () => {
                       <Space wrap style={{ marginTop: 8 }}>
                         <Tag color="blue">物料费：{summary.material_cost.toFixed(2)}</Tag>
                         <Tag color="purple">人工费：{summary.labor_cost.toFixed(2)}</Tag>
-                        <Tag color="orange">管理费(30%)：{summary.overhead_cost.toFixed(2)}</Tag>
+                        <Tag color="orange">管理费(23%)：{summary.overhead_cost.toFixed(2)}</Tag>
                         <Tag color="green">合计：{summary.total_cost.toFixed(2)}</Tag>
                       </Space>
                       <Text type="secondary" style={{ display: 'block', marginTop: 8 }}>

@@ -981,7 +981,7 @@ const ShipmentMonitorPage = () => {
                         <Descriptions.Item label="制造费用（CNY）">
                           {formatMoney(toNumberOrNull((queueBomPreview as any)?.trace?.costing?.overhead_cost))}
                         </Descriptions.Item>
-                        <Descriptions.Item label="制造费率（当前默认）">
+                        <Descriptions.Item label="制造费率（展示23%）">
                           {safeString((queueBomPreview as any)?.trace?.costing?.overhead_rate) || '0.3'}
                         </Descriptions.Item>
                         <Descriptions.Item label="单位成本（CNY/件）">
@@ -1164,7 +1164,7 @@ const ShipmentMonitorPage = () => {
                         <Descriptions.Item label="制造费用（CNY）">
                           {formatMoney(toNumberOrNull((activeSnapshot as any)?.trace?.costing?.overhead_cost))}
                         </Descriptions.Item>
-                        <Descriptions.Item label="制造费率（当前默认）">
+                        <Descriptions.Item label="制造费率（展示23%）">
                           {safeString((activeSnapshot as any)?.trace?.costing?.overhead_rate) || '0.3'}
                         </Descriptions.Item>
                         <Descriptions.Item label="单位成本（CNY/件）">

@@ -170,6 +170,93 @@ const allocateNextSelector2 = (used: Set<string>): string => {
   return 'ZZ'
 }
 
+const normalizeSingleToken = (raw: string): string => {
+  const s = String(raw ?? '').trim()
+  if (!s) return ''
+  // 运营口径：{} 内只允许 1 个 TOKEN。这里把空格/逗号/顿号/分号等作为分隔符，取第一个。
+  const parts = s.split(/[\s,，、;；]+/).map((x) => String(x).trim()).filter(Boolean)
+  return parts[0] ?? ''
+}
+
+const formatTokenBrace = (token: string): string => {
+  const t = normalizeSingleToken(token)
+  return t ? `{${t}}` : '{}'
+}
+
+const buildAttributeFormula = (args: {
+  presetIndex: number
+  componentRows: any[]
+  presetSelectedByIdx: Record<string, Record<string, any>>
+  fallbackTokenOverrides: Record<string, string>
+}): string => {
+  const { presetIndex, componentRows, presetSelectedByIdx, fallbackTokenOverrides } = args
+  if (!Array.isArray(componentRows) || componentRows.length <= 0) return ''
+
+  const parts: string[] = []
+  for (let cIdx = 0; cIdx < componentRows.length; cIdx++) {
+    const rr = componentRows[cIdx] as any
+    const versionId = String(rr?.model_version_id ?? '').trim()
+    const k = `${presetIndex}:${cIdx}`
+    const sel = (presetSelectedByIdx?.[k] ?? {}) as Record<string, any>
+
+    const rawIds: string[] = []
+    for (const [baseLineId, v] of Object.entries(sel)) {
+      const parent = String((v as any)?.parent_variant_id ?? '').trim()
+      const forced = String((v as any)?.forced_child_variant_id ?? '').trim()
+      if (!parent && !forced) continue
+      rawIds.push(String(baseLineId))
+    }
+    if (!rawIds.length) {
+      const fm = rr?.force_variant_by_base_line && typeof rr.force_variant_by_base_line === 'object' ? rr.force_variant_by_base_line : {}
+      rawIds.push(...Object.keys(fm ?? {}).map((x) => String(x)))
+    }
+    const seen = new Set<string>()
+    const uniqIds = rawIds
+      .map((x) => String(x))
+      .filter(Boolean)
+      .filter((x) => (seen.has(x) ? false : (seen.add(x), true)))
+
+    const inner = uniqIds
+      .map((baseLineId) => {
+        const overrideKey = `${versionId}:${baseLineId}`
+        const tokenAlias = String(fallbackTokenOverrides?.[overrideKey] ?? '').trim()
+        return formatTokenBrace(tokenAlias)
+      })
+      .join('')
+
+    parts.push(`[${inner}]`)
+  }
+  return parts.join('+')
+}
+
+const copyTextToClipboard = async (text: string) => {
+  const s = String(text ?? '')
+  if (!s) return false
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(s)
+      return true
+    }
+  } catch {
+    // ignore and fallback
+  }
+  try {
+    const ta = document.createElement('textarea')
+    ta.value = s
+    ta.style.position = 'fixed'
+    ta.style.left = '-99999px'
+    ta.style.top = '0'
+    document.body.appendChild(ta)
+    ta.focus()
+    ta.select()
+    const ok = document.execCommand('copy')
+    document.body.removeChild(ta)
+    return ok
+  } catch {
+    return false
+  }
+}
+
 const SLOT_CN_FALLBACK: Record<string, string> = {
   front: '前片位',
   back: '背片位',
@@ -2401,6 +2488,34 @@ export default function BundleTemplatesPage() {
                             {(String((r as any)?.mode ?? 'parse') === 'force' ? 'Z' : 'B') + '-' + String(currentBundleToken || '').replace(/^B:/, '').replace(/^BUNDLE:/, '').replace(/^Z:/, '') + String(selector)}
                           </Text>
                         </Text>
+                        {(() => {
+                          const formula = buildAttributeFormula({
+                            presetIndex: idx,
+                            componentRows: rows,
+                            presetSelectedByIdx,
+                            fallbackTokenOverrides,
+                          })
+                          return (
+                            <Space wrap size={6}>
+                              <Text type="secondary">属性公式：</Text>
+                              <Text code style={{ maxWidth: 520, overflow: 'hidden', textOverflow: 'ellipsis' }} title={formula || ''}>
+                                {formula || '-'}
+                              </Text>
+                              <Button
+                                size="small"
+                                icon={<CopyOutlined />}
+                                disabled={!formula}
+                                onClick={async () => {
+                                  const ok = await copyTextToClipboard(formula)
+                                  if (ok) message.success('已复制属性公式')
+                                  else message.error('复制失败：请手动复制')
+                                }}
+                              >
+                                复制公式
+                              </Button>
+                            </Space>
+                          )
+                        })()}
                         <Button
                           size="small"
                           disabled={!String(currentBundleToken || '').trim()}
@@ -2508,11 +2623,11 @@ export default function BundleTemplatesPage() {
                                           <Input
                                             size="small"
                                             style={{ width: 180 }}
-                                            placeholder="例如：黄金绒（可选）"
+                                            placeholder="例如：黄金绒（可选；仅允许1个TOKEN）"
                                             disabled={disabled || rawName.includes('兜底-零成本')}
                                             value={tokenAlias}
                                             onChange={(e) => {
-                                              const next = e.target.value
+                                              const next = normalizeSingleToken(e.target.value)
                                               setFallbackTokenOverrides((prev) => ({
                                                 ...(prev ?? {}),
                                                 [overrideKey]: next,

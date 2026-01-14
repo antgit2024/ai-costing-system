@@ -544,13 +544,21 @@ export default function BundleTemplatesPage() {
     return vid || null
   }, [presetModalOpen, presetModalKey, phrasePresets])
 
+  const lockedPresetApplyMode = useMemo((): 'variant' | 'force' => {
+    if (!presetModalOpen || !presetModalKey) return 'variant'
+    const p = phrasePresets?.[presetModalKey.pIdx] as any
+    const mode = String(p?.mode ?? 'parse').trim()
+    // selector 锁模式：
+    // - parse(B) => 只能“变体（解析命中）”
+    // - force(Z) => 只能“指定（强制命中，不走解析）”
+    return mode === 'force' ? 'force' : 'variant'
+  }, [presetModalOpen, presetModalKey, phrasePresets])
+
   useEffect(() => {
     if (!presetModalOpen || !presetModalKey) return
-    const r = (phrasePresets[presetModalKey.pIdx]?.components ?? [])[presetModalKey.cIdx] as any
-    const fm = r?.force_variant_by_base_line && typeof r.force_variant_by_base_line === 'object' ? r.force_variant_by_base_line : {}
-    const hasInjected = Object.keys(fm ?? {}).length > 0 || (Array.isArray(r?.tokens) && r.tokens.length > 0)
-    setPresetApplyMode(hasInjected ? 'force' : 'variant')
-  }, [presetModalOpen, presetModalKey, phrasePresets])
+    // 弹窗模式必须由 selector 的 B/Z 模式锁死，避免“弹窗里误切模式”导致失控
+    setPresetApplyMode(lockedPresetApplyMode)
+  }, [presetModalOpen, presetModalKey, lockedPresetApplyMode])
 
   const presetVersionLinesQuery = useQuery({
     queryKey: ['bundle-template-center', 'preset-version-lines', presetVersionId],
@@ -1617,7 +1625,7 @@ export default function BundleTemplatesPage() {
         width={980}
         onCancel={() => setPresetModalOpen(false)}
         onOk={applyPresetToComponent}
-        okText={presetApplyMode === 'force' ? '按勾选强制指定' : '按勾选填充触发词'}
+        okText={lockedPresetApplyMode === 'force' ? '按勾选强制指定' : '按勾选填充触发词'}
         destroyOnClose
       >
         {!presetVersionId ? (
@@ -1630,14 +1638,17 @@ export default function BundleTemplatesPage() {
               <Space wrap size={8}>
                 <Text type="secondary">模式：</Text>
                 <Radio.Group
-                  value={presetApplyMode}
-                  onChange={(e) => setPresetApplyMode((e?.target?.value as any) ?? 'variant')}
+                  value={lockedPresetApplyMode}
+                  disabled
                   optionType="button"
                   buttonStyle="solid"
                 >
                   <Radio.Button value="variant">变体（解析命中）</Radio.Button>
                   <Radio.Button value="force">指定（强制命中，不走解析）</Radio.Button>
                 </Radio.Group>
+                <Text type="secondary">
+                  （已锁定：{lockedPresetApplyMode === 'force' ? 'Z 指定型' : 'B 解析型'}，弹窗内不可切换）
+                </Text>
               </Space>
               <Text type="secondary">提示：最终命中仍受 priority + stop_on_hit 影响，建议用测试台预演确认</Text>
             </Space>
@@ -2730,6 +2741,12 @@ export default function BundleTemplatesPage() {
                                           >
                                             强制替换
                                           </Tag>
+                                          <Text type="secondary">兜底物料：</Text>
+                                          <Text strong title={rawName}>
+                                            {slot ? `${slot}：` : ''}
+                                            {rawName}
+                                          </Text>
+                                          <Text type="secondary">→</Text>
                                           <Tag color="green">{producedLabel || '-'}</Tag>
                                         </>
                                       ) : (

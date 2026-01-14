@@ -19,6 +19,18 @@
     - Frontend：`npm -C frontend run build`
     - Backend：`backend/venv/bin/python -m pytest backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py -q`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-14（套装模板：筛选弹窗锁模式 + FORCE 展示补强）
+  - 产物（前端）：
+    - `/costing/bundle-templates` 的“筛选”弹窗：
+      - 模式（变体/指定）**由 selector 的 B/Z 模式锁死**，弹窗内不可切换，避免新增行/误操作导致混用失控
+      - OK 按钮文案随锁定模式变化（填充触发词 / 强制指定）
+    - Z/指定型下的 FORCE 展示更直观：
+      - 明确展示“兜底物料行（前片/后片等结构槽位） → 替换后物料”
+      - 保留一级/子规则 id 片段用于排障定位
+  - 验收命令：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`backend/venv/bin/python -m pytest backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-14（套装模板：一键清理“变体改了导致空规则/清不掉”的失效绑定）
   - 产物（前端）：
     - `/costing/bundle-templates` 编辑页：

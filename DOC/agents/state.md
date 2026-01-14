@@ -1,5 +1,12 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-14（Standard Models：抽屉宽度 +100px（仅右侧变宽））
+  - 产物（前端）：
+    - `ProductModelEditorDrawer`：标准模型（`entryContext="standard"`）抽屉宽度从 1320 调整为 **1420**（+100px）
+    - 左侧“工艺模块”栏保持固定宽度不变，新增宽度全部让给右侧清单区域
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-14（Sample/Standard 抽屉：制造费显示改为“约23%”（不改计算口径））
   - 产物（前端）：
     - 打样/标准模型抽屉（`ProductModelEditorDrawer`）计算汇总：`制造费(30%)` 文案改为 **`制造费(约23%)`**

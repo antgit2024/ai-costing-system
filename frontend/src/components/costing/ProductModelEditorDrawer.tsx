@@ -2738,7 +2738,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       open={open}
       onClose={onClose}
       // 打样管理：抽屉略加宽，让右侧清单更好扫读（左侧工艺模块栏保持固定宽度）
-      width={entryContext === 'sample' ? 1370 : 1320}
+      width={entryContext === 'sample' ? 1370 : 1420}
       destroyOnClose
       title={(() => {
         const code = String((modelQuery.data as any)?.model_code ?? '').trim()
@@ -3824,7 +3824,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                   <Space wrap>
                     <Tag color="blue">物料费：{summary.material_cost.toFixed(2)}</Tag>
                     <Tag color="purple">人工费：{summary.labor_cost.toFixed(2)}</Tag>
-                    <Tag color="orange">制造费(约23%)：{summary.overhead_cost.toFixed(2)}</Tag>
+                    <Tag color="orange">制造费（23%）：{summary.overhead_cost.toFixed(2)}</Tag>
                     <Tag color="green">
                       合计：{summary.total_cost.toFixed(2)}{' '}
                       <Text

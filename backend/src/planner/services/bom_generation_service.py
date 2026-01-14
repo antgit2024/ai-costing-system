@@ -24,7 +24,7 @@ def _parse_bundle_scoped_phrases(spec_text: str) -> List[Dict[str, Any]]:
 
     text = str(spec_text or "")
     # remove bundle codes to avoid confusing parsing
-    text = re.sub(r"(?:BUNDLE:|B:)[A-Z0-9]{4,16}", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"(?:BUNDLE:|B:|Z:)[A-Z0-9]{4,16}", "", text, flags=re.IGNORECASE)
     # normalize separators
     text = text.replace("；", ";").replace("，", ",").replace("＋", "+")
     parts = re.split(r"[+;,/|、\n]+", text)
@@ -239,11 +239,13 @@ def generate_bom_by_spec(
             if str(t).upper().startswith("B:")
             or str(t).upper().startswith("BUNDLE:")
             or str(t).upper().startswith("B-")
+            or str(t).upper().startswith("Z:")
+            or str(t).upper().startswith("Z-")
         ),
         None,
     )
     if not bundle_token:
-        raise ValueError("交易规格未包含套装编码（B:CODE / BUNDLE:CODE / B-CODE-XX / B-XXXXXX）")
+        raise ValueError("交易规格未包含套装编码（B:CODE / BUNDLE:CODE / B-XXXXAA / Z-XXXXAA）")
     # Accept:
     # - "B:CODE" / "B:CODE:A" / "B:CODE:AA" / "BUNDLE:CODE" / "BUNDLE:CODE:A" / "BUNDLE:CODE:AA"
     # - "B-CODE" / "B-CODE-A" / "B-CODE-AA"
@@ -255,7 +257,8 @@ def generate_bom_by_spec(
     # "B-3U3PAF 雪尼尔..." => bundle_token becomes "B-3U3PAF 雪尼尔..."
     # We only want the first whitespace-separated token for bundle parsing.
     raw_bt = raw_bt.split()[0] if raw_bt else raw_bt
-    if raw_bt.upper().startswith("B-"):
+    prefix_letter = "Z" if raw_bt.upper().startswith("Z") else "B"
+    if raw_bt.upper().startswith(("B-", "Z-")):
         # Dash forms:
         # - legacy: B-CODE / B-CODE-A / B-CODE-AA
         # - new short: B-XXXX / B-XXXXAA (CODE length fixed to 4; selector 2 letters)
@@ -269,6 +272,8 @@ def generate_bom_by_spec(
             code = (rest[:4] if len(rest) in (5, 6) else rest).strip().upper()
     else:
         # Colon forms: B:CODE(:A) / BUNDLE:CODE(:A)
+        prefix_raw = raw_bt.split(":", 1)[0].strip().upper() if ":" in raw_bt else ""
+        prefix_letter = "Z" if prefix_raw == "Z" else "B"
         rest = raw_bt.split(":", 1)[1].strip()
         code = rest.split(":", 1)[0].strip().upper()
     if not code:
@@ -286,9 +291,9 @@ def generate_bom_by_spec(
     import re
 
     _mode_match = re.search(
-        rf"(?:BUNDLE:|B:){re.escape(code)}(?::(?P<sel_colon>[A-Za-z]{{1,2}}))?"
-        rf"|(?:\bB-{re.escape(code)}-(?P<sel_dash>[A-Za-z]{{1,2}})\b)"
-        rf"|(?:\bB-{re.escape(code)}(?P<sel_short>[A-Za-z]{{2}})\b)",
+        rf"(?:BUNDLE:|B:|Z:){re.escape(code)}(?::(?P<sel_colon>[A-Za-z]{{1,2}}))?"
+        rf"|(?:\b(?:B|Z)-{re.escape(code)}-(?P<sel_dash>[A-Za-z]{{1,2}})\b)"
+        rf"|(?:\b(?:B|Z)-{re.escape(code)}(?P<sel_short>[A-Za-z]{{2}})\b)",
         str(spec_text or ""),
         flags=re.IGNORECASE,
     )
@@ -597,14 +602,26 @@ def generate_bom_by_spec(
     # So we inject shared tokens via component.tokens, and set component.spec_text empty for per-component parsing.
     shared_tokens = [str(x) for x in (spec_result.get("tokens") or []) if str(x).strip()]
     # remove bundle code tokens themselves from shared tokens (avoid accidental rule matching)
-    shared_tokens = [t for t in shared_tokens if not t.upper().startswith("B:") and not t.upper().startswith("BUNDLE:")]
+    shared_tokens = [
+        t
+        for t in shared_tokens
+        if not t.upper().startswith("B:")
+        and not t.upper().startswith("BUNDLE:")
+        and not t.upper().startswith("Z:")
+    ]
 
     # Merge template-level shared trigger text (applies to all components)
     tpl_shared = str(tpl_meta.get("shared_trigger_text") or "").strip()
     if tpl_shared:
         tpl_shared_parsed = spec_parser_service.parse_spec(tpl_shared)
         tpl_shared_tokens = [str(x) for x in (tpl_shared_parsed.get("tokens") or []) if str(x).strip()]
-        tpl_shared_tokens = [t for t in tpl_shared_tokens if not t.upper().startswith("B:") and not t.upper().startswith("BUNDLE:")]
+        tpl_shared_tokens = [
+            t
+            for t in tpl_shared_tokens
+            if not t.upper().startswith("B:")
+            and not t.upper().startswith("BUNDLE:")
+            and not t.upper().startswith("Z:")
+        ]
         shared_tokens = shared_tokens + tpl_shared_tokens
 
     # --- Phrase presets (recommended): contains match, longer-first ---
@@ -797,8 +814,10 @@ def generate_bom_by_spec(
         raise ValueError("合并器返回异常")
     trace = merged.get("trace") if isinstance(merged.get("trace"), dict) else {}
     trace = dict(trace)
-    trace["bundle_code"] = f"B:{code}"
+    trace["bundle_code"] = f"B:{code}"  # backward compatible
     trace["bundle_code_legacy"] = f"BUNDLE:{code}"
+    trace["bundle_prefix"] = prefix_letter
+    trace["bundle_code_display"] = f"{prefix_letter}:{code}"
     trace["bundle_template_id"] = tpl.id
     trace["bundle_template_name"] = tpl.name
     if phrase_trace:

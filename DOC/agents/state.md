@@ -1,5 +1,24 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-14（套装模板制度化：Z/B 双前缀 + Z关键行强制覆盖 + 后端Z解析）
+  - 产物（后端）：
+    - `/bom/generate-by-spec` 支持识别 `Z-XXXXAA` / `Z:CODE:AA`（指定型入口），并在 trace 增加：
+      - `bundle_prefix`（B/Z）
+      - `bundle_code_display`（B:CODE 或 Z:CODE）
+    - `spec_parser_service.parse_spec` 支持提取 `Z-` / `Z:` 形式套装 token（生成 `Z:CODE(:AA)` 内部 token）
+  - 产物（前端）：
+    - `/costing/bundle-templates`（编辑套装模板）：
+      - selector 增加 **模式**：B（解析型）/ Z（指定型），并展示运营应使用的短码
+      - 解析型（B）：禁止配置强制映射（防止混用）
+      - 指定型（Z）：新增 **Z模式关键行（必须强制覆盖）** 多选区（默认一键选中“依赖触发词”的行）
+      - 保存/检验：Z 模式下要求“所有依赖触发词的行”必须纳入关键行，并且关键行必须配置强制映射且规则未禁用
+      - 短语生成器支持 B/Z 前缀输出（复制/预演 debug 均使用当前 selector 模式前缀）
+  - 新增文档：
+    - `DOC/costing/blueprints/bundle_templates_z_b_protocol.md`（Z/B 协议与制度化使用规范 v0.1）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`backend/venv/bin/python -m pytest backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-14（套装模板：一键清理“变体改了导致空规则/清不掉”的失效绑定）
   - 产物（前端）：
     - `/costing/bundle-templates` 编辑页：

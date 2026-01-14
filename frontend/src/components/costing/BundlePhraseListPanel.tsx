@@ -25,8 +25,11 @@ const normalizeBundleCode = (raw?: string | null): string => {
     .trim()
     .toUpperCase()
     .replace(/^BUNDLE:/, 'B:')
+    .replace(/^Z:/, 'Z:')
     .replace(/^B-/, '')
+    .replace(/^Z-/, '')
   if (s.startsWith('B:')) s = s.slice(2)
+  if (s.startsWith('Z:')) s = s.slice(2)
   // allow "B-CODE-AA" or "B-XXXXAA"
   s = s.replace(/^[A-Z0-9]{4,16}-[A-Z]{1,2}$/, (x) => x.split('-')[0])
   if (/^[A-Z0-9]{4}[A-Z]{2}$/.test(s) && s.length === 6) {
@@ -36,14 +39,14 @@ const normalizeBundleCode = (raw?: string | null): string => {
   return s
 }
 
-const toBundleTokenDash = (code: string, selector?: string | null): string => {
+const toBundleTokenDash = (code: string, selector?: string | null, prefix: 'B' | 'Z' = 'B'): string => {
   const c = String(code ?? '').trim().toUpperCase().replace(/^B:/, '').replace(/^BUNDLE:/, '').replace(/^B-/, '')
   const sel = String(selector ?? '').trim().toUpperCase()
   if (sel) {
-    if (c.length === 4 && sel.length === 2) return `B-${c}${sel}`
-    return `B-${c}-${sel}`
+    if (c.length === 4 && sel.length === 2) return `${prefix}-${c}${sel}`
+    return `${prefix}-${c}-${sel}`
   }
-  return `B-${c}`
+  return `${prefix}-${c}`
 }
 
 const stripBraces = (s: string) => String(s ?? '').replace(/[{}]/g, '').replace(/\s+/g, ' ').trim()
@@ -70,6 +73,7 @@ const extractRequiredSegments = (phraseExample: string): string[] => {
 export default function BundlePhraseListPanel(props: {
   bundleCode?: string | null
   phrasePresets: PhrasePresetLite[]
+  tokenPrefix?: 'B' | 'Z'
   defaultMode?: PhraseWriteMode
   activeSelector?: string | null
   title?: string
@@ -82,6 +86,7 @@ export default function BundlePhraseListPanel(props: {
   const {
     bundleCode,
     phrasePresets,
+    tokenPrefix = 'B',
     defaultMode = 'prefix',
     activeSelector,
     title = '短语生成器（可复制/可校验）',
@@ -102,13 +107,13 @@ export default function BundlePhraseListPanel(props: {
       const selector = String(p?.selector ?? '').trim().toUpperCase() || toSelector2(idx)
       const phraseRaw = String(p?.phrase ?? '')
       const phraseExample = stripBraces(phraseRaw)
-      const tokenDash = codeOnly ? toBundleTokenDash(codeOnly, selector) : selector
+      const tokenDash = codeOnly ? toBundleTokenDash(codeOnly, selector, tokenPrefix) : selector
       const enabled = p?.enabled !== false
       const requiredSegments = extractRequiredSegments(phraseExample)
       return { idx, selector, enabled, phraseRaw, phraseExample, tokenDash, requiredSegments, components: p?.components ?? [] }
     })
     return out.filter((r) => !!String(r.selector).trim())
-  }, [codeOnly, phrasePresets])
+  }, [codeOnly, phrasePresets, tokenPrefix])
 
   useEffect(() => {
     // Seed drafts for new selectors
@@ -198,7 +203,7 @@ export default function BundlePhraseListPanel(props: {
                     optionType="button"
                   />
                   <Text type="secondary">
-                    当前B码：{codeOnly ? <Text code>{`B-${codeOnly}`}</Text> : <Tag color="orange">未选择套装模板</Tag>}
+                    当前套装码：{codeOnly ? <Text code>{`${tokenPrefix}-${codeOnly}`}</Text> : <Tag color="orange">未选择套装模板</Tag>}
                   </Text>
                 </Space>
                 <Button icon={<CopyOutlined />} onClick={copyAll} disabled={!rows.length}>
@@ -219,7 +224,7 @@ export default function BundlePhraseListPanel(props: {
                   }
                   columns={[
                     {
-                      title: '固定B码',
+                      title: '固定套装码',
                       width: 150,
                       render: (_: any, r: any) => (
                         <Space size={6} wrap>

@@ -47,13 +47,14 @@ MODEL_CODE_3_PATTERN = re.compile(r"\b(?=[A-Z0-9]{3}\b)(?=.*[A-Z])(?=.*\d)[A-Z0-
 # - v1:     "B:CODE" / "B:CODE:A"
 # - v2:     "B-CODE-A"        (legacy dash form with separator)
 # - v3:     "B-XXXXAA" / "B-XXXX" (new short form, CODE length fixed to 4; selector is 2 letters)
+# - v4:     "Z:CODE:AA" / "Z-XXXXAA" (force-mode entry; operators should not need to provide extra trigger words)
 #
 # NOTE: The v3 form MUST appear before the generic dash form, otherwise "B-XXXXA" would be parsed as code="XXXXA"
 # and selector missing.
 BUNDLE_CODE_PATTERN = re.compile(
-    r"(?:(?P<prefix>BUNDLE:|B:)(?P<code_colon>[A-Z0-9]{4,16})(?::(?P<sel_colon>[A-Z]{1,2}))?)"
-    r"|(?:\bB-(?P<code_short>[A-Z0-9]{4})(?P<sel_short>[A-Z]{2})\b)"
-    r"|(?:\bB-(?P<code_dash>[A-Z0-9]{4,16})(?:-(?P<sel_dash>[A-Z]{1,2}))?\b)",
+    r"(?:(?P<prefix>BUNDLE:|B:|Z:)(?P<code_colon>[A-Z0-9]{4,16})(?::(?P<sel_colon>[A-Z]{1,2}))?)"
+    r"|(?:\b(?P<prefix_short>[BZ])-(?P<code_short>[A-Z0-9]{4})(?P<sel_short>[A-Z]{2})\b)"
+    r"|(?:\b(?P<prefix_dash>[BZ])-(?P<code_dash>[A-Z0-9]{4,16})(?:-(?P<sel_dash>[A-Z]{1,2}))?\b)",
     re.IGNORECASE,
 )
 
@@ -203,9 +204,7 @@ def parse_spec(spec_text: str) -> Dict[str, Any]:
             explanations.append({"token": f"M:{code}", "source": token, "rule": "extract_model_code_3_alias"})
 
         # Extract bundle template codes so BOM can be generated without parsing sizes.
-        # Emit BOTH tokens for backward compatibility:
-        # - New canonical: "B:XXXX"
-        # - Legacy: "BUNDLE:XXXX"
+        # Emit canonical tokens for downstream logic.
         for m in BUNDLE_CODE_PATTERN.finditer(token):
             gd = m.groupdict() if m else {}
             code = (
@@ -218,17 +217,27 @@ def parse_spec(spec_text: str) -> Dict[str, Any]:
                 or str(gd.get("sel_short") or "").strip().upper()
                 or str(gd.get("sel_dash") or "").strip().upper()
             )
+            prefix_raw = str(gd.get("prefix") or "").strip().upper() or None
+            prefix_short = str(gd.get("prefix_short") or "").strip().upper() or None
+            prefix_dash = str(gd.get("prefix_dash") or "").strip().upper() or None
+            prefix_letter = "Z" if (prefix_raw == "Z:" or prefix_short == "Z" or prefix_dash == "Z") else "B"
             if not code:
                 continue
-            # Emit canonical tokens for downstream logic
-            extra_tokens.append(f"B:{code}")
-            explanations.append({"token": f"B:{code}", "source": token, "rule": "extract_bundle_code"})
-            extra_tokens.append(f"BUNDLE:{code}")
-            explanations.append({"token": f"BUNDLE:{code}", "source": token, "rule": "extract_bundle_code_legacy"})
-            if selector:
-                # Internal selector token is also 2-letter (AA/AB/...), keep legacy 1-letter if provided.
-                extra_tokens.append(f"B:{code}:{selector}")
-                explanations.append({"token": f"B:{code}:{selector}", "source": token, "rule": "extract_bundle_selector"})
+            if prefix_letter == "Z":
+                extra_tokens.append(f"Z:{code}")
+                explanations.append({"token": f"Z:{code}", "source": token, "rule": "extract_bundle_code_z"})
+                if selector:
+                    extra_tokens.append(f"Z:{code}:{selector}")
+                    explanations.append({"token": f"Z:{code}:{selector}", "source": token, "rule": "extract_bundle_selector_z"})
+            else:
+                extra_tokens.append(f"B:{code}")
+                explanations.append({"token": f"B:{code}", "source": token, "rule": "extract_bundle_code"})
+                extra_tokens.append(f"BUNDLE:{code}")
+                explanations.append({"token": f"BUNDLE:{code}", "source": token, "rule": "extract_bundle_code_legacy"})
+                if selector:
+                    # Internal selector token is also 2-letter (AA/AB/...), keep legacy 1-letter if provided.
+                    extra_tokens.append(f"B:{code}:{selector}")
+                    explanations.append({"token": f"B:{code}:{selector}", "source": token, "rule": "extract_bundle_selector"})
 
         # Extract whitelist phrase tokens from within a segment
         for phrase in PHRASE_TOKEN_WHITELIST:

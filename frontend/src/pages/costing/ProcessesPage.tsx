@@ -57,7 +57,7 @@ import type {
   ProcessSummary,
   ProcessUpdatePayload,
 } from '@/types/planner'
-import processCreateGuide from '@/guides/process_create_guide.md?raw'
+import processCreateGuide from '@doc/costing/manuals/guides/process_create_guide.md?raw'
 
 const { Text, Title } = Typography
 

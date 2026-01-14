@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Button, Card, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tabs, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useMutation, useQuery } from '@tanstack/react-query'
+import { QuestionCircleOutlined } from '@ant-design/icons'
 
 import {
   archiveTaxonomyItem,
@@ -10,6 +11,8 @@ import {
   updateTaxonomyItem,
 } from '@/services/planner'
 import type { TaxonomyItemRead } from '@/types/planner'
+import GuideDrawer from '@/components/common/GuideDrawer'
+import teamRateGuide from '@doc/costing/manuals/guides/team_rate_guide.md?raw'
 
 const { Text } = Typography
 
@@ -34,6 +37,7 @@ const TaxonomyManagementPage = () => {
   const [activeDomain, setActiveDomain] = useState<DomainKey>('material_category')
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<TaxonomyItemRead | null>(null)
+  const [teamRateGuideOpen, setTeamRateGuideOpen] = useState(false)
   const [form] = Form.useForm<{
     name: string
     is_active: boolean
@@ -270,11 +274,24 @@ const TaxonomyManagementPage = () => {
               name="rate_per_minute"
               tooltip="选择该班组后，工艺模块会自动带出此分钟单价（仅在该步骤未手填单价时生效）。"
             >
-              <InputNumber min={0} precision={2} style={{ width: 220 }} placeholder="例如：0.80" />
+              <Space>
+                <InputNumber min={0} precision={2} style={{ width: 220 }} placeholder="例如：0.80" />
+                <Button icon={<QuestionCircleOutlined />} onClick={() => setTeamRateGuideOpen(true)}>
+                  工价指南
+                </Button>
+              </Space>
             </Form.Item>
           ) : null}
         </Form>
       </Modal>
+
+      <GuideDrawer
+        open={teamRateGuideOpen}
+        onClose={() => setTeamRateGuideOpen(false)}
+        title="工价指南（班组默认单价：元/分）"
+        content={teamRateGuide}
+        tip="提示：这是“班组管理”的工价口径说明。建议在录入默认单价前先按本指南统一口径。"
+      />
     </Space>
   )
 }

@@ -80,7 +80,7 @@ import type {
 import { CALCULATION_METHOD_OPTIONS } from '@/constants/calculationMethods'
 import type { MaterialReferenceKind } from '@/types/planner'
 import GuideDrawer from '@/components/common/GuideDrawer'
-import processModulesGuide from '@/guides/process_modules_guide.md?raw'
+import processModulesGuide from '@doc/costing/manuals/guides/process_modules_guide.md?raw'
 import ProcessModuleAIDrawer from '@/components/costing/ProcessModuleAIDrawer'
 import MaterialPickerDrawer from '@/components/costing/MaterialPickerDrawer'
 import type { MaterialPickerResult, MaterialPickerTab } from '@/components/costing/MaterialPickerDrawer'
@@ -1336,6 +1336,15 @@ const ProcessModulesPage = () => {
     const rawMaterials = (values.materials ?? []) as EditorMaterialValue[]
     let rawSteps = (values.steps ?? []) as EditorStepValue[]
 
+    // 郭总口径护栏：工艺模块必须有物料。没有物料的应建为“工序”，而不是“工艺模块”。
+    {
+      const nonEmpty = rawMaterials.filter((m) => String((m as any)?.material_ref_id ?? '').trim())
+      if (!nonEmpty.length) {
+        message.error('工艺模块必须包含至少 1 条物料；若没有物料，请改为新建“工序”。')
+        return
+      }
+    }
+
     // Auto-repair for copied modules:
     // some steps may have process_snapshot.process_code but missing process_id (backend requires id).
     // Try resolving by unique exact match of process_code in /processes/references.
@@ -2223,7 +2232,21 @@ const ProcessModulesPage = () => {
         onClose={() => setDrawerOpen(false)}
         destroyOnClose
         extra={
-          currentModule && drawerMode === 'view' ? (
+          isEditing ? (
+            <Space>
+              <Button icon={<QuestionCircleOutlined />} onClick={() => setGuideOpen(true)}>
+                新建指南
+              </Button>
+              <Button onClick={() => setDrawerMode(selectedId ? 'view' : 'create')}>取消</Button>
+              <Button
+                type="primary"
+                loading={createMutation.isPending || updateMutation.isPending}
+                onClick={handleSave}
+              >
+                {drawerMode === 'create' ? '创建' : '保存基础信息'}
+              </Button>
+            </Space>
+          ) : currentModule && drawerMode === 'view' ? (
             <Space>
               <Button onClick={() => setDrawerMode('edit')} icon={<EditOutlined />}>
                 编辑
@@ -2235,10 +2258,7 @@ const ProcessModulesPage = () => {
                 引用
               </Button>
               {currentModule.status === 'active' ? (
-                <Button
-                  danger
-                  onClick={() => selectedId && deactivateMutation.mutate(selectedId)}
-                >
+                <Button danger onClick={() => selectedId && deactivateMutation.mutate(selectedId)}>
                   停用
                 </Button>
               ) : (
@@ -2246,23 +2266,6 @@ const ProcessModulesPage = () => {
                   启用
                 </Button>
               )}
-            </Space>
-          ) : null
-        }
-        footer={
-          isEditing ? (
-            <Space style={{ float: 'right' }}>
-              <Button icon={<QuestionCircleOutlined />} onClick={() => setGuideOpen(true)}>
-                新建指南
-              </Button>
-              <Button onClick={() => setDrawerMode(selectedId ? 'view' : 'create')}>取消</Button>
-              <Button
-                type="primary"
-                loading={createMutation.isPending || updateMutation.isPending}
-                onClick={handleSave}
-              >
-                {drawerMode === 'create' ? '创建' : '保存'}
-              </Button>
             </Space>
           ) : null
         }

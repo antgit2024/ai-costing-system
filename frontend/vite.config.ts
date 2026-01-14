@@ -32,10 +32,29 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
+      '@doc': fileURLToPath(new URL('../DOC', import.meta.url)),
     },
   },
   server: {
+    host: '0.0.0.0',
     port: 5173,
+    // Allow accessing Vite dev server via public domain / IP.
+    // Otherwise Vite blocks unknown Host headers.
+    allowedHosts: ['work.znma.com'],
+    proxy: {
+      // Dev-only: proxy API calls to local backend to avoid CORS / wrong-port issues
+      // when accessing the dev server from a public domain.
+      '/api': {
+        target: 'http://127.0.0.1:8800',
+        changeOrigin: true,
+      },
+    },
+    fs: {
+      // Allow importing Markdown from repo root `DOC/` as the single source of truth
+      // for in-app "guides" (shown via GuideDrawer). Without this, Vite may block
+      // file access outside `frontend/`.
+      allow: ['..'],
+    },
   },
   test: {
     globals: true,

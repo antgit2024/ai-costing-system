@@ -2185,28 +2185,58 @@ def derive_standard_version(
             meta = row.metadata_json or {}
             tmpl = meta.get("derive_template") if isinstance(meta.get("derive_template"), dict) else {}
             # inputs
-            sample_measure = _measure_qty(method, width_mm=sample_width, height_mm=sample_height, quantity=sample_qty)
-            std_measure = _measure_qty(method, **standard_measure_spec)
+            sample_measure_primary = _measure_qty(method, width_mm=sample_width, height_mm=sample_height, quantity=sample_qty)
+            std_measure_primary = _measure_qty(method, **standard_measure_spec)
+            # 工艺修正（余量）与按件固定追加：不参与“主体系数”的反推，但会在标准口径下重新叠加，形成总用量（核算/扣库口径）。
+            extra_w = _decimal(meta.get("extra_width_mm"), Decimal("0"))
+            extra_h = _decimal(meta.get("extra_height_mm"), Decimal("0"))
+            extra_long = _decimal(meta.get("extra_long_side_mm"), Decimal("0"))
+            extra_short = _decimal(meta.get("extra_short_side_mm"), Decimal("0"))
+            fixed_per_count = _decimal(meta.get("fixed_per_count_quantity"), Decimal("0"))
+            sample_measure_with_extras = _measure_qty_with_extras(
+                method,
+                width_mm=sample_width,
+                height_mm=sample_height,
+                quantity=sample_qty,
+                extra_width_mm=extra_w,
+                extra_height_mm=extra_h,
+                extra_long_side_mm=extra_long,
+                extra_short_side_mm=extra_short,
+            )
+            std_measure_with_extras = _measure_qty_with_extras(
+                method,
+                width_mm=_decimal(standard_measure_spec.get("width_mm"), Decimal("1000")),
+                height_mm=_decimal(standard_measure_spec.get("height_mm"), Decimal("1000")),
+                quantity=_decimal(standard_measure_spec.get("quantity"), Decimal("1")),
+                extra_width_mm=extra_w,
+                extra_height_mm=extra_h,
+                extra_long_side_mm=extra_long,
+                extra_short_side_mm=extra_short,
+            )
             try:
-                sample_used = _decimal(meta.get("sample_used_quantity"), None)  # type: ignore[arg-type]
+                # 主体用量（看面）：优先使用显式字段；否则按 base_quantity × M 推导（不包含覆盖率/损耗/余量等附加）
+                primary_used = _decimal(meta.get("primary_used_quantity"), None)  # type: ignore[arg-type]
             except Exception:
-                sample_used = None
-            if sample_used is None:
-                sample_used = sample_measure * _decimal(row.base_quantity, Decimal("0"))
-
+                primary_used = None
             cov = _decimal(tmpl.get("coverage_ratio"), _decimal(meta.get("coverage_ratio"), Decimal("1")))
+            if primary_used is None:
+                primary_used = sample_measure_primary * _decimal(row.base_quantity, Decimal("0"))
+
             fixed = _decimal(tmpl.get("fixed_quantity"), _decimal(meta.get("fixed_quantity"), Decimal("0")))
             coeff = tmpl.get("coefficient")
             coeff_d = _decimal(coeff, None) if coeff is not None else None  # type: ignore[arg-type]
             calibrate = bool(tmpl.get("calibrate_from_sample"))
             if coeff_d is None and calibrate:
-                coeff_d = _derive_base_from_total(total=sample_used, fixed=fixed, measure_qty=sample_measure, coverage_ratio=cov)
+                # 推导只推主体：用 primary_used 反推系数（fixed/按件追加/余量不参与反推）
+                coeff_d = _derive_base_from_total(total=primary_used, fixed=Decimal("0"), measure_qty=sample_measure_primary, coverage_ratio=cov)
             if coeff_d is None:
-                # fallback: derive from sample_used regardless of template
-                coeff_d = _derive_base_from_total(total=sample_used, fixed=fixed, measure_qty=sample_measure, coverage_ratio=cov)
+                # fallback: derive from primary_used regardless of template
+                coeff_d = _derive_base_from_total(total=primary_used, fixed=Decimal("0"), measure_qty=sample_measure_primary, coverage_ratio=cov)
 
-            # compute standard total then apply min/max/round
-            total_std = fixed + (std_measure * coeff_d * cov)
+            # compute standard TOTAL then apply min/max/round
+            # total_std = fixed(fixed_quantity) + fixed_per_count*qty + measure_with_extras*coeff*cov
+            fixed_total_std = fixed + (fixed_per_count * _decimal(standard_measure_spec.get("quantity"), Decimal("1")))
+            total_std = fixed_total_std + (std_measure_with_extras * coeff_d * cov)
             min_total = tmpl.get("min_total")
             max_total = tmpl.get("max_total")
             if min_total is not None:
@@ -2219,8 +2249,11 @@ def derive_standard_version(
                 mode2 = str(rounding.get("mode") or "round")
                 total_std = _round_by_step(total_std, step=step, mode=mode2)
 
-            # recompute base from constrained total
-            coeff_out = _derive_base_from_total(total=total_std, fixed=fixed, measure_qty=std_measure, coverage_ratio=cov)
+            # recompute base from constrained total (but still keep “推导只推主体”原则):
+            # we only adjust base on the TARGET side to satisfy min/max/round constraints.
+            coeff_out = _derive_base_from_total(total=total_std, fixed=fixed_total_std, measure_qty=std_measure_with_extras, coverage_ratio=cov)
+            primary_std = std_measure_primary * coeff_out
+            additional_std = total_std - primary_std
             out_meta = dict(meta)
             out_meta["fixed_quantity"] = str(fixed)
             out_meta["coverage_ratio"] = str(cov)
@@ -2229,9 +2262,11 @@ def derive_standard_version(
             # - Many UI paths historically read/display `sample_used_quantity` as the primary "本品用量",
             #   so we also set it to the standard baseline here to avoid “推导后看起来没计算”.
             # - Keep the original sample total for traceability.
-            out_meta["source_sample_used_quantity"] = str(sample_used)
+            out_meta["source_primary_used_quantity"] = str(primary_used)
             out_meta["standard_used_quantity"] = str(total_std)
             out_meta["sample_used_quantity"] = str(total_std)
+            out_meta["primary_used_quantity"] = str(primary_std)
+            out_meta["additional_used_quantity"] = str(additional_std)
             out_meta["derived_from_version_id"] = source_sample_version.id
             out_meta["derived_at"] = tmeta["derived_at"]
             out_meta["derive_template"] = tmpl
@@ -2503,6 +2538,47 @@ def _measure_qty(method: str, *, width_mm: Decimal, height_mm: Decimal, quantity
     return ((w * h) / Decimal("1000000")) * q
 
 
+def _measure_qty_with_extras(
+    method: str,
+    *,
+    width_mm: Decimal,
+    height_mm: Decimal,
+    quantity: Decimal,
+    extra_width_mm: Decimal = Decimal("0"),
+    extra_height_mm: Decimal = Decimal("0"),
+    extra_long_side_mm: Decimal = Decimal("0"),
+    extra_short_side_mm: Decimal = Decimal("0"),
+) -> Decimal:
+    """
+    Measure quantity with "process/material extra" adjustments (工艺修正余量).
+
+    Semantics matches frontend `measureQty()`:
+    - Apply extra_width/extra_height to base width/height
+    - For long_side/short_side, apply extra_long/extra_short on top of the chosen side
+    """
+    q = max(Decimal("0"), _decimal(quantity, Decimal("0")))
+    ew = max(Decimal("0"), _decimal(extra_width_mm, Decimal("0")))
+    eh = max(Decimal("0"), _decimal(extra_height_mm, Decimal("0")))
+    el = max(Decimal("0"), _decimal(extra_long_side_mm, Decimal("0")))
+    es = max(Decimal("0"), _decimal(extra_short_side_mm, Decimal("0")))
+    w = max(Decimal("0"), _decimal(width_mm, Decimal("0"))) + ew
+    h = max(Decimal("0"), _decimal(height_mm, Decimal("0"))) + eh
+    if method == "count":
+        return q
+    if method == "width":
+        return (w / Decimal("1000")) * q
+    if method == "height":
+        return (h / Decimal("1000")) * q
+    if method == "long_side":
+        return ((max(w, h) + el) / Decimal("1000")) * q
+    if method == "short_side":
+        return ((min(w, h) + es) / Decimal("1000")) * q
+    if method == "perimeter":
+        return ((Decimal("2") * (w + h)) / Decimal("1000")) * q
+    # area
+    return ((w * h) / Decimal("1000000")) * q
+
+
 def preview_model_cost(
     db: Session,
     model: models.ProductModel,
@@ -2546,6 +2622,34 @@ def preview_model_cost(
     if model_materials or model_processes:
         material_cost_total = Decimal("0")
         labor_cost_total = Decimal("0")
+
+        def _compute_total_used_qty(
+            *,
+            method: str,
+            width_mm: Decimal,
+            height_mm: Decimal,
+            quantity: Decimal,
+            base_qty: Decimal,
+            fixed_qty: Decimal,
+            coverage_ratio: Decimal,
+            fixed_per_count_quantity: Decimal,
+            extra_width_mm: Decimal,
+            extra_height_mm: Decimal,
+            extra_long_side_mm: Decimal,
+            extra_short_side_mm: Decimal,
+        ) -> Decimal:
+            per_count = max(Decimal("0"), fixed_per_count_quantity) * max(Decimal("0"), quantity)
+            measure_qty = _measure_qty_with_extras(
+                method,
+                width_mm=width_mm,
+                height_mm=height_mm,
+                quantity=quantity,
+                extra_width_mm=extra_width_mm,
+                extra_height_mm=extra_height_mm,
+                extra_long_side_mm=extra_long_side_mm,
+                extra_short_side_mm=extra_short_side_mm,
+            )
+            return fixed_qty + per_count + (measure_qty * base_qty * coverage_ratio)
 
         meta = model.metadata_json or {}
         mappings = meta.get("placeholder_mappings") or []
@@ -2696,8 +2800,25 @@ def preview_model_cost(
             loss_rate = _decimal(row.loss_rate, Decimal("0"))
             fixed_qty = _decimal(meta.get("fixed_quantity"), Decimal("0"))
             cov = _decimal(meta.get("coverage_ratio"), Decimal("1"))
-            measure = _measure_qty(method, width_mm=width_mm, height_mm=height_mm, quantity=quantity)
-            used_qty = fixed_qty + (measure * base_qty * cov)
+            fixed_per_count = _decimal(meta.get("fixed_per_count_quantity"), Decimal("0"))
+            extra_w = _decimal(meta.get("extra_width_mm"), Decimal("0"))
+            extra_h = _decimal(meta.get("extra_height_mm"), Decimal("0"))
+            extra_long = _decimal(meta.get("extra_long_side_mm"), Decimal("0"))
+            extra_short = _decimal(meta.get("extra_short_side_mm"), Decimal("0"))
+            used_qty = _compute_total_used_qty(
+                method=method,
+                width_mm=width_mm,
+                height_mm=height_mm,
+                quantity=quantity,
+                base_qty=base_qty,
+                fixed_qty=fixed_qty,
+                coverage_ratio=cov,
+                fixed_per_count_quantity=fixed_per_count,
+                extra_width_mm=extra_w,
+                extra_height_mm=extra_h,
+                extra_long_side_mm=extra_long,
+                extra_short_side_mm=extra_short,
+            )
             used_qty = used_qty * (Decimal("1") + (loss_rate / Decimal("100")))
 
             line: Dict[str, Any] = {
@@ -3148,10 +3269,28 @@ def preview_model_cost(
             if row.is_archived:
                 continue
             method = str(row.calculation_method or "count")
-            measure_qty = _measure_qty(method, width_mm=width_mm, height_mm=height_mm, quantity=quantity)
+            meta_row = getattr(row, "metadata_json", None) or {}
+            fixed_qty = _decimal(meta_row.get("fixed_quantity"), Decimal("0"))
+            cov = _decimal(meta_row.get("coverage_ratio"), Decimal("1"))
+            fixed_per_count = _decimal(meta_row.get("fixed_per_count_quantity"), Decimal("0"))
+            extra_w = _decimal(meta_row.get("extra_width_mm"), Decimal("0"))
+            extra_h = _decimal(meta_row.get("extra_height_mm"), Decimal("0"))
+            extra_long = _decimal(meta_row.get("extra_long_side_mm"), Decimal("0"))
+            extra_short = _decimal(meta_row.get("extra_short_side_mm"), Decimal("0"))
+            measure_qty = _measure_qty_with_extras(
+                method,
+                width_mm=width_mm,
+                height_mm=height_mm,
+                quantity=quantity,
+                extra_width_mm=extra_w,
+                extra_height_mm=extra_h,
+                extra_long_side_mm=extra_long,
+                extra_short_side_mm=extra_short,
+            )
             base_qty = _decimal(row.quantity, Decimal("0"))
             loss_rate = _decimal(row.loss_rate, Decimal("0"))
-            used_qty = measure_qty * base_qty * (Decimal("1") + (loss_rate / Decimal("100")))
+            used_qty = fixed_qty + (max(Decimal("0"), fixed_per_count) * max(Decimal("0"), quantity)) + (measure_qty * base_qty * cov)
+            used_qty = used_qty * (Decimal("1") + (loss_rate / Decimal("100")))
 
             line: Dict[str, Any] = {
                 "module_id": module.id,
@@ -3167,6 +3306,8 @@ def preview_model_cost(
                 "category": row.material_category,
                 "calculation_method": method,
                 "base_quantity": base_qty,
+                "fixed_quantity": fixed_qty,
+                "coverage_ratio": cov,
                 "loss_rate": loss_rate,
                 "used_quantity": used_qty,
                 "unit": row.unit_of_measure,
@@ -3619,9 +3760,27 @@ def preview_version_cost(
         meta_line = row.metadata_json or {}
         fixed_qty = _decimal(meta_line.get("fixed_quantity"), Decimal("0"))
         cov = _decimal(meta_line.get("coverage_ratio"), Decimal("1"))
-        measure_qty = _measure_qty(method, width_mm=width_mm, height_mm=height_mm, quantity=quantity)
-        used_qty = fixed_qty + (measure_qty * base * cov) if calc_mode == "ratio" else _decimal(
-            meta_line.get("standard_used_quantity"), Decimal("0")
+        fixed_per_count = _decimal(meta_line.get("fixed_per_count_quantity"), Decimal("0"))
+        extra_w = _decimal(meta_line.get("extra_width_mm"), Decimal("0"))
+        extra_h = _decimal(meta_line.get("extra_height_mm"), Decimal("0"))
+        extra_long = _decimal(meta_line.get("extra_long_side_mm"), Decimal("0"))
+        extra_short = _decimal(meta_line.get("extra_short_side_mm"), Decimal("0"))
+        measure_qty = _measure_qty_with_extras(
+            method,
+            width_mm=width_mm,
+            height_mm=height_mm,
+            quantity=quantity,
+            extra_width_mm=extra_w,
+            extra_height_mm=extra_h,
+            extra_long_side_mm=extra_long,
+            extra_short_side_mm=extra_short,
+        )
+        used_qty = (
+            fixed_qty
+            + (max(Decimal("0"), fixed_per_count) * max(Decimal("0"), quantity))
+            + (measure_qty * base * cov)
+            if calc_mode == "ratio"
+            else _decimal(meta_line.get("standard_used_quantity"), Decimal("0"))
         )
         used_with_loss = used_qty * loss_factor
 

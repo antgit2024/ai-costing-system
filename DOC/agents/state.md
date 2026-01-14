@@ -1,5 +1,16 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-14（Frontend 接力恢复：遗留改动落地前硬验收全绿）
+  - 产物（接力/恢复）：
+    - `.gitignore` 增加忽略 `.vscode/`（避免误提交本机配置导致工作区长期“脏”）
+    - 已完成强制验收：Frontend build + Docs grep/test -d + Backend 最小 pytest
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`cd frontend && npm ci`、`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档 grep/test -d 校验
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+  - 下一步：
+    - 将本工作区遗留改动按主题小步提交（一个主题一个 commit），并在需要上线时按 `DOC/agents/commands.md` 执行静态资源原子发布
+
 - **最近校对（北京时间 GMT+8）**：2026-01-13（Product Listing：利润推演口径调整：快递费改按件金额、支付费并入平台扣点）
   - 产物（前端）：
     - `/costing/product-listing` → 左侧 Tab “利润推演”：

@@ -64,6 +64,7 @@
 
 - `DOC/costing/ui_specs/product_model.md`（产品模型 UI 规格/口径）
 - `DOC/costing/manuals/standard_model_variants_ops_rules.md`（标准模型行级变体：运营/实施规范）
+- `DOC/costing/manuals/rules_training_handbook_v1.md`（规则与培训手册：新人必读入口）
 - `DOC/costing/reviews/shipment_time_parse_review_phase0_phase1_20251222.md`（方案评审稿：发货时再解析 + SKU→已发布标准版本绑定，含 Phase0/Phase1 优先级）
 - `DOC/costing/reviews/erp_guardrails_addendum_20251222.md`（ERP口径补强清单：版本为最小核算单元、重跑语义、编码定位、解析版本化、异常工作台、成本口径）
 - `DOC/costing/blueprints/structure_standards/pillow_structure_standard_v1.md`（结构标准口径：抱枕/靠垫 slots 去歧义 + 驱动量建议）

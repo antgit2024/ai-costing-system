@@ -1,0 +1,85 @@
+.guide-markdown {
+  background: #0d1117; /* GitHub dark-ish */
+  color: #c9d1d9;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.guide-markdown :where(h1, h2, h3) {
+  color: #e6edf3;
+  margin: 0.8em 0 0.35em;
+}
+
+.guide-markdown :where(p, ul, ol) {
+  margin: 0.4em 0;
+}
+
+.guide-markdown :where(code) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
+    monospace;
+  font-size: 0.88em;
+}
+
+.guide-guozong {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(245, 189, 47, 0.08);
+  border: 1px solid rgba(245, 189, 47, 0.28);
+  color: #f5bd2f; /* yellow text as requested */
+}
+
+.guide-guozong-title {
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.guide-guozong :where(ul) {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.guide-guozong :where(li) {
+  margin: 4px 0;
+}
+
+.guide-markdown :where(p > code, li > code) {
+  background: rgba(110, 118, 129, 0.22);
+  padding: 0.12em 0.35em;
+  border-radius: 6px;
+}
+
+.guide-markdown :where(pre) {
+  background: #0b0f14;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 12px;
+  overflow: auto;
+  margin: 0.6em 0;
+}
+
+.guide-markdown :where(pre code) {
+  background: transparent;
+  padding: 0;
+}
+
+.guide-markdown :where(a) {
+  color: #58a6ff;
+}
+
+.guide-markdown :where(blockquote) {
+  margin: 0.6em 0;
+  padding: 0.2em 1em;
+  border-left: 3px solid rgba(255, 255, 255, 0.18);
+  color: rgba(201, 209, 217, 0.9);
+}
+
+.guide-markdown :where(hr) {
+  border: none;
+  border-top: 1px solid rgba(48, 54, 61, 1); /* deep gray */
+  margin: 10px 0;
+}
+

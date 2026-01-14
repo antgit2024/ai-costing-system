@@ -46,6 +46,14 @@
   - `grep -nF "POD 个性化定制（先印布）— Phase0 落地蓝图（以抱枕为例）" DOC/costing/blueprints/pod_personalization_print_pipeline_phase0.md`
 - POD Agent 接力包存在性：
   - `grep -nF "POD/印刷自动化 Agent 接力包（POD Agent）" DOC/agents/handoff_pod.md`
+- Rules Agent 接力包存在性：
+  - `grep -nF "## Rules Agent 接力包（规则/培训专用）" DOC/agents/handoff_rules.md`
+- 规则与培训手册（v1）存在性：
+  - `grep -nF "## 规则与培训手册（v1）— 新人必读入口" DOC/costing/manuals/rules_training_handbook_v1.md`
+- 规则条目目录存在性（用于逐条规则拆页）：
+  - `test -d DOC/costing/manuals/rules && grep -nF "## 规则条目目录（Rules）" DOC/costing/manuals/rules/README.md`
+- UI“新建指南”单一真相（DOC/guides）存在性：
+  - `test -d DOC/costing/manuals/guides && grep -nF "UI“新建指南”文档（单一真相）" DOC/costing/manuals/guides/README.md`
 - POD Phase0（后端闭环任务单，备用）存在性：
   - `grep -nF "Backend 闭环任务单：POD 个性化定制 Phase0（先印布）— POD 领域最小对象 + Job + 生产包下载（MVP）" DOC/agents/briefings/backend_pod_personalization_phase0_mvp.md`
 

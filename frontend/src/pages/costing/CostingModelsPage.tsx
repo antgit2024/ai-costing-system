@@ -42,7 +42,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import './CostingModelsPage.css'
 import GuideDrawer from '@/components/common/GuideDrawer'
-import productModelGuide from '@/guides/product_model_guide.md?raw'
+import productModelGuide from '@doc/costing/manuals/guides/product_model_guide.md?raw'
 import {
   activateProductModel,
   createProductModelVariantRule,

@@ -24,6 +24,9 @@ backend/media/
 # Local logs / previews (never commit)
 backend/logs/
 
+# Local IDE/editor settings
+.vscode/
+
 # Environment files (keep templates in Git: `.env.sample`, `*.example`)
 .env
 frontend/.env.production

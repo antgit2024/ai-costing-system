@@ -2,6 +2,7 @@ import { Alert, Button, Card, Drawer, Form, Input, Modal, Select, Space, Switch,
 import type { ColumnsType } from 'antd/es/table'
 import { useMemo, useState } from 'react'
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
+import { QuestionCircleOutlined } from '@ant-design/icons'
 
 import {
   activateStructureStandard,
@@ -14,6 +15,8 @@ import {
 } from '@/services/planner'
 import type { StructureStandardRead, StructureStandardStatus } from '@/types/planner'
 import { toPinyinCode } from '@/utils/pinyin'
+import GuideDrawer from '@/components/common/GuideDrawer'
+import structureStandardsGuide from '@doc/costing/manuals/guides/structure_standards_guide.md?raw'
 
 const { Title, Text } = Typography
 
@@ -49,6 +52,7 @@ export default function StructureStandardsPage() {
   const [drawerMode, setDrawerMode] = useState<DrawerMode>('create')
   const [activeRecord, setActiveRecord] = useState<StructureStandardRead | null>(null)
   const [saving, setSaving] = useState(false)
+  const [guideOpen, setGuideOpen] = useState(false)
   const [renameOpen, setRenameOpen] = useState(false)
   const [renaming, setRenaming] = useState(false)
 
@@ -442,6 +446,9 @@ export default function StructureStandardsPage() {
         destroyOnClose
         extra={
           <Space>
+            <Button icon={<QuestionCircleOutlined />} onClick={() => setGuideOpen(true)}>
+              新建指南
+            </Button>
             <Button onClick={() => setDrawerOpen(false)}>取消</Button>
             <Button type="primary" loading={saving} onClick={handleSave}>
               保存
@@ -581,6 +588,14 @@ export default function StructureStandardsPage() {
           </Form.Item>
         </Form>
       </Drawer>
+
+      <GuideDrawer
+        open={guideOpen}
+        onClose={() => setGuideOpen(false)}
+        title="结构标准新建指南"
+        content={structureStandardsGuide}
+        tip="提示：这是“结构标准”面板的新建/维护指南（Markdown）。需要调整内容，直接修改对应指南文档并重新部署即可。"
+      />
 
       <Modal
         open={renameOpen}

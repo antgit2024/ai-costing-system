@@ -6,8 +6,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from .planner.router import router as planner_router
 from .planner.services import metrics as metrics_service
+from .security.ip_allowlist import IPAllowlistMiddleware
 
 app = FastAPI(title="AI Costing Planner API", version="0.1.0")
+
+app.add_middleware(
+    IPAllowlistMiddleware,
+    allowlist_raw=settings.planner_ip_allowlist,
+    trust_proxy_headers=settings.planner_trust_proxy_headers,
+    # Keep health open for basic monitoring; everything else can be restricted.
+    exclude_paths=["/api/health"],
+)
 
 app.add_middleware(
     CORSMiddleware,

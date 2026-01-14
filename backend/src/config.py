@@ -70,6 +70,20 @@ class Settings(BaseSettings):
     #   X-PLANNER-ADMIN-KEY: <value>
     planner_admin_key: str | None = Field(default=None, env="PLANNER_ADMIN_KEY")
 
+    # ===== Lightweight access control (pre-auth phase) =====
+    # If set, only requests coming from these client IPs are allowed.
+    #
+    # Format (comma-separated):
+    #   - Single IP: "1.2.3.4"
+    #   - CIDR: "1.2.3.0/24"
+    # Example:
+    #   PLANNER_IP_ALLOWLIST="127.0.0.1,10.0.0.0/8,203.0.113.10"
+    planner_ip_allowlist: str | None = Field(default=None, env="PLANNER_IP_ALLOWLIST")
+
+    # If true, use X-Forwarded-For / X-Real-IP as client ip (for reverse proxy deployments).
+    # Keep false unless you have a trusted proxy in front (e.g. Nginx) to avoid spoofing.
+    planner_trust_proxy_headers: bool = Field(default=False, env="PLANNER_TRUST_PROXY_HEADERS")
+
     # ===== Optional LLM (e.g. 百炼/通义等) integration =====
     # We use an OpenAI-compatible endpoint by default:
     #   POST {base_url}/v1/chat/completions

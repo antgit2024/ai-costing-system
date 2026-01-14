@@ -1,5 +1,51 @@
 # Backend 闭环任务单：POD 个性化定制 Phase0（先印布）— POD 领域最小对象 + Job + 生产包下载（MVP）
 
+> 备注（重要）：该任务单当前为**备用草案**（用于避免文档验收 grep 断链），不代表已进入实施主线。  
+> 启动前置：按 `DOC/agents/handoff_pod.md` 补齐工厂参数（RIP 接入方式/裁切线格式/定位标规范/分组规则）。
+
+---
+
+## 目标（Phase0 最小闭环）
+
+用户/运营完成确稿后，后端能够：
+- 记录素材（hash/元数据/存储 key）
+- 生成“效果图/印刷稿”异步 job（至少印刷稿）
+- 生成并快照化 ProductionPack（含印刷稿文件列表 + 追溯字段）
+- 提供受控下载（工厂下载生产包）
+- 预留 ERP 回传接口（或先写回调表，后续接真实ERP）
+
+---
+
+## 建议数据落点（可先用新表，也可先用 metadata_json）
+
+- `artwork_assets`
+- `print_templates`（按 `product_model_version_id + structure_slot`）
+- `artwork_jobs`（mockup_render/print_export）
+- `production_packs`
+
+---
+
+## 建议接口（最小）
+
+- `POST /api/planner/pod/assets`：注册素材（或上传回传 storage_key）
+- `POST /api/planner/pod/jobs/print-export`：创建印刷稿 job
+- `GET /api/planner/pod/jobs/{job_id}`：查询 job 状态
+- `POST /api/planner/pod/production-packs`：确稿创建生产包（触发 print job）
+- `GET /api/planner/pod/production-packs/{id}`：生产包详情
+- `GET /api/planner/pod/production-packs/{id}/download`：受控下载（签名URL或鉴权流式）
+- `POST /api/planner/pod/erp/writeback`：回传ERP（占位，后续对齐字段）
+
+---
+
+## 验收口径（建议）
+
+给定 1 个模型版本 + 1 张图片 + 1 个确稿请求：
+- 能生成一个 production_pack（ready）
+- 能生成一个 print_export job（completed）
+- 工厂下载接口可用（返回签名链接或文件流）
+
+# Backend 闭环任务单：POD 个性化定制 Phase0（先印布）— POD 领域最小对象 + Job + 生产包下载（MVP）
+
 > 范围：仅后端 POD 领域的最小可跑通闭环；**不做 AI**、不做工厂 RIP 深对接。  
 > 背景与口径：见 `DOC/costing/blueprints/pod_personalization_print_pipeline_phase0.md` 与 `DOC/agents/handoff_pod.md`。
 

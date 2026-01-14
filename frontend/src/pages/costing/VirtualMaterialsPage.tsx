@@ -182,7 +182,7 @@ import type {
   VirtualMaterialInventoryResponse,
   VirtualMaterialUpdatePayload,
 } from '@/types/planner'
-import virtualMaterialsGuide from '@/guides/virtual_materials_guide.md?raw'
+import virtualMaterialsGuide from '@doc/costing/manuals/guides/virtual_materials_guide.md?raw'
 import {
   calculateVirtualMaterialInventory,
   createVirtualMaterial,
@@ -1456,16 +1456,46 @@ const VirtualMaterialsPage = () => {
         onClose={closeDrawer}
         destroyOnClose
         extra={
-          drawerMode === 'view' && currentVirtualMaterial ? (
-            <Space>
-              <Tag color={currentVirtualMaterial.status === 'active' ? 'green' : 'gold'}>
-                {currentVirtualMaterial.status === 'active' ? '启用' : '草稿'}
-              </Tag>
-              <Text type="secondary">
-                更新于 {dayjs(currentVirtualMaterial.updated_at).format('YYYY-MM-DD HH:mm')}
-              </Text>
-            </Space>
-          ) : null
+          <Space>
+            {drawerMode === 'view' && currentVirtualMaterial ? (
+              <>
+                <Tag color={currentVirtualMaterial.status === 'active' ? 'green' : 'gold'}>
+                  {currentVirtualMaterial.status === 'active' ? '启用' : '草稿'}
+                </Tag>
+                <Text type="secondary">
+                  更新于 {dayjs(currentVirtualMaterial.updated_at).format('YYYY-MM-DD HH:mm')}
+                </Text>
+              </>
+            ) : null}
+
+            <Button icon={<QuestionCircleOutlined />} onClick={() => setGuideOpen(true)}>
+              新建指南
+            </Button>
+
+            <Button
+              type="primary"
+              onClick={handleSaveBasic}
+              loading={savingBasic || createMutation.isPending || updateMutation.isPending}
+              disabled={savingBasic || createMutation.isPending || updateMutation.isPending}
+            >
+              保存基础信息
+            </Button>
+
+            {drawerMode === 'view' && selectedId ? (
+              <Button
+                icon={<LinkOutlined />}
+                onClick={() => {
+                  queryClient.invalidateQueries({
+                    queryKey: ['virtual-material', selectedId],
+                  })
+                }}
+              >
+                刷新详情
+              </Button>
+            ) : null}
+
+            <Button onClick={closeDrawer}>关闭</Button>
+          </Space>
         }
       >
         {drawerMode === 'view' && detailQuery.isLoading ? (
@@ -1623,31 +1653,6 @@ const VirtualMaterialsPage = () => {
                     )
                   }}
                 </Form.Item>
-                <Space>
-                  <Button icon={<QuestionCircleOutlined />} onClick={() => setGuideOpen(true)}>
-                    新建指南
-                  </Button>
-                  <Button
-                    type="primary"
-                    onClick={handleSaveBasic}
-                    loading={savingBasic || createMutation.isPending || updateMutation.isPending}
-                    disabled={savingBasic || createMutation.isPending || updateMutation.isPending}
-                  >
-                    保存基础信息
-                  </Button>
-                  {drawerMode === 'view' && selectedId && (
-                    <Button
-                      icon={<LinkOutlined />}
-                      onClick={() => {
-                        queryClient.invalidateQueries({
-                          queryKey: ['virtual-material', selectedId],
-                        })
-                      }}
-                    >
-                      刷新详情
-                    </Button>
-                  )}
-                </Space>
                 <Text type="secondary" style={{ display: 'block', marginTop: 12 }}>
                   说明：配方型会自动校验子物料单位一致并推导单位；套件型单位固定为“套”；占位型不绑定子物料，BOM 单价固定为 0。
                 </Text>

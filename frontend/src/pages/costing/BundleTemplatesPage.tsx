@@ -48,7 +48,6 @@ import {
   listLineVariants,
   updateBundleTemplate,
 } from '@/services/planner'
-import BundlePhraseListPanel from '@/components/costing/BundlePhraseListPanel'
 
 const { Text } = Typography
 
@@ -234,15 +233,13 @@ export default function BundleTemplatesPage() {
     baseLineOk: Record<string, boolean>
   } | null>(null)
 
-  // 预演（后端 debug）：用“短语生成器”的输出直接调用 /bom/generate-by-spec-debug
+  // 预演（后端 debug）：直接用“短码”作为最小 spec_text 触发 /bom/generate-by-spec-debug
   const [bundlePreviewOpen, setBundlePreviewOpen] = useState(false)
   const [bundlePreviewSpecText, setBundlePreviewSpecText] = useState<string>('')
   const [bundlePreviewData, setBundlePreviewData] = useState<any | null>(null)
-  const [bundlePreviewGeneratingSelector, setBundlePreviewGeneratingSelector] = useState<string | null>(null)
 
   const bundlePreviewMutation = useMutation({
     mutationFn: async (args: { selector: string; spec_text: string }) => {
-      setBundlePreviewGeneratingSelector(args.selector)
       const res = await generateBomBySpecDebug({ spec_text: args.spec_text })
       return res
     },
@@ -251,7 +248,6 @@ export default function BundleTemplatesPage() {
       setBundlePreviewOpen(true)
     },
     onError: (e: any) => message.error(String(e?.message ?? e)),
-    onSettled: () => setBundlePreviewGeneratingSelector(null),
   })
 
   const selectedVersionIds = useMemo(() => {
@@ -1451,7 +1447,8 @@ export default function BundleTemplatesPage() {
         {
           selector: allocateNextSelector2(used),
           phrase: '',
-          enabled: true,
+          // 新建默认停用，避免“未填完就阻塞保存/误上线上线”
+          enabled: false,
           mode: 'parse',
           components: [{ model_version_id: null, width_cm: 40, height_cm: 50, quantity: 1, spec_text: '', tokens: [] }],
         } as PhrasePresetRow,
@@ -1547,10 +1544,13 @@ export default function BundleTemplatesPage() {
       const rows = Array.isArray(p?.components) ? p.components : []
       const valid = rows.filter((c: any) => String(c?.model_version_id ?? '').trim() && Number(c?.width_cm) > 0 && Number(c?.height_cm) > 0 && Number(c?.quantity) > 0)
       if (!String(p?.phrase ?? '').trim()) {
-        issues.push({ level: 'error', message: `短语 ${selector}：短语备注不能为空（用于识别/管理）` })
+        issues.push({ level: 'error', message: `短语 ${selector}：短语备注不能为空（用于识别/管理；若暂不使用请在左侧停用该短语）` })
       }
       if (!valid.length) {
-        issues.push({ level: 'error', message: `短语 ${selector}：至少需要 1 条完整组件行（模型/宽/高/数量）` })
+        issues.push({
+          level: 'error',
+          message: `短语 ${selector}：已启用但未配置完整组件行（模型/宽/高/数量）；请补齐至少1行或在左侧停用该短语`,
+        })
       }
     }
     const hasError = issues.some((x) => x.level === 'error')
@@ -2206,7 +2206,12 @@ export default function BundleTemplatesPage() {
                 renderItem={(p: any, idx: number) => {
                   const sel = String(p?.selector ?? '').trim().toUpperCase() || toSelector2(idx)
                   const codeOnly = String(currentBundleToken || '').toUpperCase().replace(/^B:/, '').replace(/^BUNDLE:/, '')
-                  const tokenDash = codeOnly ? toBundleTokenDash(codeOnly, sel) : `B-????${sel}`
+                  const prefix = String(p?.mode ?? '').trim() === 'force' ? 'Z' : 'B'
+                  const tokenDash = codeOnly
+                    ? prefix === 'Z'
+                      ? `Z-${codeOnly}${sel}`
+                      : toBundleTokenDash(codeOnly, sel)
+                    : `${prefix}-????${sel}`
                   const active = idx === activePresetIndex
                   const enabled = p?.enabled !== false
                   const phraseText = String(p?.phrase ?? '').trim() || '-'
@@ -2226,7 +2231,10 @@ export default function BundleTemplatesPage() {
                         {/* 第一行：编码（左）+ 操作按钮（右） */}
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
                           <div style={{ minWidth: 0, display: 'flex', alignItems: 'center' }}>
-                            <Tag color={enabled ? 'blue' : 'red'} style={{ fontWeight: 600, marginInlineEnd: 0 }}>
+                            <Tag
+                              color={!enabled ? 'default' : prefix === 'Z' ? 'volcano' : 'blue'}
+                              style={{ fontWeight: 600, marginInlineEnd: 0 }}
+                            >
                               {tokenDash}
                             </Tag>
           </div>
@@ -2468,22 +2476,22 @@ export default function BundleTemplatesPage() {
                             {(String((r as any)?.mode ?? 'parse') === 'force' ? 'Z' : 'B') + '-' + String(currentBundleToken || '').replace(/^B:/, '').replace(/^BUNDLE:/, '').replace(/^Z:/, '') + String(selector)}
                           </Text>
                         </Text>
+                        <Button
+                          size="small"
+                          disabled={!String(currentBundleToken || '').trim()}
+                          icon={<PlayCircleOutlined />}
+                          onClick={() => {
+                            const codeOnly = String(currentBundleToken || '').replace(/^B:/, '').replace(/^BUNDLE:/, '').replace(/^Z:/, '')
+                            const prefix = String((r as any)?.mode ?? 'parse') === 'force' ? 'Z' : 'B'
+                            const specText = `${prefix}-${String(codeOnly).toUpperCase()}${String(selector).toUpperCase()}`
+                            setBundlePreviewSpecText(specText)
+                            bundlePreviewMutation.mutate({ selector: String(selector), spec_text: specText })
+                          }}
+                        >
+                          预演(debug)
+                        </Button>
                       </Space>
                       {/* 降噪：筛选弹窗模式已由 selector(B/Z) 锁死 */}
-                      <BundlePhraseListPanel
-                        bundleCode={currentBundleToken}
-                        phrasePresets={phrasePresets as any}
-                        activeSelector={selector}
-                        defaultOpen={false}
-                        tokenPrefix={String((r as any)?.mode ?? 'parse') === 'force' ? 'Z' : 'B'}
-                        showGenerateBom
-                        generateBomLoading={bundlePreviewMutation.isPending}
-                        generatingSelector={bundlePreviewGeneratingSelector}
-                        onGenerateBom={(args) => {
-                          setBundlePreviewSpecText(args.output)
-                          bundlePreviewMutation.mutate({ selector: String(args.selector), spec_text: String(args.output) })
-                        }}
-                      />
                       {disabled ? (
                         <Alert
                           type="warning"

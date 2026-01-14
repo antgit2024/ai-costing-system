@@ -41,6 +41,19 @@
     - Frontend：`npm -C frontend run build`
     - Backend：`backend/venv/bin/python -m pytest backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py -q`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-14（套装模板：移除短语生成器 + 左侧短码随模式变化 + 保存校验更可理解）
+  - 产物（前端）：
+    - `/costing/bundle-templates`：
+      - 移除“短语生成器（可复制/可校验）”区域（按运营反馈降噪）
+      - 左侧短语列表短码根据 selector 模式显示：
+        - B 解析型 → `B-XXXXAA`
+        - Z 指定型 → `Z-XXXXAA`
+      - “保存前校验未通过（短语 AH 缺组件行）”提示文案补强：明确告知“补齐至少 1 条组件行或停用该短语”
+      - 新建短语默认 **停用**，避免未填完阻塞保存
+  - 验收命令：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`backend/venv/bin/python -m pytest backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-14（套装模板：一键清理“变体改了导致空规则/清不掉”的失效绑定）
   - 产物（前端）：
     - `/costing/bundle-templates` 编辑页：

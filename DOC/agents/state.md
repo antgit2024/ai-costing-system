@@ -87,6 +87,17 @@
     - Frontend：`npm -C frontend run build`
     - Backend：`backend/venv/bin/python -m pytest backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py -q`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-14（套装模板：列表列重排（属性名称合并列）+ 无复制图标 + 更新时间仅日期）
+  - 产物（前端）：
+    - `/costing/bundle-templates` 列表页：
+      - 名称列缩小（约 1/3）
+      - “短码(B/Z)”与“运营短语”合并为单列：**属性名称**（前短码胶囊、后运营短语；均不显示复制图标）
+      - 模型列缩小约一半
+      - 更新时间只展示日期（YYYY-MM-DD）且列宽缩小（约 1/3）
+  - 验收命令：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`backend/venv/bin/python -m pytest backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-14（套装模板：一键清理“变体改了导致空规则/清不掉”的失效绑定）
   - 产物（前端）：
     - `/costing/bundle-templates` 编辑页：

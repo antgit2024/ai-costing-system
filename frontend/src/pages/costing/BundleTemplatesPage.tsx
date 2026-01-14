@@ -1835,65 +1835,41 @@ export default function BundleTemplatesPage() {
               columns={[
                 // 列宽缩小（原 110）：编码列更紧凑
                 { title: '编码', dataIndex: 'code', width: 70, render: (v) => <Text code>{String(v)}</Text> },
-                { title: '名称', dataIndex: 'name', width: 180, render: (v) => String(v ?? '').trim() || '-' },
+                // 名称缩小 1/3（180 -> 120）
+                { title: '名称', dataIndex: 'name', width: 120, render: (v) => String(v ?? '').trim() || '-' },
                 {
                   title: '分类',
                   width: 90,
                   render: (_: any, r: any) => String(r?.metadata?.category ?? '').trim() || '-',
                 },
                 {
-                  title: '短码(B/Z)',
-                  // 列宽缩小（原 170）
-                  width: 115,
+                  // 短码 + 运营短语合并列：把空间都给“属性名称”
+                  title: '属性名称',
+                  width: 520,
                   render: (_: any, r: any) => {
                     const codeRaw = String(r?.code ?? '').trim()
-                    if (!codeRaw) return <Text type="secondary">-</Text>
-                    const token = toBundleTokenDash(codeRaw)
                     const pp = Array.isArray(r?.metadata?.phrase_presets) ? r.metadata.phrase_presets : []
-                    if (!pp.length) return <Text code>{token}</Text>
+                    if (!codeRaw || !pp.length) return <Text type="secondary">-</Text>
                     return (
                       <Space direction="vertical" size={2}>
                         {pp.slice(0, 8).map((p: any, idx: number) => {
                           const sel = String(p?.selector ?? '').trim().toUpperCase() || toSelector2(idx)
                           const prefix = String(p?.mode ?? '').trim() === 'force' ? 'Z' : 'B'
-                          const t = sel
-                            ? prefix === 'Z'
+                          const t =
+                            sel && prefix === 'Z'
                               ? `Z-${String(codeRaw).toUpperCase()}${String(sel).toUpperCase()}`
                               : toBundleTokenDash(codeRaw, sel)
-                            : token
-                          return (
-                            <Tag key={t} color={prefix === 'Z' ? 'volcano' : 'blue'} style={{ marginInlineEnd: 0 }}>
-                              <Text copyable={{ text: t }} style={{ color: 'inherit' }}>
-                                {t}
-                              </Text>
-                            </Tag>
-                          )
-                        })}
-                        {pp.length > 8 ? <Text type="secondary">+{pp.length - 8}</Text> : null}
-                      </Space>
-                    )
-                  },
-                },
-                {
-                  title: '运营短语',
-                  width: 260,
-                  render: (_: any, r: any) => {
-                    const pp = Array.isArray(r?.metadata?.phrase_presets) ? r.metadata.phrase_presets : []
-                    if (!pp.length) return <Text type="secondary">-</Text>
-                    return (
-                      <Space direction="vertical" size={2}>
-                        {pp.slice(0, 8).map((p: any, idx: number) => {
-                          const letter = String(p?.selector ?? '').trim().toUpperCase() || toSelector2(idx)
                           const phrase = String(p?.phrase ?? '').trim()
-                          const label = phrase ? `${letter}: ${phrase}` : `${letter}: -`
+                          const label = phrase ? `${sel}: ${phrase}` : `${sel}: -`
                           return (
-                            <Text
-                              key={`${idx}-${label}`}
-                              style={{ whiteSpace: 'normal' }}
-                              copyable={phrase ? { text: phrase } : false}
-                            >
-                              {label}
-                            </Text>
+                            <div key={`${t}-${label}`} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                              {/* 短码胶囊：有底色和外框色 */}
+                              <Tag color={prefix === 'Z' ? 'volcano' : 'blue'} style={{ marginInlineEnd: 0 }}>
+                                {t}
+                              </Tag>
+                              {/* 运营短语：不截断，不显示复制图标 */}
+                              <Text style={{ whiteSpace: 'normal' }}>{label}</Text>
+                            </div>
                           )
                         })}
                         {pp.length > 8 ? <Text type="secondary">+{pp.length - 8}</Text> : null}
@@ -1919,7 +1895,8 @@ export default function BundleTemplatesPage() {
                 },
                 {
                   title: '模型',
-                  width: 260,
+                  // 模型列缩小一半（260 -> 130）
+                  width: 130,
                   render: (_: any, r: any) => {
                     const meta = r?.metadata ?? {}
                     const pool = Array.isArray(meta?.model_pool_version_ids) ? meta.model_pool_version_ids : []
@@ -1950,9 +1927,16 @@ export default function BundleTemplatesPage() {
                 },
                 {
                   title: '更新时间',
-                  width: 170,
+                  // 只要日期 + 列宽缩小 1/3（170 -> 110）
+                  width: 110,
                   dataIndex: 'updated_at',
-                  render: (v) => String(v ?? '') || '-',
+                  render: (v) => {
+                    const s = String(v ?? '').trim()
+                    if (!s) return '-'
+                    // ISO / datetime -> YYYY-MM-DD
+                    const d = s.includes('T') ? s.split('T')[0] : s.split(' ')[0]
+                    return d || s
+                  },
                 },
                 {
                   title: '状态',

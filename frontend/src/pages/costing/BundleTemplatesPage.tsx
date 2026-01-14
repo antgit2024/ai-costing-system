@@ -189,8 +189,9 @@ const buildAttributeFormula = (args: {
   presetSelectedByIdx: Record<string, Record<string, any>>
   fallbackTokenOverrides: Record<string, string>
   variantTokenOptionsByVersionBaseLine: Record<string, Record<string, string[]>>
+  baseLineInfoByVersionBaseLine: Record<string, Record<string, { orderIndex: number; isZeroCost: boolean }>>
 }): string => {
-  const { presetIndex, componentRows, presetSelectedByIdx, fallbackTokenOverrides, variantTokenOptionsByVersionBaseLine } = args
+  const { presetIndex, componentRows, presetSelectedByIdx, fallbackTokenOverrides, variantTokenOptionsByVersionBaseLine, baseLineInfoByVersionBaseLine } = args
   if (!Array.isArray(componentRows) || componentRows.length <= 0) return ''
 
   const parts: string[] = []
@@ -217,10 +218,23 @@ const buildAttributeFormula = (args: {
     const seenId = new Set<string>()
     const uniqBaseLineIds = rawBaseLineIds.filter((x) => (seenId.has(x) ? false : (seenId.add(x), true)))
 
+    const infoByBase = (baseLineInfoByVersionBaseLine?.[versionId] ?? {}) as Record<string, { orderIndex: number; isZeroCost: boolean }>
+    const baseLineIdsSorted = uniqBaseLineIds.slice().sort((a, b) => {
+      const ia = infoByBase?.[a]
+      const ib = infoByBase?.[b]
+      const za = ia?.isZeroCost ? 1 : 0
+      const zb = ib?.isZeroCost ? 1 : 0
+      if (za !== zb) return zb - za // zero-cost first
+      const oa = Number.isFinite(ia?.orderIndex) ? Number(ia.orderIndex) : 1e9
+      const ob = Number.isFinite(ib?.orderIndex) ? Number(ib.orderIndex) : 1e9
+      return oa - ob
+    })
+
     const groupsInOrder: Array<{ key: string; options: string[] }> = []
     const seenGroupKey = new Set<string>()
 
-    for (const baseLineId of uniqBaseLineIds) {
+    for (const baseLineId of baseLineIdsSorted) {
+      const isZeroCost = !!infoByBase?.[baseLineId]?.isZeroCost
       const overrideKey = `${versionId}:${baseLineId}`
       const defaultToken = String(fallbackTokenOverrides?.[overrideKey] ?? '').trim()
       const alt = (variantTokenOptionsByVersionBaseLine?.[versionId] ?? {})?.[baseLineId] ?? []
@@ -228,9 +242,19 @@ const buildAttributeFormula = (args: {
 
       const seenOpt = new Set<string>()
       const opts: string[] = []
-      // 默认选项永远排在第一位：可能是空（输出 {}）
-      opts.push(defaultToken)
-      seenOpt.add(normalizeSingleToken(defaultToken))
+      // 关键口径：
+      // - 只有当基准物料为“兜底-零成本”时，才允许空选项 {}（表示“没有这个选项”）
+      // - 非零成本基准物料不允许空选项（否则语义不成立）
+      if (isZeroCost) {
+        opts.push('') // force empty default
+        seenOpt.add('__EMPTY__')
+      } else if (defaultToken) {
+        const d = normalizeSingleToken(defaultToken)
+        if (d) {
+          opts.push(d)
+          seenOpt.add(d)
+        }
+      }
       // 其它选项按字面排序，保持稳定
       const rest = altTokens
         .map((x) => normalizeSingleToken(x))
@@ -241,8 +265,15 @@ const buildAttributeFormula = (args: {
         opts.push(t)
       }
 
-      // 若该 baseLine 既没有默认token也没有候选token，则不形成组
-      if (!opts.some((x) => !!String(x).trim())) continue
+      // 若该 baseLine 无任何可选项，则不形成组
+      // - zero-cost: 没有任何非空候选 => 不形成组（不存在“可选件”就不应该出现 [{}]）
+      // - non-zero-cost: 没有默认且没有候选 => 不形成组
+      if (isZeroCost) {
+        const hasNonEmpty = opts.some((x) => !!String(x).trim())
+        if (!hasNonEmpty) continue
+      } else {
+        if (!opts.length) continue
+      }
 
       const key = opts.map((x) => (normalizeSingleToken(x) ? normalizeSingleToken(x) : '__EMPTY__')).join('|')
       if (seenGroupKey.has(key)) continue
@@ -624,6 +655,28 @@ export default function BundleTemplatesPage() {
       m.set(String(r.version_id), inner)
     }
     return m
+  }, [versionLinesSummaryQuery.data])
+
+  const baseLineInfoByVersionBaseLine = useMemo(() => {
+    // version_id -> base_line_id -> { orderIndex, isZeroCost }
+    const out: Record<string, Record<string, { orderIndex: number; isZeroCost: boolean }>> = {}
+    for (const r of (versionLinesSummaryQuery.data ?? []) as Array<{ version_id: string; data: any }>) {
+      const versionId = String((r as any)?.version_id ?? '').trim()
+      if (!versionId) continue
+      const mats = ((r as any)?.data?.materials ?? []) as any[]
+      const inner: Record<string, { orderIndex: number; isZeroCost: boolean }> = {}
+      for (let i = 0; i < mats.length; i++) {
+        const it = mats[i]
+        const id = String(it?.id ?? '').trim()
+        if (!id) continue
+        const name = String(it?.material_name ?? '').trim()
+        const code = String(it?.material_code ?? '').trim()
+        const isZeroCost = name.includes('兜底-零成本') || code.includes('兜底-零成本')
+        inner[id] = { orderIndex: i, isZeroCost }
+      }
+      out[versionId] = inner
+    }
+    return out
   }, [versionLinesSummaryQuery.data])
 
   const moduleStructureByVersion = useMemo(() => {
@@ -2550,6 +2603,7 @@ export default function BundleTemplatesPage() {
                             presetSelectedByIdx,
                             fallbackTokenOverrides,
                             variantTokenOptionsByVersionBaseLine,
+                            baseLineInfoByVersionBaseLine,
                           })
                           return (
                             <Space wrap size={6}>

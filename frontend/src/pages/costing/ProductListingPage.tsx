@@ -81,7 +81,8 @@ type SalesPricingDraft = {
   // 计算模式：
   // - solve: 反推“券后成交价(GMV)”满足目标净利%
   // - diagnose: 给定券后成交价/标价，诊断净利率与成本拆解
-  pricing_mode: 'solve' | 'diagnose'
+  // - target_cost: 给定“券后成交价(GMV)”与目标净利%，反推“允许的最大进厂价/单位成本”（目标成本法）
+  pricing_mode: 'solve' | 'diagnose' | 'target_cost'
   deal_gmv_input: number | null
   list_price_input: number | null
 
@@ -720,8 +721,8 @@ export default function ProductListingPage() {
 
   const salesCalc = useMemo(() => {
     // 进厂价（单位成本，含制造费等）：从 BOM 预演得到
-    const factoryCost = toNumberOrNull(costingSummary?.total_cost)
-    if (factoryCost == null) return null
+    const currentFactoryCost = toNumberOrNull(costingSummary?.total_cost)
+    if (currentFactoryCost == null) return null
 
     // All % are based on GMV (tax-included deal price)
     const targetNp = clamp01(Number(salesDraft.target_net_profit_pct ?? 0) / 100)
@@ -743,13 +744,11 @@ export default function ProductListingPage() {
     // - 应纳增值税：payableVat = max(0, outputVat - inputVatCredit)
     // - 附加税：surcharge = payableVat * surchargeRatio
     const a = vat > 0 ? vat / (1 + vat) : 0
-    const inputVatBaseGoods = factoryCost * a
-    const inputVatCreditGoods = inputVatBaseGoods * inputVatCreditPct
 
     // Returns: value loss approx = return_rate * unsellable_ratio * factoryCost
     const rr = clamp01(Number(salesDraft.return_rate_pct ?? 0) / 100)
     const uns = clamp01(Number(salesDraft.unsellable_ratio_pct ?? 0) / 100)
-    const returnValueLoss = factoryCost * rr * uns
+    const returnValueLossCurrent = currentFactoryCost * rr * uns
 
     const fixedFees =
       Math.max(0, Number(salesDraft.packaging_fee_fixed ?? 0)) +
@@ -762,7 +761,7 @@ export default function ProductListingPage() {
     // - inputVatCredits(GMV) = 进厂价进项抵扣（常数项） + 平台扣点/广告费(6%专票)进项抵扣（随 GMV 线性）
     // 说明：快递费为按件固定金额；支付费视为已包含在平台扣点中，不再单列
     const pctCosts = pf + ad + fixedPct + commission
-    const baseCosts = factoryCost + fixedFees + shippingFeeFixed + returnValueLoss
+    const baseCosts = currentFactoryCost + fixedFees + shippingFeeFixed + returnValueLossCurrent
 
     // 分段闭式解（避免迭代）：
     // - 平台扣点/广告费：按 6% 专票估算可抵扣进项税（默认全额可抵扣，业务确认）
@@ -790,10 +789,12 @@ export default function ProductListingPage() {
       const a2 = a - k
       // - 若 (a2*GMV) <= inputVatCreditGoods，则应纳增值税=0 ⇒ taxTotal=0（税金段为 0）
       // - 若 (a2*GMV) > inputVatCreditGoods，则 taxTotal = ((a2*GMV - inputVatCreditGoods) * (1+surchargeRatio))（线性）
-      const thresholdGmv = a2 > 0 ? inputVatCreditGoods / a2 : 0
+      // 进项可抵扣：从“进厂价（含税）”反推
+      const inputVatCreditGoodsCurrent = currentFactoryCost * a * inputVatCreditPct
+      const thresholdGmv = a2 > 0 ? inputVatCreditGoodsCurrent / a2 : 0
 
       const taxSlope = a2 * (1 + surchargeRatio)
-      const creditAdj = inputVatCreditGoods * (1 + surchargeRatio)
+      const creditAdj = inputVatCreditGoodsCurrent * (1 + surchargeRatio)
       const denomPos = 1 - pctCosts - taxSlope - targetNp
       const solvedPos = denomPos > 0 ? (baseCosts - creditAdj) / denomPos : NaN
 
@@ -805,7 +806,9 @@ export default function ProductListingPage() {
 
     const solvedDealGmv = taxpayerKind === 'small' ? solveSmall() : solveGeneral()
 
-    const isDiagnose = String(salesDraft.pricing_mode) === 'diagnose'
+    const mode = String(salesDraft.pricing_mode) as SalesPricingDraft['pricing_mode']
+    const isDiagnose = mode === 'diagnose'
+    const isTargetCost = mode === 'target_cost'
     const dealInput = toNumberOrNull(salesDraft.deal_gmv_input)
     const listInput = toNumberOrNull(salesDraft.list_price_input)
 
@@ -817,9 +820,19 @@ export default function ProductListingPage() {
     let listDiagnose: number | null = listInput
     if (dealDiagnose == null && listDiagnose != null) dealDiagnose = listDiagnose
     if (dealDiagnose != null && listDiagnose == null) listDiagnose = dealDiagnose
+    // target_cost 复用相同的输入口径（给定市场价）
+    let dealTarget: number | null = dealInput
+    let listTarget: number | null = listInput
+    if (dealTarget == null && listTarget != null) dealTarget = listTarget
+    if (dealTarget != null && listTarget == null) listTarget = dealTarget
 
-    const dealGmv = isDiagnose ? Math.max(0, Number(dealDiagnose ?? 0)) : solvedDealGmv ?? NaN
+    const dealGmv = isTargetCost
+      ? Math.max(0, Number(dealTarget ?? 0))
+      : isDiagnose
+        ? Math.max(0, Number(dealDiagnose ?? 0))
+        : solvedDealGmv ?? NaN
     if (!Number.isFinite(dealGmv) || dealGmv <= 0) {
+      if (isDiagnose || isTargetCost) return { error: '请填写“券后成交价(含税)”或“优惠前标价(含税)”后再计算。' }
       return { error: '无法反推出合理成交价：税率/抵扣/费率组合导致解无效，请调整参数。' }
     }
 
@@ -836,6 +849,7 @@ export default function ProductListingPage() {
     let inputVatCreditAd = 0
     let inputVatCreditTotal = 0
     let payableVat = 0
+    const inputVatCreditGoodsCurrent = currentFactoryCost * a * inputVatCreditPct
 
     if (taxpayerKind === 'small') {
       // 小规模：不抵扣进项
@@ -848,7 +862,7 @@ export default function ProductListingPage() {
       const serviceA = serviceVat > 0 ? serviceVat / (1 + serviceVat) : 0
       inputVatCreditPlatform = platformFee * serviceA
       inputVatCreditAd = adFee * serviceA
-      inputVatCreditTotal = inputVatCreditGoods + inputVatCreditPlatform + inputVatCreditAd
+      inputVatCreditTotal = inputVatCreditGoodsCurrent + inputVatCreditPlatform + inputVatCreditAd
       payableVat = Math.max(0, outputVat - inputVatCreditTotal)
     }
 
@@ -860,33 +874,76 @@ export default function ProductListingPage() {
 
     // 标价：如果有活动折扣（标价 * (1-折扣)=成交价）
     const disc = clamp01(Number(salesDraft.promo_discount_pct ?? 0) / 100)
-    const listPrice = isDiagnose
-      ? Math.max(0, Number(listDiagnose ?? dealGmv))
+    const listPrice = isDiagnose || isTargetCost
+      ? Math.max(0, Number((isTargetCost ? listTarget : listDiagnose) ?? dealGmv))
       : disc > 0
         ? dealGmv / (1 - disc)
         : dealGmv
     const effectiveDiscPct = listPrice > 0 ? ((listPrice - dealGmv) / listPrice) * 100 : disc * 100
 
     // 毛利（不含税口径）：(不含税收入 - 产品成本) / 不含税收入
-    const grossProfitExTax = netRevenue - factoryCost
+    const grossProfitExTax = netRevenue - currentFactoryCost
     const grossMarginExTaxPct = netRevenue > 0 ? (grossProfitExTax / netRevenue) * 100 : 0
 
-    // 实际净利（诊断模式展示）
-    const actualNetProfit =
+    // 实际净利（在给定成交价下，基于“当前进厂价/单位成本”计算）
+    const actualNetProfitCurrent =
       dealGmv -
-      (factoryCost +
+      (currentFactoryCost +
         fixedFees +
-        returnValueLoss +
+        returnValueLossCurrent +
         platformFee +
         adFee +
         commissionFee +
         shippingFee +
         fixedCost +
         taxTotal)
-    const actualNetProfitPct = dealGmv > 0 ? (actualNetProfit / dealGmv) * 100 : 0
+    const actualNetProfitPctCurrent = dealGmv > 0 ? (actualNetProfitCurrent / dealGmv) * 100 : 0
+
+    // 目标成本模式：反推“允许的最大进厂价/单位成本”（满足目标净利%）
+    const solveMaxFactoryCostByDeal = (): number | null => {
+      const deal = dealGmv
+      const target = deal * targetNp
+      const serviceA = serviceVat > 0 ? serviceVat / (1 + serviceVat) : 0
+      const platformVatCredit = taxpayerKind === 'small' ? 0 : platformFee * serviceA
+      const adVatCredit = taxpayerKind === 'small' ? 0 : adFee * serviceA
+
+      const profitGivenCost = (factoryCost: number) => {
+        const returnLoss = factoryCost * rr * uns
+        const inputVatCreditGoods = taxpayerKind === 'small' ? 0 : factoryCost * a * inputVatCreditPct
+        const inputVatTotal = inputVatCreditGoods + platformVatCredit + adVatCredit
+        const payable = taxpayerKind === 'small' ? outputVat : Math.max(0, outputVat - inputVatTotal)
+        const tax = payable * (1 + surchargeRatio)
+        return deal - (factoryCost + fixedFees + returnLoss + platformFee + adFee + commissionFee + shippingFee + fixedCost + tax)
+      }
+
+      // f(cost)=profit(cost)-target，求 f=0 的根（最大可承受成本）
+      const f = (c: number) => profitGivenCost(c) - target
+      const f0 = f(0)
+      if (!(f0 >= 0)) return null // 即使成本=0也达不到目标净利
+
+      let lo = 0
+      let hi = Math.max(1, currentFactoryCost * 2, deal * 2)
+      // 扩展上界直到 f(hi) <= 0
+      for (let i = 0; i < 20 && f(hi) > 0; i++) hi = hi * 1.8
+      if (f(hi) > 0) return hi // 极端情况下仍满足目标（返回一个较大值作为上限）
+
+      for (let i = 0; i < 60; i++) {
+        const mid = (lo + hi) / 2
+        if (f(mid) >= 0) lo = mid
+        else hi = mid
+      }
+      return lo
+    }
+
+    const targetFactoryCostMax = isTargetCost ? solveMaxFactoryCostByDeal() : null
+    const targetCostGap =
+      isTargetCost && targetFactoryCostMax != null ? Math.max(0, currentFactoryCost - targetFactoryCostMax) : null
+    const targetCostGapPct =
+      isTargetCost && targetFactoryCostMax != null && currentFactoryCost > 0 ? (targetCostGap! / currentFactoryCost) * 100 : null
 
     return {
-      factory_cost: factoryCost,
+      pricing_mode: mode,
+      factory_cost: currentFactoryCost,
       deal_gmv: dealGmv,
       list_price: listPrice,
       promo_discount_pct: effectiveDiscPct,
@@ -894,7 +951,7 @@ export default function ProductListingPage() {
       net_revenue_ex_tax: netRevenue,
       vat_output: outputVat,
       input_vat_credit: inputVatCreditTotal,
-      input_vat_credit_goods: inputVatCreditGoods,
+      input_vat_credit_goods: inputVatCreditGoodsCurrent,
       input_vat_credit_platform: inputVatCreditPlatform,
       input_vat_credit_ad: inputVatCreditAd,
       payable_vat: payableVat,
@@ -908,13 +965,18 @@ export default function ProductListingPage() {
       shipping_fee: shippingFee,
       fixed_cost: fixedCost,
       fixed_fees: fixedFees,
-      return_value_loss: returnValueLoss,
+      return_value_loss: returnValueLossCurrent,
 
       target_net_profit: targetNetProfit,
       target_net_profit_pct: targetNp * 100,
       gross_margin_ex_tax_pct: grossMarginExTaxPct,
-      actual_net_profit: actualNetProfit,
-      actual_net_profit_pct: actualNetProfitPct,
+      actual_net_profit: actualNetProfitCurrent,
+      actual_net_profit_pct: actualNetProfitPctCurrent,
+
+      // 目标成本模式输出（允许成本与降本缺口）
+      target_factory_cost_max: targetFactoryCostMax,
+      target_cost_gap: targetCostGap,
+      target_cost_gap_pct: targetCostGapPct,
 
       pct_platform: pf * 100,
       pct_ad: ad * 100,
@@ -1290,18 +1352,19 @@ export default function ProductListingPage() {
                             options={[
                               { label: '反推售价（满足目标净利%）', value: 'solve' },
                               { label: '利润诊断（按券后价/标价）', value: 'diagnose' },
+                              { label: '目标成本（给定市场售价）', value: 'target_cost' },
                             ]}
                             optionType="button"
                             buttonStyle="solid"
                           />
-                          {salesDraft.pricing_mode === 'diagnose' ? (
+                          {salesDraft.pricing_mode === 'diagnose' || salesDraft.pricing_mode === 'target_cost' ? (
                             <Space wrap>
                               <InputNumber
                                 addonBefore="券后成交价(含税)"
                                 min={0}
                                 precision={2}
                                 value={salesDraft.deal_gmv_input}
-                                placeholder="必填（或仅填券前）"
+                                placeholder={salesDraft.pricing_mode === 'target_cost' ? '必填（市场到手价）' : '必填（或仅填券前）'}
                                 onChange={(v) => setSalesDraft((d) => ({ ...d, deal_gmv_input: v == null ? null : Number(v) }))}
                               />
                               <InputNumber
@@ -1834,7 +1897,7 @@ export default function ProductListingPage() {
                       <Descriptions.Item label="退货价值损失(元)">{formatMoney2((salesCalc as any).return_value_loss)}</Descriptions.Item>
                       <Descriptions.Item label="目标净利(元)">{formatMoney2((salesCalc as any).target_net_profit)}</Descriptions.Item>
                       <Descriptions.Item label="目标净利%(含税)">{String(Number((salesCalc as any).target_net_profit_pct ?? 0).toFixed(2))}%</Descriptions.Item>
-                      {salesDraft.pricing_mode === 'diagnose' ? (
+                      {salesDraft.pricing_mode === 'diagnose' || salesDraft.pricing_mode === 'target_cost' ? (
                         <>
                           <Descriptions.Item label="实际净利(元)">
                             <b>{formatMoney2((salesCalc as any).actual_net_profit)}</b>
@@ -1842,15 +1905,36 @@ export default function ProductListingPage() {
                           <Descriptions.Item label="实际净利%(含税)">
                             <b>{String(Number((salesCalc as any).actual_net_profit_pct ?? 0).toFixed(2))}%</b>
                           </Descriptions.Item>
+                          {salesDraft.pricing_mode === 'target_cost' ? (
+                            <>
+                              <Descriptions.Item label="可承受进厂价(元)">
+                                <b>{formatMoney2((salesCalc as any).target_factory_cost_max)}</b>
+                              </Descriptions.Item>
+                              <Descriptions.Item label="需降本(元)">
+                                <b>{formatMoney2((salesCalc as any).target_cost_gap)}</b>
+                              </Descriptions.Item>
+                              <Descriptions.Item label="需降本%（相对当前）">
+                                <b>{String(Number((salesCalc as any).target_cost_gap_pct ?? 0).toFixed(2))}%</b>
+                              </Descriptions.Item>
+                            </>
+                          ) : null}
                           <Descriptions.Item label="提示">
-                            <Text type="secondary">诊断模式：净利=GMV-所有成本项合计（含税金与退货价值损失）。</Text>
+                            <Text type="secondary">
+                              {salesDraft.pricing_mode === 'diagnose'
+                                ? '诊断模式：净利=GMV-所有成本项合计（含税金与退货价值损失）。'
+                                : '目标成本模式：给定市场价，反推“允许的最大进厂价/单位成本”（满足目标净利%）；对比当前进厂价给出需降本缺口。'}
+                            </Text>
                           </Descriptions.Item>
                         </>
                       ) : null}
                     </Descriptions>
                     <Divider style={{ margin: '10px 0' }} />
                     <Text type="secondary">
-                      反推公式：GMV = (产品成本 + 快递费(元) + 固定费用 + 退货价值损失) / (1 − 平台费% − 广告费% − 销售提成% − 固定成本% − 税金等效% − 目标净利%)
+                      {salesDraft.pricing_mode === 'solve'
+                        ? '反推公式：GMV = (产品成本 + 快递费(元) + 固定费用 + 退货价值损失) / (1 − 平台费% − 广告费% − 销售提成% − 固定成本% − 税金等效% − 目标净利%)'
+                        : salesDraft.pricing_mode === 'target_cost'
+                          ? '目标成本：在给定 GMV 下，反推“允许的最大进厂价/单位成本”，使净利满足目标净利%。'
+                          : '诊断：在给定 GMV 下，计算各成本项与净利率。'}
                     </Text>
                     <div style={{ marginTop: 6 }}>
                       <Text type="secondary">

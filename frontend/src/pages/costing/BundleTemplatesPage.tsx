@@ -756,7 +756,6 @@ export default function BundleTemplatesPage() {
       const w = Number(rr?.width_cm ?? 0)
       const h = Number(rr?.height_cm ?? 0)
       const forceMap = (rr?.force_variant_by_base_line ?? {}) as any
-      const isForce = Array.isArray(rr?.tokens) && rr.tokens.length > 0
       let okThisComp = true
 
       if (!versionId) {
@@ -796,6 +795,16 @@ export default function BundleTemplatesPage() {
       const variantsById = new Map<string, any>()
       for (const v of variants) if (v?.id) variantsById.set(String(v.id), v)
 
+      const injectedFromSpec = String(rr?.spec_text ?? '')
+        .split(/[，,、\n\r\t ]+/g)
+        .map((x) => String(x).trim())
+        .filter(Boolean)
+      const injectedFromTokens = Array.isArray(rr?.tokens) ? (rr.tokens as any[]).map((x) => String(x).trim()).filter(Boolean) : []
+      const injectedAll = new Set<string>([...injectedFromSpec, ...injectedFromTokens])
+      const forceMapForComp =
+        rr?.force_variant_by_base_line && typeof rr.force_variant_by_base_line === 'object' ? (rr.force_variant_by_base_line as any) : {}
+      const hasForce = Object.keys(forceMapForComp ?? {}).length > 0
+
       for (const [baseLineId, s] of Object.entries(sel)) {
         const parentId = String(s?.parent_variant_id ?? '').trim()
         if (!parentId) continue
@@ -815,7 +824,7 @@ export default function BundleTemplatesPage() {
         const children = variants.filter((x: any) => String(x?.metadata?.parent_variant_id ?? '').trim() === parentId)
         const hasChild = children.length > 0
         const forcedChildId = String(s?.forced_child_variant_id ?? '').trim()
-        if (isForce && hasChild && !forcedChildId) {
+        if (hasForce && hasChild && !forcedChildId) {
           okThisComp = false
           baseLineOk[baseKey] = false
           issues.push({ level: 'error', message: `组件${cIdx + 1}：物料行「${baseName}」强制模式下必须选择 1 条子条件` })
@@ -823,7 +832,7 @@ export default function BundleTemplatesPage() {
         }
 
         // 强制映射存在性（前端已写入 rr.force_variant_by_base_line；这里再确认）
-        if (isForce) {
+        if (hasForce) {
           const forcedVariantId = String(forceMap?.[String(baseLineId)] ?? '').trim()
           if (!forcedVariantId) {
             okThisComp = false
@@ -837,6 +846,36 @@ export default function BundleTemplatesPage() {
             issues.push({ level: 'error', message: `组件${cIdx + 1}：物料行「${baseName}」强制规则已不存在/已变更（请重新筛选）` })
             continue
           }
+        }
+      }
+
+      // 风险提示：若该版本存在依赖 TOKEN 的变体规则，但当前组件未写入触发词且也未强制指定，则可能仍需要运营在规格里写词
+      if (!hasForce && injectedAll.size === 0) {
+        const tokenVariants = variants.filter((v: any) => {
+          const cond = (v?.conditions ?? {}) as any
+          const anyTokens = Array.isArray(cond?.spec_contains_any) ? cond.spec_contains_any : []
+          const allTokens = Array.isArray(cond?.spec_contains_all) ? cond.spec_contains_all : []
+          return [...anyTokens, ...allTokens].some((x) => {
+            const s = String(x ?? '').trim()
+            if (!s) return false
+            const up = s.toUpperCase()
+            if (up.startsWith('MODEL:') || up.startsWith('M:') || up.startsWith('BOUND_VERSION:') || up.startsWith('SKU:')) return false
+            return true
+          })
+        })
+        if (tokenVariants.length) {
+          const sampleTokens = new Set<string>()
+          for (const v of tokenVariants.slice(0, 6)) {
+            for (const t of extractTokensForVariant(v)) {
+              const s = String(t).trim()
+              if (!s) continue
+              sampleTokens.add(s.includes(':') ? String(s.split(':', 2)[1] ?? s).trim() || s : s)
+            }
+          }
+          issues.push({
+            level: 'warn',
+            message: `组件${cIdx + 1}：该版本存在需要触发词的变体规则（例如：${Array.from(sampleTokens).slice(0, 4).join('、') || '材质类词'}）。当前未写入触发词且未强制指定，可能仍依赖运营在规格里写词（不推荐）。`,
+          })
         }
       }
 
@@ -961,7 +1000,18 @@ export default function BundleTemplatesPage() {
       }
       const v = variants.find((x: any) => String(x?.id) === String(pickId))
       if (!v) continue
-      for (const t of extractTokensForVariant(v)) tokenSet.add(t)
+      // Normalize tokens:
+      // - keep original token (e.g. 材质:雪尼尔)
+      // - also add value-only token (e.g. 雪尼尔) to reduce coupling to tokenizer/legacy rules
+      for (const t of extractTokensForVariant(v)) {
+        const s = String(t ?? '').trim()
+        if (!s) continue
+        tokenSet.add(s)
+        if (s.includes(':')) {
+          const vOnly = String(s.split(':', 2)[1] ?? '').trim()
+          if (vOnly) tokenSet.add(vOnly)
+        }
+      }
     }
     const tokens = Array.from(tokenSet)
     const nextText = tokens.join('，')
@@ -993,9 +1043,17 @@ export default function BundleTemplatesPage() {
       ),
     )
     if (presetApplyMode === 'force') {
-      message.success(tokens.length ? `已指定（强制命中）：${tokens.join('、')}` : '所选规则不包含 TOKEN，无法通过“指定(强制)”实现（请改为变体解析或补 TOKEN 条件）')
+      message.success(
+        tokens.length
+          ? `已指定（强制命中）：${tokens.join('、')}（写入模板组件，运营无需在规格中输入）`
+          : '所选规则不包含 TOKEN，无法通过“指定(强制)”实现（请改为变体解析或补 TOKEN 条件）',
+      )
     } else {
-      message.success(tokens.length ? `已填充触发词：${tokens.join('、')}` : '所选变体不依赖 TOKEN 触发词（仅尺寸/面积/周长条件等）')
+      message.success(
+        tokens.length
+          ? `已填充触发词：${tokens.join('、')}（写入模板组件，运营无需在规格中输入）`
+          : '所选变体不依赖 TOKEN 触发词（仅尺寸/面积/周长条件等）',
+      )
     }
     setPresetModalOpen(false)
   }
@@ -2134,9 +2192,19 @@ export default function BundleTemplatesPage() {
                           const k = `${idx}:${mi}`
                           const sel = (presetSelectedByIdx[k] ?? {}) as Record<string, VariantPresetSelection>
                           const selectedEntries = Object.entries(sel).filter(([, v]) => !!String(v?.parent_variant_id ?? '').trim())
-                          if (!versionId || !selectedEntries.length) return null
-                          const injectedTokens = Array.isArray(rr?.tokens) ? (rr.tokens as any[]).map((x) => String(x).trim()).filter(Boolean) : []
-                          const isForce = injectedTokens.length > 0
+                          if (!versionId) return null
+
+                          const injectedFromSpec = String(rr?.spec_text ?? '')
+                            .split(/[，,、\n\r\t ]+/g)
+                            .map((x) => String(x).trim())
+                            .filter(Boolean)
+                          const injectedFromTokens = Array.isArray(rr?.tokens)
+                            ? (rr.tokens as any[]).map((x) => String(x).trim()).filter(Boolean)
+                            : []
+                          const injectedAll = Array.from(new Set([...injectedFromSpec, ...injectedFromTokens]))
+
+                          const forceMap = rr?.force_variant_by_base_line && typeof rr.force_variant_by_base_line === 'object' ? rr.force_variant_by_base_line : {}
+                          const isForce = Object.keys(forceMap ?? {}).length > 0
 
                           const variantsForVersion = ((variantsSummaryQuery.data ?? []) as any[]).find(
                             (x: any) => String(x?.version_id ?? '') === versionId,
@@ -2175,6 +2243,39 @@ export default function BundleTemplatesPage() {
 
                           return (
                             <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                              <Alert
+                                type={injectedAll.length ? 'success' : 'warning'}
+                                showIcon
+                                message={
+                                  injectedAll.length
+                                    ? '该组件已写入触发词（运营只需 B-XXXXAA，无需在规格里再输入“雪尼尔/棉麻布”等）'
+                                    : '该组件未写入触发词：若该版本存在“材质/面料”等TOKEN变体规则，可能仍依赖运营在规格里写词（不推荐）'
+                                }
+                                description={
+                                  injectedAll.length ? (
+                                    <Space wrap size={6}>
+                                      <Text type="secondary">已注入：</Text>
+                                      {injectedAll.slice(0, 12).map((t) => (
+                                        <Tag key={`inj-${k}-${t}`} color="green">
+                                          {t}
+                                        </Tag>
+                                      ))}
+                                      {injectedAll.length > 12 ? <Text type="secondary">…</Text> : null}
+                                    </Space>
+                                  ) : (
+                                    <Text type="secondary">
+                                      建议：点“筛选 → 变体（解析命中）”让系统把触发词写入模板组件；或用“指定（强制命中）”把规则钉死。
+                                    </Text>
+                                  )
+                                }
+                              />
+
+                              {!selectedEntries.length ? (
+                                <Text type="secondary">
+                                  当前未为任何物料行选择变体规则（仅靠自然命中）。若你们约定“运营只用 B-XXXXAA 不写词”，建议至少对“面料/材质”
+                                  等关键行做一次筛选并写入触发词或强制命中。
+                                </Text>
+                              ) : null}
                               {/* 默认兜底：第一条与其它行同格式（TOKEN 可输入，兜底物料原名只读） */}
                               {!isForce ? (() => {
                                 const seen = new Set<string>()

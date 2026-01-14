@@ -1974,8 +1974,8 @@ export default function ProductListingPage() {
                         </Descriptions.Item>
                         <Descriptions.Item label="物料成本（CNY）">{formatMoney2(costingSummary?.material_cost_total)}</Descriptions.Item>
                         <Descriptions.Item label="工序成本（CNY）">{formatMoney2(costingSummary?.process_cost_total)}</Descriptions.Item>
-                        <Descriptions.Item label="制造费用（CNY，30%）">{formatMoney2(costingSummary?.overhead_cost)}</Descriptions.Item>
-                        <Descriptions.Item label="制造费率">{costingSummary ? '30%' : '-'}</Descriptions.Item>
+                        <Descriptions.Item label="制造费用（CNY，约23%）">{formatMoney2(costingSummary?.overhead_cost)}</Descriptions.Item>
+                        <Descriptions.Item label="制造费率（计算口径）">{costingSummary ? '30%（折算合计≈23%）' : '-'}</Descriptions.Item>
                         <Descriptions.Item label="单位成本（CNY/件）">{formatMoney2(costingSummary?.unit_cost)}</Descriptions.Item>
                         <Descriptions.Item label="已计价物料行">{String(costingSummary?.priced_material_lines ?? '-')}</Descriptions.Item>
                         <Descriptions.Item label="缺物料单价行">{String(costingSummary?.missing_price_material_lines ?? '-')}</Descriptions.Item>

@@ -1,5 +1,17 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-14（套装模板：编辑页增强“保存前强校验 + 预演debug”以降低误用风险）
+  - 产物（前端）：
+    - `/costing/bundle-templates`（套装模板）编辑抽屉：
+      - “保存当前短语”新增**全局保存前校验**：启用的短语必须有备注（phrase）且至少1条完整组件行，避免保存后不可用/不敢用
+      - “短语生成器”新增**预演（debug）**：一键调用后端 `/bom/generate-by-spec-debug`，并在 Drawer 展示输入 spec_text 与返回 JSON，便于核对 selector/强制命中/变体命中是否稳定
+  - 说明（当前理解的关键边界）：
+    - **纯编码**：`B:CODE` / `B-XXXX` 只负责定位套装模板；不保证变体命中稳定
+    - **selector**：`B:CODE:AA` / `B-XXXXAA` 可强制选择某条 phrase_preset（推荐），从而注入 tokens 或直接使用 preset.components（更稳定）
+    - **强制命中**：`force_variant_by_base_line` 会在后端以 `reason=forced_by_bundle` 记录命中；当变体规则变更/失效时会报错，需重新筛选保存
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-14（测试台：新增“店铺预演”TAB（店铺独立核算/组合模型））
   - 产物（前端）：
     - `/costing/product-listing` 左侧 Tabs 新增：**店铺预演**

@@ -39,6 +39,7 @@ import {
   cloneBundleTemplate,
   createBundleTemplate,
   fetchBundleTemplates,
+  generateBomBySpecDebug,
   fetchProcessModule,
   fetchProductModelVersionLines,
   fetchProductModelVersions,
@@ -228,6 +229,26 @@ export default function BundleTemplatesPage() {
     // base_line_key = `${presetIndex}:${componentIndex}:${baseLineId}`
     baseLineOk: Record<string, boolean>
   } | null>(null)
+
+  // 预演（后端 debug）：用“短语生成器”的输出直接调用 /bom/generate-by-spec-debug
+  const [bundlePreviewOpen, setBundlePreviewOpen] = useState(false)
+  const [bundlePreviewSpecText, setBundlePreviewSpecText] = useState<string>('')
+  const [bundlePreviewData, setBundlePreviewData] = useState<any | null>(null)
+  const [bundlePreviewGeneratingSelector, setBundlePreviewGeneratingSelector] = useState<string | null>(null)
+
+  const bundlePreviewMutation = useMutation({
+    mutationFn: async (args: { selector: string; spec_text: string }) => {
+      setBundlePreviewGeneratingSelector(args.selector)
+      const res = await generateBomBySpecDebug({ spec_text: args.spec_text })
+      return res
+    },
+    onSuccess: (res: any) => {
+      setBundlePreviewData(res)
+      setBundlePreviewOpen(true)
+    },
+    onError: (e: any) => message.error(String(e?.message ?? e)),
+    onSettled: () => setBundlePreviewGeneratingSelector(null),
+  })
 
   const selectedVersionIds = useMemo(() => {
     const ids = new Set<string>()
@@ -1192,6 +1213,26 @@ export default function BundleTemplatesPage() {
     onError: (e: any) => message.error(String(e?.message ?? e)),
   })
 
+  const validateAllEnabledPresetsBeforeSave = (): { ok: boolean; issues: { level: 'error' | 'warn'; message: string }[] } => {
+    const issues: { level: 'error' | 'warn'; message: string }[] = []
+    const presets = phrasePresets ?? []
+    for (let pIdx = 0; pIdx < presets.length; pIdx++) {
+      const p = presets[pIdx] as any
+      const selector = String(p?.selector ?? '').trim().toUpperCase() || `#${pIdx + 1}`
+      if (p?.enabled === false) continue
+      const rows = Array.isArray(p?.components) ? p.components : []
+      const valid = rows.filter((c: any) => String(c?.model_version_id ?? '').trim() && Number(c?.width_cm) > 0 && Number(c?.height_cm) > 0 && Number(c?.quantity) > 0)
+      if (!String(p?.phrase ?? '').trim()) {
+        issues.push({ level: 'error', message: `短语 ${selector}：短语备注不能为空（用于识别/管理）` })
+      }
+      if (!valid.length) {
+        issues.push({ level: 'error', message: `短语 ${selector}：至少需要 1 条完整组件行（模型/宽/高/数量）` })
+      }
+    }
+    const hasError = issues.some((x) => x.level === 'error')
+    return { ok: !hasError, issues }
+  }
+
   const cloneMutation = useMutation({
     mutationFn: async (row: any) => cloneBundleTemplate(String(row?.id), {}),
     onSuccess: () => {
@@ -1231,6 +1272,28 @@ export default function BundleTemplatesPage() {
 
   return (
     <div style={{ padding: 16 }}>
+      <Drawer
+        open={bundlePreviewOpen}
+        onClose={() => setBundlePreviewOpen(false)}
+        width={980}
+        destroyOnClose
+        title="套装预演结果（debug）"
+      >
+        <Space direction="vertical" style={{ width: '100%' }} size={10}>
+          <Alert
+            type="info"
+            showIcon
+            message="说明：该预演直接调用后端 /bom/generate-by-spec-debug，可用于验证“短码/selector/强制命中”是否稳定。"
+            description="建议：对关键套装模板，在修改变体规则或短语预设后先预演；若出现 forced_by_bundle 相关报错，说明强制规则已失效，需要重新筛选/保存。"
+          />
+          <Card size="small" title="本次预演输入（spec_text）">
+            <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{bundlePreviewSpecText || '-'}</pre>
+          </Card>
+          <Card size="small" title="预演输出（JSON）">
+            <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(bundlePreviewData ?? {}, null, 2)}</pre>
+          </Card>
+        </Space>
+      </Drawer>
       <Modal
         open={presetModalOpen}
         title="预设变体筛选（按物料行选择变体规则 → 一键填充触发词）"
@@ -1974,9 +2037,31 @@ export default function BundleTemplatesPage() {
                             type="primary"
                             loading={saveMutation.isPending}
                             onClick={() => {
+                              // 强校验：避免“保存了但不敢用/容易出问题”
                               const v = validateActivePreset()
                               if (!v.ok) {
                                 message.warning(v.reason || '请完善当前短语')
+                                return
+                              }
+                              // 额外：全局校验（启用的短语必须有备注与至少1条组件行）
+                              const vv = validateAllEnabledPresetsBeforeSave()
+                              if (!vv.ok) {
+                                Modal.error({
+                                  title: '保存前校验未通过',
+                                  content: (
+                                    <div>
+                                      <Text type="danger">存在必填项缺失，建议先补齐再保存：</Text>
+                                      <div style={{ marginTop: 8 }}>
+                                        {vv.issues.slice(0, 8).map((it, i2) => (
+                                          <div key={`v-iss-${i2}`}>
+                                            <Text type={it.level === 'error' ? 'danger' : 'secondary'}>{it.message}</Text>
+                                          </div>
+                                        ))}
+                                        {vv.issues.length > 8 ? <Text type="secondary">…还有 {vv.issues.length - 8} 条</Text> : null}
+                                      </div>
+                                    </div>
+                                  ),
+                                })
                                 return
                               }
                               saveMutation.mutate()
@@ -2019,6 +2104,13 @@ export default function BundleTemplatesPage() {
                         phrasePresets={phrasePresets as any}
                         activeSelector={selector}
                         defaultOpen={false}
+                        showGenerateBom
+                        generateBomLoading={bundlePreviewMutation.isPending}
+                        generatingSelector={bundlePreviewGeneratingSelector}
+                        onGenerateBom={(args) => {
+                          setBundlePreviewSpecText(args.output)
+                          bundlePreviewMutation.mutate({ selector: String(args.selector), spec_text: String(args.output) })
+                        }}
                       />
                       {disabled ? (
                         <Alert

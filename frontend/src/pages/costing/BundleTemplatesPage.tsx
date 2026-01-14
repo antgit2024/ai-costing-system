@@ -206,9 +206,15 @@ const buildAttributeFormula = (args: {
     // - 可选项来自该 base_line_id 关联的变体规则中出现过的 TOKEN（extractTokensForVariant）
     // - 多个 base_line_id 若“选项集”完全相同，则合并为同一个互斥组（用于表达“同一个TOKEN可替换多处”）
     const rawBaseLineIds: string[] = []
-    for (const baseLineId of Object.keys(sel ?? {})) {
+    // 关键口径：公式仅基于“已筛选/已强制”的基准行（base_line_id）。
+    // 若用户未筛选（parent/forced 均为空），不应生成该互斥组（尤其是兜底-零成本的 {} 分支）。
+    for (const [baseLineId, v] of Object.entries(sel ?? {})) {
       const id = String(baseLineId ?? '').trim()
-      if (id) rawBaseLineIds.push(id)
+      if (!id) continue
+      const parent = String((v as any)?.parent_variant_id ?? '').trim()
+      const forced = String((v as any)?.forced_child_variant_id ?? '').trim()
+      if (!parent && !forced) continue
+      rawBaseLineIds.push(id)
     }
     const fm = rr?.force_variant_by_base_line && typeof rr.force_variant_by_base_line === 'object' ? rr.force_variant_by_base_line : {}
     for (const baseLineId of Object.keys(fm ?? {})) {

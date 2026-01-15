@@ -186,6 +186,15 @@ const formatTokenBrace = (token: string): string => {
 type AttributeGroup = { key: string; options: string[]; isZeroCostGroup: boolean }
 type AttributeComponentGroups = { componentIndex: number; groups: AttributeGroup[] }
 
+const formatCm = (n: any): string => {
+  const v = Number(n)
+  if (!Number.isFinite(v)) return '0'
+  const rounded = Math.round(v * 100) / 100
+  const s = String(rounded)
+  // avoid trailing .0/.00
+  return s.includes('.') ? s.replace(/\.?0+$/, '') : s
+}
+
 const buildAttributeFormulaAndGroups = (args: {
   presetIndex: number
   componentRows: any[]
@@ -295,10 +304,11 @@ const buildAttributeFormulaAndGroups = (args: {
       .map((g) => `[${g.options.map((t) => formatTokenBrace(t)).join('')}]`)
       .join('')
 
-    if (componentFormula) parts.push(componentFormula)
+    const dims = `${formatCm(rr?.width_cm)}*${formatCm(rr?.height_cm)}*${formatCm(rr?.quantity ?? 1)}`
+    if (componentFormula) parts.push(`${componentFormula}${dims}`)
     if (groupsInOrder.length) components.push({ componentIndex: cIdx, groups: groupsInOrder })
   }
-  return { formula: parts.join('+'), components }
+  return { formula: parts.join(' + '), components }
 }
 
 const copyTextToClipboard = async (text: string) => {
@@ -1533,6 +1543,39 @@ export default function BundleTemplatesPage() {
     else if (activePresetIndex >= len) setActivePresetIndex(len - 1)
   }, [activePresetIndex, phrasePresets])
 
+  const activePresetAttributeBuilt = useMemo(() => {
+    const p = phrasePresets?.[activePresetIndex] as any
+    if (!p) return null
+    if (String(p?.mode ?? 'parse') === 'force') return null
+    const rows = Array.isArray(p?.components) ? (p.components as any[]) : []
+    return buildAttributeFormulaAndGroups({
+      presetIndex: activePresetIndex,
+      componentRows: rows,
+      presetSelectedByIdx,
+      fallbackTokenOverrides,
+      variantTokenOptionsByVersionBaseLine,
+      baseLineInfoByVersionBaseLine,
+    })
+  }, [
+    activePresetIndex,
+    phrasePresets,
+    presetSelectedByIdx,
+    fallbackTokenOverrides,
+    variantTokenOptionsByVersionBaseLine,
+    baseLineInfoByVersionBaseLine,
+  ])
+
+  useEffect(() => {
+    // 解析型：若属性名称/公式为空，则自动写入生成的属性公式（可手改，不会覆盖已有内容）
+    const built = activePresetAttributeBuilt
+    if (!built?.formula) return
+    const p = phrasePresets?.[activePresetIndex] as any
+    if (!p) return
+    if (String(p?.mode ?? 'parse') === 'force') return
+    if (String(p?.phrase ?? '').trim()) return
+    setPhrasePresets((prev) => (prev ?? []).map((x, i) => (i === activePresetIndex ? { ...x, phrase: built.formula } : x)))
+  }, [activePresetAttributeBuilt, activePresetIndex, phrasePresets])
+
   const addPhrasePreset = () => {
     setPhrasePresets((prev) => {
       const used = new Set((prev ?? []).map((x: any) => String(x?.selector ?? '').trim().toUpperCase()).filter(Boolean))
@@ -2559,7 +2602,11 @@ export default function BundleTemplatesPage() {
                         />
                       ) : null}
                       <Input
-                        placeholder="属性备注（黑色可编辑，可选）：例如 黄金绒双面30X50+PP棉枕芯"
+                        placeholder={
+                          String((r as any)?.mode ?? 'parse') === 'force'
+                            ? '属性备注（可选）：例如 黄金绒双面30X50+PP棉枕芯'
+                            : '属性名称/公式（解析型，默认自动生成，可编辑）：例如 [{黄金绒}{雪尼尔}]30*50*1 + [{PP}{羽丝绒}]45*45*1'
+                        }
                         disabled={disabled}
                         value={String(r?.phrase ?? '')}
                         onChange={(e) =>
@@ -2627,66 +2674,93 @@ export default function BundleTemplatesPage() {
                                 <Space direction="vertical" size={6}>
                                   <Space wrap size={6}>
                                     <Text type="secondary">属性公式：</Text>
-                                    <Text code style={{ maxWidth: 520, overflow: 'hidden', textOverflow: 'ellipsis' }} title={formula || ''}>
-                                      {formula || '-'}
-                                    </Text>
+                                    <Text type="secondary">已写入上方“属性名称/公式”输入框（可编辑）</Text>
                                     <Button
                                       size="small"
                                       icon={<CopyOutlined />}
-                                      disabled={!formula}
+                                      disabled={!String(r?.phrase ?? '').trim()}
                                       onClick={async () => {
-                                        const ok = await copyTextToClipboard(formula)
+                                        const ok = await copyTextToClipboard(String(r?.phrase ?? '').trim())
                                         if (ok) message.success('已复制属性公式')
                                         else message.error('复制失败：请手动复制')
                                       }}
                                     >
                                       复制公式
                                     </Button>
+                                    <Button
+                                      size="small"
+                                      onClick={() => {
+                                        if (!formula) {
+                                          message.warning('暂无可生成的属性公式（请先筛选/强制）')
+                                          return
+                                        }
+                                        setPhrasePresets((prev) => (prev ?? []).map((x, i) => (i === idx ? { ...x, phrase: formula } : x)))
+                                        message.success('已写入属性公式到输入框')
+                                      }}
+                                    >
+                                      重新生成
+                                    </Button>
                                   </Space>
 
-                                  {/* 互斥组下拉（解析型专用）：每组一个单选 Select */}
+                                  {/* 互斥组下拉（解析型专用）：每组一个单选 Select；按组件显示 */}
                                   {components.length ? (
-                                    <Space wrap size={10}>
-                                      {components.flatMap((c) =>
-                                        c.groups.map((g, gi) => {
-                                          const selKey = `${idx}:${c.componentIndex}:${g.key}`
-                                          const options = (g.options ?? []).map((x) => normalizeSingleToken(x))
-                                          const uniq: string[] = []
-                                          const seen = new Set<string>()
-                                          for (const t of options) {
-                                            const k = t || '__EMPTY__'
-                                            if (seen.has(k)) continue
-                                            seen.add(k)
-                                            uniq.push(t)
-                                          }
-                                          // 默认值：zero-cost 互斥组默认空；否则默认第一个非空项（兜底token优先）
-                                          const defaultValue = g.isZeroCostGroup
-                                            ? ''
-                                            : (uniq.find((x) => !!String(x).trim()) ?? '')
-                                          const value = Object.prototype.hasOwnProperty.call(attributeGroupSelections, selKey)
-                                            ? String(attributeGroupSelections[selKey] ?? '')
-                                            : defaultValue
-                                          return (
-                                            <Space key={`attr-sel-${selKey}`} size={6}>
-                                              <Text type="secondary">{`组${gi + 1}`}</Text>
-                                              <Select
-                                                size="small"
-                                                style={{ width: 160 }}
-                                                value={value}
-                                                onChange={(v) =>
-                                                  setAttributeGroupSelections((prev) => ({
-                                                    ...(prev ?? {}),
-                                                    [selKey]: String(v ?? ''),
-                                                  }))
-                                                }
-                                                options={uniq
-                                                  .filter((x) => (g.isZeroCostGroup ? true : !!String(x).trim()))
-                                                  .map((t) => ({ value: t, label: t ? t : '（无）' }))}
-                                              />
-                                            </Space>
-                                          )
-                                        }),
-                                      )}
+                                    <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                                      <style>{`
+                                        .bt-model-pill {
+                                          display: inline-flex;
+                                          align-items: center;
+                                          padding: 2px 8px;
+                                          border-radius: 999px;
+                                          font-weight: 700;
+                                          background: rgba(22,119,255,0.12);
+                                          border: 1px solid rgba(22,119,255,0.35);
+                                          color: #0958d9;
+                                          line-height: 22px;
+                                        }
+                                      `}</style>
+                                      {components.map((c) => {
+                                        const versionId = String((rows?.[c.componentIndex] as any)?.model_version_id ?? '').trim()
+                                        const label = versionId ? String(versionIdToModelLabel.get(versionId) ?? '') : ''
+                                        const modelCode = label.includes(':') ? label.split(':')[0] : label
+                                        return (
+                                          <Space key={`attr-comp-${idx}-${c.componentIndex}`} wrap size={8}>
+                                            <span className="bt-model-pill">{modelCode || '组件'}</span>
+                                            {c.groups.map((g) => {
+                                              const selKey = `${idx}:${c.componentIndex}:${g.key}`
+                                              const options = (g.options ?? []).map((x) => normalizeSingleToken(x))
+                                              const uniq: string[] = []
+                                              const seen = new Set<string>()
+                                              for (const t of options) {
+                                                const k = t || '__EMPTY__'
+                                                if (seen.has(k)) continue
+                                                seen.add(k)
+                                                uniq.push(t)
+                                              }
+                                              const defaultValue = g.isZeroCostGroup ? '' : (uniq.find((x) => !!String(x).trim()) ?? '')
+                                              const value = Object.prototype.hasOwnProperty.call(attributeGroupSelections, selKey)
+                                                ? String(attributeGroupSelections[selKey] ?? '')
+                                                : defaultValue
+                                              return (
+                                                <Select
+                                                  key={`attr-sel-${selKey}`}
+                                                  size="small"
+                                                  style={{ width: 160 }}
+                                                  value={value}
+                                                  onChange={(v) =>
+                                                    setAttributeGroupSelections((prev) => ({
+                                                      ...(prev ?? {}),
+                                                      [selKey]: String(v ?? ''),
+                                                    }))
+                                                  }
+                                                  options={uniq
+                                                    .filter((x) => (g.isZeroCostGroup ? true : !!String(x).trim()))
+                                                    .map((t) => ({ value: t, label: t ? t : '（无）' }))}
+                                                />
+                                              )
+                                            })}
+                                          </Space>
+                                        )
+                                      })}
                                     </Space>
                                   ) : (
                                     <Text type="secondary">提示：请先对需要的物料位做一次“筛选”或“强制”，才会生成互斥组下拉。</Text>

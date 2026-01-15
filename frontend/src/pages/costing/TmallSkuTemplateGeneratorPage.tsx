@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Card, Divider, Input, message, Select, Space, Switch, Table, Tag, Typography, Upload } from 'antd'
-import { DownloadOutlined, EyeOutlined, PlusOutlined, UploadOutlined } from '@ant-design/icons'
+import { Alert, Button, Card, Checkbox, Divider, Drawer, Input, message, Select, Space, Switch, Table, Tag, Typography, Upload } from 'antd'
+import { DeleteOutlined, DownloadOutlined, EyeOutlined, PlusOutlined, SettingOutlined, UploadOutlined } from '@ant-design/icons'
 import * as XLSX from 'xlsx'
 
 import {
@@ -90,7 +90,15 @@ type PersistedConfigV1 = {
   merchantSkuSuffix: string
   sizes: TmallSizeOption[]
   colors: Array<TmallColorOption & { enabledSizes?: Record<string, boolean> }>
-  mainPatternTypes: MainPatternOption[]
+  mainPatternTypes: Array<MainPatternOption & { remark?: string }>
+  ui?: {
+    enableColorImages?: boolean
+    enableSizeImages?: boolean
+    enableColorRemarks?: boolean
+    enableSizeRemarks?: boolean
+    enablePatternRemarks?: boolean
+    includeMainPatternType?: boolean
+  }
 }
 
 const STORAGE_KEY = 'tmall_sku_generator_config_v1'
@@ -142,6 +150,13 @@ export default function TmallSkuTemplateGeneratorPage() {
   const [mainPatternTypes, setMainPatternTypes] = useState<MainPatternOption[]>([
     { key: 'p1', label: '无' },
   ])
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [includeMainPatternType, setIncludeMainPatternType] = useState(true)
+  const [enableColorImages, setEnableColorImages] = useState(true)
+  const [enableSizeImages, setEnableSizeImages] = useState(false)
+  const [enableColorRemarks, setEnableColorRemarks] = useState(true)
+  const [enableSizeRemarks, setEnableSizeRemarks] = useState(true)
+  const [enablePatternRemarks, setEnablePatternRemarks] = useState(false)
 
   // Persist config in browser storage (MVP; makes it usable as "系统主体" without backend yet)
   useEffect(() => {
@@ -167,6 +182,14 @@ export default function TmallSkuTemplateGeneratorPage() {
         )
       }
       if (Array.isArray(parsed?.mainPatternTypes) && parsed.mainPatternTypes.length) setMainPatternTypes(parsed.mainPatternTypes)
+      if (parsed?.ui) {
+        if (typeof parsed.ui.enableColorImages === 'boolean') setEnableColorImages(parsed.ui.enableColorImages)
+        if (typeof parsed.ui.enableSizeImages === 'boolean') setEnableSizeImages(parsed.ui.enableSizeImages)
+        if (typeof parsed.ui.enableColorRemarks === 'boolean') setEnableColorRemarks(parsed.ui.enableColorRemarks)
+        if (typeof parsed.ui.enableSizeRemarks === 'boolean') setEnableSizeRemarks(parsed.ui.enableSizeRemarks)
+        if (typeof parsed.ui.enablePatternRemarks === 'boolean') setEnablePatternRemarks(parsed.ui.enablePatternRemarks)
+        if (typeof parsed.ui.includeMainPatternType === 'boolean') setIncludeMainPatternType(parsed.ui.includeMainPatternType)
+      }
     } catch {
       // ignore storage corruption
     }
@@ -181,12 +204,32 @@ export default function TmallSkuTemplateGeneratorPage() {
         sizes,
         colors,
         mainPatternTypes,
+        ui: {
+          enableColorImages,
+          enableSizeImages,
+          enableColorRemarks,
+          enableSizeRemarks,
+          enablePatternRemarks,
+          includeMainPatternType,
+        },
       }
       localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
     } catch {
       // ignore quota/disabled storage
     }
-  }, [merchantSkuPrefix, merchantSkuSuffix, sizes, colors, mainPatternTypes])
+  }, [
+    merchantSkuPrefix,
+    merchantSkuSuffix,
+    sizes,
+    colors,
+    mainPatternTypes,
+    enableColorImages,
+    enableSizeImages,
+    enableColorRemarks,
+    enableSizeRemarks,
+    enablePatternRemarks,
+    includeMainPatternType,
+  ])
 
   const cells: TmallSkuCell[] = useMemo(() => {
     const out: TmallSkuCell[] = []
@@ -353,6 +396,14 @@ export default function TmallSkuTemplateGeneratorPage() {
       sizes,
       colors,
       mainPatternTypes,
+      ui: {
+        enableColorImages,
+        enableSizeImages,
+        enableColorRemarks,
+        enableSizeRemarks,
+        enablePatternRemarks,
+        includeMainPatternType,
+      },
     }
     downloadText(JSON.stringify(data, null, 2), 'tmall_sku_generator_config.json')
   }
@@ -386,11 +437,27 @@ export default function TmallSkuTemplateGeneratorPage() {
           })),
         )
       }
+      if (parsed.ui) {
+        if (typeof parsed.ui.enableColorImages === 'boolean') setEnableColorImages(parsed.ui.enableColorImages)
+        if (typeof parsed.ui.enableSizeImages === 'boolean') setEnableSizeImages(parsed.ui.enableSizeImages)
+        if (typeof parsed.ui.enableColorRemarks === 'boolean') setEnableColorRemarks(parsed.ui.enableColorRemarks)
+        if (typeof parsed.ui.enableSizeRemarks === 'boolean') setEnableSizeRemarks(parsed.ui.enableSizeRemarks)
+        if (typeof parsed.ui.enablePatternRemarks === 'boolean') setEnablePatternRemarks(parsed.ui.enablePatternRemarks)
+        if (typeof parsed.ui.includeMainPatternType === 'boolean') setIncludeMainPatternType(parsed.ui.includeMainPatternType)
+      }
       message.success('已导入配置')
     } catch (e: any) {
       message.error(String(e?.message ?? e ?? '导入失败'))
     }
   }
+
+  const readFileAsDataUrl = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result ?? ''))
+      reader.onerror = () => reject(reader.error ?? new Error('读取图片失败'))
+      reader.readAsDataURL(file)
+    })
 
   const attributeText = useMemo(() => {
     const lines: string[] = []
@@ -406,25 +473,6 @@ export default function TmallSkuTemplateGeneratorPage() {
     return lines.join('\n')
   }, [colors, sizes, mainPatternTypes])
 
-  const dupSummary = useMemo(() => {
-    const countDup = (vals: string[]) => {
-      const m = new Map<string, number>()
-      for (const v of vals) {
-        const k = normalizeAttrValue(v)
-        if (!k) continue
-        m.set(k, (m.get(k) ?? 0) + 1)
-      }
-      return Array.from(m.entries())
-        .filter(([, n]) => n > 1)
-        .map(([k, n]) => ({ k, n }))
-    }
-    return {
-      colors: countDup(colors.map((c) => c.label)),
-      sizes: countDup(sizes.map((s) => s.label)),
-      patterns: countDup(mainPatternTypes.map((p) => p.label)),
-    }
-  }, [colors, sizes, mainPatternTypes])
-
   return (
     <div style={{ padding: 16 }}>
       <Space direction="vertical" style={{ width: '100%' }} size={12}>
@@ -438,6 +486,10 @@ export default function TmallSkuTemplateGeneratorPage() {
               <Input style={{ width: 260 }} value={merchantSkuPrefix} onChange={(e) => setMerchantSkuPrefix(e.target.value)} />
               <Text type="secondary">后缀</Text>
               <Input style={{ width: 160 }} value={merchantSkuSuffix} onChange={(e) => setMerchantSkuSuffix(e.target.value)} />
+              <Divider type="vertical" />
+              <Button icon={<SettingOutlined />} onClick={() => setSettingsOpen(true)}>
+                设置
+              </Button>
             </Space>
 
             <Divider style={{ margin: '8px 0' }} />
@@ -494,135 +546,6 @@ export default function TmallSkuTemplateGeneratorPage() {
         </Card>
 
         <Card
-          title="销售属性配置器（先在系统里编辑 → 复制到天猫后台建立属性）"
-          extra={
-            <Space wrap size={8}>
-              <Upload
-                accept=".json"
-                maxCount={1}
-                showUploadList={false}
-                beforeUpload={(file) => {
-                  void importConfigJson(file)
-                  return false
-                }}
-              >
-                <Button>导入配置(JSON)</Button>
-              </Upload>
-              <Button onClick={exportConfigJson}>导出配置(JSON)</Button>
-              <Button onClick={() => void copyText(attributeText)}>一键复制建属性清单</Button>
-              <Button icon={<DownloadOutlined />} onClick={exportAttributeBuildListXlsx}>
-                导出建属性清单(xlsx)
-              </Button>
-            </Space>
-          }
-        >
-          <Space direction="vertical" style={{ width: '100%' }} size={10}>
-            <Alert
-              type="warning"
-              showIcon
-              message="关键口径：销售属性在模板里不可编辑"
-              description={
-                <div>
-                  <div>我们这里的目标是：把“颜色分类/尺寸/主图案类型”等属性值先按你们 TOKEN 口径整理成可复制清单。</div>
-                  <div>你在天猫后台按清单建立属性后，再下载官方模板，用上面的“一键填充并下载”回填编码/上架即可。</div>
-                </div>
-              }
-            />
-
-            {(dupSummary.colors.length || dupSummary.sizes.length || dupSummary.patterns.length) ? (
-              <Alert
-                type="error"
-                showIcon
-                message="检测到重复属性值（会导致天猫侧歧义/回填匹配不稳定）"
-                description={
-                  <div>
-                    {dupSummary.colors.length ? (
-                      <div>
-                        <b>颜色分类重复</b>：{dupSummary.colors.map((x) => `${x.k}×${x.n}`).join('；')}
-                      </div>
-                    ) : null}
-                    {dupSummary.sizes.length ? (
-                      <div>
-                        <b>尺寸重复</b>：{dupSummary.sizes.map((x) => `${x.k}×${x.n}`).join('；')}
-                      </div>
-                    ) : null}
-                    {dupSummary.patterns.length ? (
-                      <div>
-                        <b>主图案类型重复</b>：{dupSummary.patterns.map((x) => `${x.k}×${x.n}`).join('；')}
-                      </div>
-                    ) : null}
-                  </div>
-                }
-              />
-            ) : (
-              <Alert type="success" showIcon message="属性值去重校验通过" />
-            )}
-
-            <Card size="small" title="主图案类型（可选，值域清单）" extra={<Tag>用于天猫后台建立“主图案类型”属性</Tag>}>
-              <Space direction="vertical" style={{ width: '100%' }} size={8}>
-                {mainPatternTypes.map((p, i) => (
-                  <Space key={p.key} wrap size={8} style={{ width: '100%' }}>
-                    <Text type="secondary">值</Text>
-                    <Input
-                      style={{ width: 360 }}
-                      value={p.label}
-                      onChange={(e) => setMainPatternTypes((prev) => prev.map((x, idx) => (idx === i ? { ...x, label: e.target.value } : x)))}
-                    />
-                    <Button danger onClick={() => setMainPatternTypes((prev) => prev.filter((_, idx) => idx !== i))}>
-                      删除
-                    </Button>
-                  </Space>
-                ))}
-                <Button onClick={() => setMainPatternTypes((prev) => [...prev, { key: `p_${uid()}`, label: '新类型' }])}>
-                  添加主图案类型
-                </Button>
-              </Space>
-            </Card>
-
-            <Card size="small" title="建属性清单（预览，可直接复制）">
-              <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' }}>
-                {attributeText}
-              </pre>
-            </Card>
-          </Space>
-        </Card>
-
-        <Card
-          title="尺寸选项（全局并集）"
-          extra={
-            <Button
-              icon={<PlusOutlined />}
-              onClick={() => setSizes((prev) => [...prev, { key: `size_${uid()}`, label: '新尺寸', size_code: '' }])}
-            >
-              添加尺寸
-            </Button>
-          }
-        >
-          <Space direction="vertical" style={{ width: '100%' }} size={8}>
-            {sizes.map((s, i) => (
-              <Space key={s.key} wrap size={8} style={{ width: '100%' }}>
-                <Text type="secondary">尺寸</Text>
-                <Input
-                  style={{ width: 240 }}
-                  value={s.label}
-                  onChange={(e) =>
-                    setSizes((prev) => prev.map((x, idx) => (idx === i ? { ...x, label: e.target.value } : x)))
-                  }
-                />
-                <Text type="secondary">编码段</Text>
-                <Input
-                  style={{ width: 120 }}
-                  value={s.size_code ?? ''}
-                  onChange={(e) =>
-                    setSizes((prev) => prev.map((x, idx) => (idx === i ? { ...x, size_code: e.target.value } : x)))
-                  }
-                />
-              </Space>
-            ))}
-          </Space>
-        </Card>
-
-        <Card
           title="颜色分类（图案/工艺款式）+ 是否上架矩阵"
           extra={
             <Button
@@ -668,6 +591,7 @@ export default function TmallSkuTemplateGeneratorPage() {
                 render: (_: any, r: ColorRow, idx: number) => (
                   <Select
                     allowClear
+                    disabled={!includeMainPatternType}
                     placeholder="可选"
                     style={{ width: '100%' }}
                     value={r.main_pattern_type ?? undefined}
@@ -745,6 +669,320 @@ export default function TmallSkuTemplateGeneratorPage() {
             ]}
           />
         </Card>
+
+        <Drawer
+          title="设置（SKU 模式 / 销售属性）"
+          open={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
+          width={860}
+        >
+          <Space direction="vertical" style={{ width: '100%' }} size={12}>
+            <Alert
+              type="info"
+              showIcon
+              message="说明"
+              description={
+                <div>
+                  <div>这里用于模拟天猫“建立销售属性”的第一步：维护属性值域并输出可复制清单。</div>
+                  <div>天猫模板中的“颜色分类/尺寸”不可编辑；建好属性后下载模板，再用主页面的“模板回填”批量填编码/上架。</div>
+                </div>
+              }
+            />
+
+            <Card
+              size="small"
+              title="属性选择"
+              extra={<Text type="secondary">颜色分类/尺寸为必选；主图案类型可选</Text>}
+            >
+              <Space wrap size={16}>
+                <Checkbox checked disabled>
+                  颜色分类
+                </Checkbox>
+                <Checkbox checked disabled>
+                  尺寸
+                </Checkbox>
+                <Checkbox checked={includeMainPatternType} onChange={(e) => setIncludeMainPatternType(e.target.checked)}>
+                  主图案类型
+                </Checkbox>
+              </Space>
+            </Card>
+
+            <Card
+              size="small"
+              title={`颜色分类（${colors.length}）`}
+              extra={
+                <Space wrap size={8}>
+                  <Checkbox checked={enableColorImages} onChange={(e) => setEnableColorImages(e.target.checked)}>
+                    添加图片
+                  </Checkbox>
+                  <Checkbox checked={enableColorRemarks} onChange={(e) => setEnableColorRemarks(e.target.checked)}>
+                    备注
+                  </Checkbox>
+                  <Button
+                    icon={<PlusOutlined />}
+                    onClick={() =>
+                      setColors((prev) => [
+                        ...prev,
+                        {
+                          key: `c_${uid()}`,
+                          label: '',
+                          width_cm: 45,
+                          height_cm: 45,
+                          enabledSizes: Object.fromEntries(sizes.map((s) => [s.key, true])),
+                        },
+                      ])
+                    }
+                  >
+                    添加
+                  </Button>
+                </Space>
+              }
+            >
+              <Space direction="vertical" style={{ width: '100%' }} size={10}>
+                {colors.map((c, idx) => (
+                  <Space key={c.key} wrap size={8} style={{ width: '100%', alignItems: 'flex-start' }}>
+                    {enableColorImages ? (
+                      <Upload
+                        accept="image/*"
+                        showUploadList={false}
+                        beforeUpload={async (file) => {
+                          try {
+                            const dataUrl = await readFileAsDataUrl(file)
+                            setColors((prev) => prev.map((x, i) => (i === idx ? { ...x, metadata_json: { ...(x as any).metadata_json, image_data_url: dataUrl } as any } : x)))
+                          } catch (e: any) {
+                            message.error(String(e?.message ?? e))
+                          }
+                          return false
+                        }}
+                      >
+                        <div
+                          style={{
+                            width: 40,
+                            height: 40,
+                            border: '1px solid #ddd',
+                            borderRadius: 6,
+                            overflow: 'hidden',
+                            background: '#fafafa',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            marginTop: 2,
+                          }}
+                        >
+                          {(c as any)?.metadata_json?.image_data_url ? (
+                            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+                            <img src={(c as any).metadata_json.image_data_url as string} alt="img" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                          ) : (
+                            <Text type="secondary" style={{ fontSize: 12 }}>
+                              图
+                            </Text>
+                          )}
+                        </div>
+                      </Upload>
+                    ) : null}
+
+                    <Input
+                      style={{ flex: 1, minWidth: 320 }}
+                      placeholder="颜色分类（天猫展示值）"
+                      value={c.label}
+                      onChange={(e) => setColors((prev) => prev.map((x, i) => (i === idx ? { ...x, label: e.target.value } : x)))}
+                    />
+
+                    {enableColorRemarks ? (
+                      <Input
+                        style={{ width: 220 }}
+                        placeholder="备注(可选)"
+                        value={String((c as any)?.metadata_json?.remark ?? '')}
+                        onChange={(e) =>
+                          setColors((prev) =>
+                            prev.map((x, i) =>
+                              i === idx ? { ...x, metadata_json: { ...(x as any).metadata_json, remark: e.target.value } as any } : x,
+                            ),
+                          )
+                        }
+                      />
+                    ) : null}
+
+                    <Button
+                      icon={<DeleteOutlined />}
+                      danger
+                      onClick={() => setColors((prev) => prev.filter((_, i) => i !== idx))}
+                    />
+                  </Space>
+                ))}
+              </Space>
+            </Card>
+
+            <Card
+              size="small"
+              title={`尺寸（${sizes.length}）`}
+              extra={
+                <Space wrap size={8}>
+                  <Checkbox checked={enableSizeImages} onChange={(e) => setEnableSizeImages(e.target.checked)}>
+                    添加图片
+                  </Checkbox>
+                  <Checkbox checked={enableSizeRemarks} onChange={(e) => setEnableSizeRemarks(e.target.checked)}>
+                    备注
+                  </Checkbox>
+                  <Button icon={<PlusOutlined />} onClick={() => setSizes((prev) => [...prev, { key: `size_${uid()}`, label: '', size_code: '' }])}>
+                    添加
+                  </Button>
+                </Space>
+              }
+            >
+              <Space direction="vertical" style={{ width: '100%' }} size={10}>
+                {sizes.map((s, idx) => (
+                  <Space key={s.key} wrap size={8} style={{ width: '100%', alignItems: 'flex-start' }}>
+                    {enableSizeImages ? (
+                      <Upload
+                        accept="image/*"
+                        showUploadList={false}
+                        beforeUpload={async (file) => {
+                          try {
+                            const dataUrl = await readFileAsDataUrl(file)
+                            setSizes((prev) => prev.map((x, i) => (i === idx ? ({ ...x, metadata_json: { ...(x as any).metadata_json, image_data_url: dataUrl } } as any) : x)))
+                          } catch (e: any) {
+                            message.error(String(e?.message ?? e))
+                          }
+                          return false
+                        }}
+                      >
+                        <div
+                          style={{
+                            width: 40,
+                            height: 40,
+                            border: '1px solid #ddd',
+                            borderRadius: 6,
+                            overflow: 'hidden',
+                            background: '#fafafa',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            marginTop: 2,
+                          }}
+                        >
+                          {(s as any)?.metadata_json?.image_data_url ? (
+                            <img src={(s as any).metadata_json.image_data_url as string} alt="img" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                          ) : (
+                            <Text type="secondary" style={{ fontSize: 12 }}>
+                              图
+                            </Text>
+                          )}
+                        </div>
+                      </Upload>
+                    ) : null}
+
+                    <Input
+                      style={{ width: 280 }}
+                      placeholder="尺寸（天猫展示值）"
+                      value={s.label}
+                      onChange={(e) => setSizes((prev) => prev.map((x, i) => (i === idx ? { ...x, label: e.target.value } : x)))}
+                    />
+                    <Input
+                      style={{ width: 120 }}
+                      placeholder="编码段(可选)"
+                      value={s.size_code ?? ''}
+                      onChange={(e) => setSizes((prev) => prev.map((x, i) => (i === idx ? { ...x, size_code: e.target.value } : x)))}
+                    />
+
+                    {enableSizeRemarks ? (
+                      <Input
+                        style={{ width: 220 }}
+                        placeholder="备注(可选)"
+                        value={String((s as any)?.metadata_json?.remark ?? '')}
+                        onChange={(e) =>
+                          setSizes((prev) =>
+                            prev.map((x, i) =>
+                              i === idx ? ({ ...x, metadata_json: { ...(x as any).metadata_json, remark: e.target.value } } as any) : x,
+                            ),
+                          )
+                        }
+                      />
+                    ) : null}
+
+                    <Button icon={<DeleteOutlined />} danger onClick={() => setSizes((prev) => prev.filter((_, i) => i !== idx))} />
+                  </Space>
+                ))}
+              </Space>
+            </Card>
+
+            {includeMainPatternType ? (
+              <Card
+                size="small"
+                title={`主图案类型（${mainPatternTypes.length}）`}
+                extra={
+                  <Space wrap size={8}>
+                    <Checkbox checked={enablePatternRemarks} onChange={(e) => setEnablePatternRemarks(e.target.checked)}>
+                      备注
+                    </Checkbox>
+                    <Button onClick={() => setMainPatternTypes((prev) => [...prev, { key: `p_${uid()}`, label: '' }])} icon={<PlusOutlined />}>
+                      添加
+                    </Button>
+                  </Space>
+                }
+              >
+                <Space direction="vertical" style={{ width: '100%' }} size={10}>
+                  {mainPatternTypes.map((p, idx) => (
+                    <Space key={p.key} wrap size={8} style={{ width: '100%', alignItems: 'flex-start' }}>
+                      <Input
+                        style={{ width: 360 }}
+                        placeholder="主图案类型（天猫展示值）"
+                        value={p.label}
+                        onChange={(e) =>
+                          setMainPatternTypes((prev) => prev.map((x, i) => (i === idx ? { ...x, label: e.target.value } : x)))
+                        }
+                      />
+                      {enablePatternRemarks ? (
+                        <Input
+                          style={{ width: 220 }}
+                          placeholder="备注(可选)"
+                          value={String((p as any)?.remark ?? '')}
+                          onChange={(e) =>
+                            setMainPatternTypes((prev) =>
+                              prev.map((x, i) => (i === idx ? ({ ...x, remark: e.target.value } as any) : x)),
+                            )
+                          }
+                        />
+                      ) : null}
+                      <Button icon={<DeleteOutlined />} danger onClick={() => setMainPatternTypes((prev) => prev.filter((_, i) => i !== idx))} />
+                    </Space>
+                  ))}
+                </Space>
+              </Card>
+            ) : null}
+
+            <Card
+              size="small"
+              title="输出（复制/导出）"
+              extra={
+                <Space wrap size={8}>
+                  <Upload
+                    accept=".json"
+                    maxCount={1}
+                    showUploadList={false}
+                    beforeUpload={(file) => {
+                      void importConfigJson(file)
+                      return false
+                    }}
+                  >
+                    <Button>导入配置(JSON)</Button>
+                  </Upload>
+                  <Button onClick={exportConfigJson}>导出配置(JSON)</Button>
+                  <Button onClick={() => void copyText(attributeText)}>一键复制建属性清单</Button>
+                  <Button icon={<DownloadOutlined />} onClick={exportAttributeBuildListXlsx}>
+                    导出建属性清单(xlsx)
+                  </Button>
+                </Space>
+              }
+            >
+              <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' }}>
+                {attributeText}
+              </pre>
+            </Card>
+          </Space>
+        </Drawer>
       </Space>
     </div>
   )

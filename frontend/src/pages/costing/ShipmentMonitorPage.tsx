@@ -293,14 +293,14 @@ const ShipmentMonitorPage = () => {
       render: (v) => safeString(v) || '-',
     },
     {
-      title: '货品条码(SKU)',
+      title: '货品条码',
       dataIndex: 'sku_code',
       width: 160,
       ellipsis: true,
       render: (v) => safeString(v) || '-',
     },
     {
-      title: '商品规格（网店）',
+      title: '交易规格',
       dataIndex: 'spec_text',
       ellipsis: true,
       render: (v) => safeString(v) || '-',
@@ -367,7 +367,7 @@ const ShipmentMonitorPage = () => {
       render: (v) => safeString(v) || '-',
     },
     {
-      title: '货品条码（系统）',
+      title: '货品条码',
       dataIndex: 'sku_code',
       width: 140,
       ellipsis: true,

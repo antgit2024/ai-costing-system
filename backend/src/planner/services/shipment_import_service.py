@@ -126,6 +126,37 @@ def _norm_header(value: Any) -> Optional[str]:
     return s2 or None
 
 
+SHIPMENT_FIELD_ALIASES: Dict[str, List[str]] = {
+    # Excel headers / future API keys (keep most common first)
+    "shipment_no": ["发货单号", "单号", "订单号", "shipment_no"],
+    "completed_at": ["完成时间", "付款时间", "completed_at", "finished_at"],
+    "channel": ["销售渠道", "店铺", "渠道", "channel", "shop_name"],
+    # ERP: 货品条码（系统）是主键；但发货表里通常写成“货品条码”
+    "sku_code": ["货品条码", "货品条码（系统）", "SKU", "sku_code", "erp_sku_barcode", "barcode"],
+    # “交易规格”/“商品规格（网店）”同义：以网店实时规格为第一优先
+    "spec_text": ["商品规格（网店）", "交易规格", "规格", "规格信息", "货品规格（系统）", "spec_text", "shop_spec_text", "system_spec_text"],
+    "qty": ["数量", "数量合计", "发货数量", "qty", "quantity"],
+    "revenue_amount": ["金额", "实付金额", "revenue_amount", "paid_amount"],
+    # Important for future ERP API: our pre-filled merchant code (spec code on shop)
+    "shop_spec_code": ["规格编码（网店）", "商家编码", "shop_spec_code", "merchant_sku"],
+    # Mapping dimension (1 barcode -> many platform_sku_id)
+    "platform_sku_id": ["平台规格Id（网店）", "platform_sku_id", "platformSkuId"],
+}
+
+
+def _has_any_header(headers: Dict[str, int], candidates: List[str]) -> bool:
+    for c in candidates or []:
+        key = _norm_header(c) or str(c)
+        if key in headers:
+            return True
+    return False
+
+
+def _get_field(row: List[Any], headers: Dict[str, int], field: str) -> Any:
+    aliases = SHIPMENT_FIELD_ALIASES.get(field) or []
+    return _get_by_headers(row, headers, aliases)
+
+
 def _build_header_index(header_row: Iterable[Any]) -> Dict[str, int]:
     mapping: Dict[str, int] = {}
     for idx, cell in enumerate(header_row):
@@ -176,10 +207,10 @@ def _normalize_rows_from_xlsx(file_bytes: bytes) -> Tuple[List[Dict[str, Any]], 
         warnings.append(payload)
 
     # Minimal header sanity (do not hard-fail; push warnings)
-    required_any = ["发货单号", "完成时间", "销售渠道", "货品条码", "数量"]
-    missing = [h for h in required_any if _norm_header(h) not in headers]
-    if missing:
-        _warn("MISSING_HEADERS", missing=missing)
+    required_fields = ["shipment_no", "completed_at", "channel", "sku_code", "qty"]
+    missing_fields = [f for f in required_fields if not _has_any_header(headers, SHIPMENT_FIELD_ALIASES.get(f) or [])]
+    if missing_fields:
+        _warn("MISSING_HEADERS", missing_fields=missing_fields)
 
     normalized: List[Dict[str, Any]] = []
     for i, row in enumerate(rows[1:], start=2):
@@ -188,23 +219,17 @@ def _normalize_rows_from_xlsx(file_bytes: bytes) -> Tuple[List[Dict[str, Any]], 
         if not any(v not in (None, "") for v in row_list):
             continue
 
-        shipment_no = _norm_str(_get_by_headers(row_list, headers, ["发货单号", "单号", "订单号"]))
-        completed_at = _parse_excel_datetime(_get_by_headers(row_list, headers, ["完成时间", "付款时间"]))
-        channel = _norm_str(_get_by_headers(row_list, headers, ["销售渠道", "店铺", "渠道"]))
-        # ERP: 货品条码（系统）是主键；表头可能带括号备注，已通过 _norm_header 归一化
-        sku_code = _norm_str(_get_by_headers(row_list, headers, ["货品条码", "货品条码（系统）", "SKU", "sku_code"]))
-        # ERP: 商品规格（网店）是发货时最真实的交易规格；货品规格（系统）为配对写入字段（可能滞后）
-        spec_text = _norm_str(
-            _get_by_headers(
-                row_list,
-                headers,
-                ["商品规格（网店）", "交易规格", "规格", "规格信息", "货品规格（系统）"],
-            )
-        )
+        shipment_no = _norm_str(_get_field(row_list, headers, "shipment_no"))
+        completed_at = _parse_excel_datetime(_get_field(row_list, headers, "completed_at"))
+        channel = _norm_str(_get_field(row_list, headers, "channel"))
+        # ERP: 货品条码（系统）是主键；发货表可能写成“货品条码”
+        sku_code = _norm_str(_get_field(row_list, headers, "sku_code"))
+        # 规格优先：商品规格（网店）/交易规格（实时真实） -> 货品规格（系统）（可能滞后）
+        spec_text = _norm_str(_get_field(row_list, headers, "spec_text"))
         if not spec_text:
             spec_text = _guess_spec_text(row_list)
-        qty = _to_decimal(_get_by_headers(row_list, headers, ["数量", "数量合计"]))
-        revenue_amount = _to_decimal(_get_by_headers(row_list, headers, ["金额", "实付金额"]))
+        qty = _to_decimal(_get_field(row_list, headers, "qty"))
+        revenue_amount = _to_decimal(_get_field(row_list, headers, "revenue_amount"))
 
         raw_row: Dict[str, Any] = {}
         for name, idx in headers.items():

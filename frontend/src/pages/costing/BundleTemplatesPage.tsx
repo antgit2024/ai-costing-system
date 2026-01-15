@@ -183,18 +183,22 @@ const formatTokenBrace = (token: string): string => {
   return t ? `{${t}}` : '{}'
 }
 
-const buildAttributeFormula = (args: {
+type AttributeGroup = { key: string; options: string[]; isZeroCostGroup: boolean }
+type AttributeComponentGroups = { componentIndex: number; groups: AttributeGroup[] }
+
+const buildAttributeFormulaAndGroups = (args: {
   presetIndex: number
   componentRows: any[]
   presetSelectedByIdx: Record<string, Record<string, any>>
   fallbackTokenOverrides: Record<string, string>
   variantTokenOptionsByVersionBaseLine: Record<string, Record<string, string[]>>
   baseLineInfoByVersionBaseLine: Record<string, Record<string, { orderIndex: number; isZeroCost: boolean }>>
-}): string => {
+}): { formula: string; components: AttributeComponentGroups[] } => {
   const { presetIndex, componentRows, presetSelectedByIdx, fallbackTokenOverrides, variantTokenOptionsByVersionBaseLine, baseLineInfoByVersionBaseLine } = args
-  if (!Array.isArray(componentRows) || componentRows.length <= 0) return ''
+  if (!Array.isArray(componentRows) || componentRows.length <= 0) return { formula: '', components: [] }
 
   const parts: string[] = []
+  const components: AttributeComponentGroups[] = []
   for (let cIdx = 0; cIdx < componentRows.length; cIdx++) {
     const rr = componentRows[cIdx] as any
     const versionId = String(rr?.model_version_id ?? '').trim()
@@ -236,7 +240,7 @@ const buildAttributeFormula = (args: {
       return oa - ob
     })
 
-    const groupsInOrder: Array<{ key: string; options: string[] }> = []
+    const groupsInOrder: AttributeGroup[] = []
     const seenGroupKey = new Set<string>()
 
     for (const baseLineId of baseLineIdsSorted) {
@@ -284,7 +288,7 @@ const buildAttributeFormula = (args: {
       const key = opts.map((x) => (normalizeSingleToken(x) ? normalizeSingleToken(x) : '__EMPTY__')).join('|')
       if (seenGroupKey.has(key)) continue
       seenGroupKey.add(key)
-      groupsInOrder.push({ key, options: opts })
+      groupsInOrder.push({ key, options: opts, isZeroCostGroup: isZeroCost })
     }
 
     const componentFormula = groupsInOrder
@@ -292,8 +296,9 @@ const buildAttributeFormula = (args: {
       .join('')
 
     if (componentFormula) parts.push(componentFormula)
+    if (groupsInOrder.length) components.push({ componentIndex: cIdx, groups: groupsInOrder })
   }
-  return parts.join('+')
+  return { formula: parts.join('+'), components }
 }
 
 const copyTextToClipboard = async (text: string) => {
@@ -353,6 +358,7 @@ export default function BundleTemplatesPage() {
   const [form] = Form.useForm()
   const [phrasePresets, setPhrasePresets] = useState<PhrasePresetRow[]>([])
   const [activePresetIndex, setActivePresetIndex] = useState<number>(0)
+  const [attributeGroupSelections, setAttributeGroupSelections] = useState<Record<string, string>>({})
   // 默认兜底“对客 TOKEN”（仅用于对客展示/规范化用词；不影响真实物料/扣库/算价）
   // key: `${versionId}:${baseLineId}` -> tokenAlias (例如：黄金绒)
   const [fallbackTokenOverrides, setFallbackTokenOverrides] = useState<Record<string, string>>({})
@@ -1409,6 +1415,7 @@ export default function BundleTemplatesPage() {
     setPresetSelectedByIdx({})
     setPhrasePresets([])
     setFallbackTokenOverrides({})
+    setAttributeGroupSelections({})
     setActivePresetIndex(0)
     setDrawerOpen(true)
   }
@@ -1454,6 +1461,7 @@ export default function BundleTemplatesPage() {
     const fo = (row?.metadata ?? {})?.fallback_token_overrides ?? (row?.metadata ?? {})?.fallback_display_overrides
     if (fo && typeof fo === 'object') setFallbackTokenOverrides(fo as any)
     else setFallbackTokenOverrides({})
+    setAttributeGroupSelections({})
     // NOTE: legacy metadata.lexicon_rules is preserved on save, but UI is intentionally hidden to avoid confusion.
 
     const pp = (row?.metadata ?? {})?.phrase_presets
@@ -2602,36 +2610,90 @@ export default function BundleTemplatesPage() {
                             {(String((r as any)?.mode ?? 'parse') === 'force' ? 'Z' : 'B') + '-' + String(currentBundleToken || '').replace(/^B:/, '').replace(/^BUNDLE:/, '').replace(/^Z:/, '') + String(selector)}
                           </Text>
                         </Text>
-                        {(() => {
-                          const formula = buildAttributeFormula({
-                            presetIndex: idx,
-                            componentRows: rows,
-                            presetSelectedByIdx,
-                            fallbackTokenOverrides,
-                            variantTokenOptionsByVersionBaseLine,
-                            baseLineInfoByVersionBaseLine,
-                          })
-                          return (
-                            <Space wrap size={6}>
-                              <Text type="secondary">属性公式：</Text>
-                              <Text code style={{ maxWidth: 520, overflow: 'hidden', textOverflow: 'ellipsis' }} title={formula || ''}>
-                                {formula || '-'}
-                              </Text>
-                              <Button
-                                size="small"
-                                icon={<CopyOutlined />}
-                                disabled={!formula}
-                                onClick={async () => {
-                                  const ok = await copyTextToClipboard(formula)
-                                  if (ok) message.success('已复制属性公式')
-                                  else message.error('复制失败：请手动复制')
-                                }}
-                              >
-                                复制公式
-                              </Button>
-                            </Space>
-                          )
-                        })()}
+                        {String((r as any)?.mode ?? 'parse') === 'force'
+                          ? null
+                          : (() => {
+                              const built = buildAttributeFormulaAndGroups({
+                                presetIndex: idx,
+                                componentRows: rows,
+                                presetSelectedByIdx,
+                                fallbackTokenOverrides,
+                                variantTokenOptionsByVersionBaseLine,
+                                baseLineInfoByVersionBaseLine,
+                              })
+                              const formula = built.formula
+                              const components = built.components
+                              return (
+                                <Space direction="vertical" size={6}>
+                                  <Space wrap size={6}>
+                                    <Text type="secondary">属性公式：</Text>
+                                    <Text code style={{ maxWidth: 520, overflow: 'hidden', textOverflow: 'ellipsis' }} title={formula || ''}>
+                                      {formula || '-'}
+                                    </Text>
+                                    <Button
+                                      size="small"
+                                      icon={<CopyOutlined />}
+                                      disabled={!formula}
+                                      onClick={async () => {
+                                        const ok = await copyTextToClipboard(formula)
+                                        if (ok) message.success('已复制属性公式')
+                                        else message.error('复制失败：请手动复制')
+                                      }}
+                                    >
+                                      复制公式
+                                    </Button>
+                                  </Space>
+
+                                  {/* 互斥组下拉（解析型专用）：每组一个单选 Select */}
+                                  {components.length ? (
+                                    <Space wrap size={10}>
+                                      {components.flatMap((c) =>
+                                        c.groups.map((g, gi) => {
+                                          const selKey = `${idx}:${c.componentIndex}:${g.key}`
+                                          const options = (g.options ?? []).map((x) => normalizeSingleToken(x))
+                                          const uniq: string[] = []
+                                          const seen = new Set<string>()
+                                          for (const t of options) {
+                                            const k = t || '__EMPTY__'
+                                            if (seen.has(k)) continue
+                                            seen.add(k)
+                                            uniq.push(t)
+                                          }
+                                          // 默认值：zero-cost 互斥组默认空；否则默认第一个非空项（兜底token优先）
+                                          const defaultValue = g.isZeroCostGroup
+                                            ? ''
+                                            : (uniq.find((x) => !!String(x).trim()) ?? '')
+                                          const value = Object.prototype.hasOwnProperty.call(attributeGroupSelections, selKey)
+                                            ? String(attributeGroupSelections[selKey] ?? '')
+                                            : defaultValue
+                                          return (
+                                            <Space key={`attr-sel-${selKey}`} size={6}>
+                                              <Text type="secondary">{`组${gi + 1}`}</Text>
+                                              <Select
+                                                size="small"
+                                                style={{ width: 160 }}
+                                                value={value}
+                                                onChange={(v) =>
+                                                  setAttributeGroupSelections((prev) => ({
+                                                    ...(prev ?? {}),
+                                                    [selKey]: String(v ?? ''),
+                                                  }))
+                                                }
+                                                options={uniq
+                                                  .filter((x) => (g.isZeroCostGroup ? true : !!String(x).trim()))
+                                                  .map((t) => ({ value: t, label: t ? t : '（无）' }))}
+                                              />
+                                            </Space>
+                                          )
+                                        }),
+                                      )}
+                                    </Space>
+                                  ) : (
+                                    <Text type="secondary">提示：请先对需要的物料位做一次“筛选”或“强制”，才会生成互斥组下拉。</Text>
+                                  )}
+                                </Space>
+                              )
+                            })()}
                         <Button
                           size="small"
                           disabled={!String(currentBundleToken || '').trim()}

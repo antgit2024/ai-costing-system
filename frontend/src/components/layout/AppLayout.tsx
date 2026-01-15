@@ -106,6 +106,10 @@ const menuItems: MenuProps['items'] = [
         label: <Link to="/costing/bundle-templates">套装模板</Link>,
       },
       {
+        key: '/costing/tmall-sku-generator',
+        label: <Link to="/costing/tmall-sku-generator">天猫布艺 SKU规格生成器</Link>,
+      },
+      {
         key: '/costing/sku-master',
         label: <Link to="/costing/sku-master">SKU 主档 / 商品关联</Link>,
       },

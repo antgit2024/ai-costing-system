@@ -26,6 +26,13 @@
         - 候选口径与可视化：未勾选规则时，下拉只展示兜底别名；勾选规则后才将规则 TOKEN（如“雪尼尔”）加入候选；自动生成里“不可更改”的兜底 TOKEN 以红色加粗显示
         - 修复细节：生成器淡黄底现在独立占一行（确保铺满表单宽度）；零成本互斥组不再误判为“不可更改”；上下/左右移动的顺序随“保存当前属性”持久化并在编辑时恢复
         - 交互强调：自动生成中，凡是“通过下拉选择”的 TOKEN 一律红色加粗（跨模型/跨组）；淡黄底区域进一步处理了 Card 内边距导致的“看似不满宽”
+      - **新增：天猫布艺 SKU规格生成器（MVP）**
+        - 新页面：`/costing/tmall-sku-generator`
+        - 支持维护：颜色分类（=图案/工艺款式）× 尺寸 的 SKU 矩阵（每格开关=是否上架）
+        - 支持：生成预览行（调用后端 preview），导出 xlsx（sheet1 数据 + sheet2 字段映射）
+        - 后端接口：
+          - `POST /api/planner/tmall/sku-template/preview`
+          - `POST /api/planner/tmall/sku-template/export`
   - 验收命令（必须，全部 0 退出码）：
     - Frontend：`npm -C frontend run build`
     - Docs：按 `DOC/agents/commands.md` 的文档 grep/test -d 校验

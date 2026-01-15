@@ -22,6 +22,7 @@ const StructureStandardsPage = lazy(() => import('./pages/costing/StructureStand
 const ProductListingPage = lazy(() => import('./pages/costing/ProductListingPage'))
 const BundleTemplatesPage = lazy(() => import('./pages/costing/BundleTemplatesPage'))
 const ProductionScanPage = lazy(() => import('./pages/costing/ProductionScanPage'))
+const TmallSkuTemplateGeneratorPage = lazy(() => import('./pages/costing/TmallSkuTemplateGeneratorPage'))
 
 const App = () => {
   return (
@@ -52,6 +53,7 @@ const App = () => {
           <Route path="/costing/shipping-rules" element={<ShippingRulesPage />} />
           <Route path="/costing/product-listing" element={<ProductListingPage />} />
           <Route path="/costing/bundle-templates" element={<BundleTemplatesPage />} />
+          <Route path="/costing/tmall-sku-generator" element={<TmallSkuTemplateGeneratorPage />} />
           <Route path="/costing/sku-master" element={<SkuMasterWorkspacePage />} />
           <Route path="/costing/production-scan" element={<ProductionScanPage />} />
           <Route path="/costing/spec-matching" element={<SkuSpecMatchingPage />} />

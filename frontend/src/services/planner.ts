@@ -1448,6 +1448,55 @@ export const generateBomBySpecDebug = async (payload: BomGenerateBySpecRequest):
   return response.data
 }
 
+// -----------------------------
+// TMALL SKU Template (布艺类) - MVP
+// -----------------------------
+
+export type TmallSizeOption = { key: string; label: string; size_code?: string }
+export type TmallColorOption = {
+  key: string
+  label: string
+  width_cm?: number | null
+  height_cm?: number | null
+  thickness_cm?: number | null
+  length_cm?: number | null
+  main_pattern_type?: string | null
+}
+export type TmallSkuCell = { color_key: string; size_key: string; enabled: boolean; merchant_sku?: string | null }
+export type TmallSkuTemplateRequest = {
+  sizes: TmallSizeOption[]
+  colors: TmallColorOption[]
+  cells: TmallSkuCell[]
+  merchant_sku_prefix?: string
+  merchant_sku_sep?: string
+  merchant_sku_suffix?: string
+}
+export type TmallSkuRow = {
+  color_label: string
+  size_label: string
+  merchant_sku: string
+  sku_status: number
+  main_pattern_type?: string | null
+  length_cm?: string | null
+  thickness_cm?: string | null
+  width_cm?: string | null
+}
+export type TmallSkuTemplatePreviewResponse = {
+  total_rows: number
+  rows: TmallSkuRow[]
+  header_mapping: Record<string, string>
+}
+
+export const previewTmallSkuTemplate = async (payload: TmallSkuTemplateRequest): Promise<TmallSkuTemplatePreviewResponse> => {
+  const resp = await plannerClient.post('/tmall/sku-template/preview', payload)
+  return resp.data
+}
+
+export const exportTmallSkuTemplateXlsx = async (payload: TmallSkuTemplateRequest): Promise<Blob> => {
+  const resp = await plannerClient.post('/tmall/sku-template/export', payload, { responseType: 'blob' })
+  return resp.data as Blob
+}
+
 export const fetchProductModelMaterials = async (
   modelId: string,
 ): Promise<Array<Record<string, any>>> => {

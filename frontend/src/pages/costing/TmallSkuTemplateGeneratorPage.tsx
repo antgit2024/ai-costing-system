@@ -30,6 +30,12 @@ const downloadBlob = (blob: Blob, filename: string) => {
 
 type ColorRow = TmallColorOption & { enabledSizes: Record<string, boolean> }
 
+type SizeRow = TmallSizeOption & {
+  // 绑定“模型/套版”的来源编码（用于生成商家编码；对客展示仍使用 label）
+  // 例：PI5 / YS2 / Z-3U3PAA / B-3U3PAA
+  source_code?: string
+}
+
 type BundleTokenInputParsed = {
   modeHint?: 'B' | 'Z'
   templateCode: string
@@ -45,6 +51,29 @@ const readFileAsArrayBuffer = (file: File): Promise<ArrayBuffer> =>
   })
 
 const normalizeCellText = (v: unknown) => String(v ?? '').replace(/\s+/g, ' ').trim()
+
+const buildMerchantSku = (args: {
+  merchantSkuPrefix: string
+  merchantSkuSuffix: string
+  sourceCode?: string | null
+  wh: string
+  sizeCode: string
+}) => {
+  const prefix = String(args.merchantSkuPrefix ?? '')
+  const suffix = String(args.merchantSkuSuffix ?? '')
+  const source = String(args.sourceCode ?? '').trim()
+  const wh = String(args.wh ?? '').trim()
+  const code = String(args.sizeCode ?? '').trim()
+
+  // If `source_code` is provided, it becomes the SKU anchor for ERP binding (model/bundle code),
+  // while prefix/suffix are treated as optional shop-specific decorations.
+  if (source) {
+    const mid = `${wh}${code}`.trim()
+    const joiner = mid ? '-' : ''
+    return `${source}${joiner}${mid}${suffix}`.trim()
+  }
+  return `${prefix}${wh}${code}${suffix}`.trim()
+}
 
 const parseBundleTokenInput = (raw: string): BundleTokenInputParsed | null => {
   const s0 = String(raw ?? '').trim()
@@ -200,7 +229,7 @@ type MainPatternOption = { key: string; label: string }
 type PersistedConfigV1 = {
   merchantSkuPrefix: string
   merchantSkuSuffix: string
-  sizes: TmallSizeOption[]
+  sizes: SizeRow[]
   colors: Array<TmallColorOption & { enabledSizes?: Record<string, boolean> }>
   mainPatternTypes: Array<MainPatternOption & { remark?: string }>
   ui?: {
@@ -271,9 +300,9 @@ export default function TmallSkuTemplateGeneratorPage() {
   const [merchantSkuPrefix, setMerchantSkuPrefix] = useState('BZPB008XXXXX-')
   const [merchantSkuSuffix, setMerchantSkuSuffix] = useState('')
 
-  const [sizes, setSizes] = useState<TmallSizeOption[]>([
-    { key: 'size_1', label: '枕芯+枕套', size_code: 'C1' },
-    { key: 'size_2', label: '枕套', size_code: 'C2' },
+  const [sizes, setSizes] = useState<SizeRow[]>([
+    { key: 'size_1', label: '枕芯+枕套', size_code: 'C1', source_code: '' },
+    { key: 'size_2', label: '枕套', size_code: 'C2', source_code: '' },
   ])
 
   const [colors, setColors] = useState<ColorRow[]>([
@@ -421,7 +450,13 @@ export default function TmallSkuTemplateGeneratorPage() {
         const h = fmtNum(c.height_cm)
         const wh = w && h ? `${w}${h}` : ''
         const code = String(s.size_code ?? '').trim()
-        const merchant_sku = `${merchantSkuPrefix}${wh}${code}${merchantSkuSuffix}`.trim()
+        const merchant_sku = buildMerchantSku({
+          merchantSkuPrefix,
+          merchantSkuSuffix,
+          sourceCode: (s as any)?.source_code,
+          wh,
+          sizeCode: code,
+        })
         rows.push({
           row_key: `${c.key}||${s.key}`,
           color_key: c.key,
@@ -1452,7 +1487,10 @@ export default function TmallSkuTemplateGeneratorPage() {
                   <Checkbox checked={enableSizeRemarks} onChange={(e) => setEnableSizeRemarks(e.target.checked)}>
                     备注
                   </Checkbox>
-                  <Button icon={<PlusOutlined />} onClick={() => setSizes((prev) => [...prev, { key: `size_${uid()}`, label: '', size_code: '' }])}>
+                  <Button
+                    icon={<PlusOutlined />}
+                    onClick={() => setSizes((prev) => [...prev, { key: `size_${uid()}`, label: '', size_code: '', source_code: '' }])}
+                  >
                     添加
                   </Button>
                 </Space>
@@ -1512,6 +1550,12 @@ export default function TmallSkuTemplateGeneratorPage() {
                       placeholder="编码段(可选)"
                       value={s.size_code ?? ''}
                       onChange={(e) => setSizes((prev) => prev.map((x, i) => (i === idx ? { ...x, size_code: e.target.value } : x)))}
+                    />
+                    <Input
+                      style={{ width: 220 }}
+                      placeholder="来源编码(模型/套版，如 PI5 / Z-3U3PAA)"
+                      value={String((s as any)?.source_code ?? '')}
+                      onChange={(e) => setSizes((prev) => prev.map((x, i) => (i === idx ? ({ ...x, source_code: e.target.value } as any) : x)))}
                     />
 
                     {enableSizeRemarks ? (

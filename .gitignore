@@ -34,6 +34,7 @@ frontend/.env.production
 # Local oversized/raw spreadsheets (do not commit by default; keep fixtures/chunks tracked)
 DOC/基础表单/绮妙1-10平台商品列表.xlsx
 DOC/基础表单/ERP品商品下载原始列表.xlsx
+DOC/基础表单/SKU模板_213002_1768447607241.xls
 
 
 

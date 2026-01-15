@@ -1,5 +1,17 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-15（Frontend 接力：强制三件套验收 + 工作区干净度）
+  - 本轮范围：不扩展功能，仅完成接力验收与恢复包落地（避免“正确版本只在工作区”）
+  - 本轮产物：
+    - `.gitignore`：精确忽略本地临时表单 `DOC/基础表单/SKU模板_213002_1768447607241.xls`（避免误提交/工作区长期脏）
+    - 更新恢复包：补充本条记录到 `DOC/agents/state.md`
+  - 硬验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档 grep/test -d 校验
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+  - 下一步：
+    - 若继续迭代“天猫布艺 SKU规格生成器”：优先等你补齐第二张图的字段细节/交互区形态（矩阵/列表、灰行启用、商家编码入口）
+
 - **最近校对（北京时间 GMT+8）**：2026-01-14（Bundle Templates：属性复制继承B/Z模式+编码；抽屉文案“短语”→“属性”】【/costing/bundle-templates】）
   - 产物（前端）：
     - 页面：`/costing/bundle-templates`（`frontend/src/pages/costing/BundleTemplatesPage.tsx`）

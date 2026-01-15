@@ -255,6 +255,7 @@ const buildAttributeFormulaAndGroups = (args: {
     // - 可选项来自该 base_line_id 关联的变体规则中出现过的 TOKEN（extractTokensForVariant）
     // - 多个 base_line_id 若“选项集”完全相同，则合并为同一个互斥组（用于表达“同一个TOKEN可替换多处”）
     const rawBaseLineIds: string[] = []
+    const activeBaseLineIdSet = new Set<string>() // 仅“已筛选/已强制”的基准行
     // 关键口径：公式仅基于“已筛选/已强制”的基准行（base_line_id）。
     // 若用户未筛选（parent/forced 均为空），不应生成该互斥组（尤其是兜底-零成本的 {} 分支）。
     for (const [baseLineId, v] of Object.entries(sel ?? {})) {
@@ -264,11 +265,15 @@ const buildAttributeFormulaAndGroups = (args: {
       const forced = String((v as any)?.forced_child_variant_id ?? '').trim()
       if (!parent && !forced) continue
       rawBaseLineIds.push(id)
+      activeBaseLineIdSet.add(id)
     }
     const fm = rr?.force_variant_by_base_line && typeof rr.force_variant_by_base_line === 'object' ? rr.force_variant_by_base_line : {}
     for (const baseLineId of Object.keys(fm ?? {})) {
       const id = String(baseLineId ?? '').trim()
-      if (id) rawBaseLineIds.push(id)
+      if (id) {
+        rawBaseLineIds.push(id)
+        activeBaseLineIdSet.add(id)
+      }
     }
 
     // 运营补齐口径：
@@ -306,10 +311,13 @@ const buildAttributeFormulaAndGroups = (args: {
 
     for (const baseLineId of baseLineIdsSorted) {
       const isZeroCost = !!infoByBase?.[baseLineId]?.isZeroCost
+      const isActive = activeBaseLineIdSet.has(String(baseLineId))
       const overrideKey = `${versionId}:${baseLineId}`
       const defaultToken = String(fallbackTokenOverrides?.[overrideKey] ?? '').trim()
       const alt = (variantTokenOptionsByVersionBaseLine?.[versionId] ?? {})?.[baseLineId] ?? []
-      const altTokens = Array.isArray(alt) ? alt.map((x) => String(x ?? '').trim()).filter(Boolean) : []
+      // 口径：只有当该物料位“已筛选/已强制”时，才引入规则 TOKEN 候选（如 雪尼尔）
+      // 否则只展示兜底别名（如 黄金绒），避免下拉出现运营不知为何而来的候选。
+      const altTokens = isActive ? (Array.isArray(alt) ? alt.map((x) => String(x ?? '').trim()).filter(Boolean) : []) : []
 
       const seenOpt = new Set<string>()
       const opts: string[] = []
@@ -391,22 +399,23 @@ const copyTextToClipboard = async (text: string) => {
   }
 }
 
-const buildAutoRuleFromSelections = (args: {
+const buildAutoRuleMetaFromSelections = (args: {
   presetIndex: number
   components: AttributeComponentGroups[]
   componentRows: any[]
   attributeGroupSelections: Record<string, string>
   componentOrder?: number[]
   groupOrderByPresetComponent?: Record<string, string[]>
-}): string => {
+}): { text: string; items: Array<{ tokens: Array<{ text: string; locked: boolean }>; dims: string }> } => {
   const { presetIndex, components, componentRows, attributeGroupSelections, componentOrder, groupOrderByPresetComponent } = args
-  if (!Array.isArray(components) || !Array.isArray(componentRows)) return ''
   const byComp = new Map<number, AttributeGroup[]>()
   for (const c of components) byComp.set(c.componentIndex, c.groups)
   const defaultOrder = componentRows.map((_: any, i: number) => i)
   const order = Array.isArray(componentOrder) && componentOrder.length ? componentOrder : defaultOrder
 
-  const parts: string[] = []
+  const items: Array<{ tokens: Array<{ text: string; locked: boolean }>; dims: string }> = []
+  const textParts: string[] = []
+
   for (const cIdx of order) {
     if (cIdx < 0 || cIdx >= componentRows.length) continue
     const rr = componentRows[cIdx] as any
@@ -419,18 +428,31 @@ const buildAutoRuleFromSelections = (args: {
       for (let i = 0; i < groupOrder.length; i++) idxMap.set(String(groupOrder[i]), i)
       groups = groups.slice().sort((a, b) => (idxMap.get(a.key) ?? 1e9) - (idxMap.get(b.key) ?? 1e9))
     }
-    const tokens: string[] = []
+
+    const tokens: Array<{ text: string; locked: boolean }> = []
+    const tokenTextParts: string[] = []
     for (const g of groups) {
-      const t = getEffectiveSelection({ presetIndex, componentIndex: cIdx, group: g, attributeGroupSelections })
+      const selected = getEffectiveSelection({ presetIndex, componentIndex: cIdx, group: g, attributeGroupSelections })
+      const t = normalizeSingleToken(selected)
       if (!t) continue
-      tokens.push(t)
+
+      // “不可更改”的判定：该互斥组只有一个非空候选（即只有兜底别名），运营无法通过下拉改成其它 TOKEN
+      const uniqNonEmpty = Array.from(
+        new Set((g.options ?? []).map((x) => normalizeSingleToken(x)).filter((x) => !!String(x).trim())),
+      )
+      const locked = uniqNonEmpty.length <= 1
+
+      tokens.push({ text: t, locked })
+      tokenTextParts.push(t)
     }
     if (!tokens.length) continue
-    const tokenText = tokens.join('')
     const dims = `${formatCm(rr?.width_cm)}*${formatCm(rr?.height_cm)}*${formatCm(rr?.quantity ?? 1)}`
-    parts.push(`${tokenText}${dims}`)
+    const tokenText = tokenTextParts.join('')
+    items.push({ tokens, dims })
+    textParts.push(`${tokenText}${dims}`)
   }
-  return parts.join(' + ')
+
+  return { text: textParts.join(' + '), items }
 }
 
 const SLOT_CN_FALLBACK: Record<string, string> = {
@@ -2881,7 +2903,7 @@ export default function BundleTemplatesPage() {
                                       {(() => {
                                         const orderKey = String(idx)
                                         const componentOrder = componentOrderByPreset?.[orderKey]
-                                        const autoRule = buildAutoRuleFromSelections({
+                                        const meta = buildAutoRuleMetaFromSelections({
                                           presetIndex: idx,
                                           components,
                                           componentRows: rows,
@@ -2892,15 +2914,43 @@ export default function BundleTemplatesPage() {
                                         return (
                                           <Space wrap size={8}>
                                             <Text type="secondary">自动生成：</Text>
-                                            <Text code>{autoRule || '-'}</Text>
+                                            {meta.text ? (
+                                              <Text
+                                                code
+                                                style={{
+                                                  display: 'inline-flex',
+                                                  alignItems: 'center',
+                                                  gap: 0,
+                                                }}
+                                              >
+                                                <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' }}>
+                                                  {meta.items.map((it, i2) => (
+                                                    <span key={`ar-${idx}-${i2}`}>
+                                                      {i2 > 0 ? <span>{' + '}</span> : null}
+                                                      {it.tokens.map((tk, j) => (
+                                                        <span
+                                                          key={`ar-tk-${idx}-${i2}-${j}`}
+                                                          style={tk.locked ? { color: '#cf1322', fontWeight: 700 } : undefined}
+                                                        >
+                                                          {tk.text}
+                                                        </span>
+                                                      ))}
+                                                      <span>{it.dims}</span>
+                                                    </span>
+                                                  ))}
+                                                </span>
+                                              </Text>
+                                            ) : (
+                                              <Text code>-</Text>
+                                            )}
                                             <Button
                                               size="small"
                                               type="text"
                                               icon={<CopyOutlined />}
-                                              disabled={!autoRule}
+                                              disabled={!meta.text}
                                               onClick={async () => {
-                                                if (!autoRule) return
-                                                const ok = await copyTextToClipboard(autoRule)
+                                                if (!meta.text) return
+                                                const ok = await copyTextToClipboard(meta.text)
                                                 if (ok) message.success('已复制自动生成内容')
                                                 else message.error('复制失败：请手动复制')
                                               }}

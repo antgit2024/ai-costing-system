@@ -1891,6 +1891,17 @@ export default function BundleTemplatesPage() {
                 const slot = getLineStructureLabel(base, presetVersionId)
                 const baseLabelRaw = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
                 const baseLabel = slot ? `${slot}：${baseLabelRaw}` : baseLabelRaw
+                const overrideKey = `${presetVersionId}:${String(baseLineId)}`
+                const tokenAlias = String(fallbackTokenOverrides?.[overrideKey] ?? '').trim()
+                const baseMaterialKey = String(
+                  base?.material_ref_id ??
+                    base?.material_id ??
+                    base?.material_code ??
+                    base?.material_name ??
+                    baseLabelRaw ??
+                    '',
+                ).trim()
+                const isZeroCost = baseLabelRaw.includes('兜底-零成本') || String(base?.material_code ?? '').includes('兜底-零成本')
 
                 const selectedParentId = String(selected?.parent_variant_id ?? '').trim()
                 const selectedVariant = selectedParentId ? (arr ?? []).find((x: any) => String(x?.id) === selectedParentId) : null
@@ -1912,30 +1923,63 @@ export default function BundleTemplatesPage() {
                 return {
                   key: baseLineId,
                   label: (
-                    <Space size={8}>
-                      <Text strong>{baseLabel}</Text>
-                      <Text type="secondary">{arr.length}条规则</Text>
-                      {selectedParentId ? (
-                        <Space size={6}>
-                          <Text type="secondary">{selectedEffect}</Text>
-                          {selectedProducedLabels.length && childRows.length === 0 ? (
-                            <Tag color="green">{selectedProducedLabels.join('、')}</Tag>
-                          ) : (
-                            <Tag color="green">-</Tag>
-                          )}
-                          {childRows.length ? <Tag color="orange">含二级×{childRows.length}</Tag> : null}
-                          {presetApplyMode === 'force' && childRows.length ? (
-                            <Tag color="volcano">强制：选1条子条件</Tag>
-                          ) : presetApplyMode === 'variant' && childRows.length ? (
-                            <Tag color="blue">解析：子条件默认全选</Tag>
-                          ) : (
-                            <Tag color="green">已选</Tag>
-                          )}
-                        </Space>
-                      ) : (
-                        <Tag>未选</Tag>
-                      )}
-                    </Space>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, width: '100%' }}>
+                      <Space size={8} wrap>
+                        <Text strong>{baseLabel}</Text>
+                        <Text type="secondary">{arr.length}条规则</Text>
+                        {selectedParentId ? (
+                          <Space size={6} wrap>
+                            <Text type="secondary">{selectedEffect}</Text>
+                            {selectedProducedLabels.length && childRows.length === 0 ? (
+                              <Tag color="green">{selectedProducedLabels.join('、')}</Tag>
+                            ) : (
+                              <Tag color="green">-</Tag>
+                            )}
+                            {childRows.length ? <Tag color="orange">含二级×{childRows.length}</Tag> : null}
+                            {presetApplyMode === 'force' && childRows.length ? (
+                              <Tag color="volcano">强制：选1条子条件</Tag>
+                            ) : presetApplyMode === 'variant' && childRows.length ? (
+                              <Tag color="blue">解析：子条件默认全选</Tag>
+                            ) : (
+                              <Tag color="green">已选</Tag>
+                            )}
+                          </Space>
+                        ) : (
+                          <Tag>未选</Tag>
+                        )}
+                      </Space>
+
+                      <Space size={6} align="center">
+                        <Text type="secondary">别名</Text>
+                        <Input
+                          size="small"
+                          style={{ width: 160, textAlign: 'right' }}
+                          placeholder={isZeroCost ? '（零成本兜底不可改）' : '例如：黄金绒'}
+                          // 弹窗内别名编辑：不受“属性启用/禁用”影响，仅受零成本兜底限制
+                          disabled={isZeroCost}
+                          value={tokenAlias}
+                          onChange={(e) => {
+                            const next = normalizeSingleToken(e.target.value)
+                            // 同底层物料（同 material_ref_id/material_id/material_code/material_name）自动同步别名
+                            const updates: Record<string, string> = {}
+                            for (const [blId] of presetVariantsByBaseLine.entries()) {
+                              const b = presetBaseLineMap.get(blId)
+                              const raw = String(b?.material_name ?? b?.material_code ?? blId).trim()
+                              const zc = raw.includes('兜底-零成本') || String(b?.material_code ?? '').includes('兜底-零成本')
+                              if (zc) continue
+                              const mk = String(b?.material_ref_id ?? b?.material_id ?? b?.material_code ?? b?.material_name ?? raw ?? '').trim()
+                              if (!mk || mk !== baseMaterialKey) continue
+                              updates[`${presetVersionId}:${String(blId)}`] = next
+                            }
+                            // fallback：如果识别不到 material key，则只更新当前行
+                            if (!Object.keys(updates).length) updates[overrideKey] = next
+                            setFallbackTokenOverrides((prev) => ({ ...(prev ?? {}), ...updates }))
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => e.stopPropagation()}
+                        />
+                      </Space>
+                    </div>
                   ),
                   children: (
                     <Radio.Group
@@ -2763,6 +2807,7 @@ export default function BundleTemplatesPage() {
                                   <Space wrap size={6}>
                                     <Text type="secondary">属性公式：</Text>
                                     <Text type="secondary">已写入上方“属性名称/公式”输入框（可编辑）</Text>
+                                    <Text type="secondary">提示：上下/左右移动仅影响“重新生成/自动生成”的顺序，不会自动改输入框</Text>
                                     <Button
                                       size="small"
                                       icon={<CopyOutlined />}
@@ -2976,17 +3021,6 @@ export default function BundleTemplatesPage() {
                                           <Space wrap size={8}>
                                             <Text type="secondary">自动生成：</Text>
                                             <Text code>{autoRule || '-'}</Text>
-                                            <Button
-                                              size="small"
-                                              disabled={!autoRule}
-                                              onClick={() => {
-                                                if (!autoRule) return
-                                                setPhrasePresets((prev) => (prev ?? []).map((x, i) => (i === idx ? { ...x, phrase: autoRule } : x)))
-                                                message.success('已写入自动生成内容到输入框')
-                                              }}
-                                            >
-                                              写入输入框
-                                            </Button>
                                           </Space>
                                         )
                                       })()}
@@ -3079,53 +3113,7 @@ export default function BundleTemplatesPage() {
                             <Space direction="vertical" size={4} style={{ width: '100%' }}>
                               {/* 降噪：不展示“Z模式关键行”区块；Z 模式的强制覆盖由校验自动约束 */}
                               {/* 降噪：不在此处展示“已注入触发词”与教学文案；由 Z/B 模式与预演承担验证 */}
-                              {/* 默认兜底：第一条与其它行同格式（TOKEN 可输入，兜底物料原名只读） */}
-                              {!isForce ? (() => {
-                                const seen = new Set<string>()
-                                const uniqIds: string[] = []
-                                for (const [baseLineId] of selectedEntries) {
-                                  const id = String(baseLineId)
-                                  if (!id || seen.has(id)) continue
-                                  seen.add(id)
-                                  uniqIds.push(id)
-                                }
-                                if (!uniqIds.length) return null
-                                return (
-                                  <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                                    {uniqIds.map((baseLineId) => {
-                                      const base = baseMap.get(String(baseLineId))
-                                      const slot = getLineStructureLabel(base, versionId)
-                                      const rawName = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
-                                      const overrideKey = `${versionId}:${String(baseLineId)}`
-                                      const tokenAlias = String(fallbackTokenOverrides?.[overrideKey] ?? '').trim()
-                                      return (
-                                        <Space key={`fb-token-${overrideKey}`} wrap size={10}>
-                                          <Text type="secondary">TOKEN：</Text>
-                                          <Input
-                                            size="small"
-                                            style={{ width: 180 }}
-                                            placeholder="例如：黄金绒（可选；仅允许1个TOKEN）"
-                                            disabled={disabled || rawName.includes('兜底-零成本')}
-                                            value={tokenAlias}
-                                            onChange={(e) => {
-                                              const next = normalizeSingleToken(e.target.value)
-                                              setFallbackTokenOverrides((prev) => ({
-                                                ...(prev ?? {}),
-                                                [overrideKey]: next,
-                                              }))
-                                            }}
-                                          />
-                                          <Text type="secondary">兜底物料：</Text>
-                                          <Text title={rawName}>
-                                            {slot ? `${slot}：` : ''}
-                                            {rawName}
-                                          </Text>
-                                        </Space>
-                                      )
-                                    })}
-                                  </Space>
-                                )
-                              })() : null}
+                              {/* 对客别名（TOKEN）维护入口已移至“筛选”弹窗，避免在主界面误改 */}
 
                               {selectedEntries.map(([baseLineId, s]) => {
                                 const parentId = String(s?.parent_variant_id ?? '').trim()

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Card, Checkbox, Divider, Drawer, Input, message, Select, Space, Switch, Table, Tag, Typography, Upload } from 'antd'
+import { Alert, Button, Card, Checkbox, Divider, Drawer, Input, message, Radio, Select, Space, Switch, Table, Tag, Typography, Upload } from 'antd'
 import { DeleteOutlined, DownloadOutlined, EyeOutlined, PlusOutlined, SettingOutlined, UploadOutlined } from '@ant-design/icons'
 import * as XLSX from 'xlsx'
 
@@ -45,6 +45,13 @@ const normalizeAttrValue = (v: unknown) => {
   // - trim
   // - do NOT change punctuation/case (keep user intent)
   return String(v ?? '').replace(/\s+/g, ' ').trim()
+}
+
+const fmtNum = (v: unknown): string => {
+  if (v === null || v === undefined) return ''
+  const n = Number(v)
+  if (!Number.isFinite(n)) return ''
+  return n.toFixed(2).replace(/\.?0+$/, '')
 }
 
 type HeaderIndex = {
@@ -127,6 +134,34 @@ const copyText = async (text: string) => {
   }
 }
 
+type DisplayMode = 'table' | 'matrix'
+
+type SpecRow = {
+  row_key: string
+  color_key: string
+  size_key: string
+  color_label: string
+  size_label: string
+  merchant_sku: string
+  sku_status: 0 | 1
+  main_pattern_type?: string | null
+  length_cm?: string
+  thickness_cm?: string
+  width_cm?: string
+}
+
+type SpecEdits = Record<
+  string,
+  {
+    price?: string
+    quantity?: string
+    sku_category?: '单品' | '套装'
+    barcode?: string
+    reserved_qty?: string
+    selling_point?: string
+  }
+>
+
 export default function TmallSkuTemplateGeneratorPage() {
   const [merchantSkuPrefix, setMerchantSkuPrefix] = useState('BZPB008XXXXX-')
   const [merchantSkuSuffix, setMerchantSkuSuffix] = useState('')
@@ -157,6 +192,8 @@ export default function TmallSkuTemplateGeneratorPage() {
   const [enableColorRemarks, setEnableColorRemarks] = useState(true)
   const [enableSizeRemarks, setEnableSizeRemarks] = useState(true)
   const [enablePatternRemarks, setEnablePatternRemarks] = useState(false)
+  const [displayMode, setDisplayMode] = useState<DisplayMode>('table')
+  const [specEdits, setSpecEdits] = useState<SpecEdits>({})
 
   // Persist config in browser storage (MVP; makes it usable as "系统主体" without backend yet)
   useEffect(() => {
@@ -255,6 +292,45 @@ export default function TmallSkuTemplateGeneratorPage() {
     }),
     [sizes, colors, cells, merchantSkuPrefix, merchantSkuSuffix],
   )
+
+  const specRows: SpecRow[] = useMemo(() => {
+    const rows: SpecRow[] = []
+    for (const c of colors) {
+      for (const s of sizes) {
+        const enabled = c.enabledSizes?.[s.key] !== false
+        const sku_status: 0 | 1 = enabled ? 1 : 0
+        const w = fmtNum(c.width_cm)
+        const h = fmtNum(c.height_cm)
+        const wh = w && h ? `${w}${h}` : ''
+        const code = String(s.size_code ?? '').trim()
+        const merchant_sku = `${merchantSkuPrefix}${wh}${code}${merchantSkuSuffix}`.trim()
+        rows.push({
+          row_key: `${c.key}||${s.key}`,
+          color_key: c.key,
+          size_key: s.key,
+          color_label: c.label,
+          size_label: s.label,
+          merchant_sku,
+          sku_status,
+          main_pattern_type: includeMainPatternType ? (c.main_pattern_type ?? null) : null,
+          length_cm: fmtNum(c.length_cm),
+          thickness_cm: fmtNum(c.thickness_cm),
+          width_cm: fmtNum(c.width_cm),
+        })
+      }
+    }
+    return rows
+  }, [colors, sizes, merchantSkuPrefix, merchantSkuSuffix, includeMainPatternType])
+
+  const setSkuEnabled = (colorKey: string, sizeKey: string, enabled: boolean) => {
+    setColors((prev) =>
+      prev.map((c) => (c.key === colorKey ? { ...c, enabledSizes: { ...(c.enabledSizes ?? {}), [sizeKey]: enabled } } : c)),
+    )
+  }
+
+  const updateColorField = (colorKey: string, patch: Partial<ColorRow>) => {
+    setColors((prev) => prev.map((c) => (c.key === colorKey ? { ...c, ...patch } : c)))
+  }
 
   const doPreview = async () => {
     setLoadingPreview(true)
@@ -490,6 +566,18 @@ export default function TmallSkuTemplateGeneratorPage() {
               <Button icon={<SettingOutlined />} onClick={() => setSettingsOpen(true)}>
                 设置
               </Button>
+              <Divider type="vertical" />
+              <Text type="secondary">SKU规格展示</Text>
+              <Radio.Group
+                value={displayMode}
+                onChange={(e) => setDisplayMode(e.target.value as DisplayMode)}
+                optionType="button"
+                buttonStyle="solid"
+                options={[
+                  { label: '表格', value: 'table' },
+                  { label: '矩阵', value: 'matrix' },
+                ]}
+              />
             </Space>
 
             <Divider style={{ margin: '8px 0' }} />
@@ -545,6 +633,224 @@ export default function TmallSkuTemplateGeneratorPage() {
           </Space>
         </Card>
 
+        {displayMode === 'table' ? (
+          <Card title="SKU规格（表格样式）" extra={<Text type="secondary">行数：{specRows.length}</Text>}>
+            <Table
+              size="small"
+              pagination={false}
+              rowKey="row_key"
+              dataSource={specRows}
+              scroll={{ x: 1600 }}
+              onRow={(r) => ({
+                style: r.sku_status === 0 ? { opacity: 0.45 } : undefined,
+              })}
+              columns={[
+                {
+                  title: '颜色分类',
+                  dataIndex: 'color_label',
+                  fixed: 'left',
+                  width: 300,
+                  render: (_: any, r: SpecRow) => {
+                    const color = colors.find((c) => c.key === r.color_key)
+                    const img = (color as any)?.metadata_json?.image_data_url as string | undefined
+                    return (
+                      <Space size={8} style={{ alignItems: 'flex-start' }}>
+                        {img ? (
+                          <img
+                            src={img}
+                            alt="img"
+                            style={{ width: 28, height: 28, borderRadius: 6, objectFit: 'cover' }}
+                          />
+                        ) : null}
+                        <div style={{ lineHeight: 1.2 }}>{r.color_label}</div>
+                      </Space>
+                    )
+                  },
+                },
+                { title: '尺寸', dataIndex: 'size_label', width: 120 },
+                {
+                  title: '价格（元）',
+                  width: 120,
+                  render: (_: any, r: SpecRow) => (
+                    <Input
+                      placeholder="价格"
+                      value={specEdits[r.row_key]?.price ?? ''}
+                      onChange={(e) =>
+                        setSpecEdits((prev) => ({
+                          ...prev,
+                          [r.row_key]: { ...(prev[r.row_key] ?? {}), price: e.target.value },
+                        }))
+                      }
+                    />
+                  ),
+                },
+                {
+                  title: '数量',
+                  width: 110,
+                  render: (_: any, r: SpecRow) => (
+                    <Input
+                      placeholder="数量"
+                      value={specEdits[r.row_key]?.quantity ?? ''}
+                      onChange={(e) =>
+                        setSpecEdits((prev) => ({
+                          ...prev,
+                          [r.row_key]: { ...(prev[r.row_key] ?? {}), quantity: e.target.value },
+                        }))
+                      }
+                    />
+                  ),
+                },
+                {
+                  title: 'SKU分类',
+                  width: 120,
+                  render: (_: any, r: SpecRow) => (
+                    <Select
+                      value={specEdits[r.row_key]?.sku_category ?? '单品'}
+                      style={{ width: '100%' }}
+                      options={[
+                        { label: '单品', value: '单品' },
+                        { label: '套装', value: '套装' },
+                      ]}
+                      onChange={(v) =>
+                        setSpecEdits((prev) => ({
+                          ...prev,
+                          [r.row_key]: { ...(prev[r.row_key] ?? {}), sku_category: v },
+                        }))
+                      }
+                    />
+                  ),
+                },
+                {
+                  title: '主图案类型',
+                  width: 160,
+                  render: (_: any, r: SpecRow) => (
+                    <Select
+                      allowClear
+                      disabled={!includeMainPatternType}
+                      placeholder="请选择"
+                      style={{ width: '100%' }}
+                      value={r.main_pattern_type ?? undefined}
+                      options={mainPatternTypes.map((p) => ({ label: p.label, value: p.label }))}
+                      onChange={(v) => updateColorField(r.color_key, { main_pattern_type: v ?? null })}
+                    />
+                  ),
+                },
+                {
+                  title: '长度',
+                  width: 100,
+                  render: (_: any, r: SpecRow) => (
+                    <Input
+                      placeholder="规格"
+                      value={r.length_cm ?? ''}
+                      onChange={(e) => updateColorField(r.color_key, { length_cm: Number(e.target.value || 0) })}
+                    />
+                  ),
+                },
+                {
+                  title: '厚度(cm)',
+                  width: 120,
+                  render: (_: any, r: SpecRow) => (
+                    <Input
+                      placeholder="规格"
+                      value={r.thickness_cm ?? ''}
+                      onChange={(e) => updateColorField(r.color_key, { thickness_cm: Number(e.target.value || 0) })}
+                    />
+                  ),
+                },
+                {
+                  title: '宽度',
+                  width: 100,
+                  render: (_: any, r: SpecRow) => (
+                    <Input
+                      placeholder="规格"
+                      value={r.width_cm ?? ''}
+                      onChange={(e) => updateColorField(r.color_key, { width_cm: Number(e.target.value || 0) })}
+                    />
+                  ),
+                },
+                {
+                  title: '商家编码',
+                  dataIndex: 'merchant_sku',
+                  width: 220,
+                  render: (v: any) => <Input value={String(v ?? '')} readOnly />,
+                },
+                {
+                  title: '条形码',
+                  width: 180,
+                  render: (_: any, r: SpecRow) => (
+                    <Input
+                      placeholder="条形码"
+                      value={specEdits[r.row_key]?.barcode ?? ''}
+                      onChange={(e) =>
+                        setSpecEdits((prev) => ({
+                          ...prev,
+                          [r.row_key]: { ...(prev[r.row_key] ?? {}), barcode: e.target.value },
+                        }))
+                      }
+                    />
+                  ),
+                },
+                {
+                  title: '预扣数量',
+                  width: 120,
+                  render: (_: any, r: SpecRow) => (
+                    <Input
+                      placeholder="0"
+                      value={specEdits[r.row_key]?.reserved_qty ?? ''}
+                      onChange={(e) =>
+                        setSpecEdits((prev) => ({
+                          ...prev,
+                          [r.row_key]: { ...(prev[r.row_key] ?? {}), reserved_qty: e.target.value },
+                        }))
+                      }
+                    />
+                  ),
+                },
+                {
+                  title: '推荐卖点',
+                  width: 180,
+                  render: (_: any, r: SpecRow) => (
+                    <Input
+                      placeholder="可选"
+                      value={specEdits[r.row_key]?.selling_point ?? ''}
+                      onChange={(e) =>
+                        setSpecEdits((prev) => ({
+                          ...prev,
+                          [r.row_key]: { ...(prev[r.row_key] ?? {}), selling_point: e.target.value },
+                        }))
+                      }
+                    />
+                  ),
+                },
+                {
+                  title: '是否上架',
+                  width: 110,
+                  fixed: 'right',
+                  render: (_: any, r: SpecRow) => (
+                    <Switch checked={r.sku_status === 1} onChange={(v) => setSkuEnabled(r.color_key, r.size_key, v)} />
+                  ),
+                },
+                {
+                  title: '操作',
+                  width: 110,
+                  fixed: 'right',
+                  render: (_: any, r: SpecRow) =>
+                    r.sku_status === 1 ? (
+                      <Button type="link" danger onClick={() => setSkuEnabled(r.color_key, r.size_key, false)}>
+                        删除
+                      </Button>
+                    ) : (
+                      <Button type="link" onClick={() => setSkuEnabled(r.color_key, r.size_key, true)}>
+                        重新启用
+                      </Button>
+                    ),
+                },
+              ]}
+            />
+          </Card>
+        ) : null}
+
+        {displayMode === 'matrix' ? (
         <Card
           title="颜色分类（图案/工艺款式）+ 是否上架矩阵"
           extra={
@@ -654,6 +960,7 @@ export default function TmallSkuTemplateGeneratorPage() {
             <Text type="secondary">说明：每个开关对应导出表格里的“是否上架”（开=1，关=0，平台显示为灰色不可选但可重新启用）。</Text>
           </div>
         </Card>
+        ) : null}
 
         <Card title="预览（前 50 行）" extra={<Text type="secondary">共 {previewTotal} 行</Text>}>
           <Table

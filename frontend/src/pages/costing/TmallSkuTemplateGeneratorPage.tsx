@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Alert, Button, Card, Checkbox, Divider, Drawer, Input, message, Radio, Select, Space, Switch, Table, Tag, Typography, Upload } from 'antd'
-import { DeleteOutlined, DownloadOutlined, EyeOutlined, PlusOutlined, SettingOutlined, UploadOutlined } from '@ant-design/icons'
+import { DeleteOutlined, DownloadOutlined, EyeOutlined, PlusOutlined, ReloadOutlined, SettingOutlined, UploadOutlined } from '@ant-design/icons'
 import * as XLSX from 'xlsx'
 
 import {
@@ -67,23 +67,16 @@ const buildMerchantSku = (args: {
   merchantSkuPrefix: string
   merchantSkuSuffix: string
   sourceCode?: string | null
-  wh: string
-  sizeCode: string
 }) => {
   const prefix = String(args.merchantSkuPrefix ?? '')
   const suffix = String(args.merchantSkuSuffix ?? '')
   const source = String(args.sourceCode ?? '').trim()
-  const wh = String(args.wh ?? '').trim()
-  const code = String(args.sizeCode ?? '').trim()
 
-  // If `source_code` is provided, it becomes the SKU anchor for ERP binding (model/bundle code),
-  // while prefix/suffix are treated as optional shop-specific decorations.
+  // IMPORTANT: 商家编码里不要拼尺寸（例如 -4545 / 45x45 之类），只保留稳定的绑定锚点。
   if (source) {
-    const mid = `${wh}${code}`.trim()
-    const joiner = mid ? '-' : ''
-    return `${source}${joiner}${mid}${suffix}`.trim()
+    return `${source}${suffix}`.trim()
   }
-  return `${prefix}${wh}${code}${suffix}`.trim()
+  return `${prefix}${suffix}`.trim()
 }
 
 const parseBundleTokenInput = (raw: string): BundleTokenInputParsed | null => {
@@ -364,6 +357,7 @@ export default function TmallSkuTemplateGeneratorPage() {
   // Model/bundle dropdown sources (for colors & sizes)
   const [sourceGroups, setSourceGroups] = useState<SourceOptionGroup[]>([])
   const [loadingSourceGroups, setLoadingSourceGroups] = useState(false)
+  const [sourceRefreshKey, setSourceRefreshKey] = useState(0)
 
   // Explicit save/load profiles (in addition to auto localStorage)
   const [profileName, setProfileName] = useState('')
@@ -422,7 +416,7 @@ export default function TmallSkuTemplateGeneratorPage() {
   }, [])
 
   useEffect(() => {
-    // fetch options once (lazy-ish)
+    // fetch options (refreshable)
     let cancelled = false
     void (async () => {
       setLoadingSourceGroups(true)
@@ -480,7 +474,7 @@ export default function TmallSkuTemplateGeneratorPage() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [sourceRefreshKey])
 
   useEffect(() => {
     try {
@@ -548,17 +542,11 @@ export default function TmallSkuTemplateGeneratorPage() {
       for (const s of sizes) {
         const enabled = c.enabledSizes?.[s.key] !== false
         const sku_status: 0 | 1 = enabled ? 1 : 0
-        const w = fmtNum(c.width_cm)
-        const h = fmtNum(c.height_cm)
-        const wh = w && h ? `${w}${h}` : ''
-        const code = String(s.size_code ?? '').trim()
         const merchant_sku = buildMerchantSku({
           merchantSkuPrefix,
           merchantSkuSuffix,
           // 颜色分类绑定优先级最高：更具体（同一尺寸下不同工艺/套版可不同）
           sourceCode: (c as any)?.source_code || (s as any)?.source_code,
-          wh,
-          sizeCode: code,
         })
         rows.push({
           row_key: `${c.key}||${s.key}`,
@@ -1458,7 +1446,19 @@ export default function TmallSkuTemplateGeneratorPage() {
             <Card
               size="small"
               title="属性选择"
-              extra={<Text type="secondary">颜色分类/尺寸为必选；主图案类型可选</Text>}
+              extra={
+                <Space wrap size={8}>
+                  <Text type="secondary">颜色分类/尺寸为必选；主图案类型可选</Text>
+                  <Button
+                    size="small"
+                    icon={<ReloadOutlined />}
+                    loading={loadingSourceGroups}
+                    onClick={() => setSourceRefreshKey((x) => x + 1)}
+                  >
+                    刷新模型/套版
+                  </Button>
+                </Space>
+              }
             >
               <Space wrap size={16}>
                 <Checkbox checked disabled>
@@ -1559,9 +1559,11 @@ export default function TmallSkuTemplateGeneratorPage() {
                     <Select
                       allowClear
                       showSearch
-                      style={{ width: 360 }}
+                      style={{ width: 520 }}
                       placeholder="绑定来源(模型/套版)（可选，优先级最高）"
                       loading={loadingSourceGroups}
+                      popupMatchSelectWidth={false}
+                      listHeight={520}
                       value={String((c as any)?.source_code ?? '') || undefined}
                       options={[
                         { label: '不绑定（使用尺寸绑定/前后缀规则）', value: '' },
@@ -1675,18 +1677,14 @@ export default function TmallSkuTemplateGeneratorPage() {
                       value={s.label}
                       onChange={(e) => setSizes((prev) => prev.map((x, i) => (i === idx ? { ...x, label: e.target.value } : x)))}
                     />
-                    <Input
-                      style={{ width: 120 }}
-                      placeholder="编码段(可选)"
-                      value={s.size_code ?? ''}
-                      onChange={(e) => setSizes((prev) => prev.map((x, i) => (i === idx ? { ...x, size_code: e.target.value } : x)))}
-                    />
                     <Select
                       allowClear
                       showSearch
-                      style={{ width: 360 }}
+                      style={{ width: 520 }}
                       placeholder="绑定来源(模型/套版)（可选，优先级低于颜色绑定）"
                       loading={loadingSourceGroups}
+                      popupMatchSelectWidth={false}
+                      listHeight={520}
                       value={String((s as any)?.source_code ?? '') || undefined}
                       options={[
                         { label: '不绑定（使用前后缀规则）', value: '' },

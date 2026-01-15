@@ -1084,16 +1084,16 @@ export default function BundleTemplatesPage() {
     const presetMode = (String((p as any)?.mode ?? 'parse').trim() === 'force' ? 'force' : 'parse') as 'parse' | 'force'
     const valid = rows.filter((c: any) => {
       const hasModel = !!String(c?.model_version_id ?? '').trim()
-      const qtyOk = Number(c?.quantity) > 0
       const whOk = Number(c?.width_cm) > 0 && Number(c?.height_cm) > 0
+      const qtyOk = Number(c?.quantity) > 0
       if (presetMode === 'force') return hasModel && qtyOk && whOk
-      // parse(B): allow empty width/height (runtime will parse from 商品规格); still require model+qty
-      return hasModel && qtyOk
+      // parse(B): allow empty width/height/quantity (runtime will parse width/height from 商品规格; quantity defaults to 1)
+      return hasModel
     })
     if (!valid.length) {
       return presetMode === 'force'
         ? { ok: false, reason: '请至少填写 1 条完整组件行（模型/宽/高/数量）' }
-        : { ok: false, reason: '请至少填写 1 条组件行（模型/数量）；尺寸可留空（解析型将从商品规格解析）' }
+        : { ok: false, reason: '请至少填写 1 条组件行（仅需选择模型；尺寸/数量可留空，解析型将从商品规格解析尺寸，数量默认 1）' }
     }
     return { ok: true }
   }
@@ -1134,8 +1134,12 @@ export default function BundleTemplatesPage() {
         }
       }
       if (!(q > 0)) {
-        okThisComp = false
-        issues.push({ level: 'error', message: `组件${cIdx + 1}：数量必须 >0（不填请写 1）` })
+        if (presetMode === 'force') {
+          okThisComp = false
+          issues.push({ level: 'error', message: `组件${cIdx + 1}：数量必须 >0（不填请写 1）` })
+        } else {
+          issues.push({ level: 'warn', message: `组件${cIdx + 1}：未填写数量（解析型默认按 1；若规格写了 45*45*2 则以规格为准）` })
+        }
       }
 
       const baseMap = baseLineMapByVersion.get(versionId) ?? new Map<string, any>()
@@ -1805,7 +1809,7 @@ export default function BundleTemplatesPage() {
                           : undefined,
                     }))
                     .filter((c) => {
-                      if (!c.model_version_id || !(c.quantity > 0)) return false
+                      if (!c.model_version_id) return false
                       // Z(指定型) 必须固定尺寸；B(解析型) 允许尺寸为 0（运行时从商品规格解析灌入）
                       if (presetMode === 'force') return c.width_mm > 0 && c.height_mm > 0
                       return true
@@ -1859,10 +1863,10 @@ export default function BundleTemplatesPage() {
       const presetMode = (String((p as any)?.mode ?? 'parse').trim() === 'force' ? 'force' : 'parse') as 'parse' | 'force'
       const valid = rows.filter((c: any) => {
         const hasModel = !!String(c?.model_version_id ?? '').trim()
-        const qtyOk = Number(c?.quantity) > 0
         const whOk = Number(c?.width_cm) > 0 && Number(c?.height_cm) > 0
+        const qtyOk = Number(c?.quantity) > 0
         if (presetMode === 'force') return hasModel && qtyOk && whOk
-        return hasModel && qtyOk
+        return hasModel
       })
       const phraseText =
         presetMode === 'force'
@@ -1894,7 +1898,7 @@ export default function BundleTemplatesPage() {
           message:
             presetMode === 'force'
               ? `属性 ${selector}：已启用但未配置完整组件行（模型/宽/高/数量）；请补齐至少1行或在左侧停用该属性`
-              : `属性 ${selector}：已启用但未配置组件行（模型/数量）；尺寸可留空（解析型将从商品规格解析）`,
+              : `属性 ${selector}：已启用但未配置组件行（至少选择模型）；尺寸/数量可留空（解析型将从商品规格解析尺寸，数量默认 1）`,
         })
       }
     }

@@ -406,14 +406,14 @@ const buildAutoRuleMetaFromSelections = (args: {
   attributeGroupSelections: Record<string, string>
   componentOrder?: number[]
   groupOrderByPresetComponent?: Record<string, string[]>
-}): { text: string; items: Array<{ tokens: Array<{ text: string; locked: boolean }>; dims: string }> } => {
+}): { text: string; items: Array<{ tokens: Array<{ text: string; isFromDropdown: boolean }>; dims: string }> } => {
   const { presetIndex, components, componentRows, attributeGroupSelections, componentOrder, groupOrderByPresetComponent } = args
   const byComp = new Map<number, AttributeGroup[]>()
   for (const c of components) byComp.set(c.componentIndex, c.groups)
   const defaultOrder = componentRows.map((_: any, i: number) => i)
   const order = Array.isArray(componentOrder) && componentOrder.length ? componentOrder : defaultOrder
 
-  const items: Array<{ tokens: Array<{ text: string; locked: boolean }>; dims: string }> = []
+  const items: Array<{ tokens: Array<{ text: string; isFromDropdown: boolean }>; dims: string }> = []
   const textParts: string[] = []
 
   for (const cIdx of order) {
@@ -429,22 +429,15 @@ const buildAutoRuleMetaFromSelections = (args: {
       groups = groups.slice().sort((a, b) => (idxMap.get(a.key) ?? 1e9) - (idxMap.get(b.key) ?? 1e9))
     }
 
-    const tokens: Array<{ text: string; locked: boolean }> = []
+    const tokens: Array<{ text: string; isFromDropdown: boolean }> = []
     const tokenTextParts: string[] = []
     for (const g of groups) {
+      const selKey = `${presetIndex}:${cIdx}:${g.key}`
+      const isFromDropdown = Object.prototype.hasOwnProperty.call(attributeGroupSelections, selKey)
       const selected = getEffectiveSelection({ presetIndex, componentIndex: cIdx, group: g, attributeGroupSelections })
       const t = normalizeSingleToken(selected)
       if (!t) continue
-
-      // “不可更改”的判定：
-      // - 非零成本互斥组：只有一个非空候选（即只有兜底别名），运营无法通过下拉改成其它 TOKEN
-      // - 零成本互斥组：至少有“（无）+TOKEN”两个选项，本质可改，不应标红
-      const uniqNonEmpty = Array.from(
-        new Set((g.options ?? []).map((x) => normalizeSingleToken(x)).filter((x) => !!String(x).trim())),
-      )
-      const locked = !g.isZeroCostGroup && uniqNonEmpty.length <= 1
-
-      tokens.push({ text: t, locked })
+      tokens.push({ text: t, isFromDropdown })
       tokenTextParts.push(t)
     }
     if (!tokens.length) continue
@@ -2900,7 +2893,7 @@ export default function BundleTemplatesPage() {
                             })
                             const components = built.components
                             return (
-                              <div style={{ width: '100%' }}>
+                              <div style={{ width: '100%', display: 'block' }}>
                                 <div
                                   style={{
                                     background: '#fff7e6',
@@ -2908,6 +2901,12 @@ export default function BundleTemplatesPage() {
                                     borderRadius: 8,
                                     padding: 10,
                                     width: '100%',
+                                    display: 'block',
+                                    boxSizing: 'border-box',
+                                    alignSelf: 'stretch',
+                                    // 兜底：在 Card body 有 padding 时也尽量贴边铺满视觉宽度
+                                    marginLeft: -8,
+                                    marginRight: -8,
                                   }}
                                 >
                                   {components.length ? (
@@ -2935,7 +2934,7 @@ export default function BundleTemplatesPage() {
                                                       {it.tokens.map((tk, j) => (
                                                         <span
                                                           key={`ar-tk-${idx}-${i2}-${j}`}
-                                                          style={tk.locked ? { color: '#cf1322', fontWeight: 700 } : undefined}
+                                                          style={tk.isFromDropdown ? { color: '#cf1322', fontWeight: 700 } : undefined}
                                                         >
                                                           {tk.text}
                                                         </span>

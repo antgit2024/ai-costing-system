@@ -5,7 +5,9 @@ import * as XLSX from 'xlsx'
 
 import {
   exportTmallSkuTemplateXlsx,
+  fetchBundleTemplates,
   fetchBundleTemplateByCode,
+  fetchPublishedStandardModels,
   previewTmallSkuTemplate,
   type TmallColorOption,
   type TmallSizeOption,
@@ -28,13 +30,20 @@ const downloadBlob = (blob: Blob, filename: string) => {
   window.URL.revokeObjectURL(url)
 }
 
-type ColorRow = TmallColorOption & { enabledSizes: Record<string, boolean> }
+type ColorRow = TmallColorOption & {
+  enabledSizes: Record<string, boolean>
+  // 绑定“模型/套版”的来源编码（用于生成商家编码）；颜色分类层级优先级最高（覆盖尺寸绑定）
+  // 例：PI5 / Z-3U3PAA / B-3U3PAA
+  source_code?: string
+}
 
 type SizeRow = TmallSizeOption & {
   // 绑定“模型/套版”的来源编码（用于生成商家编码；对客展示仍使用 label）
   // 例：PI5 / YS2 / Z-3U3PAA / B-3U3PAA
   source_code?: string
 }
+
+type SourceOptionGroup = { label: string; options: Array<{ label: string; value: string }> }
 
 type BundleTokenInputParsed = {
   modeHint?: 'B' | 'Z'
@@ -51,6 +60,8 @@ const readFileAsArrayBuffer = (file: File): Promise<ArrayBuffer> =>
   })
 
 const normalizeCellText = (v: unknown) => String(v ?? '').replace(/\s+/g, ' ').trim()
+
+const safeUpper = (v: unknown) => String(v ?? '').trim().toUpperCase()
 
 const buildMerchantSku = (args: {
   merchantSkuPrefix: string
@@ -230,7 +241,7 @@ type PersistedConfigV1 = {
   merchantSkuPrefix: string
   merchantSkuSuffix: string
   sizes: SizeRow[]
-  colors: Array<TmallColorOption & { enabledSizes?: Record<string, boolean> }>
+  colors: Array<TmallColorOption & { enabledSizes?: Record<string, boolean>; source_code?: string }>
   mainPatternTypes: Array<MainPatternOption & { remark?: string }>
   ui?: {
     enableColorImages?: boolean
@@ -243,6 +254,7 @@ type PersistedConfigV1 = {
 }
 
 const STORAGE_KEY = 'tmall_sku_generator_config_v1'
+const STORAGE_PROFILES_KEY = 'tmall_sku_generator_profiles_v1'
 
 const downloadText = (text: string, filename: string) => {
   const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
@@ -306,7 +318,14 @@ export default function TmallSkuTemplateGeneratorPage() {
   ])
 
   const [colors, setColors] = useState<ColorRow[]>([
-    { key: 'c1', label: 'Q25122501A黄金绒背面纯色（红色毛球） 45X45', width_cm: 45, height_cm: 45, enabledSizes: { size_1: true, size_2: true } },
+    {
+      key: 'c1',
+      label: 'Q25122501A黄金绒背面纯色（红色毛球） 45X45',
+      width_cm: 45,
+      height_cm: 45,
+      enabledSizes: { size_1: true, size_2: true },
+      source_code: '',
+    },
   ])
 
   const [previewRows, setPreviewRows] = useState<TmallSkuRow[]>([])
@@ -342,6 +361,15 @@ export default function TmallSkuTemplateGeneratorPage() {
   const [bundleIncludeDimsInColorLabel, setBundleIncludeDimsInColorLabel] = useState(true)
   const [bundleGeneratedColorLabels, setBundleGeneratedColorLabels] = useState<string>('')
 
+  // Model/bundle dropdown sources (for colors & sizes)
+  const [sourceGroups, setSourceGroups] = useState<SourceOptionGroup[]>([])
+  const [loadingSourceGroups, setLoadingSourceGroups] = useState(false)
+
+  // Explicit save/load profiles (in addition to auto localStorage)
+  const [profileName, setProfileName] = useState('')
+  const [profileNames, setProfileNames] = useState<string[]>([])
+  const [selectedProfileName, setSelectedProfileName] = useState<string>('')
+
   // Persist config in browser storage (MVP; makes it usable as "系统主体" without backend yet)
   useEffect(() => {
     try {
@@ -361,6 +389,7 @@ export default function TmallSkuTemplateGeneratorPage() {
             thickness_cm: c.thickness_cm,
             length_cm: c.length_cm,
             main_pattern_type: c.main_pattern_type,
+            source_code: (c as any)?.source_code ?? '',
             enabledSizes: c.enabledSizes ?? {},
           })),
         )
@@ -378,6 +407,79 @@ export default function TmallSkuTemplateGeneratorPage() {
       // ignore storage corruption
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_PROFILES_KEY)
+      if (!raw) return
+      const parsed = JSON.parse(raw) as Record<string, PersistedConfigV1>
+      const names = Object.keys(parsed ?? {}).filter(Boolean).sort((a, b) => a.localeCompare(b))
+      setProfileNames(names)
+    } catch {
+      // ignore
+    }
+  }, [])
+
+  useEffect(() => {
+    // fetch options once (lazy-ish)
+    let cancelled = false
+    void (async () => {
+      setLoadingSourceGroups(true)
+      try {
+        const [modelsResp, bundlesResp] = await Promise.all([
+          fetchPublishedStandardModels({ limit: 200 }),
+          fetchBundleTemplates({ page: 1, page_size: 200, include_archived: true }),
+        ])
+
+        const modelItems = Array.isArray((modelsResp as any)?.items) ? ((modelsResp as any).items as any[]) : Array.isArray(modelsResp as any) ? (modelsResp as any) : []
+        const modelOptions = modelItems
+          .map((it: any) => {
+            const code = safeUpper((it as any)?.code ?? (it as any)?.model_code ?? (it as any)?.model ?? '')
+            const name = String((it as any)?.name ?? (it as any)?.model_name ?? '').trim()
+            if (!code) return null
+            return { value: code, label: name ? `${code}（${name}）` : code }
+          })
+          .filter(Boolean) as Array<{ value: string; label: string }>
+
+        const bundleItems = Array.isArray((bundlesResp as any)?.items) ? ((bundlesResp as any).items as any[]) : []
+        const bundleOptions: Array<{ value: string; label: string }> = []
+        for (const t of bundleItems) {
+          const code = safeUpper((t as any)?.code)
+          if (!code) continue
+          const name = String((t as any)?.name ?? '').trim()
+          const pp = Array.isArray((t as any)?.metadata?.phrase_presets) ? ((t as any).metadata.phrase_presets as any[]) : []
+          for (const p of pp) {
+            const sel = safeUpper((p as any)?.selector)
+            if (!sel) continue
+            const mode = String((p as any)?.mode ?? '').trim() === 'force' ? 'Z' : 'B'
+            const token = `${mode}-${code}${sel}`
+            const phrase = String((p as any)?.phrase ?? '').trim()
+            bundleOptions.push({
+              value: token,
+              label: `${token}${name ? `（${name}）` : ''}${phrase ? `：${phrase}` : ''}`,
+            })
+          }
+        }
+        // stable sort
+        modelOptions.sort((a, b) => a.value.localeCompare(b.value))
+        bundleOptions.sort((a, b) => a.value.localeCompare(b.value))
+
+        const groups: SourceOptionGroup[] = [
+          { label: '标准模型（已发布）', options: modelOptions },
+          { label: '套装模板（B/Z + AA/AB...）', options: bundleOptions },
+        ].filter((g) => g.options.length)
+
+        if (!cancelled) setSourceGroups(groups)
+      } catch (e: any) {
+        if (!cancelled) message.warning(`加载“模型/套版”下拉失败：${String(e?.message ?? e)}`)
+      } finally {
+        if (!cancelled) setLoadingSourceGroups(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   useEffect(() => {
@@ -453,7 +555,8 @@ export default function TmallSkuTemplateGeneratorPage() {
         const merchant_sku = buildMerchantSku({
           merchantSkuPrefix,
           merchantSkuSuffix,
-          sourceCode: (s as any)?.source_code,
+          // 颜色分类绑定优先级最高：更具体（同一尺寸下不同工艺/套版可不同）
+          sourceCode: (c as any)?.source_code || (s as any)?.source_code,
           wh,
           sizeCode: code,
         })
@@ -654,6 +757,7 @@ export default function TmallSkuTemplateGeneratorPage() {
             thickness_cm: c.thickness_cm ?? null,
             length_cm: c.length_cm ?? null,
             main_pattern_type: c.main_pattern_type ?? null,
+            source_code: String((c as any)?.source_code ?? '').trim(),
             enabledSizes: (c.enabledSizes && typeof c.enabledSizes === 'object' ? c.enabledSizes : {}) as Record<string, boolean>,
           })),
         )
@@ -1391,6 +1495,7 @@ export default function TmallSkuTemplateGeneratorPage() {
                           width_cm: 45,
                           height_cm: 45,
                           enabledSizes: Object.fromEntries(sizes.map((s) => [s.key, true])),
+                          source_code: '',
                         },
                       ])
                     }
@@ -1449,6 +1554,31 @@ export default function TmallSkuTemplateGeneratorPage() {
                       placeholder="颜色分类（天猫展示值）"
                       value={c.label}
                       onChange={(e) => setColors((prev) => prev.map((x, i) => (i === idx ? { ...x, label: e.target.value } : x)))}
+                    />
+
+                    <Select
+                      allowClear
+                      showSearch
+                      style={{ width: 360 }}
+                      placeholder="绑定来源(模型/套版)（可选，优先级最高）"
+                      loading={loadingSourceGroups}
+                      value={String((c as any)?.source_code ?? '') || undefined}
+                      options={[
+                        { label: '不绑定（使用尺寸绑定/前后缀规则）', value: '' },
+                        ...sourceGroups.map((g) => ({
+                          label: g.label,
+                          options: g.options,
+                        })),
+                      ]}
+                      onChange={(v) =>
+                        setColors((prev) => prev.map((x, i) => (i === idx ? ({ ...x, source_code: String(v ?? '') } as any) : x)))
+                      }
+                      filterOption={(input, opt) => {
+                        const t = String((opt as any)?.label ?? '')
+                        const vv = String((opt as any)?.value ?? '')
+                        const q = String(input ?? '').trim().toLowerCase()
+                        return t.toLowerCase().includes(q) || vv.toLowerCase().includes(q)
+                      }}
                     />
 
                     {enableColorRemarks ? (
@@ -1551,11 +1681,29 @@ export default function TmallSkuTemplateGeneratorPage() {
                       value={s.size_code ?? ''}
                       onChange={(e) => setSizes((prev) => prev.map((x, i) => (i === idx ? { ...x, size_code: e.target.value } : x)))}
                     />
-                    <Input
-                      style={{ width: 220 }}
-                      placeholder="来源编码(模型/套版，如 PI5 / Z-3U3PAA)"
-                      value={String((s as any)?.source_code ?? '')}
-                      onChange={(e) => setSizes((prev) => prev.map((x, i) => (i === idx ? ({ ...x, source_code: e.target.value } as any) : x)))}
+                    <Select
+                      allowClear
+                      showSearch
+                      style={{ width: 360 }}
+                      placeholder="绑定来源(模型/套版)（可选，优先级低于颜色绑定）"
+                      loading={loadingSourceGroups}
+                      value={String((s as any)?.source_code ?? '') || undefined}
+                      options={[
+                        { label: '不绑定（使用前后缀规则）', value: '' },
+                        ...sourceGroups.map((g) => ({
+                          label: g.label,
+                          options: g.options,
+                        })),
+                      ]}
+                      onChange={(v) =>
+                        setSizes((prev) => prev.map((x, i) => (i === idx ? ({ ...x, source_code: String(v ?? '') } as any) : x)))
+                      }
+                      filterOption={(input, opt) => {
+                        const t = String((opt as any)?.label ?? '')
+                        const vv = String((opt as any)?.value ?? '')
+                        const q = String(input ?? '').trim().toLowerCase()
+                        return t.toLowerCase().includes(q) || vv.toLowerCase().includes(q)
+                      }}
                     />
 
                     {enableSizeRemarks ? (
@@ -1648,6 +1796,145 @@ export default function TmallSkuTemplateGeneratorPage() {
                 </Space>
               }
             >
+              <div style={{ marginBottom: 12 }}>
+                <Text type="secondary">保存方案（显式）</Text>
+                <div style={{ marginTop: 8 }}>
+                  <Space wrap size={8}>
+                    <Input
+                      style={{ width: 240 }}
+                      placeholder="方案名（例如：抱枕-枕套/枕芯套装）"
+                      value={profileName}
+                      onChange={(e) => setProfileName(e.target.value)}
+                    />
+                    <Button
+                      onClick={() => {
+                        const name = String(profileName ?? '').trim()
+                        if (!name) {
+                          message.warning('请输入方案名')
+                          return
+                        }
+                        try {
+                          const raw = localStorage.getItem(STORAGE_PROFILES_KEY)
+                          const all = raw ? (JSON.parse(raw) as Record<string, PersistedConfigV1>) : {}
+                          all[name] = {
+                            merchantSkuPrefix,
+                            merchantSkuSuffix,
+                            sizes,
+                            colors,
+                            mainPatternTypes,
+                            ui: {
+                              enableColorImages,
+                              enableSizeImages,
+                              enableColorRemarks,
+                              enableSizeRemarks,
+                              enablePatternRemarks,
+                              includeMainPatternType,
+                            },
+                          }
+                          localStorage.setItem(STORAGE_PROFILES_KEY, JSON.stringify(all))
+                          const names = Object.keys(all).filter(Boolean).sort((a, b) => a.localeCompare(b))
+                          setProfileNames(names)
+                          setSelectedProfileName(name)
+                          message.success('已保存方案')
+                        } catch (e: any) {
+                          message.error(`保存失败：${String(e?.message ?? e)}`)
+                        }
+                      }}
+                    >
+                      保存
+                    </Button>
+                    <Select
+                      style={{ width: 260 }}
+                      placeholder="选择已保存方案"
+                      value={selectedProfileName || undefined}
+                      options={profileNames.map((n) => ({ label: n, value: n }))}
+                      onChange={(v) => setSelectedProfileName(String(v ?? ''))}
+                    />
+                    <Button
+                      disabled={!selectedProfileName}
+                      onClick={() => {
+                        const name = String(selectedProfileName ?? '').trim()
+                        if (!name) return
+                        try {
+                          const raw = localStorage.getItem(STORAGE_PROFILES_KEY)
+                          const all = raw ? (JSON.parse(raw) as Record<string, PersistedConfigV1>) : {}
+                          const cfg = all[name]
+                          if (!cfg) {
+                            message.warning('未找到该方案')
+                            return
+                          }
+                          setMerchantSkuPrefix(String(cfg.merchantSkuPrefix ?? ''))
+                          setMerchantSkuSuffix(String(cfg.merchantSkuSuffix ?? ''))
+                          setSizes(Array.isArray(cfg.sizes) ? (cfg.sizes as any) : [])
+                          if (Array.isArray(cfg.colors)) {
+                            setColors(
+                              (cfg.colors as any[]).map((c) => ({
+                                key: String(c.key ?? `c_${uid()}`),
+                                label: String(c.label ?? '').trim(),
+                                width_cm: c.width_cm ?? null,
+                                height_cm: c.height_cm ?? null,
+                                thickness_cm: c.thickness_cm ?? null,
+                                length_cm: c.length_cm ?? null,
+                                main_pattern_type: c.main_pattern_type ?? null,
+                                source_code: String((c as any)?.source_code ?? '').trim(),
+                                enabledSizes: (c.enabledSizes && typeof c.enabledSizes === 'object' ? c.enabledSizes : {}) as Record<string, boolean>,
+                              })),
+                            )
+                          } else {
+                            setColors([])
+                          }
+                          if (Array.isArray(cfg.mainPatternTypes)) {
+                            setMainPatternTypes(
+                              (cfg.mainPatternTypes as any[]).map((p) => ({
+                                key: String(p.key ?? `p_${uid()}`),
+                                label: String(p.label ?? '').trim(),
+                              })),
+                            )
+                          }
+                          const ui = (cfg as any)?.ui ?? {}
+                          if (typeof ui.enableColorImages === 'boolean') setEnableColorImages(ui.enableColorImages)
+                          if (typeof ui.enableSizeImages === 'boolean') setEnableSizeImages(ui.enableSizeImages)
+                          if (typeof ui.enableColorRemarks === 'boolean') setEnableColorRemarks(ui.enableColorRemarks)
+                          if (typeof ui.enableSizeRemarks === 'boolean') setEnableSizeRemarks(ui.enableSizeRemarks)
+                          if (typeof ui.enablePatternRemarks === 'boolean') setEnablePatternRemarks(ui.enablePatternRemarks)
+                          if (typeof ui.includeMainPatternType === 'boolean') setIncludeMainPatternType(ui.includeMainPatternType)
+                          message.success('已加载方案')
+                        } catch (e: any) {
+                          message.error(`加载失败：${String(e?.message ?? e)}`)
+                        }
+                      }}
+                    >
+                      加载
+                    </Button>
+                    <Button
+                      danger
+                      disabled={!selectedProfileName}
+                      onClick={() => {
+                        const name = String(selectedProfileName ?? '').trim()
+                        if (!name) return
+                        try {
+                          const raw = localStorage.getItem(STORAGE_PROFILES_KEY)
+                          const all = raw ? (JSON.parse(raw) as Record<string, PersistedConfigV1>) : {}
+                          if (!all[name]) {
+                            message.warning('未找到该方案')
+                            return
+                          }
+                          delete all[name]
+                          localStorage.setItem(STORAGE_PROFILES_KEY, JSON.stringify(all))
+                          const names = Object.keys(all).filter(Boolean).sort((a, b) => a.localeCompare(b))
+                          setProfileNames(names)
+                          setSelectedProfileName('')
+                          message.success('已删除方案')
+                        } catch (e: any) {
+                          message.error(`删除失败：${String(e?.message ?? e)}`)
+                        }
+                      }}
+                    >
+                      删除
+                    </Button>
+                  </Space>
+                </div>
+              </div>
               <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' }}>
                 {attributeText}
               </pre>

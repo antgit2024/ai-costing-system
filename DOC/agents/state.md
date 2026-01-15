@@ -17,6 +17,19 @@
     - 增加“组合数量预估/超限提示更显式”，避免互斥组过多时爆炸
     - 支持“尺寸/规格绑定来源编码（模型/套版）”，使商家编码可按来源自动生成、而颜色/尺寸展示词可独立维护
 
+- **最近校对（北京时间 GMT+8）**：2026-01-15（天猫 SKU：颜色分类/尺寸支持下拉绑定模型/套版 + 显式保存方案）
+  - 目标：让运营在“颜色分类/尺寸”层级直接选择 **模型或套版（含 B/Z+selector）**，并以“颜色分类绑定”为最高优先级覆盖，避免手输编码；同时提供“保存方案/加载方案”，避免反复录入。
+  - 产物（前端）：
+    - 页面：`/costing/tmall-sku-generator`（`frontend/src/pages/costing/TmallSkuTemplateGeneratorPage.tsx`）
+    - 设置抽屉：
+      - 颜色分类行新增“绑定来源(模型/套版)”下拉（最高优先级覆盖尺寸绑定）
+      - 尺寸行新增“绑定来源(模型/套版)”下拉（兜底）
+      - 下拉数据来源：发布标准模型候选 + 套装模板 `phrase_presets`（输出 `B-XXXXAA` / `Z-XXXXAA`）
+    - 输出区新增：方案名保存/选择方案加载/删除（localStorage）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-15（天猫 SKU：销售属性配置器（模拟天猫建属性第一步））
   - 目标：以系统为主体维护“天猫销售属性值域”（颜色分类/尺寸/主图案类型），按 TOKEN 口径沉淀为可复制/可导出清单，再到天猫后台建立属性。
   - 产物（前端）：

@@ -45,6 +45,8 @@ type SizeRow = TmallSizeOption & {
 
 type SourceOptionGroup = { label: string; options: Array<{ label: string; value: string }> }
 
+type BundleTokenMeta = { mode: 'B' | 'Z'; phrase?: string; name?: string }
+
 type BundleTokenInputParsed = {
   modeHint?: 'B' | 'Z'
   templateCode: string
@@ -283,6 +285,7 @@ type SpecRow = {
   size_label: string
   merchant_sku: string
   attribute_spec?: string
+  token_formula?: string
   sku_status: 0 | 1
   main_pattern_type?: string | null
   length_cm?: string
@@ -359,6 +362,7 @@ export default function TmallSkuTemplateGeneratorPage() {
   const [sourceGroups, setSourceGroups] = useState<SourceOptionGroup[]>([])
   const [loadingSourceGroups, setLoadingSourceGroups] = useState(false)
   const [sourceRefreshKey, setSourceRefreshKey] = useState(0)
+  const [bundleTokenMetaByValue, setBundleTokenMetaByValue] = useState<Record<string, BundleTokenMeta>>({})
 
   // Explicit save/load profiles (in addition to auto localStorage)
   const [profileName, setProfileName] = useState('')
@@ -439,6 +443,7 @@ export default function TmallSkuTemplateGeneratorPage() {
 
         const bundleItems = Array.isArray((bundlesResp as any)?.items) ? ((bundlesResp as any).items as any[]) : []
         const bundleOptions: Array<{ value: string; label: string }> = []
+        const bundleMeta: Record<string, BundleTokenMeta> = {}
         for (const t of bundleItems) {
           const code = safeUpper((t as any)?.code)
           if (!code) continue
@@ -454,6 +459,7 @@ export default function TmallSkuTemplateGeneratorPage() {
               value: token,
               label: `${token}${name ? `（${name}）` : ''}${phrase ? `：${phrase}` : ''}`,
             })
+            bundleMeta[token] = { mode: mode as any, phrase: phrase || undefined, name: name || undefined }
           }
         }
         // stable sort
@@ -466,6 +472,7 @@ export default function TmallSkuTemplateGeneratorPage() {
         ].filter((g) => g.options.length)
 
         if (!cancelled) setSourceGroups(groups)
+        if (!cancelled) setBundleTokenMetaByValue(bundleMeta)
       } catch (e: any) {
         if (!cancelled) message.warning(`加载“模型/套版”下拉失败：${String(e?.message ?? e)}`)
       } finally {
@@ -564,6 +571,8 @@ export default function TmallSkuTemplateGeneratorPage() {
         })
         const sizeSource = String((s as any)?.source_code ?? '').trim()
         const attribute_spec = sizeSource ? sourceLabelByValue.get(sizeSource) || sizeSource : ''
+        const bm = sizeSource ? bundleTokenMetaByValue[sizeSource] : undefined
+        const token_formula = bm && bm.mode === 'B' ? String(bm.phrase ?? '').trim() : ''
         rows.push({
           row_key: `${c.key}||${s.key}`,
           color_key: c.key,
@@ -572,6 +581,7 @@ export default function TmallSkuTemplateGeneratorPage() {
           size_label: s.label,
           merchant_sku,
           attribute_spec,
+          token_formula,
           sku_status,
           main_pattern_type: includeMainPatternType ? (c.main_pattern_type ?? null) : null,
           length_cm: fmtNum(c.length_cm),
@@ -581,7 +591,7 @@ export default function TmallSkuTemplateGeneratorPage() {
       }
     }
     return rows
-  }, [colors, sizes, merchantSkuPrefix, merchantSkuSuffix, includeMainPatternType, sourceLabelByValue])
+  }, [colors, sizes, merchantSkuPrefix, merchantSkuSuffix, includeMainPatternType, sourceLabelByValue, bundleTokenMetaByValue])
 
   const setSkuEnabled = (colorKey: string, sizeKey: string, enabled: boolean) => {
     setColors((prev) =>
@@ -1196,6 +1206,16 @@ export default function TmallSkuTemplateGeneratorPage() {
                   dataIndex: 'attribute_spec',
                   width: 320,
                   render: (v: any) => <div style={{ whiteSpace: 'normal', lineHeight: 1.2 }}>{String(v ?? '').trim() || '-'}</div>,
+                },
+                {
+                  title: 'TOKEN/公式',
+                  dataIndex: 'token_formula',
+                  width: 360,
+                  render: (v: any) => (
+                    <div style={{ whiteSpace: 'normal', lineHeight: 1.2, color: '#595959' }}>
+                      {String(v ?? '').trim() || '-'}
+                    </div>
+                  ),
                 },
                 {
                   title: '是否上架',

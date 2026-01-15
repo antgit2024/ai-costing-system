@@ -54,6 +54,20 @@ const fmtNum = (v: unknown): string => {
   return n.toFixed(2).replace(/\.?0+$/, '')
 }
 
+const normalizeHeaderLabel = (v: unknown) => {
+  // Make header matching robust across common template variants:
+  // - collapse whitespace
+  // - convert full-width parentheses
+  // - strip any trailing "(必填)/(选填)/..." notes
+  const s = String(v ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/（/g, '(')
+    .replace(/）/g, ')')
+  // Remove any parenthesized suffix notes, e.g. "颜色分类(必填)" -> "颜色分类"
+  return s.replace(/\([^)]*\)\s*$/g, '').trim()
+}
+
 type HeaderIndex = {
   headerRowIndex: number
   colorCol: number
@@ -70,13 +84,15 @@ const findHeaderIndex = (ws: XLSX.WorkSheet): HeaderIndex | null => {
     const rowValues: string[] = []
     for (let c = range.s.c; c <= range.e.c; c++) {
       const addr = XLSX.utils.encode_cell({ r, c })
-      rowValues.push(normalizeCellText((ws as any)[addr]?.v))
+      rowValues.push(normalizeHeaderLabel((ws as any)[addr]?.v))
     }
-    const idx = (label: string) => rowValues.findIndex((x) => x === label)
-    const colorCol = idx('颜色分类')
-    const sizeCol = idx('尺寸')
-    const merchantSkuCol = idx('商家编码')
-    const statusCol = idx('是否上架')
+    const idxIncludesAny = (candidates: string[]) =>
+      rowValues.findIndex((x) => candidates.some((k) => x === k || x.includes(k)))
+
+    const colorCol = idxIncludesAny(['颜色分类'])
+    const sizeCol = idxIncludesAny(['尺寸'])
+    const merchantSkuCol = idxIncludesAny(['商家编码'])
+    const statusCol = idxIncludesAny(['是否上架', '上架状态'])
     if ([colorCol, sizeCol, merchantSkuCol, statusCol].every((x) => x >= 0)) {
       return {
         headerRowIndex: r,
@@ -180,6 +196,8 @@ export default function TmallSkuTemplateGeneratorPage() {
   const [loadingPreview, setLoadingPreview] = useState(false)
   const [loadingExport, setLoadingExport] = useState(false)
   const [templateFile, setTemplateFile] = useState<File | null>(null)
+  const [templateSheetNames, setTemplateSheetNames] = useState<string[]>([])
+  const [templateSheetName, setTemplateSheetName] = useState<string>('')
   const [loadingFill, setLoadingFill] = useState(false)
   const [overwriteExisting, setOverwriteExisting] = useState(true)
   const [mainPatternTypes, setMainPatternTypes] = useState<MainPatternOption[]>([
@@ -376,9 +394,9 @@ export default function TmallSkuTemplateGeneratorPage() {
       }
 
       const wb = XLSX.read(buf, { type: 'array', cellStyles: true })
-      const firstSheetName = wb.SheetNames?.[0]
-      if (!firstSheetName) throw new Error('模板无工作表（Sheet）')
-      const ws = wb.Sheets[firstSheetName]
+      const sheetName = templateSheetName && wb.SheetNames.includes(templateSheetName) ? templateSheetName : wb.SheetNames?.[0]
+      if (!sheetName) throw new Error('模板无工作表（Sheet）')
+      const ws = wb.Sheets[sheetName]
       if (!ws) throw new Error('模板工作表读取失败')
 
       const header = findHeaderIndex(ws)
@@ -616,6 +634,19 @@ export default function TmallSkuTemplateGeneratorPage() {
                 showUploadList={false}
                 beforeUpload={(file) => {
                   setTemplateFile(file)
+                  setTemplateSheetNames([])
+                  setTemplateSheetName('')
+                  void (async () => {
+                    try {
+                      const buf = await readFileAsArrayBuffer(file)
+                      const wb = XLSX.read(buf, { type: 'array' })
+                      const names = (wb.SheetNames ?? []).filter(Boolean)
+                      setTemplateSheetNames(names)
+                      if (names[0]) setTemplateSheetName(names[0])
+                    } catch (e: any) {
+                      message.warning(`读取模板工作表失败：${String(e?.message ?? e)}`)
+                    }
+                  })()
                   message.success(`已选择模板：${file.name}`)
                   return false
                 }}
@@ -623,6 +654,16 @@ export default function TmallSkuTemplateGeneratorPage() {
                 <Button icon={<UploadOutlined />}>上传天猫官方模板</Button>
               </Upload>
               <Text type="secondary">{templateFile ? templateFile.name : '未选择文件'}</Text>
+              <Divider type="vertical" />
+              <Text type="secondary">工作表</Text>
+              <Select
+                style={{ width: 220 }}
+                disabled={!templateFile || templateSheetNames.length <= 1}
+                placeholder="自动识别"
+                value={templateSheetName || undefined}
+                options={templateSheetNames.map((n) => ({ label: n, value: n }))}
+                onChange={(v) => setTemplateSheetName(v)}
+              />
               <Divider type="vertical" />
               <Text type="secondary">覆盖已有值</Text>
               <Switch checked={overwriteExisting} onChange={setOverwriteExisting} />

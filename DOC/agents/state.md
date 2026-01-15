@@ -34,6 +34,18 @@
   - 下一步：
     - 若天猫模板 sheet 名/表头存在变体：补齐更强的表头识别（同义列名、全角括号等）与“选择工作表”下拉
 
+- **最近校对（北京时间 GMT+8）**：2026-01-15（天猫 SKU：模板回填鲁棒性增强（工作表选择/表头识别））
+  - 产物（前端）：
+    - 页面：`/costing/tmall-sku-generator`（`frontend/src/pages/costing/TmallSkuTemplateGeneratorPage.tsx`）
+    - 新增：上传模板后自动解析并提供“工作表（Sheet）”下拉选择（多 Sheet 模板不再默认只取第一个）
+    - 增强：表头识别更鲁棒（兼容全角括号/括号备注；`上架状态` 同义列名）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档 grep/test -d 校验
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+  - 下一步：
+    - 若仍存在“颜色分类/尺寸”值域不一致导致未匹配：增加差异报告（输出未匹配行的颜色/尺寸值，便于回看配置或天猫模板）
+
 - **最近校对（北京时间 GMT+8）**：2026-01-15（Frontend 接力：强制三件套验收 + 工作区干净度）
   - 本轮范围：不扩展功能，仅完成接力验收与恢复包落地（避免“正确版本只在工作区”）
   - 本轮产物：

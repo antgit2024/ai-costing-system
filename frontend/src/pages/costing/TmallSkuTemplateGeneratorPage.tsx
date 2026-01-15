@@ -439,10 +439,11 @@ export default function TmallSkuTemplateGeneratorPage() {
     void (async () => {
       setLoadingSourceGroups(true)
       try {
-        const [modelsResp, bundlesResp] = await Promise.all([
-          fetchPublishedStandardModels({ limit: 200 }),
-          fetchBundleTemplates({ page: 1, page_size: 200, include_archived: true }),
-        ])
+        // cache-bust: new models/bundles might not show up immediately if upstream caches GET
+        const ts = Date.now()
+
+        // 1) Published standard models (increase limit to avoid pagination hiding new items)
+        const modelsResp = await fetchPublishedStandardModels({ limit: 1000, _ts: ts } as any)
 
         const modelItems = Array.isArray((modelsResp as any)?.items) ? ((modelsResp as any).items as any[]) : Array.isArray(modelsResp as any) ? (modelsResp as any) : []
         const modelOptions = modelItems
@@ -454,7 +455,16 @@ export default function TmallSkuTemplateGeneratorPage() {
           })
           .filter(Boolean) as Array<{ value: string; label: string }>
 
-        const bundleItems = Array.isArray((bundlesResp as any)?.items) ? ((bundlesResp as any).items as any[]) : []
+        // 2) Bundle templates: page through to avoid new items being outside first page
+        const bundleItems: any[] = []
+        const pageSize = 200
+        const maxPages = 20 // hard cap: 4000 templates max (should be enough for now)
+        for (let page = 1; page <= maxPages; page++) {
+          const resp = await fetchBundleTemplates({ page, page_size: pageSize, include_archived: true, _ts: ts } as any)
+          const items = Array.isArray((resp as any)?.items) ? ((resp as any).items as any[]) : []
+          bundleItems.push(...items)
+          if (items.length < pageSize) break
+        }
         const bundleOptions: Array<{ value: string; label: string }> = []
         const bundleMeta: Record<string, BundleTokenMeta> = {}
         for (const t of bundleItems) {
@@ -1585,7 +1595,7 @@ export default function TmallSkuTemplateGeneratorPage() {
                     ) : null}
 
                     <Input
-                      style={{ flex: 1, minWidth: 320 }}
+                      style={{ flex: 1, minWidth: 520 }}
                       placeholder="颜色分类（天猫展示值）"
                       value={c.label}
                       onChange={(e) => setColors((prev) => prev.map((x, i) => (i === idx ? { ...x, label: e.target.value } : x)))}
@@ -1707,7 +1717,7 @@ export default function TmallSkuTemplateGeneratorPage() {
                     ) : null}
 
                     <Input
-                      style={{ width: 280 }}
+                      style={{ width: 420 }}
                       placeholder="尺寸（天猫展示值）"
                       value={s.label}
                       onChange={(e) => setSizes((prev) => prev.map((x, i) => (i === idx ? { ...x, label: e.target.value } : x)))}

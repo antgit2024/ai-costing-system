@@ -270,10 +270,26 @@ const buildAttributeFormulaAndGroups = (args: {
       const id = String(baseLineId ?? '').trim()
       if (id) rawBaseLineIds.push(id)
     }
+
+    // 运营补齐口径：
+    // - 只要在“筛选弹窗”里给兜底物料填了别名（fallback_token_overrides），即使未勾选任何替换规则，
+    //   也应将该别名作为当前可选 TOKEN，出现在互斥组下拉中（避免下拉为空/运营不知道默认兜底是什么）。
+    // - 仍然遵守零成本兜底规则：零成本行不因别名而生成（且别名输入本身不可编辑）。
+    const infoByBase0 = (baseLineInfoByVersionBaseLine?.[versionId] ?? {}) as Record<string, { orderIndex: number; isZeroCost: boolean }>
+    for (const baseLineId of Object.keys(infoByBase0 ?? {})) {
+      const id = String(baseLineId ?? '').trim()
+      if (!id) continue
+      const isZeroCost = !!infoByBase0?.[id]?.isZeroCost
+      if (isZeroCost) continue
+      const overrideKey = `${versionId}:${id}`
+      const defaultToken = String(fallbackTokenOverrides?.[overrideKey] ?? '').trim()
+      if (!defaultToken) continue
+      rawBaseLineIds.push(id)
+    }
     const seenId = new Set<string>()
     const uniqBaseLineIds = rawBaseLineIds.filter((x) => (seenId.has(x) ? false : (seenId.add(x), true)))
 
-    const infoByBase = (baseLineInfoByVersionBaseLine?.[versionId] ?? {}) as Record<string, { orderIndex: number; isZeroCost: boolean }>
+    const infoByBase = infoByBase0
     const baseLineIdsSorted = uniqBaseLineIds.slice().sort((a, b) => {
       const ia = infoByBase?.[a]
       const ib = infoByBase?.[b]
@@ -2857,10 +2873,41 @@ export default function BundleTemplatesPage() {
                                       border: '1px solid #ffe7ba',
                                       borderRadius: 8,
                                       padding: 10,
+                                      width: '100%',
                                     }}
                                   >
                                     {components.length ? (
                                       <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                                      {(() => {
+                                        const orderKey = String(idx)
+                                        const componentOrder = componentOrderByPreset?.[orderKey]
+                                        const autoRule = buildAutoRuleFromSelections({
+                                          presetIndex: idx,
+                                          components,
+                                          componentRows: rows,
+                                          attributeGroupSelections,
+                                          componentOrder,
+                                          groupOrderByPresetComponent,
+                                        })
+                                        return (
+                                          <Space wrap size={8}>
+                                            <Text type="secondary">自动生成：</Text>
+                                            <Text code>{autoRule || '-'}</Text>
+                                            <Button
+                                              size="small"
+                                              type="text"
+                                              icon={<CopyOutlined />}
+                                              disabled={!autoRule}
+                                              onClick={async () => {
+                                                if (!autoRule) return
+                                                const ok = await copyTextToClipboard(autoRule)
+                                                if (ok) message.success('已复制自动生成内容')
+                                                else message.error('复制失败：请手动复制')
+                                              }}
+                                            />
+                                          </Space>
+                                        )
+                                      })()}
                                       <style>{`
                                         .bt-model-pill {
                                           display: inline-flex;
@@ -3028,37 +3075,6 @@ export default function BundleTemplatesPage() {
                                           </Space>
                                         )
                                       })}
-
-                                      {(() => {
-                                        const orderKey = String(idx)
-                                        const componentOrder = componentOrderByPreset?.[orderKey]
-                                        const autoRule = buildAutoRuleFromSelections({
-                                          presetIndex: idx,
-                                          components,
-                                          componentRows: rows,
-                                          attributeGroupSelections,
-                                          componentOrder,
-                                          groupOrderByPresetComponent,
-                                        })
-                                        return (
-                                          <Space wrap size={8}>
-                                            <Text type="secondary">自动生成：</Text>
-                                            <Text code>{autoRule || '-'}</Text>
-                                            <Button
-                                              size="small"
-                                              type="text"
-                                              icon={<CopyOutlined />}
-                                              disabled={!autoRule}
-                                              onClick={async () => {
-                                                if (!autoRule) return
-                                                const ok = await copyTextToClipboard(autoRule)
-                                                if (ok) message.success('已复制自动生成内容')
-                                                else message.error('复制失败：请手动复制')
-                                              }}
-                                            />
-                                          </Space>
-                                        )
-                                      })()}
                                       </Space>
                                   ) : (
                                     <Text type="secondary">提示：请先对需要的物料位做一次“筛选”或“强制”，才会生成互斥组下拉。</Text>

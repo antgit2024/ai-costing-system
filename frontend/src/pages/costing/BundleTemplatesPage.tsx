@@ -26,6 +26,8 @@ import {
 import {
   ArrowDownOutlined,
   ArrowUpOutlined,
+  LeftOutlined,
+  RightOutlined,
   CheckCircleFilled,
   CloseCircleFilled,
   CopyOutlined,
@@ -185,6 +187,36 @@ const formatTokenBrace = (token: string): string => {
 
 type AttributeGroup = { key: string; options: string[]; isZeroCostGroup: boolean }
 type AttributeComponentGroups = { componentIndex: number; groups: AttributeGroup[] }
+
+const getDefaultSelectionForGroup = (g: AttributeGroup): string => {
+  // zero-cost 互斥组默认空（不计入自动生成）
+  if (g.isZeroCostGroup) return ''
+  // 其它互斥组默认第一个非空项（兜底token优先）
+  const uniq: string[] = []
+  const seen = new Set<string>()
+  for (const x of g.options ?? []) {
+    const t = normalizeSingleToken(x)
+    const k = t || '__EMPTY__'
+    if (seen.has(k)) continue
+    seen.add(k)
+    uniq.push(t)
+  }
+  return uniq.find((x) => !!String(x).trim()) ?? ''
+}
+
+const getEffectiveSelection = (args: {
+  presetIndex: number
+  componentIndex: number
+  group: AttributeGroup
+  attributeGroupSelections: Record<string, string>
+}): string => {
+  const { presetIndex, componentIndex, group, attributeGroupSelections } = args
+  const selKey = `${presetIndex}:${componentIndex}:${group.key}`
+  if (Object.prototype.hasOwnProperty.call(attributeGroupSelections, selKey)) {
+    return normalizeSingleToken(String(attributeGroupSelections[selKey] ?? ''))
+  }
+  return getDefaultSelectionForGroup(group)
+}
 
 const formatCm = (n: any): string => {
   const v = Number(n)
@@ -349,8 +381,9 @@ const buildAutoRuleFromSelections = (args: {
   componentRows: any[]
   attributeGroupSelections: Record<string, string>
   componentOrder?: number[]
+  groupOrderByPresetComponent?: Record<string, string[]>
 }): string => {
-  const { presetIndex, components, componentRows, attributeGroupSelections, componentOrder } = args
+  const { presetIndex, components, componentRows, attributeGroupSelections, componentOrder, groupOrderByPresetComponent } = args
   if (!Array.isArray(components) || !Array.isArray(componentRows)) return ''
   const byComp = new Map<number, AttributeGroup[]>()
   for (const c of components) byComp.set(c.componentIndex, c.groups)
@@ -361,13 +394,18 @@ const buildAutoRuleFromSelections = (args: {
   for (const cIdx of order) {
     if (cIdx < 0 || cIdx >= componentRows.length) continue
     const rr = componentRows[cIdx] as any
-    const groups = byComp.get(cIdx) ?? []
+    let groups = byComp.get(cIdx) ?? []
     if (!groups.length) continue
+    const groupOrderKey = `${presetIndex}:${cIdx}`
+    const groupOrder = groupOrderByPresetComponent?.[groupOrderKey] ?? []
+    if (Array.isArray(groupOrder) && groupOrder.length) {
+      const idxMap = new Map<string, number>()
+      for (let i = 0; i < groupOrder.length; i++) idxMap.set(String(groupOrder[i]), i)
+      groups = groups.slice().sort((a, b) => (idxMap.get(a.key) ?? 1e9) - (idxMap.get(b.key) ?? 1e9))
+    }
     const tokens: string[] = []
     for (const g of groups) {
-      const selKey = `${presetIndex}:${cIdx}:${g.key}`
-      const raw = Object.prototype.hasOwnProperty.call(attributeGroupSelections, selKey) ? String(attributeGroupSelections[selKey] ?? '') : ''
-      const t = normalizeSingleToken(raw)
+      const t = getEffectiveSelection({ presetIndex, componentIndex: cIdx, group: g, attributeGroupSelections })
       if (!t) continue
       tokens.push(t)
     }
@@ -410,6 +448,7 @@ export default function BundleTemplatesPage() {
   const [activePresetIndex, setActivePresetIndex] = useState<number>(0)
   const [attributeGroupSelections, setAttributeGroupSelections] = useState<Record<string, string>>({})
   const [componentOrderByPreset, setComponentOrderByPreset] = useState<Record<string, number[]>>({})
+  const [groupOrderByPresetComponent, setGroupOrderByPresetComponent] = useState<Record<string, string[]>>({})
   // 默认兜底“对客 TOKEN”（仅用于对客展示/规范化用词；不影响真实物料/扣库/算价）
   // key: `${versionId}:${baseLineId}` -> tokenAlias (例如：黄金绒)
   const [fallbackTokenOverrides, setFallbackTokenOverrides] = useState<Record<string, string>>({})
@@ -1468,6 +1507,7 @@ export default function BundleTemplatesPage() {
     setFallbackTokenOverrides({})
     setAttributeGroupSelections({})
     setComponentOrderByPreset({})
+    setGroupOrderByPresetComponent({})
     setActivePresetIndex(0)
     setDrawerOpen(true)
   }
@@ -1515,6 +1555,7 @@ export default function BundleTemplatesPage() {
     else setFallbackTokenOverrides({})
     setAttributeGroupSelections({})
     setComponentOrderByPreset({})
+    setGroupOrderByPresetComponent({})
     // NOTE: legacy metadata.lexicon_rules is preserved on save, but UI is intentionally hidden to avoid confusion.
 
     const pp = (row?.metadata ?? {})?.phrase_presets
@@ -2837,7 +2878,14 @@ export default function BundleTemplatesPage() {
                                                 }}
                                               />
                                             </Space>
-                                            {c.groups.map((g) => {
+                                            {(() => {
+                                              const groupOrderKey = `${idx}:${c.componentIndex}`
+                                              const order = groupOrderByPresetComponent?.[groupOrderKey] ?? []
+                                              if (!Array.isArray(order) || !order.length) return c.groups
+                                              const idxMap = new Map<string, number>()
+                                              for (let i = 0; i < order.length; i++) idxMap.set(String(order[i]), i)
+                                              return c.groups.slice().sort((a, b) => (idxMap.get(a.key) ?? 1e9) - (idxMap.get(b.key) ?? 1e9))
+                                            })().map((g) => {
                                               const selKey = `${idx}:${c.componentIndex}:${g.key}`
                                               const options = (g.options ?? []).map((x) => normalizeSingleToken(x))
                                               const uniq: string[] = []
@@ -2848,26 +2896,65 @@ export default function BundleTemplatesPage() {
                                                 seen.add(k)
                                                 uniq.push(t)
                                               }
-                                              const defaultValue = g.isZeroCostGroup ? '' : (uniq.find((x) => !!String(x).trim()) ?? '')
-                                              const value = Object.prototype.hasOwnProperty.call(attributeGroupSelections, selKey)
-                                                ? String(attributeGroupSelections[selKey] ?? '')
-                                                : defaultValue
+                                              const value = getEffectiveSelection({
+                                                presetIndex: idx,
+                                                componentIndex: c.componentIndex,
+                                                group: g,
+                                                attributeGroupSelections,
+                                              })
+                                              const groupOrderKey = `${idx}:${c.componentIndex}`
+                                              const currentOrder = groupOrderByPresetComponent?.[groupOrderKey] ?? []
+                                              const baseOrder = currentOrder.length ? currentOrder.slice() : c.groups.map((x) => x.key)
+                                              const pos = baseOrder.indexOf(g.key)
+                                              const canLeft = pos > 0
+                                              const canRight = pos >= 0 && pos < baseOrder.length - 1
                                               return (
-                                                <Select
-                                                  key={`attr-sel-${selKey}`}
-                                                  size="small"
-                                                  style={{ width: 160 }}
-                                                  value={value}
-                                                  onChange={(v) =>
-                                                    setAttributeGroupSelections((prev) => ({
-                                                      ...(prev ?? {}),
-                                                      [selKey]: String(v ?? ''),
-                                                    }))
-                                                  }
-                                                  options={uniq
-                                                    .filter((x) => (g.isZeroCostGroup ? true : !!String(x).trim()))
-                                                    .map((t) => ({ value: t, label: t ? t : '（无）' }))}
-                                                />
+                                                <Space key={`attr-sel-${selKey}`} size={2} align="center">
+                                                  <Button
+                                                    size="small"
+                                                    type="text"
+                                                    className="bt-model-reorder-btn"
+                                                    icon={<LeftOutlined />}
+                                                    disabled={!canLeft}
+                                                    onClick={() => {
+                                                      const next = baseOrder.slice()
+                                                      if (pos <= 0) return
+                                                      const tmp = next[pos - 1]
+                                                      next[pos - 1] = next[pos]
+                                                      next[pos] = tmp
+                                                      setGroupOrderByPresetComponent((prev) => ({ ...(prev ?? {}), [groupOrderKey]: next }))
+                                                    }}
+                                                  />
+                                                  <Select
+                                                    size="small"
+                                                    style={{ width: 150 }}
+                                                    value={value}
+                                                    onChange={(v) =>
+                                                      setAttributeGroupSelections((prev) => ({
+                                                        ...(prev ?? {}),
+                                                        [selKey]: String(v ?? ''),
+                                                      }))
+                                                    }
+                                                    options={uniq
+                                                      .filter((x) => (g.isZeroCostGroup ? true : !!String(x).trim()))
+                                                      .map((t) => ({ value: t, label: t ? t : '（无）' }))}
+                                                  />
+                                                  <Button
+                                                    size="small"
+                                                    type="text"
+                                                    className="bt-model-reorder-btn"
+                                                    icon={<RightOutlined />}
+                                                    disabled={!canRight}
+                                                    onClick={() => {
+                                                      const next = baseOrder.slice()
+                                                      if (pos < 0 || pos >= next.length - 1) return
+                                                      const tmp = next[pos + 1]
+                                                      next[pos + 1] = next[pos]
+                                                      next[pos] = tmp
+                                                      setGroupOrderByPresetComponent((prev) => ({ ...(prev ?? {}), [groupOrderKey]: next }))
+                                                    }}
+                                                  />
+                                                </Space>
                                               )
                                             })}
                                           </Space>
@@ -2883,6 +2970,7 @@ export default function BundleTemplatesPage() {
                                           componentRows: rows,
                                           attributeGroupSelections,
                                           componentOrder,
+                                          groupOrderByPresetComponent,
                                         })
                                         return (
                                           <Space wrap size={8}>

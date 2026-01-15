@@ -46,6 +46,24 @@
   - 下一步：
     - 若仍存在“颜色分类/尺寸”值域不一致导致未匹配：增加差异报告（输出未匹配行的颜色/尺寸值，便于回看配置或天猫模板）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-15（发货导入：ERP字段口径对齐（条码/规格）+ 表头兼容）
+  - 背景：
+    - 上架阶段我们拿不到“平台规格Id（网店）”；ERP 配对后会写入 **货品条码（系统）**（主键），发货/售后回传以此为准。
+    - 发货时的规格口径以 **商品规格（网店）** 更“实时真实”；**货品规格（系统）** 是 ERP 配对写入字段，可能存在滞后。
+    - 天猫上架时可通过模板回填 **商家编码**，在 ERP 中对应字段为 **规格编码（网店）**（用于识别/归类到模型/套装编码）。
+  - 产物：
+    - 后端：发货导入解析兼容 ERP 导出表头变体（含括号字段名），优先读取 `商品规格（网店）`，并兼容 `货品规格（系统）`
+    - 前端：`/costing/shipments` 列标题对齐为 `货品条码（系统）/商品规格（网店）`
+  - 关键文件：
+    - `backend/src/planner/services/shipment_import_service.py`
+    - `frontend/src/pages/costing/ShipmentMonitorPage.tsx`
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档 grep/test -d 校验
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+  - 下一步：
+    - 若 ERP 导出字段进一步变化：继续补齐同义表头（但坚持“条码锁定版本、规格解析尺寸/tokens”的主链不变）
+
 - **最近校对（北京时间 GMT+8）**：2026-01-15（Frontend 接力：强制三件套验收 + 工作区干净度）
   - 本轮范围：不扩展功能，仅完成接力验收与恢复包落地（避免“正确版本只在工作区”）
   - 本轮产物：

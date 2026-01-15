@@ -300,7 +300,7 @@ const ShipmentMonitorPage = () => {
       render: (v) => safeString(v) || '-',
     },
     {
-      title: '交易规格',
+      title: '商品规格（网店）',
       dataIndex: 'spec_text',
       ellipsis: true,
       render: (v) => safeString(v) || '-',
@@ -367,7 +367,7 @@ const ShipmentMonitorPage = () => {
       render: (v) => safeString(v) || '-',
     },
     {
-      title: 'SKU',
+      title: '货品条码（系统）',
       dataIndex: 'sku_code',
       width: 140,
       ellipsis: true,

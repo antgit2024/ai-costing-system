@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import re
 from pathlib import Path
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -104,19 +105,43 @@ def _norm_str(value: Any) -> Optional[str]:
     return s or None
 
 
+def _norm_header(value: Any) -> Optional[str]:
+    """
+    Normalize Excel header cells for robustness across ERP export variants:
+    - collapse whitespace
+    - convert full-width parentheses （） -> ()
+    - strip trailing parenthesized notes, e.g. "货品条码（系统）" -> "货品条码"
+    """
+    s = _norm_str(value)
+    if not s:
+        return None
+    s2 = (
+        s.replace("（", "(")
+        .replace("）", ")")
+        .replace("\u00a0", " ")
+    )
+    s2 = re.sub(r"\s+", " ", s2).strip()
+    # Strip trailing notes "(...)" — keep the core label
+    s2 = re.sub(r"\([^)]*\)\s*$", "", s2).strip()
+    return s2 or None
+
+
 def _build_header_index(header_row: Iterable[Any]) -> Dict[str, int]:
     mapping: Dict[str, int] = {}
     for idx, cell in enumerate(header_row):
-        name = _norm_str(cell)
+        name = _norm_header(cell)
         if not name:
             continue
-        mapping[name] = idx
+        # keep the first occurrence for deterministic behavior
+        if name not in mapping:
+            mapping[name] = idx
     return mapping
 
 
 def _get_by_headers(row: List[Any], headers: Dict[str, int], names: List[str]) -> Any:
     for name in names:
-        idx = headers.get(name)
+        key = _norm_header(name) or str(name)
+        idx = headers.get(key)
         if idx is None:
             continue
         if 0 <= idx < len(row):
@@ -152,7 +177,7 @@ def _normalize_rows_from_xlsx(file_bytes: bytes) -> Tuple[List[Dict[str, Any]], 
 
     # Minimal header sanity (do not hard-fail; push warnings)
     required_any = ["发货单号", "完成时间", "销售渠道", "货品条码", "数量"]
-    missing = [h for h in required_any if h not in headers]
+    missing = [h for h in required_any if _norm_header(h) not in headers]
     if missing:
         _warn("MISSING_HEADERS", missing=missing)
 
@@ -166,8 +191,16 @@ def _normalize_rows_from_xlsx(file_bytes: bytes) -> Tuple[List[Dict[str, Any]], 
         shipment_no = _norm_str(_get_by_headers(row_list, headers, ["发货单号", "单号", "订单号"]))
         completed_at = _parse_excel_datetime(_get_by_headers(row_list, headers, ["完成时间", "付款时间"]))
         channel = _norm_str(_get_by_headers(row_list, headers, ["销售渠道", "店铺", "渠道"]))
-        sku_code = _norm_str(_get_by_headers(row_list, headers, ["货品条码", "SKU", "sku_code"]))
-        spec_text = _norm_str(_get_by_headers(row_list, headers, ["交易规格", "规格", "规格信息"]))
+        # ERP: 货品条码（系统）是主键；表头可能带括号备注，已通过 _norm_header 归一化
+        sku_code = _norm_str(_get_by_headers(row_list, headers, ["货品条码", "货品条码（系统）", "SKU", "sku_code"]))
+        # ERP: 商品规格（网店）是发货时最真实的交易规格；货品规格（系统）为配对写入字段（可能滞后）
+        spec_text = _norm_str(
+            _get_by_headers(
+                row_list,
+                headers,
+                ["商品规格（网店）", "交易规格", "规格", "规格信息", "货品规格（系统）"],
+            )
+        )
         if not spec_text:
             spec_text = _guess_spec_text(row_list)
         qty = _to_decimal(_get_by_headers(row_list, headers, ["数量", "数量合计"]))

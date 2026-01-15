@@ -1,6 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Alert, Button, Card, Checkbox, Divider, Drawer, Input, message, Radio, Select, Space, Switch, Table, Tag, Typography, Upload } from 'antd'
-import { DeleteOutlined, DownloadOutlined, EyeOutlined, PlusOutlined, ReloadOutlined, SettingOutlined, UploadOutlined } from '@ant-design/icons'
+import {
+  CheckCircleFilled,
+  CloseCircleFilled,
+  DeleteOutlined,
+  DownloadOutlined,
+  EyeOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+  SettingOutlined,
+  UploadOutlined,
+} from '@ant-design/icons'
 import * as XLSX from 'xlsx'
 
 import {
@@ -286,6 +296,7 @@ type SpecRow = {
   merchant_sku: string
   attribute_spec?: string
   token_formula?: string
+  spec_text?: string
   sku_status: 0 | 1
   main_pattern_type?: string | null
   length_cm?: string
@@ -302,6 +313,7 @@ type SpecEdits = Record<
     barcode?: string
     reserved_qty?: string
     selling_point?: string
+    spec_text?: string
   }
 >
 
@@ -346,6 +358,7 @@ export default function TmallSkuTemplateGeneratorPage() {
   const [enablePatternRemarks, setEnablePatternRemarks] = useState(false)
   const [displayMode, setDisplayMode] = useState<DisplayMode>('table')
   const [specEdits, setSpecEdits] = useState<SpecEdits>({})
+  const [rowValidation, setRowValidation] = useState<Record<string, { ok: boolean; issues: string[] }>>({})
 
   // Bundle-template assisted generation (B/Z) for token-driven Tmall attributes
   const [bundleTokenInput, setBundleTokenInput] = useState<string>('B-3U3PAA')
@@ -573,6 +586,7 @@ export default function TmallSkuTemplateGeneratorPage() {
         const attribute_spec = sizeSource ? sourceLabelByValue.get(sizeSource) || sizeSource : ''
         const bm = sizeSource ? bundleTokenMetaByValue[sizeSource] : undefined
         const token_formula = bm && bm.mode === 'B' ? String(bm.phrase ?? '').trim() : ''
+        const spec_text = `${String(c.label ?? '').trim()} ${String(s.label ?? '').trim()}`.trim()
         rows.push({
           row_key: `${c.key}||${s.key}`,
           color_key: c.key,
@@ -582,6 +596,7 @@ export default function TmallSkuTemplateGeneratorPage() {
           merchant_sku,
           attribute_spec,
           token_formula,
+          spec_text,
           sku_status,
           main_pattern_type: includeMainPatternType ? (c.main_pattern_type ?? null) : null,
           length_cm: fmtNum(c.length_cm),
@@ -592,6 +607,69 @@ export default function TmallSkuTemplateGeneratorPage() {
     }
     return rows
   }, [colors, sizes, merchantSkuPrefix, merchantSkuSuffix, includeMainPatternType, sourceLabelByValue, bundleTokenMetaByValue])
+
+  const getSpecTextForRow = (r: SpecRow): string => {
+    const edited = String(specEdits?.[r.row_key]?.spec_text ?? '').trim()
+    if (edited) return edited
+    return String(r.spec_text ?? '').trim()
+  }
+
+  const parseFormulaTokenGroups = (formulaRaw: string): Array<{ tokens: string[]; allowEmpty: boolean }> => {
+    const formula = String(formulaRaw ?? '')
+    const groups: Array<{ tokens: string[]; allowEmpty: boolean }> = []
+    const bracketRe = /\[([^\]]+)\]/g
+    let m: RegExpExecArray | null
+    while ((m = bracketRe.exec(formula))) {
+      const seg = String(m[1] ?? '')
+      const tokenRe = /\{([^}]*)\}/g
+      let mm: RegExpExecArray | null
+      const tokens: string[] = []
+      let allowEmpty = false
+      while ((mm = tokenRe.exec(seg))) {
+        const t = String(mm[1] ?? '').trim()
+        if (!t) {
+          allowEmpty = true
+          continue
+        }
+        tokens.push(t)
+      }
+      const uniq = Array.from(new Set(tokens))
+      if (uniq.length || allowEmpty) groups.push({ tokens: uniq, allowEmpty })
+    }
+    return groups
+  }
+
+  const validateAllSpecRows = () => {
+    const out: Record<string, { ok: boolean; issues: string[] }> = {}
+    let okCount = 0
+    let badCount = 0
+    for (const r of specRows) {
+      const specText = getSpecTextForRow(r)
+      const formula = String(r.token_formula ?? '').trim()
+      if (!formula) {
+        // 指定型(Z) / 模型码：暂不要求规格触发 token
+        out[r.row_key] = { ok: true, issues: [] }
+        okCount++
+        continue
+      }
+      const groups = parseFormulaTokenGroups(formula)
+      const issues: string[] = []
+      for (const g of groups) {
+        if (!g.tokens.length) continue
+        const hit = g.tokens.some((tk) => specText.includes(tk))
+        if (!hit && !g.allowEmpty) {
+          issues.push(`未命中互斥组：${g.tokens.join(' / ')}`)
+        }
+      }
+      const ok = issues.length === 0
+      out[r.row_key] = { ok, issues }
+      if (ok) okCount++
+      else badCount++
+    }
+    setRowValidation(out)
+    if (badCount) message.warning(`检验完成：通过 ${okCount} 条；未通过 ${badCount} 条（请检查“商品规格（网店）”是否包含需要的 TOKEN）`)
+    else message.success(`检验完成：全部通过（${okCount} 条）`)
+  }
 
   const setSkuEnabled = (colorKey: string, sizeKey: string, enabled: boolean) => {
     setColors((prev) =>
@@ -1108,7 +1186,17 @@ export default function TmallSkuTemplateGeneratorPage() {
         </Card>
 
         {displayMode === 'table' ? (
-          <Card title="SKU规格（表格样式）" extra={<Text type="secondary">行数：{specRows.length}</Text>}>
+          <Card
+            title="SKU规格（表格样式）"
+            extra={
+              <Space wrap size={10}>
+                <Text type="secondary">行数：{specRows.length}</Text>
+                <Button size="small" onClick={validateAllSpecRows}>
+                  检验
+                </Button>
+              </Space>
+            }
+          >
             <Table
               size="small"
               pagination={false}
@@ -1120,28 +1208,21 @@ export default function TmallSkuTemplateGeneratorPage() {
               })}
               columns={[
                 {
-                  title: '颜色分类',
-                  dataIndex: 'color_label',
+                  title: '商品规格（网店）',
                   fixed: 'left',
-                  width: 300,
-                  render: (_: any, r: SpecRow) => {
-                    const color = colors.find((c) => c.key === r.color_key)
-                    const img = (color as any)?.metadata_json?.image_data_url as string | undefined
-                    return (
-                      <Space size={8} style={{ alignItems: 'flex-start' }}>
-                        {img ? (
-                          <img
-                            src={img}
-                            alt="img"
-                            style={{ width: 28, height: 28, borderRadius: 6, objectFit: 'cover' }}
-                          />
-                        ) : null}
-                        <div style={{ lineHeight: 1.2 }}>{r.color_label}</div>
-                      </Space>
-                    )
-                  },
+                  width: 420,
+                  render: (_: any, r: SpecRow) => (
+                    <Input
+                      value={specEdits[r.row_key]?.spec_text ?? r.spec_text ?? ''}
+                      onChange={(e) =>
+                        setSpecEdits((prev) => ({
+                          ...prev,
+                          [r.row_key]: { ...(prev[r.row_key] ?? {}), spec_text: e.target.value },
+                        }))
+                      }
+                    />
+                  ),
                 },
-                { title: '尺寸', dataIndex: 'size_label', width: 120 },
                 {
                   title: 'SKU分类',
                   width: 120,
@@ -1221,9 +1302,15 @@ export default function TmallSkuTemplateGeneratorPage() {
                   title: '是否上架',
                   width: 110,
                   fixed: 'right',
-                  render: (_: any, r: SpecRow) => (
-                    <Switch checked={r.sku_status === 1} onChange={(v) => setSkuEnabled(r.color_key, r.size_key, v)} />
-                  ),
+                  render: (_: any, r: SpecRow) => {
+                    const v = rowValidation?.[r.row_key]
+                    return (
+                      <Space size={6}>
+                        {v ? (v.ok ? <CheckCircleFilled style={{ color: '#52c41a' }} /> : <CloseCircleFilled style={{ color: '#ff4d4f' }} />) : null}
+                        <Switch checked={r.sku_status === 1} onChange={(x) => setSkuEnabled(r.color_key, r.size_key, x)} />
+                      </Space>
+                    )
+                  },
                 },
                 {
                   title: '操作',

@@ -30,6 +30,7 @@
     - 输出区新增：方案名保存/选择方案加载/删除（localStorage）
     - SKU 表格列：隐藏“价格/数量/主图案类型/条形码/预扣数量/推荐卖点”，并在“商家编码”后新增“属性规格”（展示尺寸绑定的模型/套版名称）
     - SKU 表格列：在“属性规格”后新增“TOKEN/公式”（仅当尺寸绑定为 B-XXXXAA 时展示其属性公式；Z/模型码留空）
+    - SKU 表格列：将“颜色分类/尺寸”在表格中合并为“商品规格（网店）”；新增“检验”按钮，校验 TOKEN/公式的互斥组是否能被“商品规格（网店）”命中，并在“是否上架”旁显示绿/红通过状态
   - 验收命令（必须，全部 0 退出码）：
     - Frontend：`npm -C frontend run build`
     - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`

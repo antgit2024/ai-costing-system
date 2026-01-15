@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
@@ -802,6 +802,51 @@ def generate_bom_by_spec(
         # Clear spec_text for component-level parsing to avoid dimension contamination.
         c2["spec_text"] = ""
         comps2.append(c2)
+
+    # -----------------------------
+    # B / Z dimension strategy
+    # -----------------------------
+    def _to_mm_from_cm(v: Any) -> int:
+        if v is None:
+            return 0
+        try:
+            d = v if isinstance(v, Decimal) else Decimal(str(v))
+            mm = (d * Decimal("10")).to_integral_value(rounding=ROUND_HALF_UP)
+            return int(mm)
+        except Exception:
+            return 0
+
+    def _as_int(v: Any) -> int:
+        try:
+            return int(v)
+        except Exception:
+            return 0
+
+    if prefix_letter == "Z":
+        # 指定型：模板必须提供完整尺寸/数量（不依赖商品规格解析）
+        for i, c in enumerate(comps2):
+            w = _as_int(c.get("width_mm"))
+            h = _as_int(c.get("height_mm"))
+            q = _as_int(c.get("quantity"))
+            if w <= 0 or h <= 0:
+                raise ValueError(f"Z套装组件缺少尺寸：components[{i}] width_mm/height_mm 必须 >0")
+            if q <= 0:
+                raise ValueError(f"Z套装组件缺少数量：components[{i}] quantity 必须 >0")
+    else:
+        # 解析型：允许模板组件留空尺寸（0/None），运行时从“商品规格（网店）”解析宽高灌入。
+        w_mm = _to_mm_from_cm(spec_result.get("width_cm"))
+        h_mm = _to_mm_from_cm(spec_result.get("height_cm"))
+        needs_fill = any(_as_int(c.get("width_mm")) <= 0 or _as_int(c.get("height_mm")) <= 0 for c in comps2)
+        if needs_fill and (w_mm <= 0 or h_mm <= 0):
+            # C1: high safety - fail fast and let upstream put it into exception queue.
+            raise ValueError("缺尺寸：商品规格（网店）未解析到宽高（请包含如 45X45 / 45*45 / 45×45）")
+        for c in comps2:
+            if _as_int(c.get("width_mm")) <= 0:
+                c["width_mm"] = w_mm
+            if _as_int(c.get("height_mm")) <= 0:
+                c["height_mm"] = h_mm
+            if _as_int(c.get("quantity")) <= 0:
+                c["quantity"] = 1
 
     res = generate_bom_multi_bundle(
         db,

@@ -11,6 +11,20 @@ DIMENSION_PATTERN = re.compile(
     r"\s*(?P<unit>cm|厘米|mm|毫米|m|米)?",
     re.IGNORECASE,
 )
+
+# Dimension with optional quantity, e.g.:
+# - 45*45*1
+# - 45×45×2
+# - 45X45X3
+# NOTE:
+# - unit (cm/mm/m) applies to width/height only; qty is treated as a plain count.
+DIMENSION_WITH_QTY_PATTERN = re.compile(
+    r"(?P<prefix>约|大约|约等)?(?P<width>\d{1,4}(?:\.\d+)?)\s*"
+    r"(?:[xX×\*＊]\s*(?P<height>\d{1,4}(?:\.\d+)?))"
+    r"\s*(?P<unit>cm|厘米|mm|毫米|m|米)?"
+    r"(?:\s*[xX×\*＊]\s*(?P<qty>\d{1,4}))?",
+    re.IGNORECASE,
+)
 DIAMETER_PATTERN = re.compile(
     # Accept:
     # - 直径50 / φ50 / Φ50 / D50
@@ -102,6 +116,7 @@ def parse_spec(spec_text: str) -> Dict[str, Any]:
     width_cm: Decimal | None = None
     height_cm: Decimal | None = None
     diameter_cm: Decimal | None = None
+    dimension_qty: int | None = None
     extra_tokens: List[str] = []
 
     def _is_height_label(lbl: str) -> bool:
@@ -154,6 +169,23 @@ def parse_spec(spec_text: str) -> Dict[str, Any]:
             explanations.append(
                 {"token": f"{height_cm}", "source": dim_match.group(0), "rule": "width_height"}
             )
+
+    # Optional quantity parsing:
+    # - If spec uses the 3-part form (W*H*Q), take Q as the "dimension_qty"
+    # - If spec has dimensions but no qty, default to 1
+    dim_qty_match = DIMENSION_WITH_QTY_PATTERN.search(text)
+    if dim_qty_match:
+        try:
+            raw = str(dim_qty_match.group("qty") or "").strip()
+            if raw:
+                q = int(raw)
+                if q > 0:
+                    dimension_qty = q
+                    explanations.append({"token": str(q), "source": dim_qty_match.group(0), "rule": "dimension_qty"})
+        except Exception:
+            dimension_qty = None
+    if dimension_qty is None and width_cm is not None and height_cm is not None:
+        dimension_qty = 1
 
     dia_match = DIAMETER_PATTERN.search(text)
     if dia_match:
@@ -261,6 +293,7 @@ def parse_spec(spec_text: str) -> Dict[str, Any]:
         "width_cm": width_cm,
         "height_cm": height_cm,
         "diameter_cm": diameter_cm,
+        "dimension_qty": dimension_qty,
         "area_m2": area_m2,
         "perimeter_m": perimeter_m,
         "explanations": explanations,

@@ -1,5 +1,21 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-15（套装模板：Z/B 尺寸策略（B运行时解析尺寸；Z必须固定））
+  - 背景：B 套版不在模板中固定尺寸，运行时仅依赖“商品规格（网店）”解析宽高；Z 套版为指定型必须固定尺寸/数量。
+  - 产物：
+    - 后端：
+      - `backend/src/planner/services/spec_parser_service.py`：支持解析 `45*45*1 / 45×45×1 / 45X45X1` 的数量段（未写数量默认=1），输出 `dimension_qty`
+      - `backend/src/planner/services/bom_generation_service.py`：
+        - B：组件行尺寸为 0/空时，从 spec_text 解析宽高灌入；若无法解析宽高则直接失败（C1：缺尺寸进异常队列）
+        - Z：强制校验组件行尺寸/数量必须填写
+    - 前端：
+      - `/costing/bundle-templates`（`frontend/src/pages/costing/BundleTemplatesPage.tsx`）：
+        - Z（指定型）保存前强制校验“宽/高/数量”
+        - B（解析型）允许宽/高留空（运行时由商品规格解析灌入），但检验提示风险
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`backend/venv/bin/python -m pytest backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-15（天猫 SKU：从套装模板(B)互斥组公式自动生成“颜色分类”值域）
   - 背景：套装模板 B 模式已沉淀互斥组公式（例如 `[{}{毛球}][{黄金绒}{雪尼尔}]45*45*1 + [{PP}{羽丝绒}]45*45*1`），需要把这套规则直接转成“天猫建属性可用的对客词”，占主动权并保证回传 ERP 规格可解析命中 TOKEN。
   - 产物（前端）：

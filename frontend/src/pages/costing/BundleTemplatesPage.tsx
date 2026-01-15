@@ -1075,8 +1075,20 @@ export default function BundleTemplatesPage() {
     if (!p) return { ok: false, reason: '请先新建一条属性' }
     if (p?.enabled === false) return { ok: false, reason: '该属性已停用，请先启用再保存' }
     const rows = Array.isArray(p?.components) ? p.components : []
-    const valid = rows.filter((c: any) => String(c?.model_version_id ?? '').trim() && Number(c?.width_cm) > 0 && Number(c?.height_cm) > 0 && Number(c?.quantity) > 0)
-    if (!valid.length) return { ok: false, reason: '请至少填写 1 条完整组件行（模型/宽/高/数量）' }
+    const presetMode = (String((p as any)?.mode ?? 'parse').trim() === 'force' ? 'force' : 'parse') as 'parse' | 'force'
+    const valid = rows.filter((c: any) => {
+      const hasModel = !!String(c?.model_version_id ?? '').trim()
+      const qtyOk = Number(c?.quantity) > 0
+      const whOk = Number(c?.width_cm) > 0 && Number(c?.height_cm) > 0
+      if (presetMode === 'force') return hasModel && qtyOk && whOk
+      // parse(B): allow empty width/height (runtime will parse from 商品规格); still require model+qty
+      return hasModel && qtyOk
+    })
+    if (!valid.length) {
+      return presetMode === 'force'
+        ? { ok: false, reason: '请至少填写 1 条完整组件行（模型/宽/高/数量）' }
+        : { ok: false, reason: '请至少填写 1 条组件行（模型/数量）；尺寸可留空（解析型将从商品规格解析）' }
+    }
     return { ok: true }
   }
 
@@ -1099,6 +1111,7 @@ export default function BundleTemplatesPage() {
       const versionId = String(rr?.model_version_id ?? '').trim()
       const w = Number(rr?.width_cm ?? 0)
       const h = Number(rr?.height_cm ?? 0)
+        const q = Number(rr?.quantity ?? 0)
       const forceMap = (rr?.force_variant_by_base_line ?? {}) as any
       let okThisComp = true
 
@@ -1107,8 +1120,16 @@ export default function BundleTemplatesPage() {
         issues.push({ level: 'error', message: `组件${cIdx + 1}：未选择模型版本` })
       }
       if (!(w > 0 && h > 0)) {
+        if (presetMode === 'force') {
+          okThisComp = false
+          issues.push({ level: 'error', message: `组件${cIdx + 1}：尺寸非法（宽/高必须 >0）` })
+        } else {
+          issues.push({ level: 'warn', message: `组件${cIdx + 1}：未填写尺寸（解析型将从“商品规格（网店）”解析；若未解析到将失败进入异常）` })
+        }
+      }
+      if (!(q > 0)) {
         okThisComp = false
-        issues.push({ level: 'error', message: `组件${cIdx + 1}：尺寸非法（宽/高必须 >0）` })
+        issues.push({ level: 'error', message: `组件${cIdx + 1}：数量必须 >0（不填请写 1）` })
       }
 
       const baseMap = baseLineMapByVersion.get(versionId) ?? new Map<string, any>()
@@ -1740,30 +1761,38 @@ export default function BundleTemplatesPage() {
         // Preserve legacy lexicon_rules (global fallback mapping) if exists, but do not expose to operators.
         lexicon_rules: Array.isArray((editing?.metadata ?? {})?.lexicon_rules) ? (editing?.metadata ?? {})?.lexicon_rules : [],
         phrase_presets: phrasePresets
-          .map((p) => ({
-            selector: String((p as any).selector ?? '').trim().toUpperCase() || undefined,
-            enabled: (p as any).enabled === false ? false : undefined,
-            phrase: String((p as any).phrase ?? '').trim(),
-            mode: String((p as any).mode ?? '').trim() === 'force' ? 'force' : 'parse',
-            components: Array.isArray(p.components)
-              ? p.components
-                  .map((c) => ({
-                    model_version_id: String(c.model_version_id ?? '').trim(),
-                    width_mm: Number(c.width_cm) * 10,
-                    height_mm: Number(c.height_cm) * 10,
-                    quantity: Number(c.quantity),
-                    spec_text: String(c.spec_text || '').trim() || undefined,
-                    tokens: Array.isArray((c as any).tokens)
-                      ? ((c as any).tokens as any[]).map((x) => String(x)).filter(Boolean)
-                      : undefined,
-                    force_variant_by_base_line:
-                      c.force_variant_by_base_line && typeof c.force_variant_by_base_line === 'object'
-                        ? c.force_variant_by_base_line
+          .map((p) => {
+            const presetMode = String((p as any).mode ?? '').trim() === 'force' ? 'force' : 'parse'
+            return {
+              selector: String((p as any).selector ?? '').trim().toUpperCase() || undefined,
+              enabled: (p as any).enabled === false ? false : undefined,
+              phrase: String((p as any).phrase ?? '').trim(),
+              mode: presetMode,
+              components: Array.isArray(p.components)
+                ? p.components
+                    .map((c) => ({
+                      model_version_id: String(c.model_version_id ?? '').trim(),
+                      width_mm: Math.max(0, Number(c.width_cm) * 10),
+                      height_mm: Math.max(0, Number(c.height_cm) * 10),
+                      quantity: Math.max(0, Number(c.quantity)),
+                      spec_text: String(c.spec_text || '').trim() || undefined,
+                      tokens: Array.isArray((c as any).tokens)
+                        ? ((c as any).tokens as any[]).map((x) => String(x)).filter(Boolean)
                         : undefined,
-                  }))
-                  .filter((c) => c.model_version_id && c.width_mm > 0 && c.height_mm > 0 && c.quantity > 0)
-              : [],
-          }))
+                      force_variant_by_base_line:
+                        c.force_variant_by_base_line && typeof c.force_variant_by_base_line === 'object'
+                          ? c.force_variant_by_base_line
+                          : undefined,
+                    }))
+                    .filter((c) => {
+                      if (!c.model_version_id || !(c.quantity > 0)) return false
+                      // Z(指定型) 必须固定尺寸；B(解析型) 允许尺寸为 0（运行时从商品规格解析灌入）
+                      if (presetMode === 'force') return c.width_mm > 0 && c.height_mm > 0
+                      return true
+                    })
+                : [],
+            }
+          })
           // Keep disabled rows (by selector) even if they are empty, to avoid selector reuse/shift.
           // Enabled rows must have phrase + component rows.
           .filter((p: any) => {
@@ -1807,14 +1836,24 @@ export default function BundleTemplatesPage() {
       if (p?.enabled === false) continue
       enabledSelectorCounts.set(selector, (enabledSelectorCounts.get(selector) ?? 0) + 1)
       const rows = Array.isArray(p?.components) ? p.components : []
-      const valid = rows.filter((c: any) => String(c?.model_version_id ?? '').trim() && Number(c?.width_cm) > 0 && Number(c?.height_cm) > 0 && Number(c?.quantity) > 0)
+      const presetMode = (String((p as any)?.mode ?? 'parse').trim() === 'force' ? 'force' : 'parse') as 'parse' | 'force'
+      const valid = rows.filter((c: any) => {
+        const hasModel = !!String(c?.model_version_id ?? '').trim()
+        const qtyOk = Number(c?.quantity) > 0
+        const whOk = Number(c?.width_cm) > 0 && Number(c?.height_cm) > 0
+        if (presetMode === 'force') return hasModel && qtyOk && whOk
+        return hasModel && qtyOk
+      })
       if (!String(p?.phrase ?? '').trim()) {
         issues.push({ level: 'error', message: `属性 ${selector}：属性备注不能为空（用于识别/管理；若暂不使用请在左侧停用该属性）` })
       }
       if (!valid.length) {
         issues.push({
           level: 'error',
-          message: `属性 ${selector}：已启用但未配置完整组件行（模型/宽/高/数量）；请补齐至少1行或在左侧停用该属性`,
+          message:
+            presetMode === 'force'
+              ? `属性 ${selector}：已启用但未配置完整组件行（模型/宽/高/数量）；请补齐至少1行或在左侧停用该属性`
+              : `属性 ${selector}：已启用但未配置组件行（模型/数量）；尺寸可留空（解析型将从商品规格解析）`,
         })
       }
     }

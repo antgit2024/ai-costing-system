@@ -364,7 +364,8 @@ const buildAttributeFormulaAndGroups = (args: {
       .map((g) => `[${g.options.map((t) => formatTokenBrace(t)).join('')}]`)
       .join('')
 
-    const dims = `${formatCm(rr?.width_cm)}*${formatCm(rr?.height_cm)}*${formatCm(rr?.quantity ?? 1)}`
+    // 尺寸/数量：不做兜底（0 代表未填，便于“必填项红字”提示）
+    const dims = `${formatCm(rr?.width_cm)}*${formatCm(rr?.height_cm)}*${formatCm(rr?.quantity)}`
     if (componentFormula) parts.push(`${componentFormula}${dims}`)
     if (groupsInOrder.length) components.push({ componentIndex: cIdx, groups: groupsInOrder })
   }
@@ -406,14 +407,14 @@ const buildAutoRuleMetaFromSelections = (args: {
   attributeGroupSelections: Record<string, string>
   componentOrder?: number[]
   groupOrderByPresetComponent?: Record<string, string[]>
-}): { text: string; items: Array<{ tokens: Array<{ text: string; isFromDropdown: boolean }>; dims: string }> } => {
+}): { text: string; items: Array<{ tokens: Array<{ text: string; isFromDropdown: boolean }>; dims: string; dimsIsMissing: boolean }> } => {
   const { presetIndex, components, componentRows, attributeGroupSelections, componentOrder, groupOrderByPresetComponent } = args
   const byComp = new Map<number, AttributeGroup[]>()
   for (const c of components) byComp.set(c.componentIndex, c.groups)
   const defaultOrder = componentRows.map((_: any, i: number) => i)
   const order = Array.isArray(componentOrder) && componentOrder.length ? componentOrder : defaultOrder
 
-  const items: Array<{ tokens: Array<{ text: string; isFromDropdown: boolean }>; dims: string }> = []
+  const items: Array<{ tokens: Array<{ text: string; isFromDropdown: boolean }>; dims: string; dimsIsMissing: boolean }> = []
   const textParts: string[] = []
 
   for (const cIdx of order) {
@@ -441,9 +442,14 @@ const buildAutoRuleMetaFromSelections = (args: {
       tokenTextParts.push(t)
     }
     if (!tokens.length) continue
-    const dims = `${formatCm(rr?.width_cm)}*${formatCm(rr?.height_cm)}*${formatCm(rr?.quantity ?? 1)}`
+    const w = Number(rr?.width_cm ?? 0)
+    const h = Number(rr?.height_cm ?? 0)
+    const q = Number(rr?.quantity ?? 0)
+    const dimsIsMissing = !(w > 0 && h > 0 && q > 0)
+    // 尺寸/数量：不做兜底（0 代表未填，便于“必填项红字”提示）
+    const dims = `${formatCm(rr?.width_cm)}*${formatCm(rr?.height_cm)}*${formatCm(rr?.quantity)}`
     const tokenText = tokenTextParts.join('')
-    items.push({ tokens, dims })
+    items.push({ tokens, dims, dimsIsMissing })
     textParts.push(`${tokenText}${dims}`)
   }
 
@@ -1761,12 +1767,26 @@ export default function BundleTemplatesPage() {
         // Preserve legacy lexicon_rules (global fallback mapping) if exists, but do not expose to operators.
         lexicon_rules: Array.isArray((editing?.metadata ?? {})?.lexicon_rules) ? (editing?.metadata ?? {})?.lexicon_rules : [],
         phrase_presets: phrasePresets
-          .map((p) => {
+          .map((p, pIdx) => {
             const presetMode = String((p as any).mode ?? '').trim() === 'force' ? 'force' : 'parse'
+            const rows = Array.isArray((p as any)?.components) ? ((p as any).components as any[]) : []
+            const autoFormula =
+              presetMode === 'force'
+                ? ''
+                : buildAttributeFormulaAndGroups({
+                    presetIndex: pIdx,
+                    componentRows: rows,
+                    presetSelectedByIdx,
+                    fallbackTokenOverrides,
+                    variantTokenOptionsByVersionBaseLine,
+                    baseLineInfoByVersionBaseLine,
+                    componentOrder: componentOrderByPreset?.[String(pIdx)],
+                  }).formula
             return {
               selector: String((p as any).selector ?? '').trim().toUpperCase() || undefined,
               enabled: (p as any).enabled === false ? false : undefined,
-              phrase: String((p as any).phrase ?? '').trim(),
+              // 口径：B(解析型) 的属性名称/公式永远来自自动生成，且不可手改，避免不同步
+              phrase: presetMode === 'force' ? String((p as any).phrase ?? '').trim() : String(autoFormula || '').trim(),
               mode: presetMode,
               components: Array.isArray(p.components)
                 ? p.components
@@ -1844,8 +1864,29 @@ export default function BundleTemplatesPage() {
         if (presetMode === 'force') return hasModel && qtyOk && whOk
         return hasModel && qtyOk
       })
-      if (!String(p?.phrase ?? '').trim()) {
-        issues.push({ level: 'error', message: `属性 ${selector}：属性备注不能为空（用于识别/管理；若暂不使用请在左侧停用该属性）` })
+      const phraseText =
+        presetMode === 'force'
+          ? String(p?.phrase ?? '').trim()
+          : (() => {
+              const built = buildAttributeFormulaAndGroups({
+                presetIndex: pIdx,
+                componentRows: rows,
+                presetSelectedByIdx,
+                fallbackTokenOverrides,
+                variantTokenOptionsByVersionBaseLine,
+                baseLineInfoByVersionBaseLine,
+                componentOrder: componentOrderByPreset?.[String(pIdx)],
+              })
+              return String(built.formula || '').trim()
+            })()
+      if (!phraseText) {
+        issues.push({
+          level: 'error',
+          message:
+            presetMode === 'force'
+              ? `属性 ${selector}：属性备注不能为空（用于识别/管理；若暂不使用请在左侧停用该属性）`
+              : `属性 ${selector}：无法自动生成属性公式（请先筛选/强制生成互斥组，再补齐组件行）`,
+        })
       }
       if (!valid.length) {
         issues.push({
@@ -2817,9 +2858,28 @@ export default function BundleTemplatesPage() {
                             : '属性名称/公式（解析型，默认自动生成，可编辑）：例如 [{黄金绒}{雪尼尔}]30*50*1 + [{PP}{羽丝绒}]45*45*1'
                         }
                         disabled={disabled}
-                        value={String(r?.phrase ?? '')}
-                        onChange={(e) =>
-                          setPhrasePresets((prev) => (prev ?? []).map((x, i) => (i === idx ? { ...x, phrase: e.target.value } : x)))
+                        readOnly={String((r as any)?.mode ?? 'parse') !== 'force'}
+                        value={(() => {
+                          const mode = String((r as any)?.mode ?? 'parse')
+                          if (mode === 'force') return String(r?.phrase ?? '')
+                          const built = buildAttributeFormulaAndGroups({
+                            presetIndex: idx,
+                            componentRows: rows,
+                            presetSelectedByIdx,
+                            fallbackTokenOverrides,
+                            variantTokenOptionsByVersionBaseLine,
+                            baseLineInfoByVersionBaseLine,
+                            componentOrder: componentOrderByPreset?.[String(idx)],
+                          })
+                          return String(built.formula || '')
+                        })()}
+                        onChange={
+                          String((r as any)?.mode ?? 'parse') === 'force'
+                            ? (e) =>
+                                setPhrasePresets((prev) =>
+                                  (prev ?? []).map((x, i) => (i === idx ? { ...x, phrase: e.target.value } : x)),
+                                )
+                            : undefined
                         }
                       />
                       <Space wrap align="center" size={10} style={{ width: '100%' }}>
@@ -2864,39 +2924,47 @@ export default function BundleTemplatesPage() {
                           <Button
                             size="small"
                             icon={<CopyOutlined />}
-                            disabled={!String(r?.phrase ?? '').trim()}
+                            disabled={
+                              String((r as any)?.mode ?? 'parse') === 'force'
+                                ? !String(r?.phrase ?? '').trim()
+                                : (() => {
+                                    const built = buildAttributeFormulaAndGroups({
+                                      presetIndex: idx,
+                                      componentRows: rows,
+                                      presetSelectedByIdx,
+                                      fallbackTokenOverrides,
+                                      variantTokenOptionsByVersionBaseLine,
+                                      baseLineInfoByVersionBaseLine,
+                                      componentOrder: componentOrderByPreset?.[String(idx)],
+                                    })
+                                    return !String(built.formula || '').trim()
+                                  })()
+                            }
                             onClick={async () => {
-                              const ok = await copyTextToClipboard(String(r?.phrase ?? '').trim())
+                              const mode = String((r as any)?.mode ?? 'parse')
+                              const text =
+                                mode === 'force'
+                                  ? String(r?.phrase ?? '').trim()
+                                  : (() => {
+                                      const built = buildAttributeFormulaAndGroups({
+                                        presetIndex: idx,
+                                        componentRows: rows,
+                                        presetSelectedByIdx,
+                                        fallbackTokenOverrides,
+                                        variantTokenOptionsByVersionBaseLine,
+                                        baseLineInfoByVersionBaseLine,
+                                        componentOrder: componentOrderByPreset?.[String(idx)],
+                                      })
+                                      return String(built.formula || '').trim()
+                                    })()
+                              const ok = await copyTextToClipboard(text)
                               if (ok) message.success('已复制')
                               else message.error('复制失败：请手动复制')
                             }}
                           >
                             复制公式
                           </Button>
-                          <Button
-                            size="small"
-                            onClick={() => {
-                              if (String((r as any)?.mode ?? 'parse') === 'force') return
-                              const built = buildAttributeFormulaAndGroups({
-                                presetIndex: idx,
-                                componentRows: rows,
-                                presetSelectedByIdx,
-                                fallbackTokenOverrides,
-                                variantTokenOptionsByVersionBaseLine,
-                                baseLineInfoByVersionBaseLine,
-                                componentOrder: componentOrderByPreset?.[String(idx)],
-                              })
-                              const formula = built.formula
-                              if (!formula) {
-                                message.warning('暂无可生成的属性公式（请先筛选/强制）')
-                                return
-                              }
-                              setPhrasePresets((prev) => (prev ?? []).map((x, i) => (i === idx ? { ...x, phrase: formula } : x)))
-                              message.success('已写入输入框')
-                            }}
-                          >
-                            重新生成
-                          </Button>
+                          {String((r as any)?.mode ?? 'parse') === 'force' ? null : <Text type="secondary">（自动同步，只读）</Text>}
                           <Button
                             size="small"
                             disabled={!String(currentBundleToken || '').trim()}
@@ -2973,12 +3041,18 @@ export default function BundleTemplatesPage() {
                                                       {it.tokens.map((tk, j) => (
                                                         <span
                                                           key={`ar-tk-${idx}-${i2}-${j}`}
-                                                          style={tk.isFromDropdown ? { color: '#cf1322', fontWeight: 700 } : undefined}
+                                                          // 口径：TOKEN 永远红字（对客必须醒目）；是否来自下拉不影响展示
+                                                          style={{ color: '#cf1322', fontWeight: 700 }}
                                                         >
                                                           {tk.text}
                                                         </span>
                                                       ))}
-                                                      <span>{it.dims}</span>
+                                                      <span
+                                                        // 口径：尺寸/数量若未填（任一项=0）则红字；齐全则黑字
+                                                        style={it.dimsIsMissing ? { color: '#cf1322', fontWeight: 700 } : undefined}
+                                                      >
+                                                        {it.dims}
+                                                      </span>
                                                     </span>
                                                   ))}
                                                 </span>

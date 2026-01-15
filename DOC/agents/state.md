@@ -1,5 +1,20 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-15（天猫 SKU：销售属性配置器（模拟天猫建属性第一步））
+  - 目标：以系统为主体维护“天猫销售属性值域”（颜色分类/尺寸/主图案类型），按 TOKEN 口径沉淀为可复制/可导出清单，再到天猫后台建立属性。
+  - 产物（前端）：
+    - 页面：`/costing/tmall-sku-generator`（`frontend/src/pages/costing/TmallSkuTemplateGeneratorPage.tsx`）
+    - 新增：销售属性配置器（主图案类型值域维护、颜色分类行可选主图案类型）
+    - 新增：建属性清单输出（预览+一键复制+导出 xlsx）
+    - 新增：配置持久化与迁移（localStorage + 导入/导出 JSON）
+    - 约束：天猫模板/平台侧销售属性不可由模板回写；本工具只负责“建属性清单 + 后续模板回填编码/上架”
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档 grep/test -d 校验
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+  - 下一步：
+    - 按渠道抽象为“渠道属性模板”（天猫/抖音/拼多多…）复用同一套值域与编码规则（先从天猫开始）
+
 - **最近校对（北京时间 GMT+8）**：2026-01-15（天猫 SKU：回填天猫官方模板（商家编码/是否上架））
   - 背景：天猫官方模板中“颜色分类/尺寸”为销售属性不可编辑；实际痛点是给模板批量填 **商家编码** 与 **是否上架(0/1)**。
   - 产物（前端）：

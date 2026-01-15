@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
-import { Alert, Button, Card, Divider, Input, message, Space, Switch, Table, Tag, Typography, Upload } from 'antd'
+import { useEffect, useMemo, useState } from 'react'
+import { Alert, Button, Card, Divider, Input, message, Select, Space, Switch, Table, Tag, Typography, Upload } from 'antd'
 import { DownloadOutlined, EyeOutlined, PlusOutlined, UploadOutlined } from '@ant-design/icons'
 import * as XLSX from 'xlsx'
 
@@ -39,6 +39,14 @@ const readFileAsArrayBuffer = (file: File): Promise<ArrayBuffer> =>
 
 const normalizeCellText = (v: unknown) => String(v ?? '').replace(/\s+/g, ' ').trim()
 
+const normalizeAttrValue = (v: unknown) => {
+  // Normalize for stability when matching:
+  // - collapse whitespace
+  // - trim
+  // - do NOT change punctuation/case (keep user intent)
+  return String(v ?? '').replace(/\s+/g, ' ').trim()
+}
+
 type HeaderIndex = {
   headerRowIndex: number
   colorCol: number
@@ -75,6 +83,42 @@ const findHeaderIndex = (ws: XLSX.WorkSheet): HeaderIndex | null => {
   return null
 }
 
+type MainPatternOption = { key: string; label: string }
+
+type PersistedConfigV1 = {
+  merchantSkuPrefix: string
+  merchantSkuSuffix: string
+  sizes: TmallSizeOption[]
+  colors: Array<TmallColorOption & { enabledSizes?: Record<string, boolean> }>
+  mainPatternTypes: MainPatternOption[]
+}
+
+const STORAGE_KEY = 'tmall_sku_generator_config_v1'
+
+const downloadText = (text: string, filename: string) => {
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
+  downloadBlob(blob, filename)
+}
+
+const copyText = async (text: string) => {
+  try {
+    await navigator.clipboard.writeText(text)
+    message.success('已复制')
+  } catch {
+    // Fallback for environments without clipboard permission
+    const el = document.createElement('textarea')
+    el.value = text
+    el.style.position = 'fixed'
+    el.style.left = '-9999px'
+    document.body.appendChild(el)
+    el.focus()
+    el.select()
+    document.execCommand('copy')
+    el.remove()
+    message.success('已复制')
+  }
+}
+
 export default function TmallSkuTemplateGeneratorPage() {
   const [merchantSkuPrefix, setMerchantSkuPrefix] = useState('BZPB008XXXXX-')
   const [merchantSkuSuffix, setMerchantSkuSuffix] = useState('')
@@ -95,6 +139,54 @@ export default function TmallSkuTemplateGeneratorPage() {
   const [templateFile, setTemplateFile] = useState<File | null>(null)
   const [loadingFill, setLoadingFill] = useState(false)
   const [overwriteExisting, setOverwriteExisting] = useState(true)
+  const [mainPatternTypes, setMainPatternTypes] = useState<MainPatternOption[]>([
+    { key: 'p1', label: '无' },
+  ])
+
+  // Persist config in browser storage (MVP; makes it usable as "系统主体" without backend yet)
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY)
+      if (!raw) return
+      const parsed = JSON.parse(raw) as PersistedConfigV1
+      if (parsed?.merchantSkuPrefix) setMerchantSkuPrefix(parsed.merchantSkuPrefix)
+      if (parsed?.merchantSkuSuffix !== undefined) setMerchantSkuSuffix(parsed.merchantSkuSuffix)
+      if (Array.isArray(parsed?.sizes) && parsed.sizes.length) setSizes(parsed.sizes)
+      if (Array.isArray(parsed?.colors) && parsed.colors.length) {
+        setColors(
+          parsed.colors.map((c) => ({
+            key: c.key,
+            label: c.label,
+            width_cm: c.width_cm,
+            height_cm: c.height_cm,
+            thickness_cm: c.thickness_cm,
+            length_cm: c.length_cm,
+            main_pattern_type: c.main_pattern_type,
+            enabledSizes: c.enabledSizes ?? {},
+          })),
+        )
+      }
+      if (Array.isArray(parsed?.mainPatternTypes) && parsed.mainPatternTypes.length) setMainPatternTypes(parsed.mainPatternTypes)
+    } catch {
+      // ignore storage corruption
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    try {
+      const data: PersistedConfigV1 = {
+        merchantSkuPrefix,
+        merchantSkuSuffix,
+        sizes,
+        colors,
+        mainPatternTypes,
+      }
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
+    } catch {
+      // ignore quota/disabled storage
+    }
+  }, [merchantSkuPrefix, merchantSkuSuffix, sizes, colors, mainPatternTypes])
 
   const cells: TmallSkuCell[] = useMemo(() => {
     const out: TmallSkuCell[] = []
@@ -238,6 +330,101 @@ export default function TmallSkuTemplateGeneratorPage() {
     }
   }
 
+  const exportAttributeBuildListXlsx = () => {
+    const wb = XLSX.utils.book_new()
+    const rows: Array<{ attribute: string; value: string }> = []
+    for (const c of colors) rows.push({ attribute: '颜色分类', value: normalizeAttrValue(c.label) })
+    for (const s of sizes) rows.push({ attribute: '尺寸', value: normalizeAttrValue(s.label) })
+    for (const p of mainPatternTypes) rows.push({ attribute: '主图案类型', value: normalizeAttrValue(p.label) })
+
+    const ws = XLSX.utils.json_to_sheet(rows, { header: ['attribute', 'value'] })
+    // Friendly headers
+    XLSX.utils.sheet_add_aoa(ws, [['属性名', '属性值']], { origin: 'A1' })
+    XLSX.utils.book_append_sheet(wb, ws, 'build_attributes')
+
+    const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
+    downloadBlob(new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), 'tmall_build_attributes.xlsx')
+  }
+
+  const exportConfigJson = () => {
+    const data: PersistedConfigV1 = {
+      merchantSkuPrefix,
+      merchantSkuSuffix,
+      sizes,
+      colors,
+      mainPatternTypes,
+    }
+    downloadText(JSON.stringify(data, null, 2), 'tmall_sku_generator_config.json')
+  }
+
+  const importConfigJson = async (file: File) => {
+    try {
+      const buf = await file.text()
+      const parsed = JSON.parse(buf) as Partial<PersistedConfigV1>
+      if (parsed.merchantSkuPrefix !== undefined) setMerchantSkuPrefix(String(parsed.merchantSkuPrefix))
+      if (parsed.merchantSkuSuffix !== undefined) setMerchantSkuSuffix(String(parsed.merchantSkuSuffix))
+      if (Array.isArray(parsed.sizes)) setSizes(parsed.sizes as any)
+      if (Array.isArray(parsed.colors)) {
+        setColors(
+          (parsed.colors as any[]).map((c) => ({
+            key: String(c.key ?? `c_${uid()}`),
+            label: String(c.label ?? '').trim(),
+            width_cm: c.width_cm ?? null,
+            height_cm: c.height_cm ?? null,
+            thickness_cm: c.thickness_cm ?? null,
+            length_cm: c.length_cm ?? null,
+            main_pattern_type: c.main_pattern_type ?? null,
+            enabledSizes: (c.enabledSizes && typeof c.enabledSizes === 'object' ? c.enabledSizes : {}) as Record<string, boolean>,
+          })),
+        )
+      }
+      if (Array.isArray(parsed.mainPatternTypes)) {
+        setMainPatternTypes(
+          (parsed.mainPatternTypes as any[]).map((p) => ({
+            key: String(p.key ?? `p_${uid()}`),
+            label: String(p.label ?? '').trim(),
+          })),
+        )
+      }
+      message.success('已导入配置')
+    } catch (e: any) {
+      message.error(String(e?.message ?? e ?? '导入失败'))
+    }
+  }
+
+  const attributeText = useMemo(() => {
+    const lines: string[] = []
+    lines.push('【颜色分类】')
+    for (const c of colors) lines.push(`- ${normalizeAttrValue(c.label)}`)
+    lines.push('')
+    lines.push('【尺寸】')
+    for (const s of sizes) lines.push(`- ${normalizeAttrValue(s.label)}`)
+    lines.push('')
+    lines.push('【主图案类型】')
+    for (const p of mainPatternTypes) lines.push(`- ${normalizeAttrValue(p.label)}`)
+    lines.push('')
+    return lines.join('\n')
+  }, [colors, sizes, mainPatternTypes])
+
+  const dupSummary = useMemo(() => {
+    const countDup = (vals: string[]) => {
+      const m = new Map<string, number>()
+      for (const v of vals) {
+        const k = normalizeAttrValue(v)
+        if (!k) continue
+        m.set(k, (m.get(k) ?? 0) + 1)
+      }
+      return Array.from(m.entries())
+        .filter(([, n]) => n > 1)
+        .map(([k, n]) => ({ k, n }))
+    }
+    return {
+      colors: countDup(colors.map((c) => c.label)),
+      sizes: countDup(sizes.map((s) => s.label)),
+      patterns: countDup(mainPatternTypes.map((p) => p.label)),
+    }
+  }, [colors, sizes, mainPatternTypes])
+
   return (
     <div style={{ padding: 16 }}>
       <Space direction="vertical" style={{ width: '100%' }} size={12}>
@@ -303,6 +490,100 @@ export default function TmallSkuTemplateGeneratorPage() {
                 一键填充并下载
               </Button>
             </Space>
+          </Space>
+        </Card>
+
+        <Card
+          title="销售属性配置器（先在系统里编辑 → 复制到天猫后台建立属性）"
+          extra={
+            <Space wrap size={8}>
+              <Upload
+                accept=".json"
+                maxCount={1}
+                showUploadList={false}
+                beforeUpload={(file) => {
+                  void importConfigJson(file)
+                  return false
+                }}
+              >
+                <Button>导入配置(JSON)</Button>
+              </Upload>
+              <Button onClick={exportConfigJson}>导出配置(JSON)</Button>
+              <Button onClick={() => void copyText(attributeText)}>一键复制建属性清单</Button>
+              <Button icon={<DownloadOutlined />} onClick={exportAttributeBuildListXlsx}>
+                导出建属性清单(xlsx)
+              </Button>
+            </Space>
+          }
+        >
+          <Space direction="vertical" style={{ width: '100%' }} size={10}>
+            <Alert
+              type="warning"
+              showIcon
+              message="关键口径：销售属性在模板里不可编辑"
+              description={
+                <div>
+                  <div>我们这里的目标是：把“颜色分类/尺寸/主图案类型”等属性值先按你们 TOKEN 口径整理成可复制清单。</div>
+                  <div>你在天猫后台按清单建立属性后，再下载官方模板，用上面的“一键填充并下载”回填编码/上架即可。</div>
+                </div>
+              }
+            />
+
+            {(dupSummary.colors.length || dupSummary.sizes.length || dupSummary.patterns.length) ? (
+              <Alert
+                type="error"
+                showIcon
+                message="检测到重复属性值（会导致天猫侧歧义/回填匹配不稳定）"
+                description={
+                  <div>
+                    {dupSummary.colors.length ? (
+                      <div>
+                        <b>颜色分类重复</b>：{dupSummary.colors.map((x) => `${x.k}×${x.n}`).join('；')}
+                      </div>
+                    ) : null}
+                    {dupSummary.sizes.length ? (
+                      <div>
+                        <b>尺寸重复</b>：{dupSummary.sizes.map((x) => `${x.k}×${x.n}`).join('；')}
+                      </div>
+                    ) : null}
+                    {dupSummary.patterns.length ? (
+                      <div>
+                        <b>主图案类型重复</b>：{dupSummary.patterns.map((x) => `${x.k}×${x.n}`).join('；')}
+                      </div>
+                    ) : null}
+                  </div>
+                }
+              />
+            ) : (
+              <Alert type="success" showIcon message="属性值去重校验通过" />
+            )}
+
+            <Card size="small" title="主图案类型（可选，值域清单）" extra={<Tag>用于天猫后台建立“主图案类型”属性</Tag>}>
+              <Space direction="vertical" style={{ width: '100%' }} size={8}>
+                {mainPatternTypes.map((p, i) => (
+                  <Space key={p.key} wrap size={8} style={{ width: '100%' }}>
+                    <Text type="secondary">值</Text>
+                    <Input
+                      style={{ width: 360 }}
+                      value={p.label}
+                      onChange={(e) => setMainPatternTypes((prev) => prev.map((x, idx) => (idx === i ? { ...x, label: e.target.value } : x)))}
+                    />
+                    <Button danger onClick={() => setMainPatternTypes((prev) => prev.filter((_, idx) => idx !== i))}>
+                      删除
+                    </Button>
+                  </Space>
+                ))}
+                <Button onClick={() => setMainPatternTypes((prev) => [...prev, { key: `p_${uid()}`, label: '新类型' }])}>
+                  添加主图案类型
+                </Button>
+              </Space>
+            </Card>
+
+            <Card size="small" title="建属性清单（预览，可直接复制）">
+              <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' }}>
+                {attributeText}
+              </pre>
+            </Card>
           </Space>
         </Card>
 
@@ -377,6 +658,24 @@ export default function TmallSkuTemplateGeneratorPage() {
                     value={r.label}
                     onChange={(e) =>
                       setColors((prev) => prev.map((x, i) => (i === idx ? { ...x, label: e.target.value } : x)))
+                    }
+                  />
+                ),
+              },
+              {
+                title: '主图案类型（可选）',
+                width: 200,
+                render: (_: any, r: ColorRow, idx: number) => (
+                  <Select
+                    allowClear
+                    placeholder="可选"
+                    style={{ width: '100%' }}
+                    value={r.main_pattern_type ?? undefined}
+                    options={mainPatternTypes.map((p) => ({ label: p.label, value: p.label }))}
+                    onChange={(v) =>
+                      setColors((prev) =>
+                        prev.map((x, i) => (i === idx ? { ...x, main_pattern_type: v ?? null } : x)),
+                      )
                     }
                   />
                 ),

@@ -28,6 +28,7 @@
       - 商家编码：不再拼尺寸/宽高（避免出现 `-4545` 一类后缀）；尺寸区移除“编码段(可选)”
       - 下拉体验：下拉输入框加宽 + 增加“刷新模型/套版”按钮（新建后可立即刷新看到）
     - 输出区新增：方案名保存/选择方案加载/删除（localStorage）
+    - SKU 表格列：隐藏“价格/数量/主图案类型/条形码/预扣数量/推荐卖点”，并在“商家编码”后新增“属性规格”（展示尺寸绑定的模型/套版名称）
   - 验收命令（必须，全部 0 退出码）：
     - Frontend：`npm -C frontend run build`
     - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`

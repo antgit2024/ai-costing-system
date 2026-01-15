@@ -314,6 +314,7 @@ type SpecEdits = Record<
     reserved_qty?: string
     selling_point?: string
     spec_text?: string
+    model_source_code?: string
   }
 >
 
@@ -584,21 +585,31 @@ export default function TmallSkuTemplateGeneratorPage() {
     const rows: SpecRow[] = []
     for (const c of colors) {
       for (const s of sizes) {
+        const row_key = `${c.key}||${s.key}`
         const enabled = c.enabledSizes?.[s.key] !== false
         const sku_status: 0 | 1 = enabled ? 1 : 0
+
+        const rowOverride = String(specEdits?.[row_key]?.model_source_code ?? '').trim()
+        const colorSource = String((c as any)?.source_code ?? '').trim()
+        const sizeSource = String((s as any)?.source_code ?? '').trim()
+
+        // Priority:
+        // - row override (table) > color binding (drawer) > size binding (drawer) > prefix/suffix
+        const merchantSource = rowOverride || colorSource || sizeSource
+        const displaySource = rowOverride || sizeSource
+
         const merchant_sku = buildMerchantSku({
           merchantSkuPrefix,
           merchantSkuSuffix,
-          // 颜色分类绑定优先级最高：更具体（同一尺寸下不同工艺/套版可不同）
-          sourceCode: (c as any)?.source_code || (s as any)?.source_code,
+          sourceCode: merchantSource || undefined,
         })
-        const sizeSource = String((s as any)?.source_code ?? '').trim()
-        const attribute_spec = sizeSource ? sourceLabelByValue.get(sizeSource) || sizeSource : ''
-        const bm = sizeSource ? bundleTokenMetaByValue[sizeSource] : undefined
+
+        const attribute_spec = displaySource ? sourceLabelByValue.get(displaySource) || displaySource : ''
+        const bm = displaySource ? bundleTokenMetaByValue[displaySource] : undefined
         const token_formula = bm && bm.mode === 'B' ? String(bm.phrase ?? '').trim() : ''
         const spec_text = `${String(c.label ?? '').trim()} ${String(s.label ?? '').trim()}`.trim()
         rows.push({
-          row_key: `${c.key}||${s.key}`,
+          row_key,
           color_key: c.key,
           size_key: s.key,
           color_label: c.label,
@@ -616,7 +627,7 @@ export default function TmallSkuTemplateGeneratorPage() {
       }
     }
     return rows
-  }, [colors, sizes, merchantSkuPrefix, merchantSkuSuffix, includeMainPatternType, sourceLabelByValue, bundleTokenMetaByValue])
+  }, [colors, sizes, merchantSkuPrefix, merchantSkuSuffix, includeMainPatternType, sourceLabelByValue, bundleTokenMetaByValue, specEdits])
 
   const getSpecTextForRow = (r: SpecRow): string => {
     const edited = String(specEdits?.[r.row_key]?.spec_text ?? '').trim()
@@ -1250,6 +1261,40 @@ export default function TmallSkuTemplateGeneratorPage() {
                           [r.row_key]: { ...(prev[r.row_key] ?? {}), sku_category: v },
                         }))
                       }
+                    />
+                  ),
+                },
+                {
+                  title: '模型属性',
+                  width: 320,
+                  render: (_: any, r: SpecRow) => (
+                    <Select
+                      allowClear
+                      showSearch
+                      placeholder="行级覆盖：选择模型/套版"
+                      loading={loadingSourceGroups}
+                      popupMatchSelectWidth={false}
+                      listHeight={520}
+                      value={String(specEdits[r.row_key]?.model_source_code ?? '').trim() || undefined}
+                      options={[
+                        { label: '不覆盖（走颜色/尺寸绑定）', value: '' },
+                        ...sourceGroups.map((g) => ({
+                          label: g.label,
+                          options: g.options,
+                        })),
+                      ]}
+                      onChange={(v) =>
+                        setSpecEdits((prev) => ({
+                          ...prev,
+                          [r.row_key]: { ...(prev[r.row_key] ?? {}), model_source_code: String(v ?? '') },
+                        }))
+                      }
+                      filterOption={(input, opt) => {
+                        const t = String((opt as any)?.label ?? '')
+                        const vv = String((opt as any)?.value ?? '')
+                        const q = String(input ?? '').trim().toLowerCase()
+                        return t.toLowerCase().includes(q) || vv.toLowerCase().includes(q)
+                      }}
                     />
                   ),
                 },

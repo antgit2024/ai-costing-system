@@ -27,6 +27,7 @@ from .routers import (
     sku_master,
     specs,
     taxonomy,
+    tmall_sku_template,
 )
 
 router = APIRouter(prefix="/planner")
@@ -57,3 +58,4 @@ router.include_router(specs.router)
 router.include_router(taxonomy.router)
 router.include_router(bundle_templates.router)
 router.include_router(bom.router)
+router.include_router(tmall_sku_template.router)

@@ -1,5 +1,20 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-15（天猫 SKU：回填天猫官方模板（商家编码/是否上架））
+  - 背景：天猫官方模板中“颜色分类/尺寸”为销售属性不可编辑；实际痛点是给模板批量填 **商家编码** 与 **是否上架(0/1)**。
+  - 产物（前端）：
+    - 页面：`/costing/tmall-sku-generator`（`frontend/src/pages/costing/TmallSkuTemplateGeneratorPage.tsx`）
+    - 新增：上传天猫官方模板（xls/xlsx）→ 调用 `preview` 产出编码/上架 → 回填模板列（颜色分类/尺寸不改）→ 下载 `*_filled.xlsx`
+    - 支持：可选“覆盖已有值”开关（关闭时若目标单元格已有值则跳过）
+  - 依赖：
+    - 前端新增依赖：`xlsx`（用于在浏览器端读写模板并尽量保留原 sheet 结构）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档 grep/test -d 校验
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+  - 下一步：
+    - 若天猫模板 sheet 名/表头存在变体：补齐更强的表头识别（同义列名、全角括号等）与“选择工作表”下拉
+
 - **最近校对（北京时间 GMT+8）**：2026-01-15（Frontend 接力：强制三件套验收 + 工作区干净度）
   - 本轮范围：不扩展功能，仅完成接力验收与恢复包落地（避免“正确版本只在工作区”）
   - 本轮产物：

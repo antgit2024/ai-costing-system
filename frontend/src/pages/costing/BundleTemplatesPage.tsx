@@ -197,18 +197,22 @@ const formatCm = (n: any): string => {
 
 const buildAttributeFormulaAndGroups = (args: {
   presetIndex: number
+  componentOrder?: number[]
   componentRows: any[]
   presetSelectedByIdx: Record<string, Record<string, any>>
   fallbackTokenOverrides: Record<string, string>
   variantTokenOptionsByVersionBaseLine: Record<string, Record<string, string[]>>
   baseLineInfoByVersionBaseLine: Record<string, Record<string, { orderIndex: number; isZeroCost: boolean }>>
 }): { formula: string; components: AttributeComponentGroups[] } => {
-  const { presetIndex, componentRows, presetSelectedByIdx, fallbackTokenOverrides, variantTokenOptionsByVersionBaseLine, baseLineInfoByVersionBaseLine } = args
+  const { presetIndex, componentOrder, componentRows, presetSelectedByIdx, fallbackTokenOverrides, variantTokenOptionsByVersionBaseLine, baseLineInfoByVersionBaseLine } = args
   if (!Array.isArray(componentRows) || componentRows.length <= 0) return { formula: '', components: [] }
 
   const parts: string[] = []
   const components: AttributeComponentGroups[] = []
-  for (let cIdx = 0; cIdx < componentRows.length; cIdx++) {
+  const defaultOrder = componentRows.map((_, i) => i)
+  const order = Array.isArray(componentOrder) && componentOrder.length ? componentOrder : defaultOrder
+  for (const cIdx of order) {
+    if (cIdx < 0 || cIdx >= componentRows.length) continue
     const rr = componentRows[cIdx] as any
     const versionId = String(rr?.model_version_id ?? '').trim()
     const k = `${presetIndex}:${cIdx}`
@@ -339,6 +343,42 @@ const copyTextToClipboard = async (text: string) => {
   }
 }
 
+const buildAutoRuleFromSelections = (args: {
+  presetIndex: number
+  components: AttributeComponentGroups[]
+  componentRows: any[]
+  attributeGroupSelections: Record<string, string>
+  componentOrder?: number[]
+}): string => {
+  const { presetIndex, components, componentRows, attributeGroupSelections, componentOrder } = args
+  if (!Array.isArray(components) || !Array.isArray(componentRows)) return ''
+  const byComp = new Map<number, AttributeGroup[]>()
+  for (const c of components) byComp.set(c.componentIndex, c.groups)
+  const defaultOrder = componentRows.map((_: any, i: number) => i)
+  const order = Array.isArray(componentOrder) && componentOrder.length ? componentOrder : defaultOrder
+
+  const parts: string[] = []
+  for (const cIdx of order) {
+    if (cIdx < 0 || cIdx >= componentRows.length) continue
+    const rr = componentRows[cIdx] as any
+    const groups = byComp.get(cIdx) ?? []
+    if (!groups.length) continue
+    const tokens: string[] = []
+    for (const g of groups) {
+      const selKey = `${presetIndex}:${cIdx}:${g.key}`
+      const raw = Object.prototype.hasOwnProperty.call(attributeGroupSelections, selKey) ? String(attributeGroupSelections[selKey] ?? '') : ''
+      const t = normalizeSingleToken(raw)
+      if (!t) continue
+      tokens.push(t)
+    }
+    if (!tokens.length) continue
+    const tokenText = tokens.join('')
+    const dims = `${formatCm(rr?.width_cm)}*${formatCm(rr?.height_cm)}*${formatCm(rr?.quantity ?? 1)}`
+    parts.push(`${tokenText}${dims}`)
+  }
+  return parts.join(' + ')
+}
+
 const SLOT_CN_FALLBACK: Record<string, string> = {
   front: '前片位',
   back: '背片位',
@@ -369,6 +409,7 @@ export default function BundleTemplatesPage() {
   const [phrasePresets, setPhrasePresets] = useState<PhrasePresetRow[]>([])
   const [activePresetIndex, setActivePresetIndex] = useState<number>(0)
   const [attributeGroupSelections, setAttributeGroupSelections] = useState<Record<string, string>>({})
+  const [componentOrderByPreset, setComponentOrderByPreset] = useState<Record<string, number[]>>({})
   // 默认兜底“对客 TOKEN”（仅用于对客展示/规范化用词；不影响真实物料/扣库/算价）
   // key: `${versionId}:${baseLineId}` -> tokenAlias (例如：黄金绒)
   const [fallbackTokenOverrides, setFallbackTokenOverrides] = useState<Record<string, string>>({})
@@ -1426,6 +1467,7 @@ export default function BundleTemplatesPage() {
     setPhrasePresets([])
     setFallbackTokenOverrides({})
     setAttributeGroupSelections({})
+    setComponentOrderByPreset({})
     setActivePresetIndex(0)
     setDrawerOpen(true)
   }
@@ -1472,6 +1514,7 @@ export default function BundleTemplatesPage() {
     if (fo && typeof fo === 'object') setFallbackTokenOverrides(fo as any)
     else setFallbackTokenOverrides({})
     setAttributeGroupSelections({})
+    setComponentOrderByPreset({})
     // NOTE: legacy metadata.lexicon_rules is preserved on save, but UI is intentionally hidden to avoid confusion.
 
     const pp = (row?.metadata ?? {})?.phrase_presets
@@ -1548,8 +1591,11 @@ export default function BundleTemplatesPage() {
     if (!p) return null
     if (String(p?.mode ?? 'parse') === 'force') return null
     const rows = Array.isArray(p?.components) ? (p.components as any[]) : []
+    const orderKey = String(activePresetIndex)
+    const componentOrder = componentOrderByPreset?.[orderKey]
     return buildAttributeFormulaAndGroups({
       presetIndex: activePresetIndex,
+      componentOrder,
       componentRows: rows,
       presetSelectedByIdx,
       fallbackTokenOverrides,
@@ -1563,6 +1609,7 @@ export default function BundleTemplatesPage() {
     fallbackTokenOverrides,
     variantTokenOptionsByVersionBaseLine,
     baseLineInfoByVersionBaseLine,
+    componentOrderByPreset,
   ])
 
   useEffect(() => {
@@ -2709,22 +2756,87 @@ export default function BundleTemplatesPage() {
                                         .bt-model-pill {
                                           display: inline-flex;
                                           align-items: center;
-                                          padding: 2px 8px;
+                                          padding: 1px 6px;
                                           border-radius: 999px;
                                           font-weight: 700;
                                           background: rgba(22,119,255,0.12);
                                           border: 1px solid rgba(22,119,255,0.35);
                                           color: #0958d9;
-                                          line-height: 22px;
+                                          line-height: 16px;
+                                          font-size: 12px;
+                                        }
+                                        .bt-model-reorder-btn.ant-btn {
+                                          padding: 0 4px;
+                                          height: 18px;
+                                          line-height: 18px;
+                                          color: rgba(0,0,0,0.45);
+                                        }
+                                        .bt-model-reorder-btn.ant-btn:not([disabled]):hover {
+                                          color: #1677ff;
+                                          background: rgba(22,119,255,0.08);
                                         }
                                       `}</style>
-                                      {components.map((c) => {
+                                      {(() => {
+                                        const orderKey = String(idx)
+                                        const rawOrder = componentOrderByPreset?.[orderKey]
+                                        const defaultOrder = components.map((c) => c.componentIndex)
+                                        const order = Array.isArray(rawOrder) && rawOrder.length ? rawOrder : defaultOrder
+                                        const seen = new Set<number>()
+                                        const ordered = order
+                                          .map((i) => Number(i))
+                                          .filter((i) => Number.isFinite(i))
+                                          .filter((i) => (seen.has(i) ? false : (seen.add(i), true)))
+                                          .map((i) => components.find((c) => c.componentIndex === i))
+                                          .filter(Boolean) as AttributeComponentGroups[]
+                                        const rest = components.filter((c) => !seen.has(c.componentIndex))
+                                        return [...ordered, ...rest]
+                                      })().map((c) => {
                                         const versionId = String((rows?.[c.componentIndex] as any)?.model_version_id ?? '').trim()
                                         const label = versionId ? String(versionIdToModelLabel.get(versionId) ?? '') : ''
                                         const modelCode = label.includes(':') ? label.split(':')[0] : label
+                                        const orderKey = String(idx)
+                                        const currentOrder = componentOrderByPreset?.[orderKey] ?? []
+                                        const ordered = currentOrder.length
+                                          ? currentOrder.slice()
+                                          : components.map((cc) => cc.componentIndex)
+                                        const pos = ordered.indexOf(c.componentIndex)
+                                        const canUp = pos > 0
+                                        const canDown = pos >= 0 && pos < ordered.length - 1
                                         return (
                                           <Space key={`attr-comp-${idx}-${c.componentIndex}`} wrap size={8}>
-                                            <span className="bt-model-pill">{modelCode || '组件'}</span>
+                                            <Space size={4} align="center">
+                                              <span className="bt-model-pill">{modelCode || '组件'}</span>
+                                              <Button
+                                                size="small"
+                                                type="text"
+                                                className="bt-model-reorder-btn"
+                                                icon={<ArrowUpOutlined />}
+                                                disabled={!canUp}
+                                                onClick={() => {
+                                                  const next = ordered.slice()
+                                                  if (pos <= 0) return
+                                                  const tmp = next[pos - 1]
+                                                  next[pos - 1] = next[pos]
+                                                  next[pos] = tmp
+                                                  setComponentOrderByPreset((prev) => ({ ...(prev ?? {}), [orderKey]: next }))
+                                                }}
+                                              />
+                                              <Button
+                                                size="small"
+                                                type="text"
+                                                className="bt-model-reorder-btn"
+                                                icon={<ArrowDownOutlined />}
+                                                disabled={!canDown}
+                                                onClick={() => {
+                                                  const next = ordered.slice()
+                                                  if (pos < 0 || pos >= next.length - 1) return
+                                                  const tmp = next[pos + 1]
+                                                  next[pos + 1] = next[pos]
+                                                  next[pos] = tmp
+                                                  setComponentOrderByPreset((prev) => ({ ...(prev ?? {}), [orderKey]: next }))
+                                                }}
+                                              />
+                                            </Space>
                                             {c.groups.map((g) => {
                                               const selKey = `${idx}:${c.componentIndex}:${g.key}`
                                               const options = (g.options ?? []).map((x) => normalizeSingleToken(x))
@@ -2761,6 +2873,35 @@ export default function BundleTemplatesPage() {
                                           </Space>
                                         )
                                       })}
+
+                                      {(() => {
+                                        const orderKey = String(idx)
+                                        const componentOrder = componentOrderByPreset?.[orderKey]
+                                        const autoRule = buildAutoRuleFromSelections({
+                                          presetIndex: idx,
+                                          components,
+                                          componentRows: rows,
+                                          attributeGroupSelections,
+                                          componentOrder,
+                                        })
+                                        return (
+                                          <Space wrap size={8}>
+                                            <Text type="secondary">自动生成：</Text>
+                                            <Text code>{autoRule || '-'}</Text>
+                                            <Button
+                                              size="small"
+                                              disabled={!autoRule}
+                                              onClick={() => {
+                                                if (!autoRule) return
+                                                setPhrasePresets((prev) => (prev ?? []).map((x, i) => (i === idx ? { ...x, phrase: autoRule } : x)))
+                                                message.success('已写入自动生成内容到输入框')
+                                              }}
+                                            >
+                                              写入输入框
+                                            </Button>
+                                          </Space>
+                                        )
+                                      })()}
                                     </Space>
                                   ) : (
                                     <Text type="secondary">提示：请先对需要的物料位做一次“筛选”或“强制”，才会生成互斥组下拉。</Text>

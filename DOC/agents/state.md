@@ -1,5 +1,21 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-15（天猫 SKU：从套装模板(B)互斥组公式自动生成“颜色分类”值域）
+  - 背景：套装模板 B 模式已沉淀互斥组公式（例如 `[{}{毛球}][{黄金绒}{雪尼尔}]45*45*1 + [{PP}{羽丝绒}]45*45*1`），需要把这套规则直接转成“天猫建属性可用的对客词”，占主动权并保证回传 ERP 规格可解析命中 TOKEN。
+  - 产物（前端）：
+    - 页面：`/costing/tmall-sku-generator`（`frontend/src/pages/costing/TmallSkuTemplateGeneratorPage.tsx`）
+    - 新增：卡片“套装模板（B/Z）→ 天猫属性词（占主动权）”
+      - 输入 `B-XXXXAA / Z-XXXXAA` 后，自动拉取套装模板 preset 的“属性名称/公式”
+      - B（解析型）：从公式 `[...] {..}` 中解析互斥组选项，按组合生成“颜色分类”并可一键写入/追加、复制清单
+      - Z（指定型）：仅提示“无需解析 TOKEN；用于回填商家编码 Z-XXXXAA”
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档 grep/test -d 校验
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+  - 下一步：
+    - 将“互斥组 → 天猫属性”的映射进一步结构化（例如：将某些互斥组映射到 `主图案类型/推荐卖点`，而不是全部塞进颜色分类）
+    - 增加“组合数量预估/超限提示更显式”，避免互斥组过多时爆炸
+
 - **最近校对（北京时间 GMT+8）**：2026-01-15（天猫 SKU：销售属性配置器（模拟天猫建属性第一步））
   - 目标：以系统为主体维护“天猫销售属性值域”（颜色分类/尺寸/主图案类型），按 TOKEN 口径沉淀为可复制/可导出清单，再到天猫后台建立属性。
   - 产物（前端）：

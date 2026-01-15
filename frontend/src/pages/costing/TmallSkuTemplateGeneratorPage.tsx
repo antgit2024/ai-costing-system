@@ -5,6 +5,7 @@ import * as XLSX from 'xlsx'
 
 import {
   exportTmallSkuTemplateXlsx,
+  fetchBundleTemplateByCode,
   previewTmallSkuTemplate,
   type TmallColorOption,
   type TmallSizeOption,
@@ -29,6 +30,12 @@ const downloadBlob = (blob: Blob, filename: string) => {
 
 type ColorRow = TmallColorOption & { enabledSizes: Record<string, boolean> }
 
+type BundleTokenInputParsed = {
+  modeHint?: 'B' | 'Z'
+  templateCode: string
+  selector: string
+}
+
 const readFileAsArrayBuffer = (file: File): Promise<ArrayBuffer> =>
   new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -38,6 +45,88 @@ const readFileAsArrayBuffer = (file: File): Promise<ArrayBuffer> =>
   })
 
 const normalizeCellText = (v: unknown) => String(v ?? '').replace(/\s+/g, ' ').trim()
+
+const parseBundleTokenInput = (raw: string): BundleTokenInputParsed | null => {
+  const s0 = String(raw ?? '').trim()
+  if (!s0) return null
+  const s = s0
+    .replace(/^BUNDLE:/i, '')
+    .replace(/^B:/i, 'B-')
+    .replace(/^Z:/i, 'Z-')
+    .trim()
+
+  // accept: B-3U3PAA / Z-3U3PAA / 3U3PAA
+  const m = /^([BZ])?-?([0-9A-Z]+?)([A-Z]{2})$/i.exec(s.replace(/\s+/g, '').toUpperCase())
+  if (!m) return null
+  const modeHint = m[1] ? (m[1].toUpperCase() as 'B' | 'Z') : undefined
+  const templateCode = String(m[2] ?? '').toUpperCase()
+  const selector = String(m[3] ?? '').toUpperCase()
+  if (!templateCode || !selector) return null
+  return { modeHint, templateCode, selector }
+}
+
+const uniqueKeepOrder = (xs: string[]) => {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const x of xs) {
+    const k = String(x ?? '')
+    if (seen.has(k)) continue
+    seen.add(k)
+    out.push(k)
+  }
+  return out
+}
+
+const parseBundleAttributeFormula = (formulaRaw: string): { groups: string[][]; dims?: { w: number; h: number } } => {
+  const formula = String(formulaRaw ?? '')
+  const groups: string[][] = []
+
+  // 1) extract option groups: each `[...]` contains `{a}{b}{}` etc
+  for (let i = 0; i < formula.length; i++) {
+    if (formula[i] !== '[') continue
+    const j = formula.indexOf(']', i + 1)
+    if (j < 0) break
+    const seg = formula.slice(i + 1, j)
+    const opts: string[] = []
+    const re = /\{([^}]*)\}/g
+    let mm: RegExpExecArray | null
+    while ((mm = re.exec(seg))) {
+      const t = String(mm[1] ?? '').trim()
+      // keep empty option `{}` as '' (means “无/不选”)
+      opts.push(t)
+    }
+    if (opts.length) groups.push(uniqueKeepOrder(opts))
+    i = j
+  }
+
+  // 2) best-effort dims: find first `w*h*qty` / `w×h×qty`
+  const dm = /(\d+(?:\.\d+)?)\s*[*xX×]\s*(\d+(?:\.\d+)?)\s*[*xX×]\s*(\d+(?:\.\d+)?)/.exec(formula)
+  const w = dm ? Number(dm[1]) : NaN
+  const h = dm ? Number(dm[2]) : NaN
+  const dims = Number.isFinite(w) && Number.isFinite(h) ? { w, h } : undefined
+  return { groups, dims }
+}
+
+const cartesianProduct = (groups: string[][], limit: number): Array<{ tokens: string[] }> => {
+  const out: Array<{ tokens: string[] }> = []
+  if (!groups.length) return out
+  const step = (idx: number, acc: string[]) => {
+    if (out.length >= limit) return
+    if (idx >= groups.length) {
+      out.push({ tokens: acc.slice() })
+      return
+    }
+    const opts = groups[idx] ?? []
+    for (const o of opts) {
+      acc.push(String(o ?? ''))
+      step(idx + 1, acc)
+      acc.pop()
+      if (out.length >= limit) return
+    }
+  }
+  step(0, [])
+  return out
+}
 
 const normalizeAttrValue = (v: unknown) => {
   // Normalize for stability when matching:
@@ -212,6 +301,17 @@ export default function TmallSkuTemplateGeneratorPage() {
   const [enablePatternRemarks, setEnablePatternRemarks] = useState(false)
   const [displayMode, setDisplayMode] = useState<DisplayMode>('table')
   const [specEdits, setSpecEdits] = useState<SpecEdits>({})
+
+  // Bundle-template assisted generation (B/Z) for token-driven Tmall attributes
+  const [bundleTokenInput, setBundleTokenInput] = useState<string>('B-3U3PAA')
+  const [bundleLoading, setBundleLoading] = useState(false)
+  const [bundlePresetMode, setBundlePresetMode] = useState<'B' | 'Z' | null>(null)
+  const [bundlePresetPhrase, setBundlePresetPhrase] = useState<string>('')
+  const [bundleGroups, setBundleGroups] = useState<string[][]>([])
+  const [bundleDims, setBundleDims] = useState<{ w: number; h: number } | null>(null)
+  const [bundleMaxCombos, setBundleMaxCombos] = useState<number>(120)
+  const [bundleIncludeDimsInColorLabel, setBundleIncludeDimsInColorLabel] = useState(true)
+  const [bundleGeneratedColorLabels, setBundleGeneratedColorLabels] = useState<string>('')
 
   // Persist config in browser storage (MVP; makes it usable as "系统主体" without backend yet)
   useEffect(() => {
@@ -567,6 +667,88 @@ export default function TmallSkuTemplateGeneratorPage() {
     return lines.join('\n')
   }, [colors, sizes, mainPatternTypes])
 
+  const loadBundlePreset = async () => {
+    const parsed = parseBundleTokenInput(bundleTokenInput)
+    if (!parsed) {
+      message.warning('请输入套装短码，例如：B-3U3PAA 或 Z-3U3PAA')
+      return
+    }
+    setBundleLoading(true)
+    try {
+      const tpl = await fetchBundleTemplateByCode(parsed.templateCode)
+      const pp = Array.isArray((tpl as any)?.metadata?.phrase_presets) ? ((tpl as any).metadata.phrase_presets as any[]) : []
+      const preset =
+        pp.find((x) => String(x?.selector ?? '').trim().toUpperCase() === parsed.selector.toUpperCase()) ??
+        pp.find((x) => String(x?.selector ?? '').trim()) ??
+        null
+      if (!preset) {
+        throw new Error(`模板 ${parsed.templateCode} 未找到 selector=${parsed.selector} 的属性组`)
+      }
+      const mode = String(preset?.mode ?? '').trim() === 'force' ? 'Z' : 'B'
+      setBundlePresetMode(mode)
+      const phrase = String(preset?.phrase ?? '').trim()
+      setBundlePresetPhrase(phrase)
+      if (mode === 'Z') {
+        // 指定型不依赖解析；这里只展示备注/短语（如有）
+        setBundleGroups([])
+        setBundleDims(null)
+        setBundleGeneratedColorLabels('')
+        return
+      }
+      if (!phrase) {
+        throw new Error('解析型(B) 的“属性名称/公式”为空；请先在套装模板里点击“重新生成/保存当前属性”')
+      }
+      const built = parseBundleAttributeFormula(phrase)
+      setBundleGroups(built.groups)
+      setBundleDims(built.dims ?? null)
+      setBundleGeneratedColorLabels('')
+    } catch (e: any) {
+      message.error(String(e?.message ?? e))
+    } finally {
+      setBundleLoading(false)
+    }
+  }
+
+  const generateColorsFromBundleGroups = (opts: { append: boolean }) => {
+    if (bundlePresetMode === 'Z') {
+      message.warning('Z（指定型）不需要解析 TOKEN；这里只建议把商家编码回填为 Z-XXXXAA')
+      return
+    }
+    if (!bundleGroups.length) {
+      message.warning('未解析到互斥组选项（请先加载套装短码，并确保公式包含 [{A}{B}] 结构）')
+      return
+    }
+
+    const limit = Math.max(1, Math.min(500, Number(bundleMaxCombos || 0) || 120))
+    const combos = cartesianProduct(bundleGroups, limit)
+    if (!combos.length) {
+      message.warning('暂无可生成组合')
+      return
+    }
+    const labelLines: string[] = []
+    const newRows: ColorRow[] = []
+    for (const x of combos) {
+      const tokens = (x.tokens ?? []).map((t) => String(t ?? '').trim()).filter(Boolean)
+      const tokenText = tokens.length ? tokens.join(' ') : '无'
+      const dimText =
+        bundleIncludeDimsInColorLabel && bundleDims && Number.isFinite(bundleDims.w) && Number.isFinite(bundleDims.h)
+          ? ` ${fmtNum(bundleDims.w)}X${fmtNum(bundleDims.h)}`
+          : ''
+      const label = `${tokenText}${dimText}`.trim()
+      labelLines.push(label)
+      newRows.push({
+        key: `c_${uid()}`,
+        label,
+        width_cm: bundleDims?.w ?? null,
+        height_cm: bundleDims?.h ?? null,
+        enabledSizes: Object.fromEntries(sizes.map((s) => [s.key, true])),
+      })
+    }
+    setBundleGeneratedColorLabels(labelLines.join('\n'))
+    setColors((prev) => (opts.append ? [...prev, ...newRows] : newRows))
+    message.success(`已生成颜色分类：${newRows.length} 条${combos.length >= limit ? '（已按上限截断）' : ''}`)
+  }
+
   return (
     <div style={{ padding: 16 }}>
       <Space direction="vertical" style={{ width: '100%' }} size={12}>
@@ -671,6 +853,103 @@ export default function TmallSkuTemplateGeneratorPage() {
                 一键填充并下载
               </Button>
             </Space>
+          </Space>
+        </Card>
+
+        <Card
+          title="套装模板（B/Z）→ 天猫属性词（占主动权）"
+          extra={<Tag color="blue">B：解析型（用互斥组生成属性值域）；Z：指定型（不依赖解析）</Tag>}
+        >
+          <Space direction="vertical" style={{ width: '100%' }} size={10}>
+            <Alert
+              type="info"
+              showIcon
+              message="用法"
+              description={
+                <div>
+                  <div>输入套装短码（例如 B-3U3PAA / Z-3U3PAA），加载套装抽屉里保存的“属性名称/公式”。</div>
+                  <div>
+                    B（解析型）会把公式中的互斥组（例如 <Text code>{'[{}{毛球}][{黄金绒}{雪尼尔}]...'}</Text>）拆成天猫可建属性的值域，并按组合生成“颜色分类”。
+                  </div>
+                  <div>
+                    Z（指定型）不需要解析 TOKEN；建议仅用于模板回填商家编码为 <Text code>{'Z-XXXXAA'}</Text>（颜色分类可按对客展示自由定义）。
+                  </div>
+                </div>
+              }
+            />
+
+            <Space wrap size={8}>
+              <Text type="secondary">套装短码</Text>
+              <Input
+                style={{ width: 220 }}
+                value={bundleTokenInput}
+                onChange={(e) => setBundleTokenInput(e.target.value)}
+                placeholder="B-3U3PAA"
+              />
+              <Button loading={bundleLoading} onClick={() => void loadBundlePreset()}>
+                加载套版规则
+              </Button>
+              <Divider type="vertical" />
+              <Text type="secondary">最大组合数</Text>
+              <Input style={{ width: 90 }} value={String(bundleMaxCombos)} onChange={(e) => setBundleMaxCombos(Number(e.target.value || 0))} />
+              <Text type="secondary">颜色分类包含尺寸</Text>
+              <Switch checked={bundleIncludeDimsInColorLabel} onChange={setBundleIncludeDimsInColorLabel} />
+            </Space>
+
+            {bundlePresetMode ? (
+              <Space direction="vertical" style={{ width: '100%' }} size={8}>
+                <Text type="secondary">
+                  已加载模式：<Text strong>{bundlePresetMode}</Text>
+                  {bundleDims ? (
+                    <Text type="secondary">
+                      {' '}
+                      （识别尺寸：{fmtNum(bundleDims.w)}X{fmtNum(bundleDims.h)}）
+                    </Text>
+                  ) : null}
+                </Text>
+                {bundlePresetPhrase ? (
+                  <Input.TextArea value={bundlePresetPhrase} autoSize={{ minRows: 2, maxRows: 4 }} readOnly />
+                ) : (
+                  <Text type="secondary">（无公式/备注）</Text>
+                )}
+                {bundlePresetMode === 'B' ? (
+                  <div>
+                    <Text type="secondary">互斥组：</Text>
+                    <div style={{ marginTop: 6 }}>
+                      {bundleGroups.length ? (
+                        <Space wrap size={6}>
+                          {bundleGroups.map((g, i) => (
+                            <Tag key={`bg-${i}`} color="geekblue">
+                              G{i + 1}: {g.map((x) => (String(x).trim() ? String(x).trim() : '（无）')).join(' / ')}
+                            </Tag>
+                          ))}
+                        </Space>
+                      ) : (
+                        <Text type="secondary">未识别到互斥组（请确认公式包含 [...] 且内部使用 {'{'}...{'}'}）</Text>
+                      )}
+                    </div>
+                  </div>
+                ) : null}
+
+                <Space wrap size={8}>
+                  <Button type="primary" disabled={bundlePresetMode !== 'B' || !bundleGroups.length} onClick={() => generateColorsFromBundleGroups({ append: false })}>
+                    生成颜色分类（覆盖）
+                  </Button>
+                  <Button disabled={bundlePresetMode !== 'B' || !bundleGroups.length} onClick={() => generateColorsFromBundleGroups({ append: true })}>
+                    生成颜色分类（追加）
+                  </Button>
+                  <Button disabled={!bundleGeneratedColorLabels.trim()} onClick={() => void copyText(bundleGeneratedColorLabels)}>
+                    复制颜色分类清单
+                  </Button>
+                </Space>
+
+                {bundleGeneratedColorLabels.trim() ? (
+                  <Input.TextArea value={bundleGeneratedColorLabels} autoSize={{ minRows: 4, maxRows: 8 }} readOnly />
+                ) : null}
+              </Space>
+            ) : (
+              <Text type="secondary">尚未加载套版规则</Text>
+            )}
           </Space>
         </Card>
 

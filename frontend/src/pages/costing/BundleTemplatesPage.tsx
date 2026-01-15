@@ -2779,16 +2779,63 @@ export default function BundleTemplatesPage() {
                                   { label: 'B（解析型）', value: 'parse' },
                                 ]}
                               />
-                              {isModeLocked ? <Tag color="orange">已锁定（已筛选/已强制）</Tag> : null}
                             </>
                           )
                         })()}
-                        <Text type="secondary">
-                          运营短码：
-                          <Text code style={{ marginLeft: 6 }}>
-                            {(String((r as any)?.mode ?? 'parse') === 'force' ? 'Z' : 'B') + '-' + String(currentBundleToken || '').replace(/^B:/, '').replace(/^BUNDLE:/, '').replace(/^Z:/, '') + String(selector)}
-                          </Text>
-                        </Text>
+                        {/* 操作区：替换“已锁定/运营短码”行（降噪），统一放“复制公式/重新生成/预演(debug)” */}
+                        <Space wrap size={6}>
+                          <Button
+                            size="small"
+                            icon={<CopyOutlined />}
+                            disabled={!String(r?.phrase ?? '').trim()}
+                            onClick={async () => {
+                              const ok = await copyTextToClipboard(String(r?.phrase ?? '').trim())
+                              if (ok) message.success('已复制')
+                              else message.error('复制失败：请手动复制')
+                            }}
+                          >
+                            复制公式
+                          </Button>
+                          <Button
+                            size="small"
+                            onClick={() => {
+                              if (String((r as any)?.mode ?? 'parse') === 'force') return
+                              const built = buildAttributeFormulaAndGroups({
+                                presetIndex: idx,
+                                componentRows: rows,
+                                presetSelectedByIdx,
+                                fallbackTokenOverrides,
+                                variantTokenOptionsByVersionBaseLine,
+                                baseLineInfoByVersionBaseLine,
+                                componentOrder: componentOrderByPreset?.[String(idx)],
+                              })
+                              const formula = built.formula
+                              if (!formula) {
+                                message.warning('暂无可生成的属性公式（请先筛选/强制）')
+                                return
+                              }
+                              setPhrasePresets((prev) => (prev ?? []).map((x, i) => (i === idx ? { ...x, phrase: formula } : x)))
+                              message.success('已写入输入框')
+                            }}
+                          >
+                            重新生成
+                          </Button>
+                          <Button
+                            size="small"
+                            disabled={!String(currentBundleToken || '').trim()}
+                            icon={<PlayCircleOutlined />}
+                            onClick={() => {
+                              const codeOnly = String(currentBundleToken || '').replace(/^B:/, '').replace(/^BUNDLE:/, '').replace(/^Z:/, '')
+                              const prefix = String((r as any)?.mode ?? 'parse') === 'force' ? 'Z' : 'B'
+                              const specText = `${prefix}-${String(codeOnly).toUpperCase()}${String(selector).toUpperCase()}`
+                              setBundlePreviewSpecText(specText)
+                              bundlePreviewMutation.mutate({ selector: String(selector), spec_text: specText })
+                            }}
+                          >
+                            预演(debug)
+                          </Button>
+                        </Space>
+
                         {String((r as any)?.mode ?? 'parse') === 'force'
                           ? null
                           : (() => {
@@ -2800,44 +2847,20 @@ export default function BundleTemplatesPage() {
                                 variantTokenOptionsByVersionBaseLine,
                                 baseLineInfoByVersionBaseLine,
                               })
-                              const formula = built.formula
                               const components = built.components
                               return (
-                                <Space direction="vertical" size={6}>
-                                  <Space wrap size={6}>
-                                    <Text type="secondary">属性公式：</Text>
-                                    <Text type="secondary">已写入上方“属性名称/公式”输入框（可编辑）</Text>
-                                    <Text type="secondary">提示：上下/左右移动仅影响“重新生成/自动生成”的顺序，不会自动改输入框</Text>
-                                    <Button
-                                      size="small"
-                                      icon={<CopyOutlined />}
-                                      disabled={!String(r?.phrase ?? '').trim()}
-                                      onClick={async () => {
-                                        const ok = await copyTextToClipboard(String(r?.phrase ?? '').trim())
-                                        if (ok) message.success('已复制属性公式')
-                                        else message.error('复制失败：请手动复制')
-                                      }}
-                                    >
-                                      复制公式
-                                    </Button>
-                                    <Button
-                                      size="small"
-                                      onClick={() => {
-                                        if (!formula) {
-                                          message.warning('暂无可生成的属性公式（请先筛选/强制）')
-                                          return
-                                        }
-                                        setPhrasePresets((prev) => (prev ?? []).map((x, i) => (i === idx ? { ...x, phrase: formula } : x)))
-                                        message.success('已写入属性公式到输入框')
-                                      }}
-                                    >
-                                      重新生成
-                                    </Button>
-                                  </Space>
-
-                                  {/* 互斥组下拉（解析型专用）：每组一个单选 Select；按组件显示 */}
-                                  {components.length ? (
-                                    <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                                  {/* 属性生成器：淡黄底高亮（模型下拉 + 互斥组下拉 + 自动生成） */}
+                                  <div
+                                    style={{
+                                      background: '#fff7e6',
+                                      border: '1px solid #ffe7ba',
+                                      borderRadius: 8,
+                                      padding: 10,
+                                    }}
+                                  >
+                                    {components.length ? (
+                                      <Space direction="vertical" size={8} style={{ width: '100%' }}>
                                       <style>{`
                                         .bt-model-pill {
                                           display: inline-flex;
@@ -3021,30 +3044,29 @@ export default function BundleTemplatesPage() {
                                           <Space wrap size={8}>
                                             <Text type="secondary">自动生成：</Text>
                                             <Text code>{autoRule || '-'}</Text>
+                                            <Button
+                                              size="small"
+                                              type="text"
+                                              icon={<CopyOutlined />}
+                                              disabled={!autoRule}
+                                              onClick={async () => {
+                                                if (!autoRule) return
+                                                const ok = await copyTextToClipboard(autoRule)
+                                                if (ok) message.success('已复制自动生成内容')
+                                                else message.error('复制失败：请手动复制')
+                                              }}
+                                            />
                                           </Space>
                                         )
                                       })()}
-                                    </Space>
+                                      </Space>
                                   ) : (
                                     <Text type="secondary">提示：请先对需要的物料位做一次“筛选”或“强制”，才会生成互斥组下拉。</Text>
                                   )}
+                                  </div>
                                 </Space>
                               )
                             })()}
-                        <Button
-                          size="small"
-                          disabled={!String(currentBundleToken || '').trim()}
-                          icon={<PlayCircleOutlined />}
-                          onClick={() => {
-                            const codeOnly = String(currentBundleToken || '').replace(/^B:/, '').replace(/^BUNDLE:/, '').replace(/^Z:/, '')
-                            const prefix = String((r as any)?.mode ?? 'parse') === 'force' ? 'Z' : 'B'
-                            const specText = `${prefix}-${String(codeOnly).toUpperCase()}${String(selector).toUpperCase()}`
-                            setBundlePreviewSpecText(specText)
-                            bundlePreviewMutation.mutate({ selector: String(selector), spec_text: specText })
-                          }}
-                        >
-                          预演(debug)
-                        </Button>
                       </Space>
                       {/* 降噪：筛选弹窗模式已由 selector(B/Z) 锁死 */}
                       {disabled ? (

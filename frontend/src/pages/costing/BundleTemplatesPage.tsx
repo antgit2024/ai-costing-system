@@ -436,11 +436,13 @@ const buildAutoRuleMetaFromSelections = (args: {
       const t = normalizeSingleToken(selected)
       if (!t) continue
 
-      // “不可更改”的判定：该互斥组只有一个非空候选（即只有兜底别名），运营无法通过下拉改成其它 TOKEN
+      // “不可更改”的判定：
+      // - 非零成本互斥组：只有一个非空候选（即只有兜底别名），运营无法通过下拉改成其它 TOKEN
+      // - 零成本互斥组：至少有“（无）+TOKEN”两个选项，本质可改，不应标红
       const uniqNonEmpty = Array.from(
         new Set((g.options ?? []).map((x) => normalizeSingleToken(x)).filter((x) => !!String(x).trim())),
       )
-      const locked = uniqNonEmpty.length <= 1
+      const locked = !g.isZeroCostGroup && uniqNonEmpty.length <= 1
 
       tokens.push({ text: t, locked })
       tokenTextParts.push(t)
@@ -1592,8 +1594,10 @@ export default function BundleTemplatesPage() {
     if (fo && typeof fo === 'object') setFallbackTokenOverrides(fo as any)
     else setFallbackTokenOverrides({})
     setAttributeGroupSelections({})
-    setComponentOrderByPreset({})
-    setGroupOrderByPresetComponent({})
+    const co = (row?.metadata ?? {})?.component_order_by_preset
+    const go = (row?.metadata ?? {})?.group_order_by_preset_component
+    setComponentOrderByPreset(co && typeof co === 'object' ? (co as any) : {})
+    setGroupOrderByPresetComponent(go && typeof go === 'object' ? (go as any) : {})
     // NOTE: legacy metadata.lexicon_rules is preserved on save, but UI is intentionally hidden to avoid confusion.
 
     const pp = (row?.metadata ?? {})?.phrase_presets
@@ -1737,6 +1741,9 @@ export default function BundleTemplatesPage() {
         fallback_token_overrides: fallbackTokenOverrides,
         // keep legacy field for older clients
         fallback_display_overrides: fallbackTokenOverrides,
+        // UI 顺序持久化：组件上下移动 + 互斥组左右移动
+        component_order_by_preset: componentOrderByPreset,
+        group_order_by_preset_component: groupOrderByPresetComponent,
         // Preserve legacy lexicon_rules (global fallback mapping) if exists, but do not expose to operators.
         lexicon_rules: Array.isArray((editing?.metadata ?? {})?.lexicon_rules) ? (editing?.metadata ?? {})?.lexicon_rules : [],
         phrase_presets: phrasePresets
@@ -2783,7 +2790,7 @@ export default function BundleTemplatesPage() {
                           setPhrasePresets((prev) => (prev ?? []).map((x, i) => (i === idx ? { ...x, phrase: e.target.value } : x)))
                         }
                       />
-                      <Space wrap align="center" size={10}>
+                      <Space wrap align="center" size={10} style={{ width: '100%' }}>
                         <Text type="secondary">模式：</Text>
                         {(() => {
                           const hasAnyFilterSelection = Object.entries(presetSelectedByIdx ?? {}).some(([kk, mm]) => {
@@ -2876,30 +2883,35 @@ export default function BundleTemplatesPage() {
 
                         {String((r as any)?.mode ?? 'parse') === 'force'
                           ? null
-                          : (() => {
-                              const built = buildAttributeFormulaAndGroups({
-                                presetIndex: idx,
-                                componentRows: rows,
-                                presetSelectedByIdx,
-                                fallbackTokenOverrides,
-                                variantTokenOptionsByVersionBaseLine,
-                                baseLineInfoByVersionBaseLine,
-                              })
-                              const components = built.components
-                              return (
-                                <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                                  {/* 属性生成器：淡黄底高亮（模型下拉 + 互斥组下拉 + 自动生成） */}
-                                  <div
-                                    style={{
-                                      background: '#fff7e6',
-                                      border: '1px solid #ffe7ba',
-                                      borderRadius: 8,
-                                      padding: 10,
-                                      width: '100%',
-                                    }}
-                                  >
-                                    {components.length ? (
-                                      <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                          : null}
+                      </Space>
+
+                      {/* 属性生成器：单独占一行，确保淡黄底真正 100% 铺满 */}
+                      {String((phrasePresets?.[activePresetIndex] as any)?.mode ?? 'parse') === 'force'
+                        ? null
+                        : (() => {
+                            const built = buildAttributeFormulaAndGroups({
+                              presetIndex: idx,
+                              componentRows: rows,
+                              presetSelectedByIdx,
+                              fallbackTokenOverrides,
+                              variantTokenOptionsByVersionBaseLine,
+                              baseLineInfoByVersionBaseLine,
+                            })
+                            const components = built.components
+                            return (
+                              <div style={{ width: '100%' }}>
+                                <div
+                                  style={{
+                                    background: '#fff7e6',
+                                    border: '1px solid #ffe7ba',
+                                    borderRadius: 8,
+                                    padding: 10,
+                                    width: '100%',
+                                  }}
+                                >
+                                  {components.length ? (
+                                    <Space direction="vertical" size={8} style={{ width: '100%' }}>
                                       {(() => {
                                         const orderKey = String(idx)
                                         const componentOrder = componentOrderByPreset?.[orderKey]
@@ -2915,14 +2927,7 @@ export default function BundleTemplatesPage() {
                                           <Space wrap size={8}>
                                             <Text type="secondary">自动生成：</Text>
                                             {meta.text ? (
-                                              <Text
-                                                code
-                                                style={{
-                                                  display: 'inline-flex',
-                                                  alignItems: 'center',
-                                                  gap: 0,
-                                                }}
-                                              >
+                                              <Text code>
                                                 <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' }}>
                                                   {meta.items.map((it, i2) => (
                                                     <span key={`ar-${idx}-${i2}`}>
@@ -2958,6 +2963,7 @@ export default function BundleTemplatesPage() {
                                           </Space>
                                         )
                                       })()}
+
                                       <style>{`
                                         .bt-model-pill {
                                           display: inline-flex;
@@ -3002,9 +3008,7 @@ export default function BundleTemplatesPage() {
                                         const modelCode = label.includes(':') ? label.split(':')[0] : label
                                         const orderKey = String(idx)
                                         const currentOrder = componentOrderByPreset?.[orderKey] ?? []
-                                        const ordered = currentOrder.length
-                                          ? currentOrder.slice()
-                                          : components.map((cc) => cc.componentIndex)
+                                        const ordered = currentOrder.length ? currentOrder.slice() : components.map((cc) => cc.componentIndex)
                                         const pos = ordered.indexOf(c.componentIndex)
                                         const canUp = pos > 0
                                         const canDown = pos >= 0 && pos < ordered.length - 1
@@ -3125,15 +3129,14 @@ export default function BundleTemplatesPage() {
                                           </Space>
                                         )
                                       })}
-                                      </Space>
+                                    </Space>
                                   ) : (
                                     <Text type="secondary">提示：请先对需要的物料位做一次“筛选”或“强制”，才会生成互斥组下拉。</Text>
                                   )}
-                                  </div>
-                                </Space>
-                              )
-                            })()}
-                      </Space>
+                                </div>
+                              </div>
+                            )
+                          })()}
                       {/* 降噪：筛选弹窗模式已由 selector(B/Z) 锁死 */}
                       {disabled ? (
                         <Alert

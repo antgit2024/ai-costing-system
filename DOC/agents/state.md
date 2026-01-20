@@ -3,7 +3,7 @@
 - **最近校对（北京时间 GMT+8）**：2026-01-20（UI：Costing 左侧菜单/抽屉/筛选卡片 Cursor 风格收口）
   - 背景：之前 Cursor 风格只做到一半，存在 3 个明显断层：左侧菜单底色/右侧分隔线未统一、右侧抽屉底色偏浅且与 Tabs 线条冲突、部分“筛选区”卡片缺少外框线。
   - 本轮产物（前端）：
-    - 侧栏 LOGO：左侧 “饰家如画©智慧工厂” 文本替换为 LOGO（`frontend/public/logo-full.svg`），并把侧栏头部高度 +15px（`frontend/src/index.css` 的 `.sidebar-logo`）。
+    - 侧栏/顶部品牌区：移除“饰家如画©智慧工厂”文本，统一替换为 LOGO（`frontend/public/logo-full.svg`，来源为 `DOC/基础表单/logo-full.svg`），并把侧栏头部高度 +15px；LOGO 做居中与暗色可见（CSS `filter: invert(1)`）。
     - 菜单信息架构：把原先“成本核算”下的所有功能拆成 4 个一级分组（均带统一风格图标）：
       - 模型管理 / 货品管理 / 货品发布 / 数据分析（实现：`frontend/src/components/layout/AppLayout.tsx`）
     - 左侧菜单：统一侧栏背景为 `--color-theme-bg-card`，并在右侧加分隔线 `border-inline-end: 1px solid var(--color-theme-border-tertiary)`；同时关闭 AntD Menu 选中态默认 `::after` 竖线指示（更像 Cursor）。

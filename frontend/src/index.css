@@ -193,7 +193,8 @@ a {
   height: 63px; /* +15px */
   display: flex;
   align-items: center;
-  padding: 0 16px;
+  justify-content: center;
+  padding: 0;
   color: var(--app-text-strong);
   font-weight: 600;
   font-size: 13px;
@@ -203,9 +204,23 @@ a {
 
 .sidebar-logo img {
   height: 28px;
+  max-width: 200px;
   width: auto;
   display: block;
-  /* 让 LOGO 更贴近 Cursor：不刺眼，但仍清晰 */
+  /* LOGO 是黑色填充：暗色背景下需要反色，否则看不见 */
+  filter: invert(1) brightness(1.05);
+  opacity: 0.95;
+}
+
+.app-header-brand {
+  display: flex;
+  align-items: center;
+}
+.app-header-brand img {
+  height: 18px;
+  width: auto;
+  display: block;
+  filter: invert(1) brightness(1.05);
   opacity: 0.92;
 }
 

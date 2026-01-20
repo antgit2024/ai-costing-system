@@ -3,12 +3,93 @@
     sans-serif;
   line-height: 1.5;
   font-weight: 400;
-  color: #0f172a;
-  background-color: #f4f6fb;
+  /* Prefer dark surfaces to reduce eye strain */
+  color-scheme: dark;
+
+  /**
+   * Cursor Dashboard-style vars（你贴的原版 CSS 命名）
+   * 说明：Cursor 的 CSS 里大量使用 --color-theme-* / --dashboard-* 变量做统一风格控制。
+   * 我们在这里补齐一套等价变量，方便未来继续按 Cursor 的写法扩展。
+   */
+  --inactive-selection-background: #ffffff10;
+  --list-hover-background: #2a2a2a99;
+
+  /**
+   * 语义色（更中性/更压亮度的调性）
+   * 参考你贴的 Mapbox/系统类 CSS：色彩存在但更“灰”、更克制，避免高饱和刺眼。
+   */
+  --terminal-ansi-green: #8fb5a3;
+  --terminal-ansi-yellow: #d6c08a;
+  --terminal-ansi-red: #c07a7a;
+  --terminal-ansi-blue: #8da6c2;
+
+  /* Error 主背景（用于极少数“强危险操作”）也压住一点亮度 */
+  --dashboard-bg-error-primary: #c94a4a;
+  --dashboard-bg-error-primary-hover: #b13f3f;
+  --dashboard-text-error-prominent: #e06c75;
+  --dashboard-text-error-on-primary: #ffffff;
+
+  /* Theme core */
+  --color-theme-bg: #0b0b0c;
+  --color-theme-bg-secondary: #111113;
+  --color-theme-bg-tertiary: rgba(255, 255, 255, 0.04);
+  --color-theme-bg-quaternary: rgba(255, 255, 255, 0.02);
+  --color-theme-bg-card: #111113;
+  --color-theme-bg-card-hover: rgba(255, 255, 255, 0.04);
+
+  --color-theme-fg: #ffffff;
+
+  --color-theme-text-primary: rgba(244, 244, 245, 0.92);
+  --color-theme-text-secondary: rgba(244, 244, 245, 0.7);
+  --color-theme-text-tertiary: rgba(244, 244, 245, 0.55);
+  --color-theme-text-quaternary: rgba(244, 244, 245, 0.35);
+  --color-theme-text-inverted: #0b0b0c;
+
+  --color-theme-border-primary: rgba(255, 255, 255, 0.22);
+  --color-theme-border-secondary: rgba(255, 255, 255, 0.14);
+  --color-theme-border-tertiary: rgba(255, 255, 255, 0.1);
+  --color-theme-border-quaternary: rgba(255, 255, 255, 0.08);
+
+  /* Cursor 风格：主按钮更克制（中性灰），避免高饱和亮色刺眼 */
+  --color-theme-bg-button: #2f2f33;
+  --color-theme-bg-button-hover: #3a3a3f;
+  --color-theme-button-text: var(--color-theme-text-inverted);
+
+  /* App-level aliases（项目内部用 --app-*，但值完全对齐 Cursor 变量） */
+  --app-bg: var(--color-theme-bg);
+  --app-bg-elevated: var(--color-theme-bg-card);
+  --app-surface: rgba(255, 255, 255, 0.03);
+  --app-border: var(--color-theme-border-tertiary);
+  --app-text: var(--color-theme-text-secondary);
+  --app-text-strong: var(--color-theme-text-primary);
+  --app-text-muted: var(--color-theme-text-tertiary);
+  --app-shadow: none;
+
+  color: var(--color-theme-text-primary);
+  background-color: var(--app-bg);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/**
+ * 全局 90% 缩放（整体变小：字体/间距/表格/弹窗一起缩）
+ *
+ * - Chromium/Edge 支持 zoom（最稳定）
+ * - Firefox 不支持 zoom：用 transform 做降级（固定 0.9）
+ *
+ * 如需关闭：把 0.9 改成 1
+ */
+html {
+  zoom: 0.9;
+}
+@supports not (zoom: 1) {
+  body {
+    transform: scale(0.9);
+    transform-origin: top left;
+    width: 111.111%;
+  }
 }
 
 *,
@@ -20,8 +101,8 @@
 body {
   margin: 0;
   min-height: 100vh;
-  background-color: #f4f6fb;
-  color: #0f172a;
+  background-color: var(--app-bg);
+  color: var(--app-text);
 }
 
 #root {
@@ -37,14 +118,14 @@ a {
 }
 
 .app-header {
-  background: #ffffff;
-  border-bottom: 1px solid #e4e8f0;
+  background: var(--app-bg-elevated);
+  border-bottom: 1px solid var(--app-border);
   display: flex;
   align-items: center;
-  font-size: 18px;
+  font-size: 14px;
   font-weight: 600;
-  color: #1d234b;
-  padding: 0 32px;
+  color: var(--app-text-strong);
+  padding: 0 20px;
 }
 
 .app-header-inner {
@@ -74,8 +155,8 @@ a {
 }
 
 .app-content {
-  padding: 24px 32px 48px;
-  background: #f4f6fb;
+  padding: 16px 20px 28px;
+  background: var(--app-bg);
   min-height: calc(100vh - 64px);
 }
 
@@ -109,13 +190,131 @@ a {
 }
 
 .sidebar-logo {
-  height: 48px;
+  height: 63px; /* +15px */
   display: flex;
   align-items: center;
   padding: 0 16px;
-  color: #ffffff;
+  color: var(--app-text-strong);
   font-weight: 600;
-  font-size: 16px;
+  font-size: 13px;
+  background: var(--color-theme-bg-card);
+  border-bottom: 1px solid var(--color-theme-border-tertiary);
+}
+
+.sidebar-logo img {
+  height: 28px;
+  width: auto;
+  display: block;
+  /* 让 LOGO 更贴近 Cursor：不刺眼，但仍清晰 */
+  opacity: 0.92;
+}
+
+/* ===== Cursor-like left menu (Sider + Menu) ===== */
+.app-layout .ant-layout-sider {
+  background: var(--color-theme-bg-card) !important;
+  border-inline-end: 1px solid var(--color-theme-border-tertiary);
+}
+.app-layout .ant-layout-sider .ant-layout-sider-children {
+  background: transparent;
+}
+.app-layout .ant-menu.ant-menu-dark,
+.app-layout .ant-menu-dark .ant-menu-sub,
+.app-layout .ant-menu-dark .ant-menu-submenu-title {
+  background: transparent !important;
+}
+.app-layout .ant-menu-dark .ant-menu-item,
+.app-layout .ant-menu-dark .ant-menu-submenu-title {
+  color: var(--color-theme-text-secondary);
+  border-radius: 6px;
+  margin-inline: 8px;
+  width: auto;
+}
+.app-layout .ant-menu-dark .ant-menu-item {
+  padding-inline: 12px !important;
+}
+.app-layout .ant-menu-dark .ant-menu-submenu-title {
+  padding-inline: 12px !important;
+}
+.app-layout .ant-menu-dark .ant-menu-item .ant-menu-title-content,
+.app-layout .ant-menu-dark .ant-menu-submenu-title .ant-menu-title-content {
+  font-weight: 500;
+}
+.app-layout .ant-menu-dark .ant-menu-item:hover,
+.app-layout .ant-menu-dark .ant-menu-submenu-title:hover {
+  background-color: var(--list-hover-background) !important;
+  color: var(--color-theme-text-primary);
+}
+.app-layout .ant-menu-dark .ant-menu-item-selected {
+  background-color: var(--inactive-selection-background) !important;
+  color: var(--color-theme-text-primary);
+}
+.app-layout .ant-menu-dark .ant-menu-item-selected a {
+  color: var(--color-theme-text-primary);
+}
+/* 去掉 AntD Menu 选中态默认的“竖线/after”指示（更贴近 Cursor） */
+.app-layout .ant-menu-dark .ant-menu-item::after {
+  border-inline-end: 0 !important;
+}
+.app-layout .ant-menu-dark .ant-menu-submenu-arrow {
+  color: var(--color-theme-text-tertiary);
+}
+.app-layout .ant-menu-dark .ant-menu-submenu-title:hover .ant-menu-submenu-arrow {
+  color: var(--color-theme-text-secondary);
+}
+
+/* ===== Drawer background + left separator line ===== */
+.ant-drawer .ant-drawer-content {
+  background: var(--color-theme-bg-card);
+}
+.ant-drawer .ant-drawer-header {
+  background: var(--color-theme-bg-card);
+  border-bottom: 1px solid var(--color-theme-border-tertiary);
+}
+.ant-drawer .ant-drawer-body {
+  background: var(--color-theme-bg-card);
+}
+.ant-drawer .ant-drawer-footer {
+  background: var(--color-theme-bg-card);
+  border-top: 1px solid var(--color-theme-border-tertiary);
+}
+.ant-drawer .ant-drawer-close {
+  color: var(--color-theme-text-secondary);
+}
+.ant-drawer .ant-drawer-close:hover {
+  background: var(--color-theme-bg-tertiary);
+  color: var(--color-theme-text-primary);
+}
+.ant-drawer-right .ant-drawer-content-wrapper {
+  border-left: 1px solid var(--color-theme-border-tertiary);
+}
+.ant-drawer-left .ant-drawer-content-wrapper {
+  border-right: 1px solid var(--color-theme-border-tertiary);
+}
+/* Drawer 内 Tabs：避免和“左侧灰线/底色”打架 */
+.ant-drawer .ant-tabs-nav::before {
+  border-bottom: 1px solid var(--color-theme-border-tertiary) !important;
+}
+.ant-drawer .ant-tabs-tab {
+  color: var(--color-theme-text-secondary);
+}
+.ant-drawer .ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: var(--color-theme-text-primary) !important;
+}
+.ant-drawer .ant-tabs-ink-bar {
+  background: var(--color-theme-text-primary) !important;
+}
+
+/* ===== Top filter cards border (like SampleModelsPage) ===== */
+.costing-filter-card {
+  border: 1px solid var(--color-theme-border-tertiary) !important;
+  background: var(--color-theme-bg-card) !important;
+}
+.costing-filter-card .ant-card-head {
+  background: var(--color-theme-bg-card) !important;
+  border-bottom: 1px solid var(--color-theme-border-tertiary) !important;
+}
+.costing-filter-card .ant-card-body {
+  background: var(--color-theme-bg-card) !important;
 }
 
 .planner-toolbar {
@@ -128,10 +327,11 @@ a {
 }
 
 .planner-section {
-  background: #ffffff;
-  border-radius: 12px;
-  padding: 16px;
-  box-shadow: 0 8px 24px rgba(28, 35, 66, 0.05);
+  background: var(--app-bg-elevated);
+  border: 1px solid var(--app-border);
+  border-radius: 10px;
+  padding: 14px;
+  box-shadow: var(--app-shadow);
 }
 
 .initiative-list-card,

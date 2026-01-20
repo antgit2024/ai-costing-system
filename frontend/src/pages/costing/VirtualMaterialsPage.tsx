@@ -1206,9 +1206,9 @@ const VirtualMaterialsPage = () => {
                       display: 'flex',
                       gap: 8,
                       fontWeight: 600,
-                      color: '#555',
+                      color: 'var(--app-text-muted)',
                       paddingBottom: 6,
-                      borderBottom: '1px solid #f0f0f0',
+                      borderBottom: '1px solid var(--app-border)',
                       marginBottom: 6,
                     }}
                   >
@@ -1355,7 +1355,8 @@ const VirtualMaterialsPage = () => {
 
       <Card
         title="筛选"
-        bordered={false}
+        size="small"
+        className="costing-filter-card"
         extra={
           <Space>
             <Button icon={<ReloadOutlined />} onClick={() => listQuery.refetch()}>

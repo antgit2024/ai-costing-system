@@ -1,5 +1,26 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-20（UI：Costing 左侧菜单/抽屉/筛选卡片 Cursor 风格收口）
+  - 背景：之前 Cursor 风格只做到一半，存在 3 个明显断层：左侧菜单底色/右侧分隔线未统一、右侧抽屉底色偏浅且与 Tabs 线条冲突、部分“筛选区”卡片缺少外框线。
+  - 本轮产物（前端）：
+    - 侧栏 LOGO：左侧 “饰家如画©智慧工厂” 文本替换为 LOGO（`frontend/public/logo-full.svg`），并把侧栏头部高度 +15px（`frontend/src/index.css` 的 `.sidebar-logo`）。
+    - 菜单信息架构：把原先“成本核算”下的所有功能拆成 4 个一级分组（均带统一风格图标）：
+      - 模型管理 / 货品管理 / 货品发布 / 数据分析（实现：`frontend/src/components/layout/AppLayout.tsx`）
+    - 左侧菜单：统一侧栏背景为 `--color-theme-bg-card`，并在右侧加分隔线 `border-inline-end: 1px solid var(--color-theme-border-tertiary)`；同时关闭 AntD Menu 选中态默认 `::after` 竖线指示（更像 Cursor）。
+    - 抽屉：`Drawer header/body/footer` 统一 `--color-theme-bg-card`，右侧抽屉额外加 `border-left` 灰线；Tabs 的分隔线/ink-bar 统一灰白体系，避免与抽屉灰线打架；Close hover 同风格处理。
+    - 顶部筛选外框：为以下 4 个页面的“筛选 Card”统一加 `size="small" + className="costing-filter-card"`，并在全局 CSS 里给它外框线与 head 分隔线（对齐“打样模型”）：
+      - `frontend/src/pages/costing/MaterialMasterPage.tsx`
+      - `frontend/src/pages/costing/VirtualMaterialsPage.tsx`
+      - `frontend/src/pages/costing/ProcessesPage.tsx`
+      - `frontend/src/pages/costing/ProcessModulesPage.tsx`
+    - 关键样式落点：`frontend/src/index.css`
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+    - Backend（最小）：`backend/.venv/bin/python -m pytest backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py -q`
+  - 下一步：
+    - 若你希望“当前概览/列表卡片”等非筛选区的 Card 也统一成同一套极简边框体系（目前部分 `bordered={false}`），可继续在这些 costing 页面做一次收口（仍保持小步提交）。
+
 - **最近校对（北京时间 GMT+8）**：2026-01-15（套装模板：Z/B 尺寸策略（B运行时解析尺寸；Z必须固定））
   - 背景：B 套版不在模板中固定尺寸，运行时仅依赖“商品规格（网店）”解析宽高；Z 套版为指定型必须固定尺寸/数量。
   - 产物：

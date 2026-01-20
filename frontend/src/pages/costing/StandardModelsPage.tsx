@@ -320,11 +320,11 @@ export default function StandardModelsPage() {
               display: 'inline-block',
               padding: '0px 6px',
               borderRadius: 6,
-              border: '1px solid #d9d9d9',
-              background: '#fafafa',
+              border: '1px solid var(--app-border)',
+              background: 'var(--app-surface)',
               fontSize: 11,
               lineHeight: '18px',
-              color: '#595959',
+              color: 'var(--app-text-muted)',
               whiteSpace: 'nowrap',
             }}
           >

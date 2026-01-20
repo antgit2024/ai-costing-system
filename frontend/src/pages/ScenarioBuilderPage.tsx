@@ -497,8 +497,12 @@ const ScenarioBuilderPage = () => {
                       hoverable
                       onClick={() => setSelectedScenarioId(scenario.id)}
                       style={{
-                        borderColor: isActive ? '#3057e1' : scenario.baseline_flag ? '#52c41a' : '#e4e9f2',
-                        background: isActive ? 'rgba(48,87,225,0.05)' : '#fff',
+                        borderColor: isActive
+                          ? '#3057e1'
+                          : scenario.baseline_flag
+                            ? '#52c41a'
+                            : 'var(--app-border)',
+                        background: isActive ? 'rgba(48,87,225,0.10)' : 'var(--app-bg-elevated)',
                         cursor: 'pointer',
                       }}
                     >

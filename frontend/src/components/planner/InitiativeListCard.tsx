@@ -95,10 +95,10 @@ const InitiativeListCard = ({
               key={item.id}
               style={{
                 borderRadius: 10,
-                border: item.id === selectedId ? '1px solid #3057e1' : '1px solid #edf0f7',
+                border: item.id === selectedId ? '1px solid #3057e1' : '1px solid var(--app-border)',
                 padding: '12px 16px',
                 cursor: 'pointer',
-                background: item.id === selectedId ? 'rgba(48,87,225,0.04)' : '#fff',
+                background: item.id === selectedId ? 'rgba(48,87,225,0.10)' : 'var(--app-bg-elevated)',
               }}
               onClick={() => onSelect(item)}
             >

@@ -517,7 +517,7 @@ export default function StructureStandardsPage() {
               {(fields, { add, remove }) => (
                 <Space direction="vertical" style={{ width: '100%' }} size={8}>
                   {fields.map((field) => (
-                    <div key={field.key} style={{ padding: 10, border: '1px solid #f0f0f0', borderRadius: 8 }}>
+                    <div key={field.key} style={{ padding: 10, border: '1px solid var(--app-border)', borderRadius: 8 }}>
                       <Space style={{ display: 'flex', width: '100%' }} align="baseline">
                         {/* 中文名（缩到原来的 ~2/3 宽度） */}
                         <Form.Item

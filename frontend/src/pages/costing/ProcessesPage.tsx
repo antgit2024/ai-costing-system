@@ -677,7 +677,8 @@ const ProcessesPage = () => {
 
       <Card
         title="筛选"
-        bordered={false}
+        size="small"
+        className="costing-filter-card"
         extra={
           <Space>
             <Button icon={<ReloadOutlined />} onClick={() => listQuery.refetch()}>

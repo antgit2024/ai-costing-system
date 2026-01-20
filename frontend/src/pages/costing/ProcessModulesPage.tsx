@@ -270,9 +270,9 @@ const renderCodePill = (code: string, opts?: { color?: string; solid?: boolean }
         display: 'inline-block',
         padding: '2px 8px',
         borderRadius: 10,
-        border: `1px solid ${color ?? '#d9d9d9'}`,
-        background: solid ? (color ? `${color}1A` : '#fafafa') : 'transparent',
-        color: color ?? 'rgba(0,0,0,0.88)',
+        border: color ? `1px solid ${color}` : '1px solid var(--app-border)',
+        background: solid ? (color ? `${color}1A` : 'var(--app-surface)') : 'transparent',
+        color: color ?? 'var(--app-text)',
         fontFamily:
           'ui-monospace, SFMono-Regular, SF Mono, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
         fontSize: 12,
@@ -2141,7 +2141,8 @@ const ProcessModulesPage = () => {
 
       <Card
         title="筛选"
-        bordered={false}
+        size="small"
+        className="costing-filter-card"
         extra={
           <Space>
             <Button icon={<ReloadOutlined />} onClick={() => listQuery.refetch()}>

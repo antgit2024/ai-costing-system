@@ -1780,7 +1780,8 @@ const MaterialMasterPage = () => {
         <Col xs={24} xl={17} style={{ display: 'flex' }}>
           <Card
             title="筛选"
-            bordered={false}
+            size="small"
+            className="costing-filter-card"
             style={{ flex: 1 }}
             extra={
               <Space>

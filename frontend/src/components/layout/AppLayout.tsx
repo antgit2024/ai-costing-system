@@ -1,10 +1,14 @@
 import { Badge, Button, Layout, Menu, Space } from 'antd'
 import AreaChartOutlined from '@ant-design/icons/lib/icons/AreaChartOutlined'
 import CalculatorOutlined from '@ant-design/icons/lib/icons/CalculatorOutlined'
+import AppstoreOutlined from '@ant-design/icons/lib/icons/AppstoreOutlined'
+import BarChartOutlined from '@ant-design/icons/lib/icons/BarChartOutlined'
+import DatabaseOutlined from '@ant-design/icons/lib/icons/DatabaseOutlined'
 import DeploymentUnitOutlined from '@ant-design/icons/lib/icons/DeploymentUnitOutlined'
 import ExperimentOutlined from '@ant-design/icons/lib/icons/ExperimentOutlined'
 import HomeOutlined from '@ant-design/icons/lib/icons/HomeOutlined'
 import SettingOutlined from '@ant-design/icons/lib/icons/SettingOutlined'
+import ShopOutlined from '@ant-design/icons/lib/icons/ShopOutlined'
 import UnorderedListOutlined from '@ant-design/icons/lib/icons/UnorderedListOutlined'
 import type { MenuProps } from 'antd'
 import { useMemo, useState } from 'react'
@@ -44,39 +48,10 @@ const menuItems: MenuProps['items'] = [
     label: <Link to="/planner/scenario-builder">场景 Builder</Link>,
   },
   {
-    key: '/costing',
-    icon: <CalculatorOutlined />,
-    label: '成本核算',
+    key: '/costing/models',
+    icon: <AppstoreOutlined />,
+    label: '模型管理',
     children: [
-      {
-        key: '/costing/materials',
-        label: <Link to="/costing/materials">物料管理</Link>,
-      },
-      {
-        key: '/costing/virtual-materials',
-        label: <Link to="/costing/virtual-materials">虚拟物料</Link>,
-      },
-      {
-        key: '/costing/processes',
-        label: <Link to="/costing/processes">工序管理</Link>,
-      },
-      {
-        key: '/costing/process-modules',
-        label: <Link to="/costing/process-modules">工艺模块</Link>,
-      },
-      {
-        key: '/costing/structure-standards',
-        label: <Link to="/costing/structure-standards">结构标准</Link>,
-      },
-      {
-        key: '/costing/taxonomy',
-        icon: <SettingOutlined />,
-        label: (
-          <Link to="/costing/taxonomy">
-            分类管理
-          </Link>
-        ),
-      },
       {
         key: '/costing/sample-models',
         label: <Link to="/costing/sample-models">打样模型</Link>,
@@ -86,7 +61,71 @@ const menuItems: MenuProps['items'] = [
         label: <Link to="/costing/standard-models">标准模型</Link>,
       },
       {
+        key: '/costing/structure-standards',
+        label: <Link to="/costing/structure-standards">结构标准</Link>,
+      },
+      {
+        key: '/costing/process-modules',
+        label: <Link to="/costing/process-modules">工艺模块</Link>,
+      },
+      {
+        key: '/costing/processes',
+        label: <Link to="/costing/processes">工序管理</Link>,
+      },
+      {
+        key: '/costing/bundle-templates',
+        label: <Link to="/costing/bundle-templates">套装模板</Link>,
+      },
+    ],
+  },
+  {
+    key: '/costing/products',
+    icon: <DatabaseOutlined />,
+    label: '货品管理',
+    children: [
+      {
+        key: '/costing/materials',
+        label: <Link to="/costing/materials">物料主数据</Link>,
+      },
+      {
+        key: '/costing/virtual-materials',
+        label: <Link to="/costing/virtual-materials">虚拟物料</Link>,
+      },
+      {
+        key: '/costing/sku-master',
+        label: <Link to="/costing/sku-master">SKU 主档 / 商品关联</Link>,
+      },
+      {
+        key: '/costing/taxonomy',
+        icon: <SettingOutlined />,
+        label: <Link to="/costing/taxonomy">分类管理</Link>,
+      },
+    ],
+  },
+  {
+    key: '/costing/publish',
+    icon: <ShopOutlined />,
+    label: '货品发布',
+    children: [
+      {
+        key: '/costing/product-listing',
+        label: <Link to="/costing/product-listing">产品上架（测试台）</Link>,
+      },
+      {
+        key: '/costing/tmall-sku-generator',
+        icon: <CalculatorOutlined />,
+        label: <Link to="/costing/tmall-sku-generator">天猫布艺 SKU规格生成器</Link>,
+      },
+    ],
+  },
+  {
+    key: '/costing/analytics',
+    icon: <BarChartOutlined />,
+    label: '数据分析',
+    children: [
+      {
         key: '/costing/pricing-tools',
+        icon: <CalculatorOutlined />,
         label: <Link to="/costing/pricing-tools">核价工具</Link>,
       },
       {
@@ -96,22 +135,6 @@ const menuItems: MenuProps['items'] = [
       {
         key: '/costing/shipping-rules',
         label: <Link to="/costing/shipping-rules">发货规则（条件物料）</Link>,
-      },
-      {
-        key: '/costing/product-listing',
-        label: <Link to="/costing/product-listing">产品上架（测试台）</Link>,
-      },
-      {
-        key: '/costing/bundle-templates',
-        label: <Link to="/costing/bundle-templates">套装模板</Link>,
-      },
-      {
-        key: '/costing/tmall-sku-generator',
-        label: <Link to="/costing/tmall-sku-generator">天猫布艺 SKU规格生成器</Link>,
-      },
-      {
-        key: '/costing/sku-master',
-        label: <Link to="/costing/sku-master">SKU 主档 / 商品关联</Link>,
       },
       {
         key: '/costing/production-scan',
@@ -226,7 +249,7 @@ const AppLayout = ({ children }: AppLayoutProps) => {
       if (location.pathname.startsWith('/costing/spec-matching')) {
         return ['/costing/spec-matching']
       }
-      return ['/costing']
+      return ['/costing/materials']
     }
     return ['/']
   }, [location.pathname])
@@ -236,7 +259,9 @@ const AppLayout = ({ children }: AppLayoutProps) => {
       <Layout className={hideSidebar ? 'app-layout app-layout--mobile' : 'app-layout'}>
         {!hideSidebar ? (
           <Sider width={240} theme="dark">
-            <div className="sidebar-logo">饰家如画©智慧工厂</div>
+            <div className="sidebar-logo">
+              <img src="/logo-full.svg" alt="饰家如画©智慧工厂" />
+            </div>
             <Menu
               theme="dark"
               mode="inline"

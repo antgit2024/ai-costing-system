@@ -6,6 +6,7 @@ import { ConfigProvider } from 'antd'
 import App from './App.tsx'
 import 'antd/dist/reset.css'
 import './index.css'
+import { appTheme } from './theme/appTheme'
 
 const queryClient = new QueryClient()
 
@@ -25,6 +26,16 @@ function installChunkLoadRecovery() {
   const already = () => window.sessionStorage?.getItem(KEY) === '1'
   const mark = () => window.sessionStorage?.setItem(KEY, '1')
 
+  const extractMessage = (value: unknown): string => {
+    if (value instanceof Error) return value.message
+    if (typeof value === 'string') return value
+    if (typeof value === 'object' && value) {
+      const maybeMessage = (value as Record<string, unknown>).message
+      if (typeof maybeMessage === 'string') return maybeMessage
+    }
+    return String(value ?? '')
+  }
+
   const shouldRecover = (msg: string) => {
     const m = (msg || '').toLowerCase()
     return (
@@ -38,7 +49,7 @@ function installChunkLoadRecovery() {
   }
 
   const recover = (reason: unknown) => {
-    const msg = String((reason as any)?.message ?? reason ?? '')
+    const msg = extractMessage(reason)
     if (!shouldRecover(msg)) return
     if (already()) return
 
@@ -54,22 +65,23 @@ function installChunkLoadRecovery() {
   }
 
   // Vite build 里会 dispatch 该事件（见 dist/assets/index-*.js）
-  window.addEventListener('vite:preloadError' as any, (e: any) => {
+  window.addEventListener('vite:preloadError', (e: Event) => {
+    const ev = e as Event & { payload?: unknown; preventDefault?: () => void }
     try {
-      if (e?.preventDefault) e.preventDefault()
+      ev.preventDefault?.()
     } catch {
       // ignore
     }
-    recover(e?.payload ?? e)
+    recover(ev.payload ?? ev)
   })
 
-  window.addEventListener('unhandledrejection', (e) => {
-    recover((e as any)?.reason ?? e)
+  window.addEventListener('unhandledrejection', (e: PromiseRejectionEvent) => {
+    recover(e.reason ?? e)
   })
 
   // 有些浏览器会把 module load error 抛到 error 事件
-  window.addEventListener('error', (e) => {
-    recover((e as any)?.error ?? (e as any)?.message ?? e)
+  window.addEventListener('error', (e: ErrorEvent) => {
+    recover(e.error ?? e.message ?? e)
   })
 }
 
@@ -77,13 +89,7 @@ installChunkLoadRecovery()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <ConfigProvider
-      theme={{
-        token: {
-          colorPrimary: '#3057e1',
-        },
-      }}
-    >
+    <ConfigProvider theme={appTheme}>
       <QueryClientProvider client={queryClient}>
         <BrowserRouter>
           <App />

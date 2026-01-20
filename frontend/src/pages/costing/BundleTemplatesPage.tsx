@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -229,15 +230,34 @@ const formatCm = (n: any): string => {
 
 const buildAttributeFormulaAndGroups = (args: {
   presetIndex: number
+  presetSelector: string
   componentOrder?: number[]
   componentRows: any[]
   presetSelectedByIdx: Record<string, Record<string, any>>
   fallbackTokenOverrides: Record<string, string>
   variantTokenOptionsByVersionBaseLine: Record<string, Record<string, string[]>>
   baseLineInfoByVersionBaseLine: Record<string, Record<string, { orderIndex: number; isZeroCost: boolean }>>
+  variantTokenAliasOverrides: Record<string, Record<string, string>>
 }): { formula: string; components: AttributeComponentGroups[] } => {
-  const { presetIndex, componentOrder, componentRows, presetSelectedByIdx, fallbackTokenOverrides, variantTokenOptionsByVersionBaseLine, baseLineInfoByVersionBaseLine } = args
+  const {
+    presetIndex,
+    presetSelector,
+    componentOrder,
+    componentRows,
+    presetSelectedByIdx,
+    fallbackTokenOverrides,
+    variantTokenOptionsByVersionBaseLine,
+    baseLineInfoByVersionBaseLine,
+    variantTokenAliasOverrides,
+  } = args
   if (!Array.isArray(componentRows) || componentRows.length <= 0) return { formula: '', components: [] }
+
+  const displayToken = (raw: string): string => {
+    const t = normalizeSingleToken(raw)
+    const sel = String(presetSelector ?? '').trim().toUpperCase()
+    const alias = sel ? String((variantTokenAliasOverrides?.[sel] ?? {})?.[t] ?? '').trim() : ''
+    return alias || t
+  }
 
   const parts: string[] = []
   const components: AttributeComponentGroups[] = []
@@ -360,9 +380,7 @@ const buildAttributeFormulaAndGroups = (args: {
       groupsInOrder.push({ key, options: opts, isZeroCostGroup: isZeroCost })
     }
 
-    const componentFormula = groupsInOrder
-      .map((g) => `[${g.options.map((t) => formatTokenBrace(t)).join('')}]`)
-      .join('')
+    const componentFormula = groupsInOrder.map((g) => `[${g.options.map((t) => formatTokenBrace(displayToken(t))).join('')}]`).join('')
 
     // 尺寸/数量：不做兜底（0 代表未填，便于“必填项红字”提示）
     const dims = `${formatCm(rr?.width_cm)}*${formatCm(rr?.height_cm)}*${formatCm(rr?.quantity)}`
@@ -402,17 +420,26 @@ const copyTextToClipboard = async (text: string) => {
 
 const buildAutoRuleMetaFromSelections = (args: {
   presetIndex: number
+  presetSelector: string
   components: AttributeComponentGroups[]
   componentRows: any[]
   attributeGroupSelections: Record<string, string>
   componentOrder?: number[]
   groupOrderByPresetComponent?: Record<string, string[]>
+  variantTokenAliasOverrides: Record<string, Record<string, string>>
 }): { text: string; items: Array<{ tokens: Array<{ text: string; isFromDropdown: boolean }>; dims: string; dimsIsMissing: boolean }> } => {
-  const { presetIndex, components, componentRows, attributeGroupSelections, componentOrder, groupOrderByPresetComponent } = args
+  const { presetIndex, presetSelector, components, componentRows, attributeGroupSelections, componentOrder, groupOrderByPresetComponent, variantTokenAliasOverrides } = args
   const byComp = new Map<number, AttributeGroup[]>()
   for (const c of components) byComp.set(c.componentIndex, c.groups)
   const defaultOrder = componentRows.map((_: any, i: number) => i)
   const order = Array.isArray(componentOrder) && componentOrder.length ? componentOrder : defaultOrder
+
+  const displayToken = (raw: string): string => {
+    const t = normalizeSingleToken(raw)
+    const sel = String(presetSelector ?? '').trim().toUpperCase()
+    const alias = sel ? String((variantTokenAliasOverrides?.[sel] ?? {})?.[t] ?? '').trim() : ''
+    return alias || t
+  }
 
   const items: Array<{ tokens: Array<{ text: string; isFromDropdown: boolean }>; dims: string; dimsIsMissing: boolean }> = []
   const textParts: string[] = []
@@ -436,7 +463,7 @@ const buildAutoRuleMetaFromSelections = (args: {
       const selKey = `${presetIndex}:${cIdx}:${g.key}`
       const isFromDropdown = Object.prototype.hasOwnProperty.call(attributeGroupSelections, selKey)
       const selected = getEffectiveSelection({ presetIndex, componentIndex: cIdx, group: g, attributeGroupSelections })
-      const t = normalizeSingleToken(selected)
+      const t = displayToken(selected)
       if (!t) continue
       tokens.push({ text: t, isFromDropdown })
       tokenTextParts.push(t)
@@ -491,6 +518,22 @@ export default function BundleTemplatesPage() {
   // 默认兜底“对客 TOKEN”（仅用于对客展示/规范化用词；不影响真实物料/扣库/算价）
   // key: `${versionId}:${baseLineId}` -> tokenAlias (例如：黄金绒)
   const [fallbackTokenOverrides, setFallbackTokenOverrides] = useState<Record<string, string>>({})
+
+  // 变体 TOKEN 的“对客别名”（仅当前套版生效，按 selector 作用域）
+  // shape: { [selector]: { [originalToken]: aliasText } }
+  const [variantTokenAliasOverrides, setVariantTokenAliasOverrides] = useState<Record<string, Record<string, string>>>({})
+
+  const getPresetSelector2 = (pIdx: number): string => {
+    const p = (phrasePresets ?? [])[pIdx] as any
+    return String(p?.selector ?? '').trim().toUpperCase() || toSelector2(pIdx)
+  }
+
+  const displayVariantToken = (selector2: string, rawToken: string): string => {
+    const sel = String(selector2 ?? '').trim().toUpperCase()
+    const t = normalizeSingleToken(rawToken)
+    const alias = sel ? String((variantTokenAliasOverrides?.[sel] ?? {})?.[t] ?? '').trim() : ''
+    return alias || t
+  }
 
   // 模型池（缩小范围）：多选版本
   const [modelPoolVersionIds, setModelPoolVersionIds] = useState<string[]>([])
@@ -1569,6 +1612,7 @@ export default function BundleTemplatesPage() {
     setPresetSelectedByIdx({})
     setPhrasePresets([])
     setFallbackTokenOverrides({})
+    setVariantTokenAliasOverrides({})
     setAttributeGroupSelections({})
     setComponentOrderByPreset({})
     setGroupOrderByPresetComponent({})
@@ -1617,6 +1661,10 @@ export default function BundleTemplatesPage() {
     const fo = (row?.metadata ?? {})?.fallback_token_overrides ?? (row?.metadata ?? {})?.fallback_display_overrides
     if (fo && typeof fo === 'object') setFallbackTokenOverrides(fo as any)
     else setFallbackTokenOverrides({})
+
+    const vtao = (row?.metadata ?? {})?.variant_token_alias_overrides
+    if (vtao && typeof vtao === 'object') setVariantTokenAliasOverrides(vtao as any)
+    else setVariantTokenAliasOverrides({})
     setAttributeGroupSelections({})
     const co = (row?.metadata ?? {})?.component_order_by_preset
     const go = (row?.metadata ?? {})?.group_order_by_preset_component
@@ -1702,12 +1750,14 @@ export default function BundleTemplatesPage() {
     const componentOrder = componentOrderByPreset?.[orderKey]
     return buildAttributeFormulaAndGroups({
       presetIndex: activePresetIndex,
+      presetSelector: getPresetSelector2(activePresetIndex),
       componentOrder,
       componentRows: rows,
       presetSelectedByIdx,
       fallbackTokenOverrides,
       variantTokenOptionsByVersionBaseLine,
       baseLineInfoByVersionBaseLine,
+      variantTokenAliasOverrides,
     })
   }, [
     activePresetIndex,
@@ -1717,6 +1767,7 @@ export default function BundleTemplatesPage() {
     variantTokenOptionsByVersionBaseLine,
     baseLineInfoByVersionBaseLine,
     componentOrderByPreset,
+    variantTokenAliasOverrides,
   ])
 
   useEffect(() => {
@@ -1765,6 +1816,8 @@ export default function BundleTemplatesPage() {
         fallback_token_overrides: fallbackTokenOverrides,
         // keep legacy field for older clients
         fallback_display_overrides: fallbackTokenOverrides,
+        // 变体 TOKEN 别名（按 selector）
+        variant_token_alias_overrides: variantTokenAliasOverrides,
         // UI 顺序持久化：组件上下移动 + 互斥组左右移动
         component_order_by_preset: componentOrderByPreset,
         group_order_by_preset_component: groupOrderByPresetComponent,
@@ -1779,12 +1832,14 @@ export default function BundleTemplatesPage() {
                 ? ''
                 : buildAttributeFormulaAndGroups({
                     presetIndex: pIdx,
+                    presetSelector: getPresetSelector2(pIdx),
                     componentRows: rows,
                     presetSelectedByIdx,
                     fallbackTokenOverrides,
                     variantTokenOptionsByVersionBaseLine,
                     baseLineInfoByVersionBaseLine,
                     componentOrder: componentOrderByPreset?.[String(pIdx)],
+                    variantTokenAliasOverrides,
                   }).formula
             return {
               selector: String((p as any).selector ?? '').trim().toUpperCase() || undefined,
@@ -1874,12 +1929,14 @@ export default function BundleTemplatesPage() {
           : (() => {
               const built = buildAttributeFormulaAndGroups({
                 presetIndex: pIdx,
+                presetSelector: getPresetSelector2(pIdx),
                 componentRows: rows,
                 presetSelectedByIdx,
                 fallbackTokenOverrides,
                 variantTokenOptionsByVersionBaseLine,
                 baseLineInfoByVersionBaseLine,
                 componentOrder: componentOrderByPreset?.[String(pIdx)],
+                variantTokenAliasOverrides,
               })
               return String(built.formula || '').trim()
             })()
@@ -2104,6 +2161,58 @@ export default function BundleTemplatesPage() {
                     </div>
                   ),
                   children: (
+                    <div>
+                      {(() => {
+                        const selector2 = presetModalKey ? getPresetSelector2(presetModalKey.pIdx) : 'AA'
+                        const toks =
+                          ((variantTokenOptionsByVersionBaseLine?.[presetVersionId] ?? {}) as any)?.[String(baseLineId)] ??
+                          []
+                        const uniq = Array.isArray(toks)
+                          ? Array.from(new Set(toks.map((x: any) => normalizeSingleToken(String(x ?? ''))).filter(Boolean)))
+                          : []
+                        if (!uniq.length) return null
+                        return (
+                          <div style={{ marginBottom: 10, padding: 8, border: '1px dashed var(--app-border)', borderRadius: 6 }}>
+                            <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                              <Text type="secondary">
+                                TOKEN 别名（仅当前套版 {selector2}；留空=用原词；规格写别名也可命中扣库）
+                              </Text>
+                              <Space wrap size={8}>
+                                {uniq.slice(0, 20).map((tok: string) => {
+                                  const sel = String(selector2).trim().toUpperCase()
+                                  const alias = String((variantTokenAliasOverrides?.[sel] ?? {})?.[tok] ?? '').trim()
+                                  return (
+                                    <Space key={`vtao-${sel}-${tok}`} size={6} wrap align="center">
+                                      <Tag color="red">{tok}</Tag>
+                                      <Text type="secondary">→</Text>
+                                      <Input
+                                        size="small"
+                                        style={{ width: 140 }}
+                                        placeholder="对客别名(可选)"
+                                        value={alias}
+                                        onChange={(e) => {
+                                          const next = normalizeSingleToken(e.target.value)
+                                          setVariantTokenAliasOverrides((prev) => {
+                                            const cur = { ...(prev ?? {}) }
+                                            const inner = { ...(cur[sel] ?? {}) }
+                                            if (!next) delete inner[tok]
+                                            else inner[tok] = next
+                                            cur[sel] = inner
+                                            return cur
+                                          })
+                                        }}
+                                        onClick={(e) => e.stopPropagation()}
+                                        onKeyDown={(e) => e.stopPropagation()}
+                                      />
+                                    </Space>
+                                  )
+                                })}
+                                {uniq.length > 20 ? <Text type="secondary">…还有 {uniq.length - 20} 个</Text> : null}
+                              </Space>
+                            </Space>
+                          </div>
+                        )
+                      })()}
                     <Radio.Group
                       value={selectedParentId || ''}
                       onChange={(e) => {
@@ -2281,6 +2390,7 @@ export default function BundleTemplatesPage() {
                         })()}
                       </Space>
                     </Radio.Group>
+                    </div>
                   ),
                 }
               })}
@@ -2632,11 +2742,11 @@ export default function BundleTemplatesPage() {
                   return (
                     <div
                       style={{
-                        border: active ? '1px solid #1677ff' : '1px solid rgba(0,0,0,0.08)',
+                        border: active ? '1px solid #1677ff' : '1px solid var(--app-border)',
                         borderRadius: 8,
                         padding: 10,
                         marginBottom: 8,
-                        background: active ? 'rgba(22,119,255,0.06)' : '#fff',
+                        background: active ? 'rgba(22,119,255,0.10)' : 'var(--app-bg-elevated)',
                         cursor: 'pointer',
                       }}
                       onClick={() => setActivePresetIndex(idx)}
@@ -2868,12 +2978,14 @@ export default function BundleTemplatesPage() {
                           if (mode === 'force') return String(r?.phrase ?? '')
                           const built = buildAttributeFormulaAndGroups({
                             presetIndex: idx,
+                            presetSelector: getPresetSelector2(idx),
                             componentRows: rows,
                             presetSelectedByIdx,
                             fallbackTokenOverrides,
                             variantTokenOptionsByVersionBaseLine,
                             baseLineInfoByVersionBaseLine,
                             componentOrder: componentOrderByPreset?.[String(idx)],
+                            variantTokenAliasOverrides,
                           })
                           return String(built.formula || '')
                         })()}
@@ -2934,12 +3046,14 @@ export default function BundleTemplatesPage() {
                                 : (() => {
                                     const built = buildAttributeFormulaAndGroups({
                                       presetIndex: idx,
+                                      presetSelector: getPresetSelector2(idx),
                                       componentRows: rows,
                                       presetSelectedByIdx,
                                       fallbackTokenOverrides,
                                       variantTokenOptionsByVersionBaseLine,
                                       baseLineInfoByVersionBaseLine,
                                       componentOrder: componentOrderByPreset?.[String(idx)],
+                                      variantTokenAliasOverrides,
                                     })
                                     return !String(built.formula || '').trim()
                                   })()
@@ -2952,12 +3066,14 @@ export default function BundleTemplatesPage() {
                                   : (() => {
                                       const built = buildAttributeFormulaAndGroups({
                                         presetIndex: idx,
+                                        presetSelector: getPresetSelector2(idx),
                                         componentRows: rows,
                                         presetSelectedByIdx,
                                         fallbackTokenOverrides,
                                         variantTokenOptionsByVersionBaseLine,
                                         baseLineInfoByVersionBaseLine,
                                         componentOrder: componentOrderByPreset?.[String(idx)],
+                                        variantTokenAliasOverrides,
                                       })
                                       return String(built.formula || '').trim()
                                     })()
@@ -2996,11 +3112,13 @@ export default function BundleTemplatesPage() {
                         : (() => {
                             const built = buildAttributeFormulaAndGroups({
                               presetIndex: idx,
+                              presetSelector: getPresetSelector2(idx),
                               componentRows: rows,
                               presetSelectedByIdx,
                               fallbackTokenOverrides,
                               variantTokenOptionsByVersionBaseLine,
                               baseLineInfoByVersionBaseLine,
+                              variantTokenAliasOverrides,
                             })
                             const components = built.components
                             return (
@@ -3027,11 +3145,13 @@ export default function BundleTemplatesPage() {
                                         const componentOrder = componentOrderByPreset?.[orderKey]
                                         const meta = buildAutoRuleMetaFromSelections({
                                           presetIndex: idx,
+                                          presetSelector: getPresetSelector2(idx),
                                           components,
                                           componentRows: rows,
                                           attributeGroupSelections,
                                           componentOrder,
                                           groupOrderByPresetComponent,
+                                          variantTokenAliasOverrides,
                                         })
                                         return (
                                           <Space wrap size={8}>
@@ -3222,7 +3342,10 @@ export default function BundleTemplatesPage() {
                                                     }
                                                     options={uniq
                                                       .filter((x) => (g.isZeroCostGroup ? true : !!String(x).trim()))
-                                                      .map((t) => ({ value: t, label: t ? t : '（无）' }))}
+                                                      .map((t) => ({
+                                                        value: t,
+                                                        label: t ? displayVariantToken(getPresetSelector2(idx), t) : '（无）',
+                                                      }))}
                                                   />
                                                   <Button
                                                     size="small"
@@ -3391,7 +3514,7 @@ export default function BundleTemplatesPage() {
                                                   border: '1px solid #ffccc7',
                                                 }}
                                               >
-                                                {t}
+                                                {displayVariantToken(getPresetSelector2(idx), t)}
                                               </Tag>
                                             ))
                                           ) : (

@@ -13,6 +13,7 @@
         - 工艺模块图片区：黑底 + 三列缩略图；缩略图默认压亮度（透明黑盖层+brightness），hover 还原
         - 工艺模块列表底色 alpha 下调，使其与子项（物料/工序）的模块色底一致（避免模块区更亮）
         - 实现：`frontend/src/components/costing/ProductModelEditorDrawer.tsx`
+    - 后端（宜搭同步）：钉钉 token 获取的网络/DNS 异常做了“可读化 + 脱敏”，避免把 appsecret 回显到错误里；同时 MaterialSyncJob 的 error_message 也做了脱敏（实现：`backend/src/planner/services/yida_sync.py`、`backend/src/planner/services/dingtalk_client.py`）
     - 文档/源文件：补齐 LOGO 源文件入库（`DOC/基础表单/logo-full.svg`），作为 `frontend/public/logo-full.svg` 的上游来源
     - 后端（BOM）：支持“变体 TOKEN 别名”回溯——当 `spec_text` 命中 alias 时，自动注入原始 token 进 `shared_tokens`，确保原规则仍可命中（实现：`backend/src/planner/services/bom_generation_service.py`，读取 `variant_token_alias_overrides` + selector）
     - 清理：移除误生成的无关文档草稿（避免污染恢复包）

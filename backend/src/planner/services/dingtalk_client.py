@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +20,27 @@ class DingTalkAttachment:
 
 class DingTalkClient:
     TOKEN_URL = "https://oapi.dingtalk.com/gettoken"
+
+    @staticmethod
+    def _redact_sensitive(text: str) -> str:
+        """
+        防止把 appsecret 等敏感信息回显到错误消息里（例如 requests 连接错误会包含完整 URL）。
+        """
+        s = str(text or "")
+        s = re.sub(r"(appsecret=)[^&\s]+", r"\1***", s, flags=re.IGNORECASE)
+        s = re.sub(r"(appkey=)[^&\s]+", r"\1***", s, flags=re.IGNORECASE)
+        return s
+
+    @classmethod
+    def _format_network_error(cls, exc: BaseException) -> str:
+        raw = cls._redact_sensitive(str(exc))
+        low = raw.lower()
+        # requests / urllib3 常见 DNS 失败文案
+        if "failed to resolve" in low or "name or service not known" in low or "temporary failure in name resolution" in low:
+            return "无法解析钉钉域名 oapi.dingtalk.com（DNS 解析失败）。请检查服务器 DNS/网络出口（/etc/resolv.conf）。"
+        if "timed out" in low or "timeout" in low:
+            return "访问钉钉接口超时。请检查服务器网络出口或稍后重试。"
+        return f"访问钉钉接口失败：{raw}"
 
     def __init__(
         self,
@@ -44,7 +66,11 @@ class DingTalkClient:
             return self._access_token
 
         params = {"appkey": self.app_key, "appsecret": self.app_secret}
-        resp = self._session.get(self.TOKEN_URL, params=params, timeout=10)
+        try:
+            resp = self._session.get(self.TOKEN_URL, params=params, timeout=10)
+        except requests.RequestException as exc:
+            # 不把原始异常（含 URL query）透传出去，避免 appsecret 泄露
+            raise RuntimeError(self._format_network_error(exc)) from None
         resp.raise_for_status()
         payload = resp.json()
         if payload.get("errcode") != 0:

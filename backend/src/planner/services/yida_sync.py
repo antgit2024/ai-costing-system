@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
@@ -122,7 +123,21 @@ class YidaFormClient:
             return self._access_token
 
         params = {"appkey": self.config.app_key, "appsecret": self.config.app_secret}
-        resp = self._session.get(self.TOKEN_URL, params=params, timeout=10)
+        try:
+            resp = self._session.get(self.TOKEN_URL, params=params, timeout=10)
+        except requests.RequestException as exc:
+            msg = str(exc)
+            # 防止把 appsecret 等敏感信息写入 job.error_message
+            msg = re.sub(r"(appsecret=)[^&\s]+", r"\1***", msg, flags=re.IGNORECASE)
+            msg = re.sub(r"(appkey=)[^&\s]+", r"\1***", msg, flags=re.IGNORECASE)
+            low = msg.lower()
+            if "failed to resolve" in low or "name or service not known" in low or "temporary failure in name resolution" in low:
+                raise RuntimeError(
+                    "同步宜搭失败：无法解析钉钉域名 oapi.dingtalk.com（DNS 解析失败）。请检查服务器 DNS/网络出口（/etc/resolv.conf）。"
+                ) from None
+            if "timed out" in low or "timeout" in low:
+                raise RuntimeError("同步宜搭失败：访问钉钉接口超时。请检查服务器网络出口或稍后重试。") from None
+            raise RuntimeError(f"同步宜搭失败：访问钉钉接口失败：{msg}") from None
         resp.raise_for_status()
         payload = resp.json()
         if payload.get("errcode") != 0:
@@ -882,7 +897,11 @@ def run_material_sync_job(job_id: str) -> None:
             job = session.get(MaterialSyncJob, job_id)
         if job:
             job.status = "failed"
-            job.error_message = str(exc)
+            # 防止把 appsecret 等敏感信息写入 job.error_message（前端会直接展示）
+            msg = str(exc)
+            msg = re.sub(r"(appsecret=)[^&\s]+", r"\1***", msg, flags=re.IGNORECASE)
+            msg = re.sub(r"(appkey=)[^&\s]+", r"\1***", msg, flags=re.IGNORECASE)
+            job.error_message = msg
             job.finished_at = utcnow()
             session.commit()
         logger.exception("Material sync job %s failed", job_id)

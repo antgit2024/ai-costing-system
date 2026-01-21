@@ -343,11 +343,12 @@ export default function StandardModelsPage() {
               display: 'inline-block',
               padding: '0px 6px',
               borderRadius: 6,
-              border: '1px solid var(--app-border)',
-              background: 'var(--app-surface)',
+              /* 与“标准版本列表：已发布行”保持同一语义色（深绿 + alpha） */
+              border: '1px solid rgba(35, 134, 54, 0.35)',
+              background: 'rgba(35, 134, 54, 0.22)',
               fontSize: 11,
               lineHeight: '18px',
-              color: 'var(--app-text-muted)',
+              color: 'rgba(35, 134, 54, 0.92)',
               whiteSpace: 'nowrap',
             }}
           >

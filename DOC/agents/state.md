@@ -1,5 +1,18 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-21（UI：Modal/Confirm 边框再压暗一档，避免“白框”）
+  - 本轮范围：不扩展功能，仅修复暗色弹窗边框观感，并完成 Frontend 接力三件套（恢复包/硬验收/提交）。
+  - 本轮产物：
+    - 前端：`frontend/src/index.css`
+      - `.ant-modal` 的 content/header/footer 边线从 `--color-theme-border-tertiary` 改为 `--color-theme-border-quaternary`
+      - `.ant-modal-confirm-body-wrapper` 补边框与圆角，避免 confirm 仍出现亮边
+    - 恢复包：更新 `DOC/agents/state.md`（本条）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+  - 下一步：
+    - 若线上仍出现“白框”，优先排查是否来自业务自定义容器（非 AntD Modal）或第三方组件（如 Popover/Dropdown）边框未统一。
+
 - **最近校对（北京时间 GMT+8）**：2026-01-21（UI：品牌区收口 + BOM token alias 回溯）
   - 本轮产物：
     - 前端品牌区：

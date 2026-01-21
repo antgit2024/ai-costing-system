@@ -218,9 +218,15 @@ a {
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 12px;
+  bottom: 2px; /* 再下移 10px */
   height: 1px;
   background: var(--color-theme-border-tertiary);
+}
+
+/* 侧栏 LOGO 下方分隔线：只保留一条（避免 Menu 自带边线叠加成“两条灰线”） */
+.app-layout .ant-layout-sider .ant-menu {
+  border-top: 0 !important;
+  box-shadow: none !important;
 }
 
 .app-header-brand {

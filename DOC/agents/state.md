@@ -4,7 +4,7 @@
   - 本轮产物：
     - 前端品牌区：
       - 顶部栏品牌区：改为文字 `饰家如画®AI智慧数字工厂`（实现：`frontend/src/components/layout/AppLayout.tsx`）
-      - 侧栏品牌区：LOGO 放大 1/3（28px → 37px）+ 分隔线向上移动 12px（实现：`frontend/src/index.css`）
+      - 侧栏品牌区：LOGO 放大 1/3（28px → 37px）+ 分隔线只保留一条并下移（避免两条灰线叠加，见 `frontend/src/index.css`）
       - `logo-full.svg`：修复头部 `id` 乱码（统一为 `layer_1`，避免编码差异导致 diff 漂移）
     - 文档/源文件：补齐 LOGO 源文件入库（`DOC/基础表单/logo-full.svg`），作为 `frontend/public/logo-full.svg` 的上游来源
     - 后端（BOM）：支持“变体 TOKEN 别名”回溯——当 `spec_text` 命中 alias 时，自动注入原始 token 进 `shared_tokens`，确保原规则仍可命中（实现：`backend/src/planner/services/bom_generation_service.py`，读取 `variant_token_alias_overrides` + selector）

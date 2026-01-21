@@ -18,44 +18,18 @@ import ProductModelEditorDrawer from '@/components/costing/ProductModelEditorDra
 
 const { Title, Text } = Typography
 
-const KEYWORD_COLOR_PALETTE = [
-  '#1677ff', // blue
-  '#52c41a', // green
-  '#faad14', // gold
-  '#722ed1', // purple
-  '#eb2f96', // magenta
-  '#13c2c2', // cyan
-  '#fa541c', // volcano
-  '#2f54eb', // geekblue
-  '#a0d911', // lime
-  '#f5222d', // red
-] as const
-
-const hashToIndex = (s: string, mod: number) => {
-  let h = 0
-  for (let i = 0; i < s.length; i += 1) h = (h * 31 + s.charCodeAt(i)) >>> 0
-  return mod === 0 ? 0 : h % mod
-}
-
-const getKeywordColor = (keyword?: string | null) => {
-  const key = String(keyword ?? '').trim() || 'keyword'
-  const idx = hashToIndex(key, KEYWORD_COLOR_PALETTE.length)
-  return KEYWORD_COLOR_PALETTE[idx]
-}
-
 const KeywordPill = ({ keyword }: { keyword: string }) => {
   const k = String(keyword ?? '').trim()
-  const color = getKeywordColor(k)
   return (
     <span
       style={{
         display: 'inline-block',
         padding: '1px 8px',
         borderRadius: 999,
-        border: `1px solid ${color}55`,
-        background: `${color}22`,
-        color,
-        fontSize: 12,
+        border: '1px solid var(--app-border)',
+        background: 'var(--app-surface)',
+        color: 'var(--app-text-muted)',
+        fontSize: 11, // 字体缩小一号
         lineHeight: '18px',
         whiteSpace: 'nowrap',
       }}
@@ -285,7 +259,23 @@ export default function StandardModelsPage() {
             {show.map((k) => (
               <KeywordPill key={k} keyword={k} />
             ))}
-            {rest > 0 ? <Tag style={{ borderRadius: 999 }}>+{rest}</Tag> : null}
+            {rest > 0 ? (
+              <span
+                style={{
+                  display: 'inline-block',
+                  padding: '1px 8px',
+                  borderRadius: 999,
+                  border: '1px solid var(--app-border)',
+                  background: 'var(--app-surface)',
+                  color: 'var(--app-text-muted)',
+                  fontSize: 11,
+                  lineHeight: '18px',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                +{rest}
+              </span>
+            ) : null}
           </Space>
         )
 

@@ -325,6 +325,25 @@ a {
 }
 
 /* ===== Modal (弹窗) 黑灰风格：适用于 confirm/info 等 ===== */
+.ant-modal-content {
+  /* AntD Modal/Confirm 是 portal 到 body；直接覆盖 content，避免出现“外壳白底” */
+  background: var(--color-theme-bg-card) !important;
+  /* 边框再压暗一档，避免看起来像“白框” */
+  border: 1px solid var(--color-theme-border-quaternary) !important;
+  box-shadow: none !important;
+}
+.ant-modal-header {
+  background: var(--color-theme-bg-card) !important;
+  border-bottom: 1px solid var(--color-theme-border-quaternary) !important;
+}
+.ant-modal-body {
+  background: var(--color-theme-bg-card) !important;
+  color: var(--color-theme-text-secondary) !important;
+}
+.ant-modal-footer {
+  background: var(--color-theme-bg-card) !important;
+  border-top: 1px solid var(--color-theme-border-quaternary) !important;
+}
 .ant-modal .ant-modal-content {
   background: var(--color-theme-bg-card) !important;
   /* 边框再压暗一档，避免看起来像“白框” */

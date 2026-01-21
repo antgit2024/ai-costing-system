@@ -1,5 +1,18 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-21（UI：修复 Material 主数据页弹窗“外壳白底”）
+  - 本轮范围：仅收口 `Modal.confirm/info` 在 portal 场景下仍出现“外壳白底”的观感问题（不改业务逻辑）。
+  - 本轮产物：
+    - 前端：`frontend/src/index.css`
+      - 直接覆盖 `.ant-modal-content/.ant-modal-header/.ant-modal-body/.ant-modal-footer` 的背景与边框，避免仅写 `.ant-modal .ant-modal-content` 时漏掉结构差异导致白底
+      - 目标覆盖点：`/costing/materials` 的“同步新料 / 更新图片 / 查看来源”
+    - 恢复包：更新 `DOC/agents/state.md`（本条）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+  - 下一步：
+    - 若仍看到白色面板，优先截图 DOM 层级确认是否为 `Card/Descriptions/Table` 内部白底（再针对性补齐组件层覆盖）。
+
 - **最近校对（北京时间 GMT+8）**：2026-01-21（UI：Modal/Confirm 边框再压暗一档，避免“白框”）
   - 本轮范围：不扩展功能，仅修复暗色弹窗边框观感，并完成 Frontend 接力三件套（恢复包/硬验收/提交）。
   - 本轮产物：

@@ -18,17 +18,47 @@ import ProductModelEditorDrawer from '@/components/costing/ProductModelEditorDra
 
 const { Title, Text } = Typography
 
+const KEYWORD_COLOR_PALETTE = [
+  '#1677ff', // blue
+  '#52c41a', // green
+  '#faad14', // gold
+  '#722ed1', // purple
+  '#eb2f96', // magenta
+  '#13c2c2', // cyan
+  '#fa541c', // volcano
+  '#2f54eb', // geekblue
+  '#a0d911', // lime
+  '#f5222d', // red
+] as const
+
+const hashToIndex = (s: string, mod: number) => {
+  let h = 0
+  for (let i = 0; i < s.length; i += 1) h = (h * 31 + s.charCodeAt(i)) >>> 0
+  return mod === 0 ? 0 : h % mod
+}
+
+const getKeywordColor = (keyword?: string | null) => {
+  const key = String(keyword ?? '').trim() || 'keyword'
+  const idx = hashToIndex(key, KEYWORD_COLOR_PALETTE.length)
+  return KEYWORD_COLOR_PALETTE[idx]
+}
+
 const KeywordPill = ({ keyword }: { keyword: string }) => {
   const k = String(keyword ?? '').trim()
+  const color = getKeywordColor(k)
+  // Cursor-like：保留彩色，但用 alpha 把亮度/饱和压下来（更中性）
+  const border = `${color}33`
+  const background = `${color}14`
+  const text = `${color}CC`
   return (
     <span
       style={{
         display: 'inline-block',
         padding: '1px 8px',
         borderRadius: 999,
-        border: '1px solid var(--app-border)',
-        background: 'var(--app-surface)',
-        color: 'var(--app-text-muted)',
+        border: `1px solid ${border}`,
+        background,
+        color: text,
         fontSize: 11, // 字体缩小一号
         lineHeight: '18px',
         whiteSpace: 'nowrap',
@@ -262,11 +292,12 @@ export default function StandardModelsPage() {
             {rest > 0 ? (
               <span
                 style={{
+                  // 与 KeywordPill 统一风格（中性彩色通过 alpha 压亮度）
                   display: 'inline-block',
                   padding: '1px 8px',
                   borderRadius: 999,
                   border: '1px solid var(--app-border)',
-                  background: 'var(--app-surface)',
+                  background: 'var(--app-bg-elevated)',
                   color: 'var(--app-text-muted)',
                   fontSize: 11,
                   lineHeight: '18px',

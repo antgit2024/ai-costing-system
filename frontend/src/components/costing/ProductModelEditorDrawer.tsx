@@ -2793,6 +2793,14 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
           font-weight: var(--pm-lines-title-font-weight);
         }
 
+        /* 标准版本列表：已发布(运行中)版本行高亮（深绿色 + 透明度） */
+        .pm-versions-table .pm-version-row--published > td {
+          background: rgba(35, 134, 54, 0.22) !important; /* deep green w/ alpha */
+        }
+        .pm-versions-table .pm-version-row--published:hover > td {
+          background: rgba(35, 134, 54, 0.28) !important;
+        }
+
         /* “新增物料/新增工序”：改为深灰按钮（避免白底在深色面板里突兀） */
         .pm-lines-scope .ant-btn.pm-lines-add-btn {
           background: rgba(255, 255, 255, 0.06) !important;
@@ -3255,6 +3263,14 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                       pagination={false}
                       loading={versionsQuery.isLoading}
                       dataSource={filteredVersions}
+                      className="pm-versions-table"
+                      rowClassName={(record: any) => {
+                        const id = String(record?.id ?? '').trim()
+                        const status = String(record?.version_status ?? '').trim()
+                        const publishedId = String((modelQuery.data as any)?.current_published_standard_version_id ?? '').trim()
+                        const isPublished = status === 'published' || (publishedId && id && publishedId === id)
+                        return isPublished ? 'pm-version-row--published' : ''
+                      }}
                       columns={[
                         { title: '模型版本号', width: 220, ellipsis: true, render: (_: any, v: any) => getVersionDisplayName(v) },
                         { title: '物料数', width: 60, render: (_: any, v: any) => versionStatsById[v.id]?.material_count ?? '-' },

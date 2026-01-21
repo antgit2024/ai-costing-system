@@ -3130,17 +3130,17 @@ export default function BundleTemplatesPage() {
                               <div style={{ width: '100%', display: 'block' }}>
                                 <div
                                   style={{
-                                    // “自动生成”区块：深灰底（暗色风格），并左右缩进 10px 让框体更居中
+                                    // “自动生成”区块：深灰底（暗色风格），并左右缩进 5px 让框体更居中
                                     background: 'rgba(255, 255, 255, 0.035)',
                                     border: '1px solid var(--color-theme-border-quaternary)',
                                     borderRadius: 8,
                                     padding: 10,
-                                    width: 'calc(100% - 20px)',
+                                    width: 'calc(100% - 10px)',
                                     display: 'block',
                                     boxSizing: 'border-box',
                                     alignSelf: 'stretch',
-                                    marginLeft: 10,
-                                    marginRight: 10,
+                                    marginLeft: 5,
+                                    marginRight: 5,
                                   }}
                                 >
                                   {components.length ? (
@@ -3222,11 +3222,12 @@ export default function BundleTemplatesPage() {
                                           padding: 0 4px;
                                           height: 18px;
                                           line-height: 18px;
-                                          color: rgba(0,0,0,0.45);
+                                          /* 暗色主题：移动按钮默认浅灰，避免“黑色按钮”在深底上对比过强 */
+                                          color: var(--color-theme-text-tertiary);
                                         }
                                         .bt-model-reorder-btn.ant-btn:not([disabled]):hover {
-                                          color: #1677ff;
-                                          background: rgba(22,119,255,0.08);
+                                          color: var(--color-theme-text-primary);
+                                          background: var(--color-theme-bg-tertiary);
                                         }
                                       `}</style>
                                       {(() => {

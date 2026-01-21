@@ -1,5 +1,16 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-21（UI：自动生成区块缩进收口 + 移动按钮浅灰）
+  - 本轮范围：仅调整 `/costing/bundle-templates` 编辑抽屉“自动生成”区块的对齐与按钮可读性（不改业务逻辑）。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/BundleTemplatesPage.tsx`
+      - “自动生成：”区块左右缩进：10px → 5px（更贴近内容区但仍居中）
+      - 区块内上下移动按钮（`.bt-model-reorder-btn`）默认色改为浅灰（暗色变量），hover 保持高对比
+    - 恢复包：更新 `DOC/agents/state.md`（本条）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+
 - **最近校对（北京时间 GMT+8）**：2026-01-21（UI：套装模板抽屉右侧 FORCE/TOKEN 胶囊去外框 + “自动生成”区块深灰居中）
   - 本轮范围：仅收口 `/costing/bundle-templates` 编辑抽屉的视觉细节（不改业务逻辑）。
   - 本轮产物：

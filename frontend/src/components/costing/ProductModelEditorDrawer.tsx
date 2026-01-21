@@ -2792,19 +2792,6 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
           font-weight: var(--pm-lines-title-font-weight);
         }
 
-        /* 物料组/工序组：表格底色统一深灰（避免出现“纯白底色”） */
-        .pm-lines-scope .pm-lines-group-card .ant-table,
-        .pm-lines-scope .pm-lines-group-card .ant-table-container,
-        .pm-lines-scope .pm-lines-group-card .ant-table-thead > tr > th,
-        .pm-lines-scope .pm-lines-group-card .ant-table-tbody > tr > td {
-          background: var(--color-theme-bg-card) !important;
-          color: var(--app-text) !important;
-          border-color: var(--app-border) !important;
-        }
-        .pm-lines-scope .pm-lines-group-card .ant-table-tbody > tr.ant-table-row:hover > td {
-          background: var(--color-theme-bg-tertiary) !important;
-        }
-
         /* “新增物料/新增工序”：改为深灰按钮（避免白底在深色面板里突兀） */
         .pm-lines-scope .ant-btn.pm-lines-add-btn {
           background: rgba(255, 255, 255, 0.06) !important;
@@ -3988,7 +3975,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                               const color = key ? getColorForModuleKey(key) : '#ffffff'
                               return {
                                 style: {
-                                  background: key ? hexToRgba(color, 0.14) : undefined,
+                                  // 与“物料组/工序组”的模块色底一致（避免模块区更亮）
+                                  background: key ? hexToRgba(color, 0.06) : undefined,
                                   borderLeft: key ? `4px solid ${color}` : undefined,
                                 },
                               }
@@ -4007,7 +3995,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                             onCell: (_r: any) => {
                               const key = String(_r?.module_id ?? '').trim()
                               const color = key ? getColorForModuleKey(key) : '#ffffff'
-                              return { style: { background: key ? hexToRgba(color, 0.14) : undefined } }
+                              return { style: { background: key ? hexToRgba(color, 0.06) : undefined } }
                             },
                             render: (_: any, r: any) => (
                               <span style={{ fontSize: TABLE_FONT_SIZE }}>{r.module?.module_name ?? '-'}</span>
@@ -4019,7 +4007,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                             onCell: (_r: any) => {
                               const key = String(_r?.module_id ?? '').trim()
                               const color = key ? getColorForModuleKey(key) : '#ffffff'
-                              return { style: { background: key ? hexToRgba(color, 0.14) : undefined } }
+                              return { style: { background: key ? hexToRgba(color, 0.06) : undefined } }
                             },
                             render: (_: any, __: any, idx: number) => (
                               <Button
@@ -4232,9 +4220,9 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                           onRow={(r: any) => {
                             // 保留原本“打散底色”：
                             // - 来源模块行：按模块色上浅底
-                            // - 手动新增行：统一灰底（色条为白色）
+                            // - 手动新增行：统一深灰底（色条为白色）
                             const hasSource = !!(r?.source_module_id || r?.source_module_code)
-                            if (!hasSource) return { style: { background: '#f5f5f5' } }
+                            if (!hasSource) return { style: { background: 'var(--color-theme-bg-tertiary)' } }
                             const key = r.source_module_id ?? r.source_module_code ?? 'model'
                             const color = getColorForModuleKey(String(key))
                             return { style: { background: hexToRgba(color, 0.06) } }
@@ -5036,9 +5024,9 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                         onRow={(r: any) => {
                           // 保留原本“打散底色”：
                           // - 来源模块行：按模块色上浅底
-                          // - 手动新增行：统一灰底（色条为白色）
+                          // - 手动新增行：统一深灰底（色条为白色）
                           const hasSource = !!(r?.source_module_id || r?.source_module_code)
-                          if (!hasSource) return { style: { background: '#f5f5f5' } }
+                          if (!hasSource) return { style: { background: 'var(--color-theme-bg-tertiary)' } }
                           const key = r.source_module_id ?? r.source_module_code ?? 'model'
                           const color = getColorForModuleKey(String(key))
                           return { style: { background: hexToRgba(color, 0.06) } }

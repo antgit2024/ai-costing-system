@@ -1,5 +1,18 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-21（UI：Bundle Templates 编码胶囊去外框并收口宽度）
+  - 本轮范围：仅调整 `/costing/bundle-templates` 列表“属性名称”列里的编码胶囊样式（不改业务逻辑）。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/BundleTemplatesPage.tsx`
+      - 编码胶囊（Tag）移除亮色边框（避免暗色主题下视觉噪声）
+      - 胶囊最小宽度收口约 1/5：120 → 96
+    - 恢复包：更新 `DOC/agents/state.md`（本条）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+  - 下一步：
+    - 若要进一步收口（比如长编码不换行/支持复制），建议抽出统一的 `CodePill` 组件并全站复用（避免页面内联样式散落）。
+
 - **最近校对（北京时间 GMT+8）**：2026-01-21（UI：彻底修复 Modal/Confirm 白底（AntD 变量注入））
   - 本轮范围：仅针对 `Modal.confirm/info` 的白底根因（`--ant-modal-content-bg: #fff`）做变量级覆盖，并补齐弹窗内容常见白底容器（Card/Descriptions/Table）。
   - 本轮产物：

@@ -2498,10 +2498,10 @@ export default function BundleTemplatesPage() {
                                 style={{
                                   marginInlineEnd: 0,
                                   borderRadius: 999,
-                                  borderWidth: 1,
-                                  borderStyle: 'solid',
-                                  borderColor: prefix === 'Z' ? '#ffccc7' : '#91caff',
-                                  minWidth: 120,
+                                  // 胶囊外框去掉（暗色主题下边框过亮，且视觉噪声大）
+                                  border: 'none',
+                                  // 宽度收口：缩小约 1/5（120 -> 96）
+                                  minWidth: 96,
                                   textAlign: 'center',
                                   fontWeight: 700,
                                 }}

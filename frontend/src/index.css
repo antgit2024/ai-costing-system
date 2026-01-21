@@ -190,7 +190,7 @@ a {
 }
 
 .sidebar-logo {
-  height: 63px; /* +15px */
+  height: 55px; /* -8px：让分隔线与顶部栏底线对齐 */
   display: flex;
   align-items: center;
   justify-content: center;
@@ -200,6 +200,8 @@ a {
   font-size: 13px;
   background: var(--color-theme-bg-card);
   position: relative;
+  /* 用 border-bottom 统一口径，避免 ::after 造成“看起来不齐” */
+  border-bottom: 1px solid var(--app-border);
 }
 
 .sidebar-logo img {
@@ -212,18 +214,7 @@ a {
   opacity: 0.95;
 }
 
-/* 分隔线向上挪 12px（线与菜单之间留出更“呼吸”的空隙） */
-.sidebar-logo::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 2px; /* 再下移 10px */
-  height: 1px;
-  background: var(--color-theme-border-tertiary);
-}
-
-/* 侧栏 LOGO 下方分隔线：只保留一条（避免 Menu 自带边线叠加成“两条灰线”） */
+/* 只保留一条线：避免 Menu 自带边线/阴影叠加成“两条灰线” */
 .app-layout .ant-layout-sider .ant-menu {
   border-top: 0 !important;
   box-shadow: none !important;

@@ -47,9 +47,10 @@ const KeywordPill = ({ keyword }: { keyword: string }) => {
   const k = String(keyword ?? '').trim()
   const color = getKeywordColor(k)
   // Cursor-like：保留彩色，但用 alpha 把亮度/饱和压下来（更中性）
-  const border = `${color}33`
-  const background = `${color}14`
-  const text = `${color}CC`
+  // 进一步降 alpha：避免“太鲜艳”，更贴近按钮/标签整体灰度层级
+  const border = `${color}26` // ~15%
+  const background = `${color}0F` // ~6%
+  const text = `${color}99` // ~60%
   return (
     <span
       style={{

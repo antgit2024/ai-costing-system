@@ -6,7 +6,7 @@
       - 顶部栏品牌区：改为文字 `饰家如画®AI智慧数字工厂`（实现：`frontend/src/components/layout/AppLayout.tsx`）
       - 侧栏品牌区：LOGO 区域高度 -8px，并用 `border-bottom` 对齐顶部栏底线；同时避免 Menu 叠加边线导致“双灰线”（见 `frontend/src/index.css`）
       - `logo-full.svg`：修复头部 `id` 乱码（统一为 `layer_1`，避免编码差异导致 diff 漂移）
-      - 标准模型列表“货品映射关键词”胶囊标签：字体缩小一号，并按 Cursor 风格做“中性彩色（alpha 降亮度）”（实现：`frontend/src/pages/costing/StandardModelsPage.tsx`）
+      - 标准模型列表“货品映射关键词”胶囊标签：字体缩小一号，并按 Cursor 风格做“中性彩色（alpha 再降一档）”（实现：`frontend/src/pages/costing/StandardModelsPage.tsx`）
     - 文档/源文件：补齐 LOGO 源文件入库（`DOC/基础表单/logo-full.svg`），作为 `frontend/public/logo-full.svg` 的上游来源
     - 后端（BOM）：支持“变体 TOKEN 别名”回溯——当 `spec_text` 命中 alias 时，自动注入原始 token 进 `shared_tokens`，确保原规则仍可命中（实现：`backend/src/planner/services/bom_generation_service.py`，读取 `variant_token_alias_overrides` + selector）
     - 清理：移除误生成的无关文档草稿（避免污染恢复包）

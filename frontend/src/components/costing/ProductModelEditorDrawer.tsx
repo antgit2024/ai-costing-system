@@ -32,6 +32,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   CopyOutlined,
   BranchesOutlined,
+  CloudUploadOutlined,
   DownOutlined,
   DeleteOutlined,
   EditOutlined,
@@ -3298,113 +3299,130 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                         },
                         {
                           title: '操作',
-                          width: 230,
+                          width: 140,
                           render: (_: any, v: any) => (
-                            <Space wrap>
-                              <Button
-                                size="small"
-                                type={selectedVersionId === v.id ? 'primary' : 'default'}
-                                disabled={String(v.version_status) !== 'draft'}
-                                onClick={() => {
-                                  setSelectedVersionId(v.id)
-                                  setActiveTab('lines')
-                                }}
-                              >
-                                编辑
-                              </Button>
-                              <Button
-                                size="small"
-                                type="primary"
-                                disabled={String(v.version_status) !== 'draft'}
-                                loading={publishMutation.isPending}
-                                onClick={() => {
-                                  const published = (filteredVersions as any[]).find(
-                                    (x) => String(x.version_kind) === 'standard' && String(x.version_status) === 'published',
-                                  )
-                                  if (published && String(published.id) !== String(v.id)) {
+                            <Space size={6} wrap>
+                              <Tooltip title="编辑（仅 draft）">
+                                <Button
+                                  size="small"
+                                  type={selectedVersionId === v.id ? 'primary' : 'text'}
+                                  icon={<EditOutlined />}
+                                  aria-label="编辑"
+                                  disabled={String(v.version_status) !== 'draft'}
+                                  onClick={() => {
+                                    setSelectedVersionId(v.id)
+                                    setActiveTab('lines')
+                                  }}
+                                />
+                              </Tooltip>
+
+                              <Tooltip title="发布（仅 draft）">
+                                <Button
+                                  size="small"
+                                  type="text"
+                                  icon={<CloudUploadOutlined />}
+                                  aria-label="发布"
+                                  disabled={String(v.version_status) !== 'draft'}
+                                  loading={publishMutation.isPending}
+                                  onClick={() => {
+                                    const published = (filteredVersions as any[]).find(
+                                      (x) => String(x.version_kind) === 'standard' && String(x.version_status) === 'published',
+                                    )
+                                    if (published && String(published.id) !== String(v.id)) {
+                                      Modal.confirm({
+                                        title: '发布该版本并替换当前已发布版本？',
+                                        content: '系统将把当前已发布的标准版本归档，并发布此版本（同一模型只允许一个版本处于发布状态）。继续？',
+                                        okText: '继续发布',
+                                        cancelText: '取消',
+                                        onOk: () => {
+                                          setSelectedVersionId(v.id)
+                                          publishMutation.mutate(v.id)
+                                        },
+                                      })
+                                      return
+                                    }
+                                    setSelectedVersionId(v.id)
+                                    publishMutation.mutate(v.id)
+                                  }}
+                                />
+                              </Tooltip>
+
+                              <Tooltip title="复制版本">
+                                <Button
+                                  size="small"
+                                  type="text"
+                                  icon={<CopyOutlined />}
+                                  aria-label="复制版本"
+                                  onClick={() => openCopyVersionModal(v.id)}
+                                  disabled={String(v.version_status) === 'archived'}
+                                />
+                              </Tooltip>
+
+                              <Tooltip title="克隆模型">
+                                <Button
+                                  size="small"
+                                  type="text"
+                                  icon={<BranchesOutlined />}
+                                  aria-label="克隆模型"
+                                  onClick={() => {
                                     Modal.confirm({
-                                      title: '发布该版本并替换当前已发布版本？',
-                                      content: '系统将把当前已发布的标准版本归档，并发布此版本（同一模型只允许一个版本处于发布状态）。继续？',
-                                      okText: '继续发布',
+                                      title: '克隆为新标准模型？',
+                                      content:
+                                        '系统将基于该标准版本创建一个全新的标准模型（自动生成新编码/新版本号），并复制清单与行级变体（Overlay）。继续？',
+                                      okText: '继续克隆',
                                       cancelText: '取消',
-                                      onOk: () => {
-                                        setSelectedVersionId(v.id)
-                                        publishMutation.mutate(v.id)
+                                      onOk: async () => {
+                                        try {
+                                          const res = await cloneProductModelFromStandardVersion(v.id, {
+                                            include_line_variants: true,
+                                          })
+                                          message.success(`已克隆新模型：${res.new_model_code}`)
+                                          // 打开新模型抽屉并定位到新标准版本
+                                          navigate('/costing/standard-models', {
+                                            state: {
+                                              openModelId: res.new_model_id,
+                                              openVersionId: res.new_standard_version_id,
+                                            },
+                                          })
+                                        } catch (err: any) {
+                                          message.error(err?.response?.data?.detail ?? '克隆模型失败')
+                                        }
                                       },
                                     })
-                                    return
-                                  }
-                                  setSelectedVersionId(v.id)
-                                  publishMutation.mutate(v.id)
-                                }}
-                              >
-                                发布
-                              </Button>
-                              <Button
-                                size="small"
-                                onClick={() => openCopyVersionModal(v.id)}
-                                disabled={String(v.version_status) === 'archived'}
-                              >
-                                复制版本
-                              </Button>
-                              <Button
-                                size="small"
-                                onClick={() => {
-                                  Modal.confirm({
-                                    title: '克隆为新标准模型？',
-                                    content:
-                                      '系统将基于该标准版本创建一个全新的标准模型（自动生成新编码/新版本号），并复制清单与行级变体（Overlay）。继续？',
-                                    okText: '继续克隆',
-                                    cancelText: '取消',
-                                    onOk: async () => {
-                                      try {
-                                        const res = await cloneProductModelFromStandardVersion(v.id, {
-                                          include_line_variants: true,
-                                        })
-                                        message.success(`已克隆新模型：${res.new_model_code}`)
-                                        // 打开新模型抽屉并定位到新标准版本
-                                        navigate('/costing/standard-models', {
-                                          state: {
-                                            openModelId: res.new_model_id,
-                                            openVersionId: res.new_standard_version_id,
-                                          },
-                                        })
-                                      } catch (err: any) {
-                                        message.error(err?.response?.data?.detail ?? '克隆模型失败')
-                                      }
-                                    },
-                                  })
-                                }}
-                                disabled={String(v.version_status) === 'archived'}
-                              >
-                                克隆模型
-                              </Button>
-                              <Button
-                                size="small"
-                                danger
-                                disabled={String(v.version_status) !== 'draft'}
-                                onClick={() => {
-                                  Modal.confirm({
-                                    title: '删除标准版本（草稿）？',
-                                    content: '未发布（draft）的标准版本允许删除；已发布/已归档版本不允许删除。确认删除？',
-                                    okText: '删除',
-                                    okButtonProps: { danger: true },
-                                    cancelText: '取消',
-                                    onOk: async () => {
-                                      try {
-                                        await deleteProductModelVersion(v.id)
-                                        message.success('已删除版本')
-                                        await versionsQuery.refetch()
-                                        if (selectedVersionId === v.id) setSelectedVersionId(null)
-                                      } catch (err: any) {
-                                        message.error(err?.response?.data?.detail ?? '删除版本失败')
-                                      }
-                                    },
-                                  })
-                                }}
-                              >
-                                删除
-                              </Button>
+                                  }}
+                                  disabled={String(v.version_status) === 'archived'}
+                                />
+                              </Tooltip>
+
+                              <Tooltip title="删除（仅 draft）">
+                                <Button
+                                  size="small"
+                                  type="text"
+                                  danger
+                                  icon={<DeleteOutlined />}
+                                  aria-label="删除"
+                                  disabled={String(v.version_status) !== 'draft'}
+                                  onClick={() => {
+                                    Modal.confirm({
+                                      title: '删除标准版本（草稿）？',
+                                      content: '未发布（draft）的标准版本允许删除；已发布/已归档版本不允许删除。确认删除？',
+                                      okText: '删除',
+                                      okButtonProps: { danger: true },
+                                      cancelText: '取消',
+                                      onOk: async () => {
+                                        try {
+                                          await deleteProductModelVersion(v.id)
+                                          message.success('已删除版本')
+                                          await versionsQuery.refetch()
+                                          if (selectedVersionId === v.id) setSelectedVersionId(null)
+                                        } catch (err: any) {
+                                          message.error(err?.response?.data?.detail ?? '删除版本失败')
+                                        }
+                                      },
+                                    })
+                                  }}
+                                />
+                              </Tooltip>
                             </Space>
                           ),
                         },

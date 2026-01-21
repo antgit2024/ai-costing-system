@@ -1139,7 +1139,10 @@ const MaterialMasterPage = () => {
                     style={{
                       maxHeight: 360,
                       overflow: 'auto',
-                      background: '#f7f7f7',
+                      background: 'var(--color-theme-bg-tertiary)',
+                      border: '1px solid var(--color-theme-border-tertiary)',
+                      borderRadius: 8,
+                      color: 'var(--color-theme-text-secondary)',
                       padding: 12,
                     }}
                   >

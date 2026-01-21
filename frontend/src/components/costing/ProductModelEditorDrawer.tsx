@@ -2792,6 +2792,82 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
           font-weight: var(--pm-lines-title-font-weight);
         }
 
+        /* 物料组/工序组：表格底色统一深灰（避免出现“纯白底色”） */
+        .pm-lines-scope .pm-lines-group-card .ant-table,
+        .pm-lines-scope .pm-lines-group-card .ant-table-container,
+        .pm-lines-scope .pm-lines-group-card .ant-table-thead > tr > th,
+        .pm-lines-scope .pm-lines-group-card .ant-table-tbody > tr > td {
+          background: var(--color-theme-bg-card) !important;
+          color: var(--app-text) !important;
+          border-color: var(--app-border) !important;
+        }
+        .pm-lines-scope .pm-lines-group-card .ant-table-tbody > tr.ant-table-row:hover > td {
+          background: var(--color-theme-bg-tertiary) !important;
+        }
+
+        /* “新增物料/新增工序”：改为深灰按钮（避免白底在深色面板里突兀） */
+        .pm-lines-scope .ant-btn.pm-lines-add-btn {
+          background: rgba(255, 255, 255, 0.06) !important;
+          border-color: rgba(255, 255, 255, 0.12) !important;
+          color: var(--color-theme-text-primary) !important;
+        }
+        .pm-lines-scope .ant-btn.pm-lines-add-btn:hover {
+          background: rgba(255, 255, 255, 0.10) !important;
+          border-color: rgba(255, 255, 255, 0.16) !important;
+        }
+
+        /* 工艺模块：版本图片区（黑底 + 三列缩略图 + hover 压亮度/还原） */
+        .pm-lines-scope .pm-version-images-panel {
+          border: 1px dashed rgba(255, 255, 255, 0.16);
+          border-radius: 8px;
+          background: #000;
+          padding: 10px;
+        }
+        .pm-lines-scope .pm-version-images-grid {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 8px;
+        }
+        .pm-lines-scope .pm-version-image-thumb {
+          position: relative;
+          aspect-ratio: 1 / 1;
+          border-radius: 8px;
+          overflow: hidden;
+          border: 1px solid rgba(255, 255, 255, 0.10);
+          background: #000;
+        }
+        .pm-lines-scope .pm-version-image-thumb::after {
+          content: '';
+          position: absolute;
+          inset: 0;
+          background: rgba(0, 0, 0, 0.35);
+          opacity: 1;
+          transition: opacity 120ms ease;
+          pointer-events: none;
+        }
+        .pm-lines-scope .pm-version-image-thumb .ant-image,
+        .pm-lines-scope .pm-version-image-thumb .ant-image-img {
+          width: 100%;
+          height: 100%;
+        }
+        .pm-lines-scope .pm-version-image-thumb .ant-image-img {
+          object-fit: cover;
+          display: block;
+          filter: brightness(0.72);
+          transition: filter 120ms ease;
+        }
+        .pm-lines-scope .pm-version-image-thumb:hover::after {
+          opacity: 0;
+        }
+        .pm-lines-scope .pm-version-image-thumb:hover .ant-image-img {
+          filter: brightness(1);
+        }
+        .pm-lines-scope .pm-version-images-footer {
+          margin-top: 10px;
+          display: flex;
+          justify-content: flex-end;
+        }
+
         /* Table header/body size:
            - list headers use A
            - list body uses A (C==A in current baseline, but we keep rule explicit)
@@ -3962,97 +4038,73 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
 
                       {/* 版本图片上传入口（每个版本独立） */}
                       <div style={{ marginTop: 12 }}>
-                        <div
-                          style={{
-                            width: '100%',
-                            aspectRatio: '1 / 1',
-                            border: '1px dashed #d9d9d9',
-                            borderRadius: 8,
-                            background: '#fafafa',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            overflow: 'hidden',
-                          }}
-                        >
+                        <div className="pm-version-images-panel">
                           {versionImages.length > 0 ? (
-                            <Image
-                              src={versionImages[Math.min(versionImageCursor, versionImages.length - 1)]?.url}
-                              alt="version"
-                              preview
-                              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                            />
+                            <div className="pm-version-images-grid">
+                              {versionImages.map((img, idx) => (
+                                <div
+                                  key={`${img.url}-${idx}`}
+                                  className="pm-version-image-thumb"
+                                  onClick={() => setVersionImageCursor(idx)}
+                                >
+                                  <Image src={img.url} alt={`version-${idx + 1}`} preview />
+                                </div>
+                              ))}
+                            </div>
                           ) : (
-                            <Text type="secondary">暂无图片</Text>
+                            <div style={{ height: 160, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                              <Text style={{ color: 'rgba(255,255,255,0.60)' }}>暂无图片</Text>
+                            </div>
                           )}
-                        </div>
-                        <div style={{ marginTop: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <Space size={6}>
-                            <Button
-                              size="small"
-                              disabled={versionImages.length === 0 || versionImageCursor <= 0}
-                              onClick={() => setVersionImageCursor((c) => Math.max(0, c - 1))}
-                            >
-                              上一张
-                            </Button>
-                            <Button
-                              size="small"
-                              disabled={versionImages.length === 0 || versionImageCursor >= versionImages.length - 1}
-                              onClick={() => setVersionImageCursor((c) => Math.min(versionImages.length - 1, c + 1))}
-                            >
-                              下一张
-                            </Button>
-                            <Text type="secondary" style={{ fontVariantNumeric: 'tabular-nums' }}>
-                              {versionImages.length === 0 ? '-' : `${versionImageCursor + 1}/${versionImages.length}`}
-                            </Text>
-                          </Space>
 
-                          <Upload
-                            accept="image/*"
-                            showUploadList={false}
-                            disabled={!selectedVersionId || !canEditSelectedVersion || uploadingVersionImage}
-                            beforeUpload={(f) => {
-                              if (!selectedVersionId) {
-                                message.warning('请先选择版本')
-                                return Upload.LIST_IGNORE
-                              }
-                              const file = f as File
-                              if (file.size > 10 * 1024 * 1024) {
-                                message.error('图片过大：请控制在 10MB 内')
-                                return Upload.LIST_IGNORE
-                              }
-                              // nginx 常见默认 1MB 限制；为避免 413，>1MB 会在 customRequest 里自动压缩
-                              if (file.size > 1024 * 1024) {
-                                message.info('图片较大：将自动压缩以避免上传 413（后续可通过 Nginx 配置放开到 10MB）')
-                              }
-                              return true
-                            }}
-                            customRequest={async (opt) => {
-                              const vid = String(selectedVersionId ?? '').trim()
-                              if (!vid) return
-                              try {
-                                setUploadingVersionImage(true)
-                                const file0 = opt.file as File
-                                // Try to keep under ~900KB to survive default nginx limits with multipart overhead
-                                const file = await compressImageToTarget(file0, 900 * 1024)
-                                const res = await uploadProductModelVersionImage(vid, file)
-                                setVersionImages(res.images ?? [])
-                                setVersionImageCursor(Math.max(0, (res.images?.length ?? 1) - 1))
-                                await versionsQuery.refetch()
-                                message.success('上传成功')
-                                opt.onSuccess?.({}, new XMLHttpRequest())
-                              } catch (err: any) {
-                                message.error(err?.response?.data?.detail ?? err?.message ?? '上传失败')
-                                opt.onError?.(err)
-                              } finally {
-                                setUploadingVersionImage(false)
-                              }
-                            }}
-                          >
-                            <Button size="small" loading={uploadingVersionImage}>
-                              上传
-                            </Button>
-                          </Upload>
+                          <div className="pm-version-images-footer">
+                            <Upload
+                              accept="image/*"
+                              showUploadList={false}
+                              disabled={!selectedVersionId || !canEditSelectedVersion || uploadingVersionImage}
+                              beforeUpload={(f) => {
+                                if (!selectedVersionId) {
+                                  message.warning('请先选择版本')
+                                  return Upload.LIST_IGNORE
+                                }
+                                const file = f as File
+                                if (file.size > 10 * 1024 * 1024) {
+                                  message.error('图片过大：请控制在 10MB 内')
+                                  return Upload.LIST_IGNORE
+                                }
+                                // nginx 常见默认 1MB 限制；为避免 413，>1MB 会在 customRequest 里自动压缩
+                                if (file.size > 1024 * 1024) {
+                                  message.info('图片较大：将自动压缩以避免上传 413（后续可通过 Nginx 配置放开到 10MB）')
+                                }
+                                return true
+                              }}
+                              customRequest={async (opt) => {
+                                const vid = String(selectedVersionId ?? '').trim()
+                                if (!vid) return
+                                try {
+                                  setUploadingVersionImage(true)
+                                  const file0 = opt.file as File
+                                  // Try to keep under ~900KB to survive default nginx limits with multipart overhead
+                                  const file = await compressImageToTarget(file0, 900 * 1024)
+                                  const res = await uploadProductModelVersionImage(vid, file)
+                                  setVersionImages(res.images ?? [])
+                                  setVersionImageCursor(Math.max(0, (res.images?.length ?? 1) - 1))
+                                  await versionsQuery.refetch()
+                                  message.success('上传成功')
+                                  opt.onSuccess?.({}, new XMLHttpRequest())
+                                } catch (err: any) {
+                                  message.error(err?.response?.data?.detail ?? err?.message ?? '上传失败')
+                                  opt.onError?.(err)
+                                } finally {
+                                  setUploadingVersionImage(false)
+                                }
+                              }}
+                            >
+                              <Button size="small" loading={uploadingVersionImage} className="pm-lines-add-btn">
+                                上传
+                              </Button>
+                            </Upload>
+                          </div>
                         </div>
                       </div>
                     </Card>
@@ -4080,6 +4132,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                           <Button
                             size="small"
                             type="primary"
+                            className="pm-lines-add-btn"
                             onClick={openMaterialPickerForAdd}
                             disabled={materialSummaryView || !canEditSelectedVersion}
                           >
@@ -4887,7 +4940,13 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                               <Switch size="small" checked={processSummaryView} onChange={setProcessSummaryView} />
                             </Space>
                           </Tooltip>
-                          <Button size="small" type="primary" onClick={openProcessPickerForAdd} disabled={!canEditSelectedVersion}>
+                          <Button
+                            size="small"
+                            type="primary"
+                            className="pm-lines-add-btn"
+                            onClick={openProcessPickerForAdd}
+                            disabled={!canEditSelectedVersion}
+                          >
                             新增工序
                           </Button>
                         </Space>

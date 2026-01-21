@@ -99,5 +99,26 @@
   - 如遇 `pg_hba.conf rejects ... no encryption`（服务端强制加密）：设置环境变量 **`PLANNER_PG_SSLMODE=require`**
   - 如遇 `server does not support SSL, but SSL was required`（链路/代理不支持 SSL 协商）：设置环境变量 **`PLANNER_PG_SSLMODE=disable`**
 
+### 13) 全站列表/记录都空或 500：DNS 被 Tailscale/NetworkManager 接管导致公网域名解析失败
+
+- **典型现象**：
+  - 页面能打开（静态资源正常、`/api/planner/health` 仍可能返回 200）
+  - 但所有依赖 DB 的接口（materials/processes/taxonomy/virtual materials…）全 500 或“列表无记录”
+  - 同时“同步宜搭/钉钉”也会失败（钉钉域名解析不到）
+- **后端日志关键字**：
+  - `could not translate host name "<pgm-xxx>.pg.rds.aliyuncs.com" to address: Name or service not known`
+- **快速确认**（返回空/报错即为 DNS 问题）：
+  - `getent hosts pgm-xxx.pg.rds.aliyuncs.com`
+  - `getent hosts oapi.dingtalk.com`
+  - `cat /etc/resolv.conf`
+    - 若看到 `nameserver 100.100.*`（Tailscale DNS）或仅 tailnet search，通常就是被接管且上游不可用
+- **修复口径（推荐：不影响 Tailscale 通道，但停止接管全机 DNS）**：
+  - 关闭 Tailscale 接管 DNS：`sudo tailscale set --accept-dns=false`
+  - 若 `/etc/resolv.conf` 仍被 NetworkManager 写成 `100.100.*`，把主网卡连接改为忽略自动 DNS 并指定可用 DNS：
+    - `nmcli -t -f NAME,DEVICE,TYPE connection show --active`
+    - `nmcli connection modify "<NAME>" ipv4.ignore-auto-dns yes ipv4.dns "223.5.5.5 114.114.114.114"`
+    - `nmcli connection up "<NAME>"`
+  - DNS 恢复后建议重启后端服务以重建连接池：`systemctl --user restart planner-costing.service`（注意 SSH 场景要设置 `XDG_RUNTIME_DIR`）
+
 
 

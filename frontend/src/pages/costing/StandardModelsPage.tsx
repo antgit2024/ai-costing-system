@@ -4,6 +4,7 @@ import { Button, Card, Col, Input, Modal, Row, Select, Space, Switch, Table, Tag
 import type { ColumnsType } from 'antd/es/table'
 import { useQuery } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
+import { DeleteOutlined, EditOutlined, ThunderboltOutlined } from '@ant-design/icons'
 
 import {
   createProductModel,
@@ -389,30 +390,44 @@ export default function StandardModelsPage() {
     },
     {
       title: '操作',
-      width: 260,
+      width: 140,
       render: (_, r) => (
-        <Space>
-          <Button
-            type="primary"
-            onClick={() => {
-              setEditingModelId(r.id)
-              setEditingVersionId(null)
-              setEditorOpen(true)
-            }}
-          >
-            编辑
-          </Button>
-          <Button loading={Boolean(auditingModelIds[r.id])} onClick={() => handleRealtimeAudit(r)}>
-            实时核价
-          </Button>
+        <Space size={6}>
+          <Tooltip title="编辑">
+            <Button
+              size="small"
+              type="text"
+              icon={<EditOutlined />}
+              aria-label="编辑"
+              onClick={() => {
+                setEditingModelId(r.id)
+                setEditingVersionId(null)
+                setEditorOpen(true)
+              }}
+            />
+          </Tooltip>
+
+          <Tooltip title="实时核价">
+            <Button
+              size="small"
+              type="text"
+              icon={<ThunderboltOutlined />}
+              aria-label="实时核价"
+              loading={Boolean(auditingModelIds[r.id])}
+              onClick={() => handleRealtimeAudit(r)}
+            />
+          </Tooltip>
+
           <Tooltip title="删除为“归档删除标准版本（不影响打样版本）”。规则：存在已发布标准版本或存在SKU绑定则不允许删除；否则允许删除标准版本。">
             <Button
+              size="small"
+              type="text"
               danger
+              icon={<DeleteOutlined />}
+              aria-label="删除"
               disabled={Boolean((r as any).current_published_standard_version_id)}
               onClick={() => handleDeleteModel(r)}
-            >
-              删除
-            </Button>
+            />
           </Tooltip>
         </Space>
       ),

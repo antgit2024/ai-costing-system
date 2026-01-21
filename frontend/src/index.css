@@ -388,6 +388,41 @@ a {
   border-color: rgba(201, 74, 74, 0.34) !important;
 }
 
+/* Confirm 类型弹窗没有 footer：按钮在 .ant-modal-confirm-btns */
+.ant-modal-confirm .ant-modal-confirm-body-wrapper {
+  background: var(--color-theme-bg-card) !important;
+}
+.ant-modal-confirm .ant-modal-confirm-body {
+  color: var(--color-theme-text-secondary) !important;
+}
+.ant-modal-confirm .ant-modal-confirm-btns .ant-btn {
+  background: rgba(255, 255, 255, 0.06) !important;
+  border-color: rgba(255, 255, 255, 0.14) !important;
+  color: var(--color-theme-text-primary) !important;
+}
+.ant-modal-confirm .ant-modal-confirm-btns .ant-btn:hover {
+  background: rgba(255, 255, 255, 0.10) !important;
+  border-color: rgba(255, 255, 255, 0.16) !important;
+}
+.ant-modal-confirm .ant-modal-confirm-btns .ant-btn-primary {
+  background: rgba(255, 255, 255, 0.10) !important;
+  border-color: rgba(255, 255, 255, 0.18) !important;
+  color: var(--color-theme-text-primary) !important;
+}
+.ant-modal-confirm .ant-modal-confirm-btns .ant-btn-primary:hover {
+  background: rgba(255, 255, 255, 0.14) !important;
+  border-color: rgba(255, 255, 255, 0.22) !important;
+}
+.ant-modal-confirm .ant-modal-confirm-btns .ant-btn-dangerous {
+  background: rgba(201, 74, 74, 0.14) !important;
+  border-color: rgba(201, 74, 74, 0.28) !important;
+  color: var(--dashboard-text-error-prominent) !important;
+}
+.ant-modal-confirm .ant-modal-confirm-btns .ant-btn-dangerous:hover {
+  background: rgba(201, 74, 74, 0.18) !important;
+  border-color: rgba(201, 74, 74, 0.34) !important;
+}
+
 /* ===== Top filter cards border (like SampleModelsPage) ===== */
 .costing-filter-card {
   border: 1px solid var(--color-theme-border-tertiary) !important;

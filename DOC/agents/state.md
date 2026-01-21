@@ -1,5 +1,19 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-21（UI：彻底修复 Modal/Confirm 白底（AntD 变量注入））
+  - 本轮范围：仅针对 `Modal.confirm/info` 的白底根因（`--ant-modal-content-bg: #fff`）做变量级覆盖，并补齐弹窗内容常见白底容器（Card/Descriptions/Table）。
+  - 本轮产物：
+    - 前端：`frontend/src/index.css`
+      - 在 `.ant-modal/.ant-modal-confirm` 作用域内覆写 `--ant-modal-content-bg/--ant-modal-title-color/--ant-color-text...` 等变量为暗色体系
+      - 强制 `.ant-modal` 内 `Card/Descriptions/Table` 背景与边框为暗色（避免内容面板仍白）
+    - 部署：执行 `frontend/scripts/deploy_static.sh` 原子发布到 `/var/www/html/ai-costing/dist`
+    - 恢复包：更新 `DOC/agents/state.md`（本条）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+  - 下一步：
+    - 若仍出现白底，请在 DevTools 选中白底元素并截图 class/Computed（用于识别是否为 Popover/Dropdown 等非 Modal 组件）。
+
 - **最近校对（北京时间 GMT+8）**：2026-01-21（UI：修复 Material 主数据页弹窗“外壳白底”）
   - 本轮范围：仅收口 `Modal.confirm/info` 在 portal 场景下仍出现“外壳白底”的观感问题（不改业务逻辑）。
   - 本轮产物：

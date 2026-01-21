@@ -325,6 +325,78 @@ a {
 }
 
 /* ===== Modal (弹窗) 黑灰风格：适用于 confirm/info 等 ===== */
+.ant-modal,
+.ant-modal-confirm {
+  /**
+   * AntD v5 modal 使用 CSS 变量控制背景（默认是白色：--ant-modal-content-bg: #fff）。
+   * 线上“仍是白色”多数是因为该变量在 modal scope 内被注入为 #fff。
+   * 这里在 modal 作用域内覆写变量（只影响弹窗，不影响全站 token）。
+   */
+  --ant-modal-content-bg: var(--color-theme-bg-card) !important;
+  --ant-modal-header-bg: var(--color-theme-bg-card) !important;
+  --ant-modal-footer-bg: var(--color-theme-bg-card) !important;
+  --ant-modal-title-color: var(--color-theme-text-primary) !important;
+  --ant-color-text: var(--color-theme-text-primary) !important;
+  --ant-color-text-secondary: var(--color-theme-text-secondary) !important;
+  --ant-color-bg-elevated: var(--color-theme-bg-card) !important;
+  --ant-color-bg-container: var(--color-theme-bg-card) !important;
+  --ant-color-border: var(--color-theme-border-quaternary) !important;
+  --ant-color-split: var(--color-theme-border-quaternary) !important;
+  --ant-box-shadow: none !important;
+}
+
+.ant-modal .ant-modal-content,
+.ant-modal-confirm .ant-modal-content {
+  background: var(--color-theme-bg-card) !important;
+  background-color: var(--color-theme-bg-card) !important;
+  border: 1px solid var(--color-theme-border-quaternary) !important;
+  box-shadow: none !important;
+}
+
+.ant-modal .ant-modal-header,
+.ant-modal-confirm .ant-modal-header {
+  background: var(--color-theme-bg-card) !important;
+  background-color: var(--color-theme-bg-card) !important;
+  border-bottom: 1px solid var(--color-theme-border-quaternary) !important;
+}
+
+.ant-modal .ant-modal-body,
+.ant-modal-confirm .ant-modal-body {
+  background: var(--color-theme-bg-card) !important;
+  background-color: var(--color-theme-bg-card) !important;
+  color: var(--color-theme-text-secondary) !important;
+}
+
+.ant-modal .ant-modal-footer,
+.ant-modal-confirm .ant-modal-footer {
+  background: var(--color-theme-bg-card) !important;
+  background-color: var(--color-theme-bg-card) !important;
+  border-top: 1px solid var(--color-theme-border-quaternary) !important;
+}
+
+/* 弹窗内容里常见“白底面板”来源：Card/Descriptions/Table 默认 container bg */
+.ant-modal .ant-card,
+.ant-modal .ant-card-body,
+.ant-modal .ant-card-head,
+.ant-modal .ant-descriptions-view,
+.ant-modal .ant-table,
+.ant-modal .ant-table-container,
+.ant-modal .ant-table-thead > tr > th,
+.ant-modal .ant-table-tbody > tr > td,
+.ant-modal-confirm .ant-card,
+.ant-modal-confirm .ant-card-body,
+.ant-modal-confirm .ant-card-head,
+.ant-modal-confirm .ant-descriptions-view,
+.ant-modal-confirm .ant-table,
+.ant-modal-confirm .ant-table-container,
+.ant-modal-confirm .ant-table-thead > tr > th,
+.ant-modal-confirm .ant-table-tbody > tr > td {
+  background: var(--color-theme-bg-card) !important;
+  background-color: var(--color-theme-bg-card) !important;
+  border-color: var(--color-theme-border-quaternary) !important;
+  color: var(--color-theme-text-secondary) !important;
+}
+
 .ant-modal-content {
   /* AntD Modal/Confirm 是 portal 到 body；直接覆盖 content，避免出现“外壳白底” */
   background: var(--color-theme-bg-card) !important;

@@ -15,6 +15,7 @@ import {
 import CloudSyncOutlined from '@ant-design/icons/lib/icons/CloudSyncOutlined'
 import { useEffect, useMemo } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { isAxiosError } from 'axios'
 
 import { fetchMaterial, fetchMaterialSyncJob, triggerMaterialSync, updateMaterial } from '@/services/planner'
 import { MATERIAL_STATUS_OPTIONS } from '@/constants/planner'
@@ -22,6 +23,14 @@ import { BOM_UNIT_SELECT_OPTIONS } from '@/constants/calculationMethods'
 import type { Material, MaterialStatusUpdatePayload } from '@/types/planner'
 
 const { Text } = Typography
+
+const formatRequestError = (err: unknown, fallback = '请求失败') => {
+  if (isAxiosError(err)) {
+    const data: any = err.response?.data
+    return data?.detail ?? data?.message ?? err.message ?? fallback
+  }
+  return (err as any)?.message ?? fallback
+}
 
 interface MaterialDrawerProps {
   materialId: string | null
@@ -173,7 +182,13 @@ const MaterialDrawer = ({ materialId, open, onClose, onUpdated }: MaterialDrawer
                 if (jobId) {
                   for (let i = 0; i < 20; i++) {
                     await new Promise((r) => setTimeout(r, 1000))
-                    const current = await fetchMaterialSyncJob(jobId)
+                    let current: any
+                    try {
+                      current = await fetchMaterialSyncJob(jobId)
+                    } catch (e) {
+                      message.error(formatRequestError(e, '查询同步任务失败'))
+                      break
+                    }
                     if (current?.status === 'succeeded' || current?.status === 'completed') {
                       break
                     }
@@ -186,7 +201,7 @@ const MaterialDrawer = ({ materialId, open, onClose, onUpdated }: MaterialDrawer
                 queryClient.invalidateQueries({ queryKey: ['material', materialId] })
                 queryClient.invalidateQueries({ queryKey: ['materials'] })
               } catch (err: any) {
-                message.error((err as Error)?.message || '同步失败')
+                message.error(formatRequestError(err, '同步失败'))
               }
             }}
           >

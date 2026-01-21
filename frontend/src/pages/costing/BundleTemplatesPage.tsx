@@ -3130,18 +3130,17 @@ export default function BundleTemplatesPage() {
                               <div style={{ width: '100%', display: 'block' }}>
                                 <div
                                   style={{
-                                    // “自动生成”区块：用更深的黄（暗色风格），避免像白底面板
-                                    background: 'rgba(214, 192, 138, 0.14)',
-                                    border: '1px solid rgba(214, 192, 138, 0.28)',
+                                    // “自动生成”区块：深灰底（暗色风格），并左右缩进 10px 让框体更居中
+                                    background: 'rgba(255, 255, 255, 0.035)',
+                                    border: '1px solid var(--color-theme-border-quaternary)',
                                     borderRadius: 8,
                                     padding: 10,
-                                    width: '100%',
+                                    width: 'calc(100% - 20px)',
                                     display: 'block',
                                     boxSizing: 'border-box',
                                     alignSelf: 'stretch',
-                                    // 兜底：在 Card body 有 padding 时也尽量贴边铺满视觉宽度
-                                    marginLeft: -8,
-                                    marginRight: -8,
+                                    marginLeft: 10,
+                                    marginRight: 10,
                                   }}
                                 >
                                   {components.length ? (
@@ -3475,7 +3474,7 @@ export default function BundleTemplatesPage() {
                                             style={{
                                               background: 'rgba(255, 77, 79, 0.14)',
                                               color: '#cf1322',
-                                              border: '1px solid #ffccc7',
+                                              border: 'none',
                                               fontWeight: 700,
                                             }}
                                           >
@@ -3485,7 +3484,7 @@ export default function BundleTemplatesPage() {
                                             style={{
                                               background: 'rgba(250,173,20,0.18)',
                                               color: '#d46b08',
-                                              border: '1px solid #ffe7ba',
+                                              border: 'none',
                                               fontWeight: 700,
                                             }}
                                           >
@@ -3504,7 +3503,7 @@ export default function BundleTemplatesPage() {
                                             style={{
                                               background: 'rgba(22, 119, 255, 0.14)',
                                               color: '#0958d9',
-                                              border: '1px solid #91caff',
+                                              border: 'none',
                                               fontWeight: 700,
                                             }}
                                           >
@@ -3517,7 +3516,7 @@ export default function BundleTemplatesPage() {
                                                 style={{
                                                   background: 'rgba(255,77,79,0.15)',
                                                   color: '#cf1322',
-                                                  border: '1px solid #ffccc7',
+                                                  border: 'none',
                                                 }}
                                               >
                                                 {displayVariantToken(getPresetSelector2(idx), t)}

@@ -1,5 +1,16 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-21（UI：套装模板抽屉右侧 FORCE/TOKEN 胶囊去外框 + “自动生成”区块深灰居中）
+  - 本轮范围：仅收口 `/costing/bundle-templates` 编辑抽屉的视觉细节（不改业务逻辑）。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/BundleTemplatesPage.tsx`
+      - 右侧摘要区：`FORCE / 强制替换 / TOKEN / 羽丝绒` 等胶囊 Tag 去掉外框线（暗色下边框过亮）
+      - “自动生成：”区块底色改为深灰，并左右各缩进 10px（框体更居中）
+    - 恢复包：更新 `DOC/agents/state.md`（本条）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+
 - **最近校对（北京时间 GMT+8）**：2026-01-21（UI：套装模板抽屉左侧可读性 + FORCE/TOKEN 去外框 + 自动生成区块暗黄）
   - 本轮范围：仅调整 `/costing/bundle-templates` 的“编辑套装模板”抽屉视觉（不改业务逻辑）。
   - 本轮产物：

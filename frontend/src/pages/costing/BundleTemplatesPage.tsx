@@ -2116,7 +2116,9 @@ export default function BundleTemplatesPage() {
                             )}
                             {childRows.length ? <Tag color="orange">含二级×{childRows.length}</Tag> : null}
                             {presetApplyMode === 'force' && childRows.length ? (
-                              <Tag color="volcano">强制：选1条子条件</Tag>
+                              <Tag color="volcano" style={{ border: 'none' }}>
+                                强制：选1条子条件
+                              </Tag>
                             ) : presetApplyMode === 'variant' && childRows.length ? (
                               <Tag color="blue">解析：子条件默认全选</Tag>
                             ) : (
@@ -2183,7 +2185,9 @@ export default function BundleTemplatesPage() {
                                   const alias = String((variantTokenAliasOverrides?.[sel] ?? {})?.[tok] ?? '').trim()
                                   return (
                                     <Space key={`vtao-${sel}-${tok}`} size={6} wrap align="center">
-                                      <Tag color="red">{tok}</Tag>
+                                      <Tag color="red" style={{ border: 'none' }}>
+                                        {tok}
+                                      </Tag>
                                       <Text type="secondary">→</Text>
                                       <Input
                                         size="small"
@@ -2327,7 +2331,7 @@ export default function BundleTemplatesPage() {
                                           style={{
                                             background: 'rgba(255,77,79,0.15)',
                                             color: '#cf1322',
-                                            border: '1px solid #ffccc7',
+                                            border: 'none',
                                           }}
                                         >
                                           {t}
@@ -2702,16 +2706,17 @@ export default function BundleTemplatesPage() {
               <style>{`
                 /* BundleTemplatesPage: phrase card list micro-UX */
                 .bt-phrase-card-icon-btn.ant-btn {
-                  color: rgba(0,0,0,0.45);
+                  /* 暗色主题：图标按钮文字/图标需要更亮，避免与卡片底色融在一起 */
+                  color: var(--color-theme-text-secondary);
                   padding: 0 4px;
                   height: 24px;
                 }
                 .bt-phrase-card-icon-btn.ant-btn:not([disabled]):hover {
-                  color: #1677ff;
-                  background: rgba(22,119,255,0.08);
+                  color: var(--color-theme-text-primary);
+                  background: var(--color-theme-bg-tertiary);
                 }
                 .bt-phrase-card-icon-btn.ant-btn[disabled] {
-                  color: rgba(0,0,0,0.25);
+                  color: var(--color-theme-text-quaternary);
                 }
                 /* Model pool select: allow wrapping tags onto multiple lines */
                 .bt-model-pool-select .ant-select-selector {
@@ -2842,7 +2847,7 @@ export default function BundleTemplatesPage() {
                         </div>
 
                         {/* 第二行：纯短语（运营短语不截短，全显示） */}
-                        <Text style={{ color: 'rgba(0,0,0,0.88)', whiteSpace: 'normal' }}>
+                        <Text style={{ color: 'var(--color-theme-text-primary)', whiteSpace: 'normal' }}>
                           {phraseText}
                         </Text>
                       </Space>
@@ -3125,8 +3130,9 @@ export default function BundleTemplatesPage() {
                               <div style={{ width: '100%', display: 'block' }}>
                                 <div
                                   style={{
-                                    background: '#fff7e6',
-                                    border: '1px solid #ffe7ba',
+                                    // “自动生成”区块：用更深的黄（暗色风格），避免像白底面板
+                                    background: 'rgba(214, 192, 138, 0.14)',
+                                    border: '1px solid rgba(214, 192, 138, 0.28)',
                                     borderRadius: 8,
                                     padding: 10,
                                     width: '100%',

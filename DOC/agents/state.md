@@ -1,5 +1,20 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-21（UI：套装模板抽屉左侧可读性 + FORCE/TOKEN 去外框 + 自动生成区块暗黄）
+  - 本轮范围：仅调整 `/costing/bundle-templates` 的“编辑套装模板”抽屉视觉（不改业务逻辑）。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/BundleTemplatesPage.tsx`
+      - 左侧“属性列表”卡片：文字与图标按钮颜色改为暗色变量（不再与背景融在一起）
+      - FORCE（强制：选1条子条件）胶囊：去掉 Tag 外框线
+      - TOKEN 胶囊（例如“羽丝绒”）：去掉 Tag 外框线
+      - “自动生成”区块：底色从浅黄（接近白）改为更深的暗黄（rgba），匹配当前暗色风格
+    - 恢复包：更新 `DOC/agents/state.md`（本条）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+  - 下一步：
+    - 若仍有“图标太暗”的点（例如自动生成区块内的上下移动按钮），建议把同类按钮样式抽成统一 class 并复用（避免多处内联 style）。
+
 - **最近校对（北京时间 GMT+8）**：2026-01-21（UI：Bundle Templates 编码胶囊去外框并收口宽度）
   - 本轮范围：仅调整 `/costing/bundle-templates` 列表“属性名称”列里的编码胶囊样式（不改业务逻辑）。
   - 本轮产物：

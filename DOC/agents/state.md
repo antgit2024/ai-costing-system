@@ -1,9 +1,30 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-21（UI：品牌区收口 + BOM token alias 回溯）
+  - 本轮产物：
+    - 前端品牌区：
+      - 顶部栏品牌区：改为文字 `饰家如画®AI智慧数字工厂`（实现：`frontend/src/components/layout/AppLayout.tsx`）
+      - 侧栏品牌区：LOGO 放大 1/3（28px → 37px）+ 分隔线向上移动 12px（实现：`frontend/src/index.css`）
+      - `logo-full.svg`：修复头部 `id` 乱码（统一为 `layer_1`，避免编码差异导致 diff 漂移）
+    - 文档/源文件：补齐 LOGO 源文件入库（`DOC/基础表单/logo-full.svg`），作为 `frontend/public/logo-full.svg` 的上游来源
+    - 后端（BOM）：支持“变体 TOKEN 别名”回溯——当 `spec_text` 命中 alias 时，自动注入原始 token 进 `shared_tokens`，确保原规则仍可命中（实现：`backend/src/planner/services/bom_generation_service.py`，读取 `variant_token_alias_overrides` + selector）
+    - 清理：移除误生成的无关文档草稿（避免污染恢复包）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+    - Backend（最小）：`backend/.venv/bin/python -m pytest backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py -q`
+  - 下一步：
+    - 若要让“别名”从模板配置到 UI 完整闭环：在套装模板/编辑器侧暴露 `variant_token_alias_overrides` 的编辑入口，并补齐对应用例测试（避免 alias 漏配导致线上难排查）
+
 - **最近校对（北京时间 GMT+8）**：2026-01-20（UI：Costing 左侧菜单/抽屉/筛选卡片 Cursor 风格收口）
   - 背景：之前 Cursor 风格只做到一半，存在 3 个明显断层：左侧菜单底色/右侧分隔线未统一、右侧抽屉底色偏浅且与 Tabs 线条冲突、部分“筛选区”卡片缺少外框线。
   - 本轮产物（前端）：
-    - 侧栏/顶部品牌区：移除“饰家如画©智慧工厂”文本，统一替换为 LOGO（`frontend/public/logo-full.svg`，来源为 `DOC/基础表单/logo-full.svg`），并把侧栏头部高度 +15px；LOGO 做居中与暗色可见（CSS `filter: invert(1)`）。
+    - 侧栏品牌区（“总览”上方）：保留 LOGO（`frontend/public/logo-full.svg`，来源 `DOC/基础表单/logo-full.svg`），并按你要求：
+      - LOGO 放大 1/3（侧栏 logo 高度从 28px → 37px）
+      - 分隔菜单的灰线向上移动 12px（实现：`.sidebar-logo::after { bottom: 12px; }`）
+      - 暗色可见：对黑色 LOGO 使用 `filter: invert(1)`（视觉上为白）
+    - 顶部栏品牌区：不再展示 LOGO，改为文字：`饰家如画®AI智慧数字工厂`
+    - 稳定性：修复 `logo-full.svg` 头部 `id` 乱码问题（统一为 `layer_1`，避免编码差异导致 diff 漂移）。
     - 菜单信息架构：把原先“成本核算”下的所有功能拆成 4 个一级分组（均带统一风格图标）：
       - 模型管理 / 货品管理 / 货品发布 / 数据分析（实现：`frontend/src/components/layout/AppLayout.tsx`）
     - 左侧菜单：统一侧栏背景为 `--color-theme-bg-card`，并在右侧加分隔线 `border-inline-end: 1px solid var(--color-theme-border-tertiary)`；同时关闭 AntD Menu 选中态默认 `::after` 竖线指示（更像 Cursor）。

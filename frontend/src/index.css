@@ -199,11 +199,11 @@ a {
   font-weight: 600;
   font-size: 13px;
   background: var(--color-theme-bg-card);
-  border-bottom: 1px solid var(--color-theme-border-tertiary);
+  position: relative;
 }
 
 .sidebar-logo img {
-  height: 28px;
+  height: 37px; /* +1/3 */
   max-width: 200px;
   width: auto;
   display: block;
@@ -212,16 +212,24 @@ a {
   opacity: 0.95;
 }
 
+/* 分隔线向上挪 12px（线与菜单之间留出更“呼吸”的空隙） */
+.sidebar-logo::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 12px;
+  height: 1px;
+  background: var(--color-theme-border-tertiary);
+}
+
 .app-header-brand {
   display: flex;
   align-items: center;
-}
-.app-header-brand img {
-  height: 18px;
-  width: auto;
-  display: block;
-  filter: invert(1) brightness(1.05);
-  opacity: 0.92;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-theme-text-primary);
+  letter-spacing: 0.2px;
 }
 
 /* ===== Cursor-like left menu (Sider + Menu) ===== */

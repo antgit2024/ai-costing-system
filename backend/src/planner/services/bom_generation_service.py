@@ -624,6 +624,32 @@ def generate_bom_by_spec(
         ]
         shared_tokens = shared_tokens + tpl_shared_tokens
 
+    # Variant token alias overrides (per selector):
+    # - Display: UI may output customer-friendly alias tokens in formula/spec
+    # - Trigger: ERP spec_text may contain alias; we must still match original variant TOKEN conditions
+    # Strategy: if spec_text contains alias, also inject original token into shared_tokens.
+    sel_for_alias = (forced_preset_selector or bundle_selector or "").strip().upper() or None
+    if sel_for_alias:
+        alias_cfg = tpl_meta.get("variant_token_alias_overrides")
+        if isinstance(alias_cfg, dict):
+            per = alias_cfg.get(sel_for_alias)
+            if isinstance(per, dict) and per:
+                text0 = str(spec_text or "")
+                seen = {str(t).strip().lower() for t in shared_tokens if str(t).strip()}
+                for orig, alias in per.items():
+                    o = str(orig or "").strip()
+                    a = str(alias or "").strip()
+                    if not o or not a:
+                        continue
+                    if o.strip().lower() == a.strip().lower():
+                        continue
+                    if a in text0:
+                        k = o.lower()
+                        if k in seen:
+                            continue
+                        shared_tokens.append(o)
+                        seen.add(k)
+
     # --- Phrase presets (recommended): contains match, longer-first ---
     phrase_scoped, phrase_remove_tokens, phrase_trace, phrase_matched_any = _apply_phrase_presets(
         tpl_meta=tpl_meta,

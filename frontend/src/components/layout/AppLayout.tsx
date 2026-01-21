@@ -275,8 +275,8 @@ const AppLayout = ({ children }: AppLayoutProps) => {
           {!hideSidebar ? (
             <Header className="app-header">
             <div className="app-header-inner">
-                    <div className="app-header-brand" aria-label="饰家如画©智慧工厂">
-                      <img src="/logo-full.svg" alt="饰家如画©智慧工厂" />
+                    <div className="app-header-brand" aria-label="饰家如画®AI智慧数字工厂">
+                      饰家如画®AI智慧数字工厂
                     </div>
               <Space>
                 <Badge count={runningCount} size="small" className={runningCount ? 'task-badge-blink' : undefined}>

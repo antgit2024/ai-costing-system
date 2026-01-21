@@ -4,6 +4,7 @@ import DownloadOutlined from '@ant-design/icons/lib/icons/DownloadOutlined'
 import EditOutlined from '@ant-design/icons/lib/icons/EditOutlined'
 import FileSearchOutlined from '@ant-design/icons/lib/icons/FileSearchOutlined'
 import HistoryOutlined from '@ant-design/icons/lib/icons/HistoryOutlined'
+import PictureOutlined from '@ant-design/icons/lib/icons/PictureOutlined'
 import QuestionCircleOutlined from '@ant-design/icons/lib/icons/QuestionCircleOutlined'
 import ReloadOutlined from '@ant-design/icons/lib/icons/ReloadOutlined'
 import {
@@ -388,6 +389,7 @@ const MaterialMasterPage = () => {
   const [syncPagination, setSyncPagination] = useState({ page: 1, pageSize: 10 })
   const [exporting, setExporting] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const [refreshingImages, setRefreshingImages] = useState(false)
   const [detailDrawerOpen, setDetailDrawerOpen] = useState(false)
   const [detailDrawerActiveTab, setDetailDrawerActiveTab] = useState('basic')
   const [guideOpen, setGuideOpen] = useState(false)
@@ -802,6 +804,40 @@ const MaterialMasterPage = () => {
     }
   }
 
+  const confirmRefreshImages = () => {
+    const count = materials.length
+    Modal.confirm({
+      title: '更新图片（当前页）',
+      content:
+        count > 0
+          ? `将对当前列表页的 ${count} 条物料执行图片“强制刷新”请求（只处理有图片链接的记录），用于修复/补齐缩略图。确认继续？`
+          : '当前页没有记录，无需更新图片。',
+      okText: '开始更新',
+      cancelText: '取消',
+      okButtonProps: { disabled: count <= 0 },
+      onOk: () => handleRefreshImages(),
+    })
+  }
+
+  const handleRefreshImages = async () => {
+    if (refreshingImages) return
+    setRefreshingImages(true)
+    try {
+      let touched = 0
+      for (const record of materials) {
+        const urls = getImageUrls(record)
+        if (!urls.length) continue
+        touched += 1
+        await prefetchMaterialImages(record, { force_refresh: true })
+      }
+      message.success(touched > 0 ? `已触发更新图片：${touched} 条（仅当前页有图记录）` : '当前页没有可更新的图片链接')
+    } catch (err: any) {
+      message.error(getErrorMessage(err) || '更新图片失败')
+    } finally {
+      setRefreshingImages(false)
+    }
+  }
+
   type MaterialSyncMode = 'full' | 'new_only' | 'core_fields'
 
   const confirmSyncMaterials = (mode: MaterialSyncMode) => {
@@ -884,7 +920,7 @@ const MaterialMasterPage = () => {
           }
         }
         if (!done) {
-          message.info('同步任务仍在执行，可稍后手动点击“推导BOM价格”')
+          message.info('同步任务仍在执行，可稍后查看“同步日志”')
         }
       }
     } catch (error) {
@@ -893,52 +929,6 @@ const MaterialMasterPage = () => {
     } finally {
       setSyncing(false)
     }
-  }
-
-  const confirmDeriveBomPrices = () => {
-    Modal.confirm({
-      title: '推导 BOM 价格（入库→BOM）',
-      content:
-        '将按“BOM 单价 = 入库单价 ÷ 入库→BOM 换算”推导并写入本地（metadata_json.bom_unit_price）。该值用于算价/扣库；无法推导的物料会清理旧的 BOM 单价快照并在列表中以红字提示原因。确认继续？',
-      okText: '立即推导',
-      cancelText: '取消',
-      onOk: async () => {
-        try {
-          setSyncing(true)
-          const job = await triggerMaterialBomDerive({
-            requested_by: 'material_master_manual',
-            limit: 5000,
-            search: filters.search,
-            category: filters.category,
-            status: filters.status,
-            is_active: filters.is_active,
-            is_bom_material: filters.is_bom_material,
-          })
-          message.success('已触发 BOM 价格推导任务')
-          setSyncDrawerOpen(true)
-          queryClient.invalidateQueries({ queryKey: ['material-sync-logs'] })
-          const jobId = job?.id
-          if (jobId) {
-            for (let i = 0; i < 120; i++) {
-              await new Promise((r) => setTimeout(r, 1000))
-              const current = await fetchMaterialSyncJob(jobId)
-              if (current?.status === 'failed') {
-                message.error(current?.error_message || 'BOM 价格推导失败')
-                break
-              }
-              if (current?.status === 'succeeded' || current?.status === 'completed') {
-                await materialsQuery.refetch()
-                break
-              }
-            }
-          }
-        } catch (err: any) {
-          message.error(getErrorMessage(err))
-        } finally {
-          setSyncing(false)
-        }
-      },
-    })
   }
 
   const materialColumns: ColumnsType<Material> = [
@@ -1758,74 +1748,9 @@ const MaterialMasterPage = () => {
         </Text>
       </div>
 
-      <Row gutter={[24, 24]}>
-        <Col xs={24} xl={7} style={{ display: 'flex' }}>
-          <Card
-            title="当前概览"
-            bordered={false}
-            style={{ flex: 1, minHeight: '100%' }}
-            bodyStyle={{
-              display: 'flex',
-              flexDirection: 'column',
-              justifyContent: 'center',
-              gap: 12,
-            }}
-          >
-            <Text strong style={{ fontSize: 16 }}>
-              物料总数：{totalCount}
-            </Text>
-            <Text type="secondary">统计所有同步的物料数量</Text>
-          </Card>
-        </Col>
-        <Col xs={24} xl={17} style={{ display: 'flex' }}>
-          <Card
-            title="筛选"
-            size="small"
-            className="costing-filter-card"
-            style={{ flex: 1 }}
-            extra={
-              <Space>
-                <Button icon={<ReloadOutlined />} onClick={() => materialsQuery.refetch()}>
-                  刷新
-                </Button>
-                <Button loading={syncing} onClick={confirmDeriveBomPrices}>
-                  推导BOM价格
-                </Button>
-                <Button
-                  icon={<CloudSyncOutlined />}
-                  loading={syncing}
-                  onClick={() => confirmSyncMaterials('new_only')}
-                >
-                  同步新物料
-                </Button>
-                <Button
-                  icon={<CloudSyncOutlined />}
-                  loading={syncing}
-                  onClick={() => confirmSyncMaterials('core_fields')}
-                >
-                  更新原价格
-                </Button>
-                <Button
-                  icon={<CloudSyncOutlined />}
-                  loading={syncing}
-                  onClick={() => confirmSyncMaterials('full')}
-                >
-                  全量同步宜搭
-                </Button>
-                <Button icon={<HistoryOutlined />} onClick={() => setSyncDrawerOpen(true)}>
-                  同步日志
-                </Button>
-                <Button
-                  type="primary"
-                  icon={<DownloadOutlined />}
-                  loading={exporting}
-                  onClick={handleExport}
-                >
-                  导出
-                </Button>
-              </Space>
-            }
-          >
+      <Row gutter={[16, 16]}>
+        <Col xs={24} lg={12}>
+          <Card title="筛选" size="small" className="costing-filter-card">
             <Form
               form={filtersForm}
               layout="inline"
@@ -1851,12 +1776,7 @@ const MaterialMasterPage = () => {
                 />
               </Form.Item>
               <Form.Item name="status" label="状态">
-                <Select
-                  allowClear
-                  placeholder="全部"
-                  options={MATERIAL_STATUS_OPTIONS}
-                  style={{ width: 120 }}
-                />
+                <Select allowClear placeholder="全部" options={MATERIAL_STATUS_OPTIONS} style={{ width: 120 }} />
               </Form.Item>
               <Form.Item name="onlyActive" valuePropName="checked" label="仅启用">
                 <Switch />
@@ -1873,6 +1793,27 @@ const MaterialMasterPage = () => {
                 </Space>
               </Form.Item>
             </Form>
+          </Card>
+        </Col>
+        <Col xs={24} lg={12}>
+          <Card title="操作" size="small" className="costing-filter-card">
+            <Space wrap>
+              <Button icon={<CloudSyncOutlined />} loading={syncing} onClick={() => confirmSyncMaterials('new_only')}>
+                同步新料
+              </Button>
+              <Button icon={<PictureOutlined />} loading={refreshingImages} onClick={confirmRefreshImages}>
+                更新图片
+              </Button>
+              <Button icon={<HistoryOutlined />} onClick={() => setSyncDrawerOpen(true)}>
+                同步日志
+              </Button>
+              <Button type="primary" icon={<DownloadOutlined />} loading={exporting} onClick={handleExport}>
+                导出物料
+              </Button>
+              <Button icon={<ReloadOutlined />} onClick={() => materialsQuery.refetch()}>
+                刷新
+              </Button>
+            </Space>
           </Card>
         </Col>
       </Row>

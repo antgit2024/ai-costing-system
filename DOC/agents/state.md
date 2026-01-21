@@ -20,6 +20,7 @@
     - 标准模型管理抽屉：标准版本列表“操作”列文字按钮改为图标按钮（编辑/发布/复制/克隆/删除），避免放不下（实现：`frontend/src/components/costing/ProductModelEditorDrawer.tsx`）
     - 标准模型管理抽屉：标准版本列表中“已发布（运行中）版本”行底色改为**深绿色半透明**（alpha），便于一眼识别当前运行版本（实现：`frontend/src/components/costing/ProductModelEditorDrawer.tsx`）
     - 标准模型列表：“当前发布标准”列的版本号胶囊底色同步改为**深绿色半透明**（alpha），与抽屉“已发布行”语义一致（实现：`frontend/src/pages/costing/StandardModelsPage.tsx`）
+    - 物料主数据管理：顶部改为与“打样模型”一致的**筛选卡 + 操作卡**布局，移除“当前概览”；收口批量高风险按钮，仅保留“同步新料/更新图片/同步日志/导出物料”（另保留刷新），把更新单条价格收口到抽屉“同步宜搭”（实现：`frontend/src/pages/costing/MaterialMasterPage.tsx`）
     - 文档/源文件：补齐 LOGO 源文件入库（`DOC/基础表单/logo-full.svg`），作为 `frontend/public/logo-full.svg` 的上游来源
     - 后端（BOM）：支持“变体 TOKEN 别名”回溯——当 `spec_text` 命中 alias 时，自动注入原始 token 进 `shared_tokens`，确保原规则仍可命中（实现：`backend/src/planner/services/bom_generation_service.py`，读取 `variant_token_alias_overrides` + selector）
     - 清理：移除误生成的无关文档草稿（避免污染恢复包）

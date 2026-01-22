@@ -2401,8 +2401,8 @@ export default function ProductListingPage() {
                         pagination={false}
                         dataSource={finalLines}
                         columns={[
-                          { title: '编码', dataIndex: 'material_code', width: 140, render: (v) => v ?? '-' },
-                          { title: '名称', dataIndex: 'material_name', render: (v) => v ?? '-' },
+                          { title: '编码', dataIndex: 'material_code', width: 120, render: (v) => v ?? '-' },
+                          { title: '名称', dataIndex: 'material_name', width: 220, ellipsis: true, render: (v) => v ?? '-' },
                           { title: '数量', dataIndex: 'computed_quantity', width: 120, render: (v) => (v == null ? '-' : String(v)) },
                           { title: '单位', dataIndex: 'unit_of_measure', width: 90, render: (v) => v ?? '-' },
                           { title: '计量方式', dataIndex: 'calculation_method', width: 110, render: (v) => String(v ?? '-') },
@@ -2447,7 +2447,7 @@ export default function ProductListingPage() {
                           rowKey={(r) => String((r as any).process_id ?? '') + '-' + String((r as any).process_code ?? '')}
                           columns={[
                             { title: '工序编码', dataIndex: 'process_code', width: 120, ellipsis: true },
-                            { title: '工序名称', dataIndex: 'process_name', ellipsis: true },
+                            { title: '工序名称', dataIndex: 'process_name', width: 220, ellipsis: true },
                             { title: '班组', dataIndex: 'team_name', width: 110, ellipsis: true },
                             { title: '计量', dataIndex: 'pricing_method', width: 90 },
                             { title: '计量值', dataIndex: 'measure_quantity', width: 90 },
@@ -2471,7 +2471,7 @@ export default function ProductListingPage() {
                       )}
 
                       <Divider style={{ margin: '4px 0' }} />
-                      <Text strong>扣库清单（真实物料展开）</Text>
+                      <Text strong>扣库单</Text>
                       {Array.isArray((bom?.trace as any)?.inventory?.warnings) && ((bom?.trace as any)?.inventory?.warnings ?? []).length ? (
                         <Alert
                           style={{ marginTop: 8 }}
@@ -2487,8 +2487,8 @@ export default function ProductListingPage() {
                           pagination={false}
                           rowKey={(r) => String((r as any)?.material_code ?? '')}
                           columns={[
-                            { title: '物料编码', dataIndex: 'material_code', width: 140, ellipsis: true },
-                            { title: '物料名称', dataIndex: 'material_name', ellipsis: true },
+                            { title: '物料编码', dataIndex: 'material_code', width: 120, ellipsis: true },
+                            { title: '物料名称', dataIndex: 'material_name', width: 220, ellipsis: true },
                             { title: '单位', dataIndex: 'unit_of_measure', width: 90 },
                             { title: '扣库数量', dataIndex: 'quantity', width: 140 },
                             {
@@ -2504,8 +2504,8 @@ export default function ProductListingPage() {
                         <Alert
                           type="info"
                           showIcon
-                          message="暂未生成扣库清单（真实物料展开）。"
-                          description="当前“物料”表可能包含虚拟物料（VM）。若需要对账/扣库，请以“扣库清单（真实物料展开）”为准。"
+                          message="暂未生成扣库单。"
+                          description="当前“物料”表可能包含虚拟物料（VM）。若需要对账/扣库，请以“扣库单”为准。"
                         />
                       )}
                     </Space>

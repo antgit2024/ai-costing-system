@@ -1209,7 +1209,11 @@ export default function ProductListingPage() {
     const out: any[] = []
     for (let i = 0; i < comps.length; i += 1) {
       const c = comps[i] as any
-      const lines = (((c?.trace ?? {}) as any)?.costing ?? {})?.process_lines
+      const lines =
+        (((c?.trace ?? {}) as any)?.costing ?? {})?.process_lines ??
+        (((c ?? {}) as any)?.costing ?? {})?.process_lines ??
+        (((c?.trace ?? {}) as any)?.costing ?? {})?.processes ??
+        (((c ?? {}) as any)?.costing ?? {})?.processes
       if (!Array.isArray(lines) || !lines.length) continue
       for (const r of lines) {
         out.push({ ...(r as any), component_index: c?.component_index ?? i })
@@ -1225,6 +1229,34 @@ export default function ProductListingPage() {
   }, [bom])
 
   const finalLines = useMemo(() => bom?.final_material_lines ?? [], [bom])
+
+  const inventoryWarningsFiltered = useMemo(() => {
+    const raw = ((bom?.trace as any)?.inventory?.warnings ?? []) as any[]
+    const warnings = Array.isArray(raw) ? raw.map((x) => String(x ?? '')).filter(Boolean) : []
+    if (!warnings.length) return []
+
+    // 兜底-零成本虚拟物料：允许“未绑定”作为正常分支，不应作为扣库展开警告
+    const zeroCostCodes = new Set<string>()
+    for (const r of [...(inventoryLines as any[]), ...(finalLines as any[])]) {
+      const code = String((r as any)?.material_code ?? '').trim()
+      const name = String((r as any)?.material_name ?? '').trim()
+      if (!code) continue
+      if (name.includes('兜底-零成本') || code.includes('兜底-零成本')) zeroCostCodes.add(code)
+    }
+
+    const parseVmCode = (s: string): string | null => {
+      const m = s.match(/虚拟物料未配置绑定：\s*([A-Za-z0-9_-]+)/)
+      return m?.[1] ? String(m[1]).trim() : null
+    }
+
+    return warnings.filter((w) => {
+      const vm = parseVmCode(w)
+      if (!vm) return true
+      // 若该 VM 在本次结果中标记为“兜底-零成本”，则不提示
+      if (zeroCostCodes.has(vm)) return false
+      return true
+    })
+  }, [bom, inventoryLines, finalLines])
 
   const costingSummary = useMemo(() => {
     if (!bom) return null
@@ -2064,22 +2096,21 @@ export default function ProductListingPage() {
                                       padding: 10,
                                     }}
                                   >
+                                    <style>{`
+                                      .bt-model-pill {
+                                        display: inline-flex;
+                                        align-items: center;
+                                        padding: 1px 6px;
+                                        border-radius: 999px;
+                                        font-weight: 700;
+                                        background: rgba(22,119,255,0.12);
+                                        border: 1px solid rgba(22,119,255,0.35);
+                                        color: #0958d9;
+                                        line-height: 16px;
+                                        font-size: 12px;
+                                      }
+                                    `}</style>
                                     <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                                      <style>{`
-                                        .bt-model-pill {
-                                          display: inline-flex;
-                                          align-items: center;
-                                          padding: 1px 6px;
-                                          border-radius: 999px;
-                                          font-weight: 700;
-                                          background: rgba(22,119,255,0.12);
-                                          border: 1px solid rgba(22,119,255,0.35);
-                                          color: #0958d9;
-                                          line-height: 16px;
-                                          font-size: 12px;
-                                        }
-                                      `}</style>
-
                                       {builtComponents.length ? (
                                         <Space direction="vertical" size={8} style={{ width: '100%' }}>
                                           <Space wrap size={8}>
@@ -3179,13 +3210,13 @@ export default function ProductListingPage() {
 
                       <Divider style={{ margin: '4px 0' }} />
                       <Text strong>扣库单</Text>
-                      {Array.isArray((bom?.trace as any)?.inventory?.warnings) && ((bom?.trace as any)?.inventory?.warnings ?? []).length ? (
+                      {inventoryWarningsFiltered.length ? (
                         <Alert
                           style={{ marginTop: 8 }}
                           type="warning"
                           showIcon
                           message="扣库展开存在提示（可能导致部分物料未展开）"
-                          description={String(((bom?.trace as any)?.inventory?.warnings ?? []).slice(0, 5).join('；'))}
+                          description={String(inventoryWarningsFiltered.slice(0, 5).join('；'))}
                         />
                       ) : null}
                       {inventoryLines.length ? (

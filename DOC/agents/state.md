@@ -1,5 +1,15 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-22（产品上架测试台：工序兜底解析增强 + 过滤兜底-零成本虚拟物料警告 + 自动生成空行修复）
+  - 本轮范围：仅前端展示/提示收口；不改后端业务逻辑。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/ProductListingPage.tsx`
+      - 修复“自动生成：”上方空行：将 `<style>` 从 `Space` 子节点移出，避免被 `Space` 当作一项导致多余间距。
+      - 工序明细兜底增强：兼容 `trace.components[*].costing.process_lines` 与 `trace.components[*].trace.costing.process_lines` 两种返回形态，避免右侧“工序”为空。
+      - 扣库展开提示：对“虚拟物料未配置绑定：VMxxxx”警告做过滤——若该 VM 在本次结果中名称/标记包含“兜底-零成本”，则不作为警告展示（例如 VM00052）。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-22（产品上架测试台：自动生成区块扁平化 DOM）
   - 本轮范围：仅 UI 结构收口；不改业务逻辑/接口。
   - 本轮产物：

@@ -245,6 +245,7 @@ const toBundleTokenDash = (code: string, selector?: string | null): string => {
 export default function ProductListingPage() {
   const [mode, setMode] = useState<'single' | 'multi' | 'spec_gen' | 'sales' | 'store'>('single')
   const [specGenGeneratingSelector, setSpecGenGeneratingSelector] = useState<string | null>(null)
+  const [singleModelKind, setSingleModelKind] = useState<'sample' | 'standard'>('standard')
   const [salesModelKind, setSalesModelKind] = useState<'sample' | 'standard'>('standard')
   const [draft, setDraft] = useState<ProductListingDraft>({
     sku_code: '',
@@ -1148,6 +1149,11 @@ export default function ProductListingPage() {
     return versionOptions
   }, [salesModelKind, sampleVersionOptions, versionOptions])
 
+  const singleVersionOptions = useMemo(() => {
+    if (singleModelKind === 'sample') return sampleVersionOptions
+    return versionOptions
+  }, [singleModelKind, sampleVersionOptions, versionOptions])
+
   return (
     <div style={{ padding: 16 }}>
       <Row gutter={[16, 16]}>
@@ -1354,38 +1360,77 @@ export default function ProductListingPage() {
                 </Card>
               ) : mode === 'single' ? (
                 <>
-                  <Select
-                    showSearch
-                    allowClear
-                    placeholder="选择标准模型（按编码/名称搜索）"
-                    options={modelOptions as any}
-                    value={draft.model_id ?? undefined}
-                    loading={modelsQuery.isLoading}
-                    filterOption={(input, option: any) => {
-                      const raw = option?.raw as ProductModel | undefined
-                      const q = String(input ?? '').trim().toLowerCase()
-                      if (!raw) return false
-                      return String(raw.model_code ?? '').toLowerCase().includes(q) || String(raw.model_name ?? '').toLowerCase().includes(q)
-                    }}
-                    onChange={(v) => {
-                      setDraft((d) => ({ ...d, model_id: (v as string) ?? null, model_version_id: null }))
-                      setBom(null)
-                    }}
-                  />
-
-                  <Select
-                    showSearch
-                    allowClear
-                    placeholder="选择已发布标准版本（published standard）"
-                    options={versionOptions as any}
-                    value={draft.model_version_id ?? undefined}
-                    loading={versionsQuery.isLoading}
-                    disabled={!draft.model_id}
-                    onChange={(v) => {
-                      setDraft((d) => ({ ...d, model_version_id: (v as string) ?? null }))
-                      setBom(null)
-                    }}
-                  />
+                  <Row gutter={[12, 12]}>
+                    <Col xs={24} lg={6}>
+                      <Select
+                        value={singleModelKind}
+                        style={{ width: '100%' }}
+                        options={[
+                          { value: 'sample', label: '打样模型' },
+                          { value: 'standard', label: '标准模型' },
+                        ]}
+                        onChange={(v) => {
+                          setSingleModelKind(v as any)
+                          setDraft((d) => ({ ...d, model_version_id: null }))
+                          setBom(null)
+                          setParsed(null)
+                        }}
+                      />
+                    </Col>
+                    <Col xs={24} lg={9}>
+                      <Select
+                        showSearch
+                        allowClear
+                        placeholder="模型名称"
+                        options={modelOptions as any}
+                        value={draft.model_id ?? undefined}
+                        loading={modelsQuery.isLoading}
+                        style={{ width: '100%' }}
+                        filterOption={(input, option: any) => {
+                          const raw = option?.raw as ProductModel | undefined
+                          const q = String(input ?? '').trim().toLowerCase()
+                          if (!raw) return false
+                          return String(raw.model_code ?? '').toLowerCase().includes(q) || String(raw.model_name ?? '').toLowerCase().includes(q)
+                        }}
+                        onChange={(v) => {
+                          setDraft((d) => ({ ...d, model_id: (v as string) ?? null, model_version_id: null }))
+                          setBom(null)
+                          setParsed(null)
+                        }}
+                      />
+                    </Col>
+                    <Col xs={24} lg={9}>
+                      <Space.Compact style={{ width: '100%' }}>
+                        <Select
+                          showSearch
+                          allowClear
+                          placeholder="版本名称"
+                          options={singleVersionOptions as any}
+                          value={draft.model_version_id ?? undefined}
+                          loading={versionsQuery.isLoading}
+                          disabled={!draft.model_id}
+                          style={{ width: '100%' }}
+                          onChange={(v) => {
+                            setDraft((d) => ({ ...d, model_version_id: (v as string) ?? null }))
+                            setBom(null)
+                            setParsed(null)
+                          }}
+                        />
+                        {singleModelKind === 'standard' ? (
+                          <Button
+                            onClick={() => {
+                              setShowAllStandardVersions((x) => !x)
+                              setDraft((d) => ({ ...d, model_version_id: null }))
+                              setBom(null)
+                              setParsed(null)
+                            }}
+                          >
+                            {showAllStandardVersions ? '仅发布' : '全部'}
+                          </Button>
+                        ) : null}
+                      </Space.Compact>
+                    </Col>
+                  </Row>
                 </>
               ) : mode === 'multi' ? (
                 <>
@@ -1947,36 +1992,20 @@ export default function ProductListingPage() {
               {mode === 'single' ? (
                 <>
                   {!draft.model_id ? (
-                    <Alert type="info" showIcon message="提示：先选择一个标准模型，再选择“已发布标准版本”用于预演。" />
-                  ) : !showAllStandardVersions && selectableStandardVersions.length === 0 ? (
+                    <Alert
+                      type="info"
+                      showIcon
+                      message={
+                        singleModelKind === 'standard'
+                          ? '提示：先选择一个标准模型，再选择“已发布标准版本”用于预演。'
+                          : '提示：先选择一个打样模型，再选择一个版本用于预演。'
+                      }
+                    />
+                  ) : singleModelKind === 'standard' && !showAllStandardVersions && selectableStandardVersions.length === 0 ? (
                     <Alert
                       type="warning"
                       showIcon
                       message="该模型暂无已发布标准版本（published）。请先发布标准版本，否则无法用于生产级预演。"
-                    />
-                  ) : null}
-
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                      版本候选：
-                      {showAllStandardVersions ? '全部标准版本（含 draft/archived）' : '仅 published 标准版本'}
-                    </Text>
-                    <Button
-                      size="small"
-                      onClick={() => {
-                        setShowAllStandardVersions((v) => !v)
-                        setDraft((d) => ({ ...d, model_version_id: null }))
-                        setBom(null)
-                      }}
-                    >
-                      {showAllStandardVersions ? '切回仅 published' : '显示全部标准版本'}
-                    </Button>
-                  </div>
-                  {showAllStandardVersions ? (
-                    <Alert
-                      type="info"
-                      showIcon
-                      message="你正在使用“全部标准版本”模式：允许选择 draft/archived 用于测试预演（不代表可用于生产）。"
                     />
                   ) : null}
                 </>

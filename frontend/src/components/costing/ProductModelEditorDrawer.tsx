@@ -2512,6 +2512,67 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   const [versionOpLoading, setVersionOpLoading] = useState(false)
   const [derivingStandardFromSampleId, setDerivingStandardFromSampleId] = useState<string | null>(null)
 
+  const stripCopySuffixIfAny = (label: string): string => {
+    const s = String(label ?? '').trim()
+    // 兼容旧行为：去掉末尾 “（复制）”
+    return s.replace(/（复制）\s*$/, '').trim()
+  }
+
+  const baseLabelForCopies = (label: string): string => {
+    const s = stripCopySuffixIfAny(label)
+    // 规则：PI5-...-03-01 复制时，基准应回退到 PI5-...-03
+    const m = s.match(/^(.*-\d{2})(?:-\d{2})$/)
+    return m ? String(m[1]) : s
+  }
+
+  const suggestCopyLabel = (sourceLabel: string): string => {
+    const base = baseLabelForCopies(sourceLabel)
+    if (!base) return '版本-01'
+    // 找已有的 -NN 后缀，取最大+1
+    const re = new RegExp(`^${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-([0-9]{2})$`)
+    const taken = new Set<number>()
+    for (const v of versions ?? []) {
+      const name = stripCopySuffixIfAny(getVersionDisplayName(v))
+      const m = name.match(re)
+      if (!m) continue
+      const n = Number(m[1])
+      if (Number.isFinite(n)) taken.add(n)
+    }
+    let next = 1
+    while (taken.has(next) && next < 99) next += 1
+    const suffix = String(next).padStart(2, '0')
+    return `${base}-${suffix}`
+  }
+
+  const suggestNextBaseLabel = (): string | null => {
+    // 规则：PI5-STANDARD-20260104-03 新建 => PI5-STANDARD-20260104-04
+    // 以“当前选中版本”的 baseLabel 前缀为准；否则回退到最新可见版本的前缀。
+    const cur =
+      (selectedVersionId ? (versions ?? []).find((v) => v.id === selectedVersionId) : null) ??
+      ((filteredVersions ?? [])[0] as any)
+    const curName = cur ? stripCopySuffixIfAny(getVersionDisplayName(cur)) : ''
+    const base = baseLabelForCopies(curName)
+    const m = base.match(/^(.*-)(\d{2})$/)
+    if (!m) return null
+    const prefix = String(m[1])
+    const currentNum = Number(m[2])
+    if (!Number.isFinite(currentNum)) return null
+
+    // 在同前缀下找最大末段（忽略 -NN 复制后缀）
+    let maxNum = currentNum
+    for (const v of versions ?? []) {
+      const name = stripCopySuffixIfAny(getVersionDisplayName(v))
+      const base0 = baseLabelForCopies(name)
+      const m0 = base0.match(/^(.*-)(\d{2})$/)
+      if (!m0) continue
+      if (String(m0[1]) !== prefix) continue
+      const n0 = Number(m0[2])
+      if (Number.isFinite(n0)) maxNum = Math.max(maxNum, n0)
+    }
+    const next = String(Math.min(99, maxNum + 1)).padStart(2, '0')
+    return `${prefix}${next}`
+  }
+
   const suggestVersionUiLabel = (mode: 'create' | 'copy', sourceId?: string | null): string => {
     const m = modelQuery.data as any
     const modelCode = String(m?.model_code ?? m?.code ?? '').trim()
@@ -2521,7 +2582,13 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       const sid = String(sourceId ?? '').trim()
       const src = sid ? (versions ?? []).find((v) => v.id === sid) : null
       const srcName = src ? getVersionDisplayName(src) : ''
-      return srcName ? `${srcName}（复制）` : `${base}（复制）`
+      // 新规则：复制默认在原号后加 -01/-02...
+      return suggestCopyLabel(srcName || base)
+    }
+    // 新规则：标准版本“新增”默认把末段 -NN 自增（若能解析）；否则回退旧策略
+    if (String(desiredKind) === 'standard') {
+      const next = suggestNextBaseLabel()
+      if (next) return next
     }
     const kindLabel = desiredKind === 'sample' ? '打样' : '标准'
     const seq = ((filteredVersions ?? []).length || 0) + 1
@@ -2600,7 +2667,23 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       if (versionOpMode === 'copy' && versionOpSourceId) {
         const srcLines = await fetchProductModelVersionLines(versionOpSourceId)
         // 1) copy lines (materials/processes/spec) including advanced formula metadata_json
-        const createdLines = await updateProductModelVersionLines(created.id, srcLines as any)
+        // 关键：复制时不要把源行 id 带过去（后端可能校验 id 必须属于目标版本）
+        const sanitizedLines: any = {
+          ...(srcLines as any),
+          materials: Array.isArray((srcLines as any)?.materials)
+            ? ((srcLines as any).materials as any[]).map((r: any) => {
+                const { id, ...rest } = r ?? {}
+                return { ...rest }
+              })
+            : [],
+          processes: Array.isArray((srcLines as any)?.processes)
+            ? ((srcLines as any).processes as any[]).map((r: any) => {
+                const { id, ...rest } = r ?? {}
+                return { ...rest }
+              })
+            : [],
+        }
+        const createdLines = await updateProductModelVersionLines(created.id, sanitizedLines as any)
 
         // 2) copy line variants (Overlay) and remap base_line_id (material line id)
         try {

@@ -178,6 +178,20 @@ const buildVariantStableKey = (v: any): string => {
   return [`act=${act}`, `prio=${pr}`, `stop=${stop}`, `out=${out}`, tok ? `tok=${tok}` : ''].filter(Boolean).join('|')
 }
 
+const buildVariantsByBaseLineForVersion = (variantsSummary: any[] | undefined, versionId: string): Map<string, any[]> => {
+  const items = (variantsSummary ?? []).find((x: any) => String(x?.version_id ?? '').trim() === String(versionId ?? '').trim())?.items
+  const arr = Array.isArray(items) ? items : []
+  const by = new Map<string, any[]>()
+  for (const v of arr) {
+    const baseLineId = String(v?.base_line_id ?? '').trim()
+    if (!baseLineId) continue
+    const list = by.get(baseLineId) ?? []
+    list.push(v)
+    by.set(baseLineId, list)
+  }
+  return by
+}
+
 const normalizeBundleToken = (raw: any): string => {
   let s = String(raw ?? '').trim().toUpperCase()
   if (!s) return ''
@@ -882,6 +896,188 @@ export default function BundleTemplatesPage() {
     }
     return m
   }, [versionLinesSummaryQuery.data])
+
+  const migrateComponentBindingsOnVersionChange = (args: {
+    presetIndex: number
+    componentIndex: number
+    oldVersionId: string | null
+    newVersionId: string | null
+  }) => {
+    const { presetIndex, componentIndex, oldVersionId, newVersionId } = args
+    const oldVid = String(oldVersionId ?? '').trim()
+    const newVid = String(newVersionId ?? '').trim()
+
+    // Clearing version: reset force mapping (avoid dangling ids)
+    if (!newVid) {
+      setPhrasePresets((prev) =>
+        (prev ?? []).map((pp, pi) =>
+          pi !== presetIndex
+            ? pp
+            : {
+                ...pp,
+                components: (pp.components ?? []).map((cc, ci) =>
+                  ci === componentIndex
+                    ? { ...cc, model_version_id: null, force_variant_by_base_line: undefined, force_variant_by_base_line_stable: undefined }
+                    : cc,
+                ),
+              },
+        ),
+      )
+      setPresetSelectedByIdx((prev) => {
+        const key = `${presetIndex}:${componentIndex}`
+        if (!(prev ?? {})[key]) return prev
+        const out = { ...(prev ?? {}) } as any
+        delete out[key]
+        return out
+      })
+      return
+    }
+
+    const oldBaseMap = oldVid ? baseLineMapByVersion.get(oldVid) ?? new Map<string, any>() : new Map<string, any>()
+    const newBaseMap = baseLineMapByVersion.get(newVid) ?? new Map<string, any>()
+
+    const oldKeyToBaseId = new Map<string, string>()
+    for (const [id, line] of oldBaseMap.entries()) {
+      const k = buildBaseLineStableKey(line)
+      if (k && !oldKeyToBaseId.has(k)) oldKeyToBaseId.set(k, String(id))
+    }
+    const newKeyToBaseId = new Map<string, string>()
+    for (const [id, line] of newBaseMap.entries()) {
+      const k = buildBaseLineStableKey(line)
+      if (k && !newKeyToBaseId.has(k)) newKeyToBaseId.set(k, String(id))
+    }
+    const oldBaseIdToNewBaseId = new Map<string, string>()
+    for (const [k, oldId] of oldKeyToBaseId.entries()) {
+      const newId = newKeyToBaseId.get(k)
+      if (newId) oldBaseIdToNewBaseId.set(String(oldId), String(newId))
+    }
+
+    const newVariantsByBase = buildVariantsByBaseLineForVersion(variantsSummaryQuery.data as any, newVid)
+    const oldVariantsByBase = oldVid ? buildVariantsByBaseLineForVersion(variantsSummaryQuery.data as any, oldVid) : new Map<string, any[]>()
+
+    // 1) migrate component row force mapping (and keep/update stable map)
+    setPhrasePresets((prev) =>
+      (prev ?? []).map((pp, pi) => {
+        if (pi !== presetIndex) return pp
+        const nextComponents = (pp.components ?? []).map((cc, ci) => {
+          if (ci !== componentIndex) return cc
+          const stableRaw = (cc as any)?.force_variant_by_base_line_stable
+          const stableMap =
+            stableRaw && typeof stableRaw === 'object' ? (stableRaw as Record<string, string>) : null
+
+          const nextForce: Record<string, string> = {}
+          if (stableMap) {
+            // Apply stable map directly to new version
+            for (const [baseId, line] of newBaseMap.entries()) {
+              const baseKey = buildBaseLineStableKey(line)
+              const variantKey = baseKey ? String(stableMap[baseKey] ?? '').trim() : ''
+              if (!baseKey || !variantKey) continue
+              const candidates = newVariantsByBase.get(String(baseId)) ?? []
+              const hit = candidates.find((v: any) => buildVariantStableKey(v) === variantKey)
+              if (hit?.id) nextForce[String(baseId)] = String(hit.id)
+            }
+          } else if (oldVid) {
+            const fm = cc?.force_variant_by_base_line && typeof cc.force_variant_by_base_line === 'object' ? (cc.force_variant_by_base_line as any) : {}
+            for (const [oldBaseId, oldVariantId] of Object.entries(fm ?? {})) {
+              const newBaseId = oldBaseIdToNewBaseId.get(String(oldBaseId))
+              if (!newBaseId) continue
+              const oldCandidates = oldVariantsByBase.get(String(oldBaseId)) ?? []
+              const oldHit = oldCandidates.find((v: any) => String(v?.id ?? '') === String(oldVariantId ?? ''))
+              const vKey = buildVariantStableKey(oldHit)
+              if (!vKey) continue
+              const newCandidates = newVariantsByBase.get(String(newBaseId)) ?? []
+              const newHit = newCandidates.find((v: any) => buildVariantStableKey(v) === vKey)
+              if (newHit?.id) nextForce[String(newBaseId)] = String(newHit.id)
+            }
+          }
+
+          const nextStable: Record<string, string> = stableMap ? { ...stableMap } : {}
+          if (!stableMap && Object.keys(nextForce).length) {
+            for (const [baseId, variantId] of Object.entries(nextForce)) {
+              const line = newBaseMap.get(String(baseId))
+              const baseKey = buildBaseLineStableKey(line)
+              if (!baseKey) continue
+              const candidates = newVariantsByBase.get(String(baseId)) ?? []
+              const v = candidates.find((x: any) => String(x?.id ?? '') === String(variantId))
+              const vk = buildVariantStableKey(v)
+              if (vk) nextStable[baseKey] = vk
+            }
+          }
+
+          return {
+            ...cc,
+            model_version_id: newVid,
+            force_variant_by_base_line: Object.keys(nextForce).length ? nextForce : undefined,
+            force_variant_by_base_line_stable: Object.keys(nextStable).length ? nextStable : undefined,
+          }
+        })
+        return { ...pp, components: nextComponents }
+      }),
+    )
+
+    // 2) migrate presetSelectedByIdx (base_line_id keys + variant ids)
+    setPresetSelectedByIdx((prev) => {
+      const key = `${presetIndex}:${componentIndex}`
+      const selMap = (prev ?? {})[key]
+      if (!selMap || typeof selMap !== 'object') return prev
+      const nextInner: any = {}
+      let changed = false
+
+      const migrateVariantId = (baseOld: string, baseNew: string, vid: string): string | null => {
+        if (!oldVid) return null
+        if (!vid) return null
+        const oldCandidates = oldVariantsByBase.get(String(baseOld)) ?? []
+        const oldHit = oldCandidates.find((v: any) => String(v?.id ?? '') === vid)
+        const vKey = buildVariantStableKey(oldHit)
+        if (!vKey) return null
+        const newCandidates = newVariantsByBase.get(String(baseNew)) ?? []
+        const newHit = newCandidates.find((v: any) => buildVariantStableKey(v) === vKey)
+        return newHit?.id ? String(newHit.id) : null
+      }
+
+      for (const [oldBaseId, sel] of Object.entries(selMap as any)) {
+        const newBaseId = oldBaseIdToNewBaseId.get(String(oldBaseId))
+        if (!newBaseId) {
+          changed = true
+          continue
+        }
+        const s = sel as any
+        const parentId = String(s?.parent_variant_id ?? '').trim()
+        const forcedChildId = String(s?.forced_child_variant_id ?? '').trim()
+
+        const nextParent = migrateVariantId(String(oldBaseId), String(newBaseId), parentId)
+        const nextForced = migrateVariantId(String(oldBaseId), String(newBaseId), forcedChildId)
+
+        nextInner[String(newBaseId)] = {
+          ...(s ?? {}),
+          parent_variant_id: nextParent ?? null,
+          forced_child_variant_id: nextForced ?? null,
+        }
+
+        if (String(newBaseId) !== String(oldBaseId) || nextParent !== parentId || nextForced !== forcedChildId) changed = true
+      }
+
+      if (!changed) return prev
+      return { ...(prev ?? {}), [key]: nextInner }
+    })
+
+    // 3) migrate fallbackTokenOverrides keys `${versionId}:${baseLineId}` (copy values forward; don't delete old)
+    if (oldVid) {
+      setFallbackTokenOverrides((prev) => {
+        const out = { ...(prev ?? {}) }
+        let changed = false
+        for (const [oldBaseId, newBaseId] of oldBaseIdToNewBaseId.entries()) {
+          const kOld = `${oldVid}:${oldBaseId}`
+          const kNew = `${newVid}:${newBaseId}`
+          if (Object.prototype.hasOwnProperty.call(out, kOld) && !Object.prototype.hasOwnProperty.call(out, kNew)) {
+            out[kNew] = String(out[kOld] ?? '')
+            changed = true
+          }
+        }
+        return changed ? out : prev
+      })
+    }
+  }
 
   const baseLineInfoByVersionBaseLine = useMemo(() => {
     // version_id -> base_line_id -> { orderIndex, isZeroCost }
@@ -3634,20 +3830,16 @@ export default function BundleTemplatesPage() {
                               loading={versionPickerQuery.isLoading}
                               options={options as any}
                               value={rr.model_version_id ?? undefined}
-                              onChange={(v) =>
-                                setPhrasePresets((prev) =>
-                                    (prev ?? []).map((pp, pi) =>
-                                    pi !== idx
-                                      ? pp
-                                      : {
-                                          ...pp,
-                                          components: (pp.components ?? []).map((c, ci) =>
-                                            ci === mi ? { ...c, model_version_id: (v as any) ?? null } : c,
-                                          ),
-                                        },
-                                  ),
-                                )
-                              }
+                              onChange={(v) => {
+                                const nextVid = (v as any) ?? null
+                                const oldVid = (rr?.model_version_id ?? null) as any
+                                migrateComponentBindingsOnVersionChange({
+                                  presetIndex: idx,
+                                  componentIndex: mi,
+                                  oldVersionId: oldVid,
+                                  newVersionId: nextVid,
+                                })
+                              }}
                             />
                           ),
                         },

@@ -1,5 +1,16 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-22（套装模板：切换模型版本时自动迁移 FORCE/筛选别名，避免只剩 id）
+  - 本轮范围：前端防呆增强；当组件行的 `model_version_id` 被切换时，尽量用稳定键把旧版本的强制规则与筛选配置迁移到新版本，避免 UI 退化为“（无 TOKEN）+ UUID”导致运营无法识别原选择。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/BundleTemplatesPage.tsx`
+      - 组件行切换模型版本时，自动迁移：
+        - `force_variant_by_base_line`（base_line_id/variant_id）→ 通过 `force_variant_by_base_line_stable` 或稳定键重绑到新版本对应规则。
+        - `presetSelectedByIdx`（预设变体筛选的选中状态）→ 尝试按稳定键迁移到新版本，迁移失败则置空等待重选。
+        - `fallbackTokenOverrides`（别名/兜底展示）→ 将旧版本的 `${oldVid}:${oldBaseLineId}` 覆盖值复制到新版本 `${newVid}:${newBaseLineId}`（不删除旧值，避免影响其他组件）。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-22（Z 强制绑定：引入稳定键并支持跨版本重绑定）
   - 本轮范围：补齐“发布版不可编辑 + 新版本发布”场景下的引用稳定性；避免 `base_line_id/variant_id` 复制后失效导致套装乱套。
   - 本轮产物：

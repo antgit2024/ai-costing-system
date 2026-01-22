@@ -229,17 +229,24 @@ const toSelector2 = (idx: number): string => {
   return String.fromCharCode('A'.charCodeAt(0) + a) + String.fromCharCode('A'.charCodeAt(0) + b)
 }
 
-const toBundleTokenDash = (code: string, selector?: string | null): string => {
-  const c = String(code ?? '').trim().toUpperCase().replace(/^B:/, '').replace(/^BUNDLE:/, '').replace(/^B-/, '')
+const toBundleTokenDash = (code: string, selector?: string | null, prefix: 'B' | 'Z' = 'B'): string => {
+  const c = String(code ?? '')
+    .trim()
+    .toUpperCase()
+    .replace(/^B:/, '')
+    .replace(/^Z:/, '')
+    .replace(/^BUNDLE:/, 'B:')
+    .replace(/^B-/, '')
+    .replace(/^Z-/, '')
   const sel = String(selector ?? '').trim().toUpperCase()
   // Format rules:
   // - New short form (only when CODE length==4 and selector length==2): B-XXXXAA
   // - Legacy/compat selector form (any CODE): B-CODE-AA
   if (sel) {
-    if (c.length === 4 && sel.length === 2) return `B-${c}${sel}`
-    return `B-${c}-${sel}`
+    if (c.length === 4 && sel.length === 2) return `${prefix}-${c}${sel}`
+    return `${prefix}-${c}-${sel}`
   }
-  return `B-${c}`
+  return `${prefix}-${c}`
 }
 
 export default function ProductListingPage() {
@@ -429,9 +436,49 @@ export default function ProductListingPage() {
     return pp.slice(0, 26 * 26).map((p: any, idx: number) => {
       const sel = String(p?.selector ?? '').trim().toUpperCase() || toSelector2(idx)
       const phrase = String(p?.phrase ?? '').trim()
-      return { value: sel, label: `${sel}: ${phrase || '-'}` }
+      const mode = String(p?.mode ?? '').trim()
+      const tokenPrefix: 'B' | 'Z' = mode === 'force' ? 'Z' : 'B'
+      const codeOnly = String(effectiveBundleCode ?? '').trim()
+      const tokenDash = codeOnly ? toBundleTokenDash(codeOnly, sel, tokenPrefix) : sel
+      return {
+        value: sel,
+        label: (
+          <Space size={8}>
+            <Tag
+              color={tokenPrefix === 'Z' ? 'volcano' : 'blue'}
+              style={{ marginInlineEnd: 0, fontSize: 12, lineHeight: '18px', padding: '0 8px', borderRadius: 999 }}
+            >
+              {tokenDash}
+            </Tag>
+            <Text ellipsis style={{ maxWidth: 260 }}>
+              {phrase || '-'}
+            </Text>
+          </Space>
+        ),
+        raw: p,
+        tokenPrefix,
+        tokenDash,
+      }
     })
-  }, [bundleTemplateDetailQuery.data])
+  }, [bundleTemplateDetailQuery.data, effectiveBundleCode])
+
+  const selectedBundlePresetPrefix = useMemo(() => {
+    const sel = String(bundleDraft.bundle_selector ?? '').trim().toUpperCase()
+    if (!sel) return 'B' as const
+    const meta: any = (bundleTemplateDetailQuery.data as any)?.metadata ?? {}
+    const pp = Array.isArray(meta?.phrase_presets) ? meta.phrase_presets : []
+    const hit =
+      pp.find((x: any) => String(x?.selector ?? '').trim().toUpperCase() === sel) ??
+      (() => {
+        if (sel.length !== 2) return null
+        const a = sel.charCodeAt(0) - 'A'.charCodeAt(0)
+        const b = sel.charCodeAt(1) - 'A'.charCodeAt(0)
+        const idx = a * 26 + b
+        return idx >= 0 ? pp[idx] : null
+      })()
+    const mode = String((hit as any)?.mode ?? '').trim()
+    return mode === 'force' ? ('Z' as const) : ('B' as const)
+  }, [bundleDraft.bundle_selector, bundleTemplateDetailQuery.data])
 
   const bundleSelectedPhrase = useMemo(() => {
     const sel = String(bundleDraft.bundle_selector ?? '').trim().toUpperCase()
@@ -569,31 +616,31 @@ export default function ProductListingPage() {
       const inputSelector =
         String(bundleDraft.spec_text || '')
           .match(
-            /(?:BUNDLE:|B:)[A-Z0-9]{4,16}:([A-Za-z]{1,2})|\bB-[A-Z0-9]{4,16}-([A-Za-z]{1,2})\b|\bB-[A-Z0-9]{4}([A-Za-z]{2})\b/i,
+            /(?:BUNDLE:|B:|Z:)[A-Z0-9]{4,16}:([A-Za-z]{1,2})|\b(?:B|Z)-[A-Z0-9]{4,16}-([A-Za-z]{1,2})\b|\b(?:B|Z)-[A-Z0-9]{4}([A-Za-z]{2})\b/i,
           )
           ?.[1]?.toUpperCase() ??
         String(bundleDraft.spec_text || '')
           .match(
-            /(?:BUNDLE:|B:)[A-Z0-9]{4,16}:([A-Za-z]{1,2})|\bB-[A-Z0-9]{4,16}-([A-Za-z]{1,2})\b|\bB-[A-Z0-9]{4}([A-Za-z]{2})\b/i,
+            /(?:BUNDLE:|B:|Z:)[A-Z0-9]{4,16}:([A-Za-z]{1,2})|\b(?:B|Z)-[A-Z0-9]{4,16}-([A-Za-z]{1,2})\b|\b(?:B|Z)-[A-Z0-9]{4}([A-Za-z]{2})\b/i,
           )
           ?.[2]?.toUpperCase() ??
         String(bundleDraft.spec_text || '')
           .match(
-            /(?:BUNDLE:|B:)[A-Z0-9]{4,16}:([A-Za-z]{1,2})|\bB-[A-Z0-9]{4,16}-([A-Za-z]{1,2})\b|\bB-[A-Z0-9]{4}([A-Za-z]{2})\b/i,
+            /(?:BUNDLE:|B:|Z:)[A-Z0-9]{4,16}:([A-Za-z]{1,2})|\b(?:B|Z)-[A-Z0-9]{4,16}-([A-Za-z]{1,2})\b|\b(?:B|Z)-[A-Z0-9]{4}([A-Za-z]{2})\b/i,
           )
           ?.[3]?.toUpperCase() ??
         ''
       const extra = String(bundleDraft.spec_text ?? '')
-        .replace(/(?:BUNDLE:|B:)[A-Z0-9]{4,16}/gi, '')
+        .replace(/(?:BUNDLE:|B:|Z:)[A-Z0-9]{4,16}/gi, '')
         // Remove legacy and new short tokens
-        .replace(/\bB-[A-Z0-9]{4,16}(?:-[A-Za-z]{1,2})?\b/gi, '')
-        .replace(/\bB-[A-Z0-9]{4}[A-Za-z]{2}\b/gi, '')
+        .replace(/\b(?:B|Z)-[A-Z0-9]{4,16}(?:-[A-Za-z]{1,2})?\b/gi, '')
+        .replace(/\b(?:B|Z)-[A-Z0-9]{4}[A-Za-z]{2}\b/gi, '')
         .trim()
       const sel =
         String(bundleDraft.bundle_selector ?? '').trim().toUpperCase() ||
         inputSelector ||
         String(bundleTokenFromBundleInput.selector ?? '').trim().toUpperCase()
-      const token = toBundleTokenDash(code, sel && (sel.length === 1 || sel.length === 2) ? sel : null)
+      const token = toBundleTokenDash(code, sel && (sel.length === 1 || sel.length === 2) ? sel : null, selectedBundlePresetPrefix)
       // 不强制使用“；”分隔，直接拼接 (B:CODE[:A]) 即可
       const spec_text = extra ? `${extra}(${token})` : `${token}`
       if (bundleDebugMode) {
@@ -1435,22 +1482,37 @@ export default function ProductListingPage() {
               ) : mode === 'multi' ? (
                 <>
                   <Input
-                    placeholder="套装短码（可直接输入）：例如 B-3U3PAA / B-CODE-AA / B:CODE:AA"
+                    placeholder="套装短码（可直接输入）：例如 B-3U3PAA / Z-3U3PAA / B-CODE-AA / B:CODE:AA"
                     value={bundleDraft.bundle_input}
                     onChange={(e) => setBundleDraft((d) => ({ ...d, bundle_input: e.target.value }))}
                   />
-                  <Select
-                    showSearch
-                    allowClear
-                    placeholder="选择套装（B-XXXXAA）"
-                    options={bundleTemplateOptions as any}
-                    value={bundleDraft.bundle_code ?? undefined}
-                    loading={bundleTemplatesQuery.isLoading}
-                    onChange={(v) =>
-                      setBundleDraft((d) => ({ ...d, bundle_code: (v as string) ?? null, bundle_selector: null, spec_text: '' }))
-                    }
-                    style={{ width: '100%' }}
-                  />
+                  <Row gutter={[12, 12]}>
+                    <Col xs={24} lg={12}>
+                      <Select
+                        showSearch
+                        allowClear
+                        placeholder="套装选择"
+                        options={bundleTemplateOptions as any}
+                        value={bundleDraft.bundle_code ?? undefined}
+                        loading={bundleTemplatesQuery.isLoading}
+                        onChange={(v) =>
+                          setBundleDraft((d) => ({ ...d, bundle_code: (v as string) ?? null, bundle_selector: null, spec_text: '' }))
+                        }
+                        style={{ width: '100%' }}
+                      />
+                    </Col>
+                    <Col xs={24} lg={12}>
+                      <Select
+                        allowClear
+                        placeholder="属性规格"
+                        options={bundlePhraseOptions as any}
+                        value={bundleDraft.bundle_selector ?? undefined}
+                        loading={bundleTemplateDetailQuery.isLoading}
+                        onChange={(v) => setBundleDraft((d) => ({ ...d, bundle_selector: (v as string) ?? null }))}
+                        style={{ width: '100%' }}
+                      />
+                    </Col>
+                  </Row>
                   {!bundleDraft.bundle_code && bundleTokenFromBundleInput.code ? (
                     <Alert
                       type="info"
@@ -1461,21 +1523,15 @@ export default function ProductListingPage() {
                   ) : null}
                   <Row gutter={[12, 12]}>
                     <Col xs={24} lg={12}>
-                      <Card size="small" title="短语选择器（A/B/C…）">
+                      <Card size="small" title="属性规格">
                         <Space direction="vertical" style={{ width: '100%' }} size={8}>
-                          <Select
-                            allowClear
-                            placeholder="选择 A/B/C…（对应套装模板里的运营短语）"
-                            options={bundlePhraseOptions as any}
-                            value={bundleDraft.bundle_selector ?? undefined}
-                            loading={bundleTemplateDetailQuery.isLoading}
-                            onChange={(v) => setBundleDraft((d) => ({ ...d, bundle_selector: (v as string) ?? null }))}
-                            style={{ width: '100%' }}
-                          />
                           {bundleDraft.bundle_selector ? (
                             <Text>
-                              <Text code>{String(bundleDraft.bundle_selector ?? '').trim().toUpperCase()}</Text>
-                              <Text>：</Text>
+                              <Tag color={selectedBundlePresetPrefix === 'Z' ? 'volcano' : 'blue'} style={{ marginInlineEnd: 6 }}>
+                                {bundleDraft.bundle_code
+                                  ? toBundleTokenDash(bundleDraft.bundle_code, bundleDraft.bundle_selector, selectedBundlePresetPrefix)
+                                  : String(bundleDraft.bundle_selector ?? '').trim().toUpperCase()}
+                              </Tag>
                               <Text>{bundleSelectedPhrase || '-'}</Text>
                             </Text>
                           ) : null}
@@ -1497,7 +1553,7 @@ export default function ProductListingPage() {
                                 })()
                               const phrase = String(hit?.phrase ?? '').trim()
                               const code = String(bundleDraft.bundle_code ?? '').trim()
-                              const token = code ? toBundleTokenDash(code, sel) : ''
+                              const token = code ? toBundleTokenDash(code, sel, selectedBundlePresetPrefix) : ''
                               const text = phrase && token ? `${phrase}(${token})` : phrase || token
                               setBundleDraft((d) => ({ ...d, spec_text: text }))
                             }}
@@ -1509,9 +1565,11 @@ export default function ProductListingPage() {
                             <Text code>
                               {bundleDraft.bundle_code
                                 ? bundleDraft.bundle_selector
-                                  ? toBundleTokenDash(bundleDraft.bundle_code, bundleDraft.bundle_selector)
-                                  : toBundleTokenDash(bundleDraft.bundle_code)
-                                : 'B-XXXXAA'}
+                                  ? toBundleTokenDash(bundleDraft.bundle_code, bundleDraft.bundle_selector, selectedBundlePresetPrefix)
+                                  : toBundleTokenDash(bundleDraft.bundle_code, null, selectedBundlePresetPrefix)
+                                : selectedBundlePresetPrefix === 'Z'
+                                  ? 'Z-XXXXAA'
+                                  : 'B-XXXXAA'}
                             </Text>
                           </Text>
                         </Space>

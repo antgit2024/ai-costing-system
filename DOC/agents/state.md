@@ -1,5 +1,16 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-22（测试台：套装选择与属性规格同排 + 下拉展示 B/Z 编码胶囊）
+  - 本轮范围：仅 UI 布局与展示优化，不改业务逻辑。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/ProductListingPage.tsx`
+      - 套装测试：将“套装选择”和“属性规格（原短语选择器）”放在一行两列。
+      - “属性规格”下拉项在名称前展示 `B-`/`Z-` 编码，并用胶囊 Tag 包裹（Z=volcano，B=blue）。
+      - 预演与 spec_text 生成根据属性规格的模式（parse/force）自动选择 `B-` 或 `Z-` 前缀拼接 token。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+
 - **最近校对（北京时间 GMT+8）**：2026-01-22（产品测试台：工序名称列宽观感回归）
   - 本轮范围：仅 UI 视觉对齐，不改业务逻辑。
   - 本轮产物：

@@ -2080,140 +2080,130 @@ export default function ProductListingPage() {
                                         }
                                       `}</style>
 
-                                      <div
-                                        style={{
-                                          background: 'rgba(255, 255, 255, 0.02)',
-                                          border: '1px dashed var(--color-theme-border-quaternary)',
-                                          borderRadius: 8,
-                                          padding: 10,
-                                        }}
-                                      >
-                                        {builtComponents.length ? (
-                                          <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                                            <Space wrap size={8}>
-                                              <Text type="secondary">自动生成：</Text>
-                                              {autoMeta.text ? (
-                                                <Text code>
-                                                  <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' }}>
-                                                    {autoMeta.items.map((it: any, i2: number) => (
-                                                      <span key={`ar-${presetIndex}-${i2}`}>
-                                                        {i2 > 0 ? <span>{' + '}</span> : null}
-                                                        {it.tokens.map((tk: any, j: number) => (
-                                                          <span
-                                                            key={`ar-tk-${presetIndex}-${i2}-${j}`}
-                                                            style={{ color: '#cf1322', fontWeight: 700 }}
-                                                          >
-                                                            {tk.text}
-                                                          </span>
-                                                        ))}
-                                                        <span style={it.dimsIsMissing ? { color: '#cf1322', fontWeight: 700 } : undefined}>
-                                                          {it.dims}
+                                      {builtComponents.length ? (
+                                        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                                          <Space wrap size={8}>
+                                            <Text type="secondary">自动生成：</Text>
+                                            {autoMeta.text ? (
+                                              <Text code>
+                                                <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' }}>
+                                                  {autoMeta.items.map((it: any, i2: number) => (
+                                                    <span key={`ar-${presetIndex}-${i2}`}>
+                                                      {i2 > 0 ? <span>{' + '}</span> : null}
+                                                      {it.tokens.map((tk: any, j: number) => (
+                                                        <span
+                                                          key={`ar-tk-${presetIndex}-${i2}-${j}`}
+                                                          style={{ color: '#cf1322', fontWeight: 700 }}
+                                                        >
+                                                          {tk.text}
                                                         </span>
+                                                      ))}
+                                                      <span style={it.dimsIsMissing ? { color: '#cf1322', fontWeight: 700 } : undefined}>
+                                                        {it.dims}
                                                       </span>
-                                                    ))}
-                                                  </span>
-                                                </Text>
-                                              ) : (
-                                                <Text code>-</Text>
-                                              )}
-                                              <Button
-                                                size="small"
-                                                type="text"
-                                                icon={<CopyOutlined />}
-                                                disabled={!autoMeta.text}
-                                                onClick={async () => {
-                                                  if (!autoMeta.text) return
-                                                  const ok = await copyTextToClipboard(autoMeta.text)
-                                                  if (ok) message.success('已复制自动生成内容')
-                                                  else message.error('复制失败：请手动复制')
-                                                }}
-                                              />
-                                            </Space>
-
-                                            {(() => {
-                                              const orderKey = String(presetIndex)
-                                              const rawOrder = bundleComponentOrderByPreset?.[orderKey]
-                                              const defaultOrder = builtComponents.map((c) => c.componentIndex)
-                                              const order =
-                                                Array.isArray(rawOrder) && rawOrder.length ? rawOrder : defaultOrder
-                                              const seen = new Set<number>()
-                                              const ordered = order
-                                                .map((i) => Number(i))
-                                                .filter((i) => Number.isFinite(i))
-                                                .filter((i) => (seen.has(i) ? false : (seen.add(i), true)))
-                                                .map((i) => builtComponents.find((c) => c.componentIndex === i))
-                                                .filter(Boolean) as AttributeComponentGroups[]
-                                              const rest = builtComponents.filter((c) => !seen.has(c.componentIndex))
-                                              return [...ordered, ...rest]
-                                            })().map((c) => {
-                                              const versionId = String((componentRowsRaw?.[c.componentIndex] as any)?.model_version_id ?? '').trim()
-                                              const label = versionId ? String(versionIdToModelLabel.get(versionId) ?? '') : ''
-                                              const modelCode = label.includes(':') ? label.split(':')[0] : label
-                                              return (
-                                                <Space key={`attr-comp-${presetIndex}-${c.componentIndex}`} wrap size={8}>
-                                                  <Space size={4} align="center">
-                                                    <span className="bt-model-pill">{modelCode || '组件'}</span>
-                                                  </Space>
-                                                  {(() => {
-                                                    const groupOrderKey = `${presetIndex}:${c.componentIndex}`
-                                                    const order = bundleGroupOrderByPresetComponent?.[groupOrderKey] ?? []
-                                                    if (!Array.isArray(order) || !order.length) return c.groups
-                                                    const idxMap = new Map<string, number>()
-                                                    for (let i = 0; i < order.length; i++) idxMap.set(String(order[i]), i)
-                                                    return c.groups.slice().sort((a, b) => (idxMap.get(a.key) ?? 1e9) - (idxMap.get(b.key) ?? 1e9))
-                                                  })().map((g) => {
-                                                    const selKey = `${presetIndex}:${c.componentIndex}:${g.key}`
-                                                    const options = (g.options ?? []).map((x) => normalizeSingleToken(x))
-                                                    const uniq: string[] = []
-                                                    const seen = new Set<string>()
-                                                    for (const t of options) {
-                                                      const k = t || '__EMPTY__'
-                                                      if (seen.has(k)) continue
-                                                      seen.add(k)
-                                                      uniq.push(t)
-                                                    }
-                                                    const value = getEffectiveSelection({
-                                                      presetIndex,
-                                                      componentIndex: c.componentIndex,
-                                                      group: g,
-                                                      attributeGroupSelections: bundleAttributeGroupSelections,
-                                                    })
-                                                    const displayVariantToken = (selector2: string, rawToken: string): string => {
-                                                      const sel = String(selector2 ?? '').trim().toUpperCase()
-                                                      const t = normalizeSingleToken(rawToken)
-                                                      const alias = sel ? String((bundleVariantTokenAliasOverrides?.[sel] ?? {})?.[t] ?? '').trim() : ''
-                                                      return alias || t
-                                                    }
-                                                    return (
-                                                      <Space key={`attr-sel-${selKey}`} size={2} align="center">
-                                                        <Select
-                                                          size="small"
-                                                          style={{ width: 100 }}
-                                                          value={value}
-                                                          onChange={(v) =>
-                                                            setBundleAttributeGroupSelections((prev) => ({
-                                                              ...(prev ?? {}),
-                                                              [selKey]: String(v ?? ''),
-                                                            }))
-                                                          }
-                                                          options={uniq
-                                                            .filter((x) => (g.isZeroCostGroup ? true : !!String(x).trim()))
-                                                            .map((t) => ({
-                                                              value: t,
-                                                              label: t ? displayVariantToken(presetSelector2, t) : '（无）',
-                                                            }))}
-                                                        />
-                                                      </Space>
-                                                    )
-                                                  })}
-                                                </Space>
-                                              )
-                                            })}
+                                                    </span>
+                                                  ))}
+                                                </span>
+                                              </Text>
+                                            ) : (
+                                              <Text code>-</Text>
+                                            )}
+                                            <Button
+                                              size="small"
+                                              type="text"
+                                              icon={<CopyOutlined />}
+                                              disabled={!autoMeta.text}
+                                              onClick={async () => {
+                                                if (!autoMeta.text) return
+                                                const ok = await copyTextToClipboard(autoMeta.text)
+                                                if (ok) message.success('已复制自动生成内容')
+                                                else message.error('复制失败：请手动复制')
+                                              }}
+                                            />
                                           </Space>
-                                        ) : (
-                                          <Text type="secondary">提示：该属性规格暂无可用的互斥组下拉（可能尚未配置筛选/强制或兜底别名）。</Text>
-                                        )}
-                                      </div>
+
+                                          {(() => {
+                                            const orderKey = String(presetIndex)
+                                            const rawOrder = bundleComponentOrderByPreset?.[orderKey]
+                                            const defaultOrder = builtComponents.map((c) => c.componentIndex)
+                                            const order = Array.isArray(rawOrder) && rawOrder.length ? rawOrder : defaultOrder
+                                            const seen = new Set<number>()
+                                            const ordered = order
+                                              .map((i) => Number(i))
+                                              .filter((i) => Number.isFinite(i))
+                                              .filter((i) => (seen.has(i) ? false : (seen.add(i), true)))
+                                              .map((i) => builtComponents.find((c) => c.componentIndex === i))
+                                              .filter(Boolean) as AttributeComponentGroups[]
+                                            const rest = builtComponents.filter((c) => !seen.has(c.componentIndex))
+                                            return [...ordered, ...rest]
+                                          })().map((c) => {
+                                            const versionId = String((componentRowsRaw?.[c.componentIndex] as any)?.model_version_id ?? '').trim()
+                                            const label = versionId ? String(versionIdToModelLabel.get(versionId) ?? '') : ''
+                                            const modelCode = label.includes(':') ? label.split(':')[0] : label
+                                            return (
+                                              <Space key={`attr-comp-${presetIndex}-${c.componentIndex}`} wrap size={8}>
+                                                <Space size={4} align="center">
+                                                  <span className="bt-model-pill">{modelCode || '组件'}</span>
+                                                </Space>
+                                                {(() => {
+                                                  const groupOrderKey = `${presetIndex}:${c.componentIndex}`
+                                                  const order = bundleGroupOrderByPresetComponent?.[groupOrderKey] ?? []
+                                                  if (!Array.isArray(order) || !order.length) return c.groups
+                                                  const idxMap = new Map<string, number>()
+                                                  for (let i = 0; i < order.length; i++) idxMap.set(String(order[i]), i)
+                                                  return c.groups.slice().sort((a, b) => (idxMap.get(a.key) ?? 1e9) - (idxMap.get(b.key) ?? 1e9))
+                                                })().map((g) => {
+                                                  const selKey = `${presetIndex}:${c.componentIndex}:${g.key}`
+                                                  const options = (g.options ?? []).map((x) => normalizeSingleToken(x))
+                                                  const uniq: string[] = []
+                                                  const seen = new Set<string>()
+                                                  for (const t of options) {
+                                                    const k = t || '__EMPTY__'
+                                                    if (seen.has(k)) continue
+                                                    seen.add(k)
+                                                    uniq.push(t)
+                                                  }
+                                                  const value = getEffectiveSelection({
+                                                    presetIndex,
+                                                    componentIndex: c.componentIndex,
+                                                    group: g,
+                                                    attributeGroupSelections: bundleAttributeGroupSelections,
+                                                  })
+                                                  const displayVariantToken = (selector2: string, rawToken: string): string => {
+                                                    const sel = String(selector2 ?? '').trim().toUpperCase()
+                                                    const t = normalizeSingleToken(rawToken)
+                                                    const alias = sel ? String((bundleVariantTokenAliasOverrides?.[sel] ?? {})?.[t] ?? '').trim() : ''
+                                                    return alias || t
+                                                  }
+                                                  return (
+                                                    <Space key={`attr-sel-${selKey}`} size={2} align="center">
+                                                      <Select
+                                                        size="small"
+                                                        style={{ width: 100 }}
+                                                        value={value}
+                                                        onChange={(v) =>
+                                                          setBundleAttributeGroupSelections((prev) => ({
+                                                            ...(prev ?? {}),
+                                                            [selKey]: String(v ?? ''),
+                                                          }))
+                                                        }
+                                                        options={uniq
+                                                          .filter((x) => (g.isZeroCostGroup ? true : !!String(x).trim()))
+                                                          .map((t) => ({
+                                                            value: t,
+                                                            label: t ? displayVariantToken(presetSelector2, t) : '（无）',
+                                                          }))}
+                                                      />
+                                                    </Space>
+                                                  )
+                                                })}
+                                              </Space>
+                                            )
+                                          })}
+                                        </Space>
+                                      ) : (
+                                        <Text type="secondary">提示：该属性规格暂无可用的互斥组下拉（可能尚未配置筛选/强制或兜底别名）。</Text>
+                                      )}
                                     </Space>
                                   </div>
                                 )

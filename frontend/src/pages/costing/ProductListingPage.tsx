@@ -272,7 +272,7 @@ export default function ProductListingPage() {
   const [bundleComponentsDebug, setBundleComponentsDebug] = useState<any[] | null>(null)
   const [bundleDebugRaw, setBundleDebugRaw] = useState<any | null>(null)
   const [lastError, setLastError] = useState<string | null>(null)
-  const [bundleDebugMode, setBundleDebugMode] = useState(false)
+  const [bundleDebugMode, setBundleDebugMode] = useState(true)
 
   const [salesDraft, setSalesDraft] = useState<SalesPricingDraft>({
     channel: 'tmall',
@@ -757,7 +757,20 @@ export default function ProductListingPage() {
   const processLines = useMemo(() => {
     const traceAny = (bom?.trace ?? {}) as any
     const arr = traceAny?.costing?.process_lines
-    return Array.isArray(arr) ? arr : []
+    if (Array.isArray(arr) && arr.length) return arr
+    // 套装合并BOM：后端可能把工序明细放在 components.trace.costing.process_lines
+    const comps = traceAny?.components
+    if (!Array.isArray(comps) || !comps.length) return []
+    const out: any[] = []
+    for (let i = 0; i < comps.length; i += 1) {
+      const c = comps[i] as any
+      const lines = (((c?.trace ?? {}) as any)?.costing ?? {})?.process_lines
+      if (!Array.isArray(lines) || !lines.length) continue
+      for (const r of lines) {
+        out.push({ ...(r as any), component_index: c?.component_index ?? i })
+      }
+    }
+    return out
   }, [bom])
 
   const inventoryLines = useMemo(() => {
@@ -1574,15 +1587,7 @@ export default function ProductListingPage() {
                           </Text>
                         </Space>
                       </Card>
-                      <div style={{ marginTop: 12 }}>
-                        <BundlePhraseListPanel
-                          bundleCode={effectiveBundleCode}
-                          phrasePresets={(((bundleTemplateDetailQuery.data as any)?.metadata ?? {})?.phrase_presets ?? []) as any}
-                          activeSelector={bundleDraft.bundle_selector}
-                          defaultOpen={false}
-                          title="短语生成器（运营可改词+验证）"
-                        />
-                      </div>
+                      {/* 已移除：短语生成器（运营可改词+验证） */}
                     </Col>
                     <Col xs={24} lg={12}>
                       <Card size="small" title="组件行预览（来自该短语）">
@@ -2027,7 +2032,9 @@ export default function ProductListingPage() {
                     showGenerateBom
                     generateBomLoading={bundlePreviewMutation.isPending}
                     generatingSelector={specGenGeneratingSelector}
-                    onGenerateBom={({ selector, phrase }) => {
+                    onGenerateBom={(args: { selector: string; phrase: string }) => {
+                      const selector = args.selector
+                      const phrase = args.phrase
                       // 关键：spec_text 只写“对客短语”，不要拼 B码；bundlePreviewMutation 会自动拼 token
                       setSpecGenGeneratingSelector(String(selector))
                       setBundleDraft((d) => ({ ...d, bundle_selector: selector, spec_text: String(phrase || '').trim() }))
@@ -2498,11 +2505,18 @@ export default function ProductListingPage() {
 
                       <Divider style={{ margin: '4px 0' }} />
                       <Text strong>工序（{processLines.length}）</Text>
-                      {processLines.length ? (
-                        <Table
+                      <Table
                           size="small"
                           pagination={false}
-                          rowKey={(r) => String((r as any).process_id ?? '') + '-' + String((r as any).process_code ?? '')}
+                          rowKey={(r: any, idx?: number) =>
+                            String(r?.process_id ?? '') +
+                            '-' +
+                            String(r?.process_code ?? '') +
+                            '-' +
+                            String(r?.component_index ?? '') +
+                            '-' +
+                            String(idx ?? 0)
+                          }
                           columns={[
                             { title: '工序编码', dataIndex: 'process_code', width: 120, ellipsis: true },
                             { title: '工序名称', dataIndex: 'process_name', width: 220, ellipsis: true },
@@ -2523,10 +2537,8 @@ export default function ProductListingPage() {
                             },
                           ]}
                           dataSource={processLines}
+                          locale={{ emptyText: '暂无工序明细（可先“解析+预演”或“套装：预演 BOM”）' }}
                         />
-                      ) : (
-                        <Alert type="info" showIcon message="该版本未返回工序明细（可能未配置工序行或后端未回传）。" />
-                      )}
 
                       <Divider style={{ margin: '4px 0' }} />
                       <Text strong>扣库单</Text>

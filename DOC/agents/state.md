@@ -1,5 +1,16 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-22（测试台：移除短语生成器 + Debug 默认开启 + 工序明细兜底展示）
+  - 本轮范围：仅 UI 体验收口，不改业务逻辑。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/ProductListingPage.tsx`
+      - 移除“短语生成器（运营可改词+验证）”面板（保留“规格生成”面板）。
+      - 套装 Debug 默认开启（返回组件明细），方便排障。
+      - 工序明细：当合并 BOM 未返回 `trace.costing.process_lines` 时，尝试从 `trace.components[*].trace.costing.process_lines` 汇总展示；并且即使为 0 也显示表格空态，不再用提示遮挡。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+
 - **最近校对（北京时间 GMT+8）**：2026-01-22（测试台：套装选择与属性规格同排 + 下拉展示 B/Z 编码胶囊）
   - 本轮范围：仅 UI 布局与展示优化，不改业务逻辑。
   - 本轮产物：

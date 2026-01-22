@@ -4011,7 +4011,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                 style: {
                                   // 与“物料组/工序组”的模块色底一致（避免模块区更亮）
                                   background: key ? hexToRgba(color, 0.06) : undefined,
-                                  borderLeft: key ? `4px solid ${color}` : undefined,
+                                  borderLeft: key ? `1px solid ${color}` : undefined,
                                 },
                               }
                             },

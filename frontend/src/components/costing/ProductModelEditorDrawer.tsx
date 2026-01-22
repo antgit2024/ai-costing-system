@@ -4436,16 +4436,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                     type="text"
                                     icon={<BranchesOutlined />}
                                     title={hasVariants ? '变体（Overlay）：已配置' : '变体（Overlay）'}
-                                    style={
-                                      hasVariants
-                                        ? {
-                                            background: '#fff7e6',
-                                            border: '1px solid #ffe58f',
-                                            borderRadius: 6,
-                                            color: '#ad6800',
-                                          }
-                                        : undefined
-                                    }
+                                    className={hasVariants ? 'line-variant-btn--active' : undefined}
                                     onClick={() => openLineVariantDrawerForMaterialRow((materials as any[])[idx])}
                                   />
                                 ) : null}

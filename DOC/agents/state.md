@@ -1,5 +1,17 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-22（标准模型：清单编辑“变体”按钮底色收口）
+  - 本轮范围：仅 UI 视觉收口，不改业务逻辑。
+  - 本轮产物：
+    - 前端：`frontend/src/components/costing/ProductModelEditorDrawer.tsx`
+      - 标准模型 → 清单编辑 → 物料组“变体（Overlay）”图标按钮：当已配置变体（hasVariants）时，将底色从淡黄改为**深黑黄**（避免刺眼），并保持 hover 有轻微加亮。
+    - 样式：`frontend/src/index.css`
+      - 新增 `.line-variant-btn--active` 样式（深黑黄背景 + 暗金边框 + 高对比文字/图标色）
+    - 恢复包：更新 `DOC/agents/state.md`（本条）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+
 - **最近校对（北京时间 GMT+8）**：2026-01-22（接手 Frontend：验收链路确认 + Gitignore 补齐）
   - 本轮范围：不改业务功能；仅完成“新 Frontend 接力”规范动作（恢复包/硬验收/落地提交）。
   - 本轮产物：

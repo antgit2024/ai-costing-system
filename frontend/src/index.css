@@ -531,6 +531,20 @@ a {
   background: var(--color-theme-bg-card) !important;
 }
 
+/* ===== Standard model: line variants (Overlay) indicator button ===== */
+.line-variant-btn--active.ant-btn {
+  /* 深黑黄（避免淡黄刺眼），同时保持“已配置”可读性 */
+  background: rgba(43, 33, 0, 0.88) !important;
+  border: 1px solid rgba(255, 214, 102, 0.22) !important;
+  border-radius: 6px !important;
+  color: rgba(255, 214, 102, 0.95) !important;
+}
+.line-variant-btn--active.ant-btn:hover {
+  background: rgba(56, 42, 0, 0.92) !important;
+  border-color: rgba(255, 214, 102, 0.32) !important;
+  color: rgba(255, 214, 102, 0.98) !important;
+}
+
 .planner-toolbar {
   margin-bottom: 16px;
   display: flex;

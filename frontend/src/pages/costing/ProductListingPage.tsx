@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { Alert, Button, Card, Col, Descriptions, Divider, Empty, Input, InputNumber, Modal, Radio, Row, Select, Space, Table, Tabs, Tag, Typography, message } from 'antd'
-import { ArrowDownOutlined, ArrowUpOutlined, CopyOutlined, LeftOutlined, RightOutlined } from '@ant-design/icons'
+import { CopyOutlined } from '@ant-design/icons'
 import { isAxiosError } from 'axios'
 
 import BundlePhraseListPanel from '@/components/costing/BundlePhraseListPanel'
@@ -2110,16 +2110,6 @@ export default function ProductListingPage() {
                                           line-height: 16px;
                                           font-size: 12px;
                                         }
-                                        .bt-model-reorder-btn.ant-btn {
-                                          padding: 0 4px;
-                                          height: 18px;
-                                          line-height: 18px;
-                                          color: var(--color-theme-text-tertiary);
-                                        }
-                                        .bt-model-reorder-btn.ant-btn:not([disabled]):hover {
-                                          color: var(--color-theme-text-primary);
-                                          background: var(--color-theme-bg-tertiary);
-                                        }
                                       `}</style>
 
                                       <div
@@ -2191,46 +2181,10 @@ export default function ProductListingPage() {
                                               const versionId = String((componentRowsRaw?.[c.componentIndex] as any)?.model_version_id ?? '').trim()
                                               const label = versionId ? String(versionIdToModelLabel.get(versionId) ?? '') : ''
                                               const modelCode = label.includes(':') ? label.split(':')[0] : label
-                                              const orderKey = String(presetIndex)
-                                              const currentOrder = bundleComponentOrderByPreset?.[orderKey] ?? []
-                                              const ordered = currentOrder.length ? currentOrder.slice() : builtComponents.map((cc) => cc.componentIndex)
-                                              const pos = ordered.indexOf(c.componentIndex)
-                                              const canUp = pos > 0
-                                              const canDown = pos >= 0 && pos < ordered.length - 1
                                               return (
                                                 <Space key={`attr-comp-${presetIndex}-${c.componentIndex}`} wrap size={8}>
                                                   <Space size={4} align="center">
                                                     <span className="bt-model-pill">{modelCode || '组件'}</span>
-                                                    <Button
-                                                      size="small"
-                                                      type="text"
-                                                      className="bt-model-reorder-btn"
-                                                      icon={<ArrowUpOutlined />}
-                                                      disabled={!canUp}
-                                                      onClick={() => {
-                                                        const next = ordered.slice()
-                                                        if (pos <= 0) return
-                                                        const tmp = next[pos - 1]
-                                                        next[pos - 1] = next[pos]
-                                                        next[pos] = tmp
-                                                        setBundleComponentOrderByPreset((prev) => ({ ...(prev ?? {}), [orderKey]: next }))
-                                                      }}
-                                                    />
-                                                    <Button
-                                                      size="small"
-                                                      type="text"
-                                                      className="bt-model-reorder-btn"
-                                                      icon={<ArrowDownOutlined />}
-                                                      disabled={!canDown}
-                                                      onClick={() => {
-                                                        const next = ordered.slice()
-                                                        if (pos < 0 || pos >= next.length - 1) return
-                                                        const tmp = next[pos + 1]
-                                                        next[pos + 1] = next[pos]
-                                                        next[pos] = tmp
-                                                        setBundleComponentOrderByPreset((prev) => ({ ...(prev ?? {}), [orderKey]: next }))
-                                                      }}
-                                                    />
                                                   </Space>
                                                   {(() => {
                                                     const groupOrderKey = `${presetIndex}:${c.componentIndex}`
@@ -2256,12 +2210,6 @@ export default function ProductListingPage() {
                                                       group: g,
                                                       attributeGroupSelections: bundleAttributeGroupSelections,
                                                     })
-                                                    const groupOrderKey = `${presetIndex}:${c.componentIndex}`
-                                                    const currentOrder = bundleGroupOrderByPresetComponent?.[groupOrderKey] ?? []
-                                                    const baseOrder = currentOrder.length ? currentOrder.slice() : c.groups.map((x) => x.key)
-                                                    const pos = baseOrder.indexOf(g.key)
-                                                    const canLeft = pos > 0
-                                                    const canRight = pos >= 0 && pos < baseOrder.length - 1
                                                     const displayVariantToken = (selector2: string, rawToken: string): string => {
                                                       const sel = String(selector2 ?? '').trim().toUpperCase()
                                                       const t = normalizeSingleToken(rawToken)
@@ -2270,24 +2218,9 @@ export default function ProductListingPage() {
                                                     }
                                                     return (
                                                       <Space key={`attr-sel-${selKey}`} size={2} align="center">
-                                                        <Button
-                                                          size="small"
-                                                          type="text"
-                                                          className="bt-model-reorder-btn"
-                                                          icon={<LeftOutlined />}
-                                                          disabled={!canLeft}
-                                                          onClick={() => {
-                                                            const next = baseOrder.slice()
-                                                            if (pos <= 0) return
-                                                            const tmp = next[pos - 1]
-                                                            next[pos - 1] = next[pos]
-                                                            next[pos] = tmp
-                                                            setBundleGroupOrderByPresetComponent((prev) => ({ ...(prev ?? {}), [groupOrderKey]: next }))
-                                                          }}
-                                                        />
                                                         <Select
                                                           size="small"
-                                                          style={{ width: 150 }}
+                                                          style={{ width: 100 }}
                                                           value={value}
                                                           onChange={(v) =>
                                                             setBundleAttributeGroupSelections((prev) => ({
@@ -2301,21 +2234,6 @@ export default function ProductListingPage() {
                                                               value: t,
                                                               label: t ? displayVariantToken(presetSelector2, t) : '（无）',
                                                             }))}
-                                                        />
-                                                        <Button
-                                                          size="small"
-                                                          type="text"
-                                                          className="bt-model-reorder-btn"
-                                                          icon={<RightOutlined />}
-                                                          disabled={!canRight}
-                                                          onClick={() => {
-                                                            const next = baseOrder.slice()
-                                                            if (pos < 0 || pos >= next.length - 1) return
-                                                            const tmp = next[pos + 1]
-                                                            next[pos + 1] = next[pos]
-                                                            next[pos] = tmp
-                                                            setBundleGroupOrderByPresetComponent((prev) => ({ ...(prev ?? {}), [groupOrderKey]: next }))
-                                                          }}
                                                         />
                                                       </Space>
                                                     )

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { Alert, Button, Card, Col, Descriptions, Divider, Empty, Input, InputNumber, Modal, Radio, Row, Select, Space, Table, Tabs, Tag, Typography, message } from 'antd'
+import { ArrowDownOutlined, ArrowUpOutlined, CopyOutlined, LeftOutlined, RightOutlined } from '@ant-design/icons'
 import { isAxiosError } from 'axios'
 
 import BundlePhraseListPanel from '@/components/costing/BundlePhraseListPanel'
@@ -249,6 +250,319 @@ const toBundleTokenDash = (code: string, selector?: string | null, prefix: 'B' |
   return `${prefix}-${c}`
 }
 
+const extractTokensForVariant = (v: any): string[] => {
+  const cond = (v?.conditions ?? {}) as any
+  const anyTokens = Array.isArray(cond?.spec_contains_any) ? cond.spec_contains_any : []
+  const allTokens = Array.isArray(cond?.spec_contains_all) ? cond.spec_contains_all : []
+  const out: string[] = []
+  for (const t of [...anyTokens, ...allTokens]) {
+    const s = String(t ?? '').trim()
+    if (!s) continue
+    const up = s.toUpperCase()
+    // runtime-only binding tokens (not customer-facing)
+    if (up.startsWith('MODEL:') || up.startsWith('M:') || up.startsWith('BOUND_VERSION:') || up.startsWith('SKU:')) continue
+    out.push(s)
+  }
+  const seen = new Set<string>()
+  const uniq: string[] = []
+  for (const x of out) {
+    const k = String(x).trim()
+    if (!k || seen.has(k)) continue
+    seen.add(k)
+    uniq.push(k)
+  }
+  return uniq
+}
+
+const normalizeSingleToken = (raw: string): string => {
+  const s = String(raw ?? '').trim()
+  if (!s) return ''
+  // 运营口径：{} 内只允许 1 个 TOKEN。这里把空格/逗号/顿号/分号等作为分隔符，取第一个。
+  const parts = s
+    .split(/[\s,，、;；]+/)
+    .map((x) => String(x).trim())
+    .filter(Boolean)
+  return parts[0] ?? ''
+}
+
+type AttributeGroup = { key: string; options: string[]; isZeroCostGroup: boolean }
+type AttributeComponentGroups = { componentIndex: number; groups: AttributeGroup[] }
+
+const getDefaultSelectionForGroup = (g: AttributeGroup): string => {
+  // zero-cost 互斥组默认空（不计入自动生成）
+  if (g.isZeroCostGroup) return ''
+  // 其它互斥组默认第一个非空项（兜底token优先）
+  const uniq: string[] = []
+  const seen = new Set<string>()
+  for (const x of g.options ?? []) {
+    const t = normalizeSingleToken(x)
+    const k = t || '__EMPTY__'
+    if (seen.has(k)) continue
+    seen.add(k)
+    uniq.push(t)
+  }
+  return uniq.find((x) => !!String(x).trim()) ?? ''
+}
+
+const getEffectiveSelection = (args: {
+  presetIndex: number
+  componentIndex: number
+  group: AttributeGroup
+  attributeGroupSelections: Record<string, string>
+}): string => {
+  const { presetIndex, componentIndex, group, attributeGroupSelections } = args
+  const selKey = `${presetIndex}:${componentIndex}:${group.key}`
+  if (Object.prototype.hasOwnProperty.call(attributeGroupSelections, selKey)) {
+    return normalizeSingleToken(String(attributeGroupSelections[selKey] ?? ''))
+  }
+  return getDefaultSelectionForGroup(group)
+}
+
+const formatCm = (n: any): string => {
+  const v = Number(n)
+  if (!Number.isFinite(v)) return '0'
+  const rounded = Math.round(v * 100) / 100
+  const s = String(rounded)
+  // avoid trailing .0/.00
+  return s.includes('.') ? s.replace(/\.?0+$/, '') : s
+}
+
+const copyTextToClipboard = async (text: string) => {
+  const s = String(text ?? '')
+  if (!s) return false
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(s)
+      return true
+    }
+  } catch {
+    // ignore and fallback
+  }
+  try {
+    const ta = document.createElement('textarea')
+    ta.value = s
+    ta.style.position = 'fixed'
+    ta.style.left = '-99999px'
+    ta.style.top = '0'
+    document.body.appendChild(ta)
+    ta.focus()
+    ta.select()
+    const ok = document.execCommand('copy')
+    document.body.removeChild(ta)
+    return ok
+  } catch {
+    return false
+  }
+}
+
+const buildAttributeFormulaAndGroups = (args: {
+  presetIndex: number
+  presetSelector: string
+  componentOrder?: number[]
+  componentRows: any[]
+  presetSelectedByIdx: Record<string, Record<string, any>>
+  fallbackTokenOverrides: Record<string, string>
+  variantTokenOptionsByVersionBaseLine: Record<string, Record<string, string[]>>
+  baseLineInfoByVersionBaseLine: Record<string, Record<string, { orderIndex: number; isZeroCost: boolean }>>
+  variantTokenAliasOverrides: Record<string, Record<string, string>>
+}): { formula: string; components: AttributeComponentGroups[] } => {
+  const {
+    presetIndex,
+    presetSelector,
+    componentOrder,
+    componentRows,
+    presetSelectedByIdx,
+    fallbackTokenOverrides,
+    variantTokenOptionsByVersionBaseLine,
+    baseLineInfoByVersionBaseLine,
+    variantTokenAliasOverrides,
+  } = args
+  if (!Array.isArray(componentRows) || componentRows.length <= 0) return { formula: '', components: [] }
+
+  const displayToken = (raw: string): string => {
+    const t = normalizeSingleToken(raw)
+    const sel = String(presetSelector ?? '').trim().toUpperCase()
+    const alias = sel ? String((variantTokenAliasOverrides?.[sel] ?? {})?.[t] ?? '').trim() : ''
+    return alias || t
+  }
+
+  const parts: string[] = []
+  const components: AttributeComponentGroups[] = []
+  const defaultOrder = componentRows.map((_, i) => i)
+  const order = Array.isArray(componentOrder) && componentOrder.length ? componentOrder : defaultOrder
+  for (const cIdx of order) {
+    if (cIdx < 0 || cIdx >= componentRows.length) continue
+    const rr = componentRows[cIdx] as any
+    const versionId = String(rr?.model_version_id ?? '').trim()
+    const k = `${presetIndex}:${cIdx}`
+    const sel = (presetSelectedByIdx?.[k] ?? {}) as Record<string, any>
+
+    const rawBaseLineIds: string[] = []
+    const activeBaseLineIdSet = new Set<string>() // 仅“已筛选/已强制”的基准行
+    for (const [baseLineId, v] of Object.entries(sel ?? {})) {
+      const id = String(baseLineId ?? '').trim()
+      if (!id) continue
+      const parent = String((v as any)?.parent_variant_id ?? '').trim()
+      const forced = String((v as any)?.forced_child_variant_id ?? '').trim()
+      if (!parent && !forced) continue
+      rawBaseLineIds.push(id)
+      activeBaseLineIdSet.add(id)
+    }
+    const fm = rr?.force_variant_by_base_line && typeof rr.force_variant_by_base_line === 'object' ? rr.force_variant_by_base_line : {}
+    for (const baseLineId of Object.keys(fm ?? {})) {
+      const id = String(baseLineId ?? '').trim()
+      if (id) {
+        rawBaseLineIds.push(id)
+        activeBaseLineIdSet.add(id)
+      }
+    }
+
+    const infoByBase0 = (baseLineInfoByVersionBaseLine?.[versionId] ?? {}) as Record<string, { orderIndex: number; isZeroCost: boolean }>
+    for (const baseLineId of Object.keys(infoByBase0 ?? {})) {
+      const id = String(baseLineId ?? '').trim()
+      if (!id) continue
+      const isZeroCost = !!infoByBase0?.[id]?.isZeroCost
+      if (isZeroCost) continue
+      const overrideKey = `${versionId}:${id}`
+      const defaultToken = String(fallbackTokenOverrides?.[overrideKey] ?? '').trim()
+      if (!defaultToken) continue
+      rawBaseLineIds.push(id)
+    }
+    const seenId = new Set<string>()
+    const uniqBaseLineIds = rawBaseLineIds.filter((x) => (seenId.has(x) ? false : (seenId.add(x), true)))
+
+    const infoByBase = infoByBase0
+    const baseLineIdsSorted = uniqBaseLineIds.slice().sort((a, b) => {
+      const ia = infoByBase?.[a]
+      const ib = infoByBase?.[b]
+      const za = ia?.isZeroCost ? 1 : 0
+      const zb = ib?.isZeroCost ? 1 : 0
+      if (za !== zb) return zb - za // zero-cost first
+      const oa = Number.isFinite(ia?.orderIndex) ? Number(ia.orderIndex) : 1e9
+      const ob = Number.isFinite(ib?.orderIndex) ? Number(ib.orderIndex) : 1e9
+      return oa - ob
+    })
+
+    const groupsInOrder: AttributeGroup[] = []
+    const seenGroupKey = new Set<string>()
+
+    for (const baseLineId of baseLineIdsSorted) {
+      const isZeroCost = !!infoByBase?.[baseLineId]?.isZeroCost
+      const isActive = activeBaseLineIdSet.has(String(baseLineId))
+      const overrideKey = `${versionId}:${baseLineId}`
+      const defaultToken = String(fallbackTokenOverrides?.[overrideKey] ?? '').trim()
+      const alt = (variantTokenOptionsByVersionBaseLine?.[versionId] ?? {})?.[baseLineId] ?? []
+      const altTokens = isActive ? (Array.isArray(alt) ? alt.map((x) => String(x ?? '').trim()).filter(Boolean) : []) : []
+
+      const seenOpt = new Set<string>()
+      const opts: string[] = []
+      if (isZeroCost) {
+        opts.push('') // force empty default
+        seenOpt.add('__EMPTY__')
+      } else if (defaultToken) {
+        const d = normalizeSingleToken(defaultToken)
+        if (d) {
+          opts.push(d)
+          seenOpt.add(d)
+        }
+      }
+      const rest = altTokens
+        .map((x) => normalizeSingleToken(x))
+        .filter((x) => x && !seenOpt.has(x))
+        .sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
+      for (const t of rest) {
+        seenOpt.add(t)
+        opts.push(t)
+      }
+
+      if (isZeroCost) {
+        const hasNonEmpty = opts.some((x) => !!String(x).trim())
+        if (!hasNonEmpty) continue
+      } else {
+        if (!opts.length) continue
+      }
+
+      const key = opts.map((x) => (normalizeSingleToken(x) ? normalizeSingleToken(x) : '__EMPTY__')).join('|')
+      if (seenGroupKey.has(key)) continue
+      seenGroupKey.add(key)
+      groupsInOrder.push({ key, options: opts, isZeroCostGroup: isZeroCost })
+    }
+
+    const componentFormula = groupsInOrder
+      .map((g) => `[${g.options.map((t) => (normalizeSingleToken(t) ? `{${displayToken(t)}}` : '{}')).join('')}]`)
+      .join('')
+
+    const dims = `${formatCm(rr?.width_cm)}*${formatCm(rr?.height_cm)}*${formatCm(rr?.quantity)}`
+    if (componentFormula) parts.push(`${componentFormula}${dims}`)
+    if (groupsInOrder.length) components.push({ componentIndex: cIdx, groups: groupsInOrder })
+  }
+  return { formula: parts.join(' + '), components }
+}
+
+const buildAutoRuleMetaFromSelections = (args: {
+  presetIndex: number
+  presetSelector: string
+  components: AttributeComponentGroups[]
+  componentRows: any[]
+  attributeGroupSelections: Record<string, string>
+  componentOrder?: number[]
+  groupOrderByPresetComponent?: Record<string, string[]>
+  variantTokenAliasOverrides: Record<string, Record<string, string>>
+}): { text: string; items: Array<{ tokens: Array<{ text: string; isFromDropdown: boolean }>; dims: string; dimsIsMissing: boolean }> } => {
+  const { presetIndex, presetSelector, components, componentRows, attributeGroupSelections, componentOrder, groupOrderByPresetComponent, variantTokenAliasOverrides } = args
+  const byComp = new Map<number, AttributeGroup[]>()
+  for (const c of components) byComp.set(c.componentIndex, c.groups)
+  const defaultOrder = componentRows.map((_: any, i: number) => i)
+  const order = Array.isArray(componentOrder) && componentOrder.length ? componentOrder : defaultOrder
+
+  const displayToken = (raw: string): string => {
+    const t = normalizeSingleToken(raw)
+    const sel = String(presetSelector ?? '').trim().toUpperCase()
+    const alias = sel ? String((variantTokenAliasOverrides?.[sel] ?? {})?.[t] ?? '').trim() : ''
+    return alias || t
+  }
+
+  const items: Array<{ tokens: Array<{ text: string; isFromDropdown: boolean }>; dims: string; dimsIsMissing: boolean }> = []
+  const textParts: string[] = []
+
+  for (const cIdx of order) {
+    if (cIdx < 0 || cIdx >= componentRows.length) continue
+    const rr = componentRows[cIdx] as any
+    let groups = byComp.get(cIdx) ?? []
+    if (!groups.length) continue
+    const groupOrderKey = `${presetIndex}:${cIdx}`
+    const groupOrder = groupOrderByPresetComponent?.[groupOrderKey] ?? []
+    if (Array.isArray(groupOrder) && groupOrder.length) {
+      const idxMap = new Map<string, number>()
+      for (let i = 0; i < groupOrder.length; i++) idxMap.set(String(groupOrder[i]), i)
+      groups = groups.slice().sort((a, b) => (idxMap.get(a.key) ?? 1e9) - (idxMap.get(b.key) ?? 1e9))
+    }
+
+    const tokens: Array<{ text: string; isFromDropdown: boolean }> = []
+    const tokenTextParts: string[] = []
+    for (const g of groups) {
+      const selKey = `${presetIndex}:${cIdx}:${g.key}`
+      const isFromDropdown = Object.prototype.hasOwnProperty.call(attributeGroupSelections, selKey)
+      const selected = getEffectiveSelection({ presetIndex, componentIndex: cIdx, group: g, attributeGroupSelections })
+      const t = displayToken(selected)
+      if (!t) continue
+      tokens.push({ text: t, isFromDropdown })
+      tokenTextParts.push(t)
+    }
+    if (!tokens.length) continue
+    const w = Number(rr?.width_cm ?? 0)
+    const h = Number(rr?.height_cm ?? 0)
+    const q = Number(rr?.quantity ?? 0)
+    const dimsIsMissing = !(w > 0 && h > 0 && q > 0)
+    const dims = `${formatCm(rr?.width_cm)}*${formatCm(rr?.height_cm)}*${formatCm(rr?.quantity)}`
+    const tokenText = tokenTextParts.join('')
+    items.push({ tokens, dims, dimsIsMissing })
+    textParts.push(`${tokenText}${dims}`)
+  }
+
+  return { text: textParts.join(' + '), items }
+}
+
 export default function ProductListingPage() {
   const [mode, setMode] = useState<'single' | 'multi' | 'spec_gen' | 'sales' | 'store'>('single')
   const [specGenGeneratingSelector, setSpecGenGeneratingSelector] = useState<string | null>(null)
@@ -266,6 +580,9 @@ export default function ProductListingPage() {
     bundle_input: '',
     spec_text: '',
   })
+  const [bundleAttributeGroupSelections, setBundleAttributeGroupSelections] = useState<Record<string, string>>({})
+  const [bundleComponentOrderByPreset, setBundleComponentOrderByPreset] = useState<Record<string, number[]>>({})
+  const [bundleGroupOrderByPresetComponent, setBundleGroupOrderByPresetComponent] = useState<Record<string, string[]>>({})
 
   const [parsed, setParsed] = useState<SpecParseResponse | null>(null)
   const [bom, setBom] = useState<BomGenerateResponse | null>(null)
@@ -518,6 +835,134 @@ export default function ProductListingPage() {
     const rows = Array.isArray(hit?.components) ? hit.components : []
     return rows
   }, [bundleDraft.bundle_selector, bundleTemplateDetailQuery.data])
+
+  const bundleTemplateMeta = useMemo(() => {
+    return ((bundleTemplateDetailQuery.data as any)?.metadata ?? {}) as any
+  }, [bundleTemplateDetailQuery.data])
+
+  const bundlePhraseVariantPresets = useMemo(() => {
+    const vp = bundleTemplateMeta?.phrase_variant_presets
+    if (!vp || typeof vp !== 'object') return {} as Record<string, Record<string, any>>
+    // Backward compatibility:
+    // - legacy: { [k]: { [base_line_id]: variant_id|null } }
+    // - new:    { [k]: { [base_line_id]: { parent_variant_id, child_variant_ids?, forced_child_variant_id? } } }
+    const out: Record<string, Record<string, any>> = {}
+    for (const [k, m] of Object.entries(vp as any)) {
+      if (!m || typeof m !== 'object') continue
+      const inner: Record<string, any> = {}
+      for (const [baseLineId, rawSel] of Object.entries(m as any)) {
+        if (!baseLineId) continue
+        if (rawSel && typeof rawSel === 'object' && 'parent_variant_id' in (rawSel as any)) {
+          inner[String(baseLineId)] = rawSel as any
+          continue
+        }
+        const vid = String(rawSel ?? '').trim()
+        inner[String(baseLineId)] = { parent_variant_id: vid || null }
+      }
+      out[String(k)] = inner
+    }
+    return out
+  }, [bundleTemplateMeta])
+
+  const bundleFallbackTokenOverrides = useMemo(() => {
+    const fo = bundleTemplateMeta?.fallback_token_overrides ?? bundleTemplateMeta?.fallback_display_overrides
+    return fo && typeof fo === 'object' ? (fo as Record<string, string>) : {}
+  }, [bundleTemplateMeta])
+
+  const bundleVariantTokenAliasOverrides = useMemo(() => {
+    const vtao = bundleTemplateMeta?.variant_token_alias_overrides
+    return vtao && typeof vtao === 'object' ? (vtao as Record<string, Record<string, string>>) : {}
+  }, [bundleTemplateMeta])
+
+  useEffect(() => {
+    const co = bundleTemplateMeta?.component_order_by_preset
+    const go = bundleTemplateMeta?.group_order_by_preset_component
+    setBundleComponentOrderByPreset(co && typeof co === 'object' ? (co as any) : {})
+    setBundleGroupOrderByPresetComponent(go && typeof go === 'object' ? (go as any) : {})
+    setBundleAttributeGroupSelections({})
+  }, [bundleTemplateMeta])
+
+  const bundlePresetVersionIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const r of (bundlePresetComponents ?? []) as any[]) {
+      const vid = String((r as any)?.model_version_id ?? '').trim()
+      if (vid) ids.add(vid)
+    }
+    return Array.from(ids)
+  }, [bundlePresetComponents])
+
+  const bundlePresetVersionLinesSummaryQuery = useQuery({
+    queryKey: ['product-listing', 'bundle-preset', 'version-lines-summary', bundlePresetVersionIds.join(',')],
+    queryFn: async () => {
+      const rows = await Promise.all(
+        bundlePresetVersionIds.map(async (version_id) => {
+          const data = await fetchProductModelVersionLines(String(version_id))
+          return { version_id, data }
+        }),
+      )
+      return rows
+    },
+    enabled: mode === 'multi' && bundlePresetVersionIds.length > 0,
+  })
+
+  const baseLineInfoByVersionBaseLineForBundle = useMemo(() => {
+    const out: Record<string, Record<string, { orderIndex: number; isZeroCost: boolean }>> = {}
+    for (const r of (bundlePresetVersionLinesSummaryQuery.data ?? []) as Array<{ version_id: string; data: any }>) {
+      const versionId = String((r as any)?.version_id ?? '').trim()
+      if (!versionId) continue
+      const mats = ((r as any)?.data?.materials ?? []) as any[]
+      const inner: Record<string, { orderIndex: number; isZeroCost: boolean }> = {}
+      for (let i = 0; i < mats.length; i++) {
+        const it = mats[i]
+        const id = String(it?.id ?? '').trim()
+        if (!id) continue
+        const name = String(it?.material_name ?? '').trim()
+        const code = String(it?.material_code ?? '').trim()
+        const isZeroCost = name.includes('兜底-零成本') || code.includes('兜底-零成本')
+        inner[id] = { orderIndex: i, isZeroCost }
+      }
+      out[versionId] = inner
+    }
+    return out
+  }, [bundlePresetVersionLinesSummaryQuery.data])
+
+  const bundleVariantsSummaryQuery = useQuery({
+    queryKey: ['product-listing', 'bundle-preset', 'variants-summary', bundlePresetVersionIds.join(',')],
+    queryFn: async () => {
+      const rows = await Promise.all(
+        bundlePresetVersionIds.map(async (version_id) => {
+          const items = await listLineVariants({ version_id })
+          return { version_id, items }
+        }),
+      )
+      return rows
+    },
+    enabled: mode === 'multi' && bundlePresetVersionIds.length > 0,
+  })
+
+  const variantTokenOptionsByVersionBaseLineForBundle = useMemo(() => {
+    const out: Record<string, Record<string, string[]>> = {}
+    for (const x of (bundleVariantsSummaryQuery.data ?? []) as any[]) {
+      const versionId = String((x as any)?.version_id ?? '').trim()
+      if (!versionId) continue
+      const items = Array.isArray((x as any)?.items) ? (x as any).items : []
+      const byBase: Record<string, Set<string>> = {}
+      for (const v of items) {
+        const baseLineId = String((v as any)?.base_line_id ?? '').trim()
+        if (!baseLineId) continue
+        const tokens = extractTokensForVariant(v)
+        if (!tokens.length) continue
+        if (!byBase[baseLineId]) byBase[baseLineId] = new Set<string>()
+        for (const t of tokens) byBase[baseLineId].add(String(t))
+      }
+      const inner: Record<string, string[]> = {}
+      for (const [baseLineId, set] of Object.entries(byBase)) {
+        inner[baseLineId] = Array.from(set).sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
+      }
+      out[versionId] = inner
+    }
+    return out
+  }, [bundleVariantsSummaryQuery.data])
 
   const versionsPagedQuery = useQuery({
     queryKey: ['product-model-versions-paged', 'listing', 'standard', 'for-bundle-preview'],
@@ -1548,31 +1993,347 @@ export default function ProductListingPage() {
                               <Text>{bundleSelectedPhrase || '-'}</Text>
                             </Text>
                           ) : null}
-                          <Button
-                            disabled={!bundleDraft.bundle_code || !bundleDraft.bundle_selector}
-                            onClick={() => {
-                              const sel = String(bundleDraft.bundle_selector ?? '').trim().toUpperCase()
-                              if (!sel) return
-                              const meta: any = (bundleTemplateDetailQuery.data as any)?.metadata ?? {}
-                              const pp = Array.isArray(meta?.phrase_presets) ? meta.phrase_presets : []
-                              const hit =
-                                pp.find((x: any) => String(x?.selector ?? '').trim().toUpperCase() === sel) ??
-                                (() => {
-                                  if (sel.length !== 2) return null
+                          {bundleDraft.bundle_code && bundleDraft.bundle_selector ? (
+                            selectedBundlePresetPrefix === 'Z' ? (
+                              <Alert
+                                type="info"
+                                showIcon
+                                message="Z 指定型：无需 TOKEN 和尺寸编码，直接解析。"
+                                description="说明：Z 模式不依赖交易规格里的触发词/尺寸段来命中组件；系统会自动按 Z 前缀选择对应属性规格并生成最终 BOM。"
+                              />
+                            ) : (
+                              (() => {
+                                const sel = String(bundleDraft.bundle_selector ?? '').trim().toUpperCase()
+                                const meta: any = (bundleTemplateDetailQuery.data as any)?.metadata ?? {}
+                                const pp = Array.isArray(meta?.phrase_presets) ? meta.phrase_presets : []
+                                const hitInfo = (() => {
+                                  const directIdx = pp.findIndex((x: any) => String(x?.selector ?? '').trim().toUpperCase() === sel)
+                                  if (directIdx >= 0) return { hit: pp[directIdx], presetIndex: directIdx }
+                                  if (sel.length !== 2) return { hit: null, presetIndex: -1 }
                                   const a = sel.charCodeAt(0) - 'A'.charCodeAt(0)
                                   const b = sel.charCodeAt(1) - 'A'.charCodeAt(0)
                                   const idx = a * 26 + b
-                                  return idx >= 0 ? pp[idx] : null
+                                  return { hit: idx >= 0 ? pp[idx] : null, presetIndex: idx }
                                 })()
-                              const phrase = String(hit?.phrase ?? '').trim()
-                              const code = String(bundleDraft.bundle_code ?? '').trim()
-                              const token = code ? toBundleTokenDash(code, sel, selectedBundlePresetPrefix) : ''
-                              const text = phrase && token ? `${phrase}(${token})` : phrase || token
-                              setBundleDraft((d) => ({ ...d, spec_text: text }))
-                            }}
-                          >
-                            用所选短语生成 spec_text
-                          </Button>
+                                const hit = hitInfo.hit
+                                const presetIndex = hitInfo.presetIndex
+                                const presetSelector2 = String((hit as any)?.selector ?? '').trim().toUpperCase() || (presetIndex >= 0 ? toSelector2(presetIndex) : sel)
+                                const phrase = String(hit?.phrase ?? '').trim()
+                                const code = String(bundleDraft.bundle_code ?? '').trim()
+                                const token = code ? toBundleTokenDash(code, sel, selectedBundlePresetPrefix) : ''
+                                const autoText = phrase && token ? `${phrase}(${token})` : phrase || token
+                                const componentRowsRaw = Array.isArray((hit as any)?.components) ? ((hit as any).components as any[]) : []
+                                const componentRows = componentRowsRaw.map((c: any) => ({
+                                  ...c,
+                                  width_cm: Number(c?.width_mm ?? 0) / 10,
+                                  height_cm: Number(c?.height_mm ?? 0) / 10,
+                                  quantity: Number(c?.quantity ?? 0),
+                                }))
+                                const built = presetIndex >= 0
+                                  ? buildAttributeFormulaAndGroups({
+                                      presetIndex,
+                                      presetSelector: presetSelector2,
+                                      componentOrder: bundleComponentOrderByPreset?.[String(presetIndex)],
+                                      componentRows,
+                                      presetSelectedByIdx: bundlePhraseVariantPresets as any,
+                                      fallbackTokenOverrides: bundleFallbackTokenOverrides,
+                                      variantTokenOptionsByVersionBaseLine: variantTokenOptionsByVersionBaseLineForBundle,
+                                      baseLineInfoByVersionBaseLine: baseLineInfoByVersionBaseLineForBundle,
+                                      variantTokenAliasOverrides: bundleVariantTokenAliasOverrides,
+                                    })
+                                  : { formula: '', components: [] as any[] }
+                                const builtComponents = built.components as AttributeComponentGroups[]
+                                const autoMeta = presetIndex >= 0
+                                  ? buildAutoRuleMetaFromSelections({
+                                      presetIndex,
+                                      presetSelector: presetSelector2,
+                                      components: builtComponents,
+                                      componentRows,
+                                      attributeGroupSelections: bundleAttributeGroupSelections,
+                                      componentOrder: bundleComponentOrderByPreset?.[String(presetIndex)],
+                                      groupOrderByPresetComponent: bundleGroupOrderByPresetComponent,
+                                      variantTokenAliasOverrides: bundleVariantTokenAliasOverrides,
+                                    })
+                                  : { text: '', items: [] as any[] }
+                                return (
+                                  <div
+                                    style={{
+                                      background: 'rgba(255, 255, 255, 0.035)',
+                                      border: '1px solid var(--color-theme-border-quaternary)',
+                                      borderRadius: 8,
+                                      padding: 10,
+                                    }}
+                                  >
+                                    <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                                      <Space wrap size={8}>
+                                        <Text type="secondary">自动拼接（用于预演 spec_text）：</Text>
+                                        <Text code style={{ marginBottom: 0 }}>
+                                          <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' }}>
+                                            {autoText || '-'}
+                                          </span>
+                                        </Text>
+                                        <Button
+                                          size="small"
+                                          type="text"
+                                          icon={<CopyOutlined />}
+                                          disabled={!autoText}
+                                          onClick={async () => {
+                                            if (!autoText) return
+                                            const ok = await copyTextToClipboard(autoText)
+                                            if (ok) message.success('已复制自动生成内容')
+                                            else message.error('复制失败：请手动复制')
+                                          }}
+                                        />
+                                        <Button
+                                          size="small"
+                                          disabled={!autoText}
+                                          onClick={() => {
+                                            if (!autoText) return
+                                            setBundleDraft((d) => ({ ...d, spec_text: autoText }))
+                                            message.success('已写入 spec_text')
+                                          }}
+                                        >
+                                          写入 spec_text
+                                        </Button>
+                                      </Space>
+
+                                      <style>{`
+                                        .bt-model-pill {
+                                          display: inline-flex;
+                                          align-items: center;
+                                          padding: 1px 6px;
+                                          border-radius: 999px;
+                                          font-weight: 700;
+                                          background: rgba(22,119,255,0.12);
+                                          border: 1px solid rgba(22,119,255,0.35);
+                                          color: #0958d9;
+                                          line-height: 16px;
+                                          font-size: 12px;
+                                        }
+                                        .bt-model-reorder-btn.ant-btn {
+                                          padding: 0 4px;
+                                          height: 18px;
+                                          line-height: 18px;
+                                          color: var(--color-theme-text-tertiary);
+                                        }
+                                        .bt-model-reorder-btn.ant-btn:not([disabled]):hover {
+                                          color: var(--color-theme-text-primary);
+                                          background: var(--color-theme-bg-tertiary);
+                                        }
+                                      `}</style>
+
+                                      <div
+                                        style={{
+                                          background: 'rgba(255, 255, 255, 0.02)',
+                                          border: '1px dashed var(--color-theme-border-quaternary)',
+                                          borderRadius: 8,
+                                          padding: 10,
+                                        }}
+                                      >
+                                        {builtComponents.length ? (
+                                          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                                            <Space wrap size={8}>
+                                              <Text type="secondary">自动生成：</Text>
+                                              {autoMeta.text ? (
+                                                <Text code>
+                                                  <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' }}>
+                                                    {autoMeta.items.map((it: any, i2: number) => (
+                                                      <span key={`ar-${presetIndex}-${i2}`}>
+                                                        {i2 > 0 ? <span>{' + '}</span> : null}
+                                                        {it.tokens.map((tk: any, j: number) => (
+                                                          <span
+                                                            key={`ar-tk-${presetIndex}-${i2}-${j}`}
+                                                            style={{ color: '#cf1322', fontWeight: 700 }}
+                                                          >
+                                                            {tk.text}
+                                                          </span>
+                                                        ))}
+                                                        <span style={it.dimsIsMissing ? { color: '#cf1322', fontWeight: 700 } : undefined}>
+                                                          {it.dims}
+                                                        </span>
+                                                      </span>
+                                                    ))}
+                                                  </span>
+                                                </Text>
+                                              ) : (
+                                                <Text code>-</Text>
+                                              )}
+                                              <Button
+                                                size="small"
+                                                type="text"
+                                                icon={<CopyOutlined />}
+                                                disabled={!autoMeta.text}
+                                                onClick={async () => {
+                                                  if (!autoMeta.text) return
+                                                  const ok = await copyTextToClipboard(autoMeta.text)
+                                                  if (ok) message.success('已复制自动生成内容')
+                                                  else message.error('复制失败：请手动复制')
+                                                }}
+                                              />
+                                            </Space>
+
+                                            {(() => {
+                                              const orderKey = String(presetIndex)
+                                              const rawOrder = bundleComponentOrderByPreset?.[orderKey]
+                                              const defaultOrder = builtComponents.map((c) => c.componentIndex)
+                                              const order =
+                                                Array.isArray(rawOrder) && rawOrder.length ? rawOrder : defaultOrder
+                                              const seen = new Set<number>()
+                                              const ordered = order
+                                                .map((i) => Number(i))
+                                                .filter((i) => Number.isFinite(i))
+                                                .filter((i) => (seen.has(i) ? false : (seen.add(i), true)))
+                                                .map((i) => builtComponents.find((c) => c.componentIndex === i))
+                                                .filter(Boolean) as AttributeComponentGroups[]
+                                              const rest = builtComponents.filter((c) => !seen.has(c.componentIndex))
+                                              return [...ordered, ...rest]
+                                            })().map((c) => {
+                                              const versionId = String((componentRowsRaw?.[c.componentIndex] as any)?.model_version_id ?? '').trim()
+                                              const label = versionId ? String(versionIdToModelLabel.get(versionId) ?? '') : ''
+                                              const modelCode = label.includes(':') ? label.split(':')[0] : label
+                                              const orderKey = String(presetIndex)
+                                              const currentOrder = bundleComponentOrderByPreset?.[orderKey] ?? []
+                                              const ordered = currentOrder.length ? currentOrder.slice() : builtComponents.map((cc) => cc.componentIndex)
+                                              const pos = ordered.indexOf(c.componentIndex)
+                                              const canUp = pos > 0
+                                              const canDown = pos >= 0 && pos < ordered.length - 1
+                                              return (
+                                                <Space key={`attr-comp-${presetIndex}-${c.componentIndex}`} wrap size={8}>
+                                                  <Space size={4} align="center">
+                                                    <span className="bt-model-pill">{modelCode || '组件'}</span>
+                                                    <Button
+                                                      size="small"
+                                                      type="text"
+                                                      className="bt-model-reorder-btn"
+                                                      icon={<ArrowUpOutlined />}
+                                                      disabled={!canUp}
+                                                      onClick={() => {
+                                                        const next = ordered.slice()
+                                                        if (pos <= 0) return
+                                                        const tmp = next[pos - 1]
+                                                        next[pos - 1] = next[pos]
+                                                        next[pos] = tmp
+                                                        setBundleComponentOrderByPreset((prev) => ({ ...(prev ?? {}), [orderKey]: next }))
+                                                      }}
+                                                    />
+                                                    <Button
+                                                      size="small"
+                                                      type="text"
+                                                      className="bt-model-reorder-btn"
+                                                      icon={<ArrowDownOutlined />}
+                                                      disabled={!canDown}
+                                                      onClick={() => {
+                                                        const next = ordered.slice()
+                                                        if (pos < 0 || pos >= next.length - 1) return
+                                                        const tmp = next[pos + 1]
+                                                        next[pos + 1] = next[pos]
+                                                        next[pos] = tmp
+                                                        setBundleComponentOrderByPreset((prev) => ({ ...(prev ?? {}), [orderKey]: next }))
+                                                      }}
+                                                    />
+                                                  </Space>
+                                                  {(() => {
+                                                    const groupOrderKey = `${presetIndex}:${c.componentIndex}`
+                                                    const order = bundleGroupOrderByPresetComponent?.[groupOrderKey] ?? []
+                                                    if (!Array.isArray(order) || !order.length) return c.groups
+                                                    const idxMap = new Map<string, number>()
+                                                    for (let i = 0; i < order.length; i++) idxMap.set(String(order[i]), i)
+                                                    return c.groups.slice().sort((a, b) => (idxMap.get(a.key) ?? 1e9) - (idxMap.get(b.key) ?? 1e9))
+                                                  })().map((g) => {
+                                                    const selKey = `${presetIndex}:${c.componentIndex}:${g.key}`
+                                                    const options = (g.options ?? []).map((x) => normalizeSingleToken(x))
+                                                    const uniq: string[] = []
+                                                    const seen = new Set<string>()
+                                                    for (const t of options) {
+                                                      const k = t || '__EMPTY__'
+                                                      if (seen.has(k)) continue
+                                                      seen.add(k)
+                                                      uniq.push(t)
+                                                    }
+                                                    const value = getEffectiveSelection({
+                                                      presetIndex,
+                                                      componentIndex: c.componentIndex,
+                                                      group: g,
+                                                      attributeGroupSelections: bundleAttributeGroupSelections,
+                                                    })
+                                                    const groupOrderKey = `${presetIndex}:${c.componentIndex}`
+                                                    const currentOrder = bundleGroupOrderByPresetComponent?.[groupOrderKey] ?? []
+                                                    const baseOrder = currentOrder.length ? currentOrder.slice() : c.groups.map((x) => x.key)
+                                                    const pos = baseOrder.indexOf(g.key)
+                                                    const canLeft = pos > 0
+                                                    const canRight = pos >= 0 && pos < baseOrder.length - 1
+                                                    const displayVariantToken = (selector2: string, rawToken: string): string => {
+                                                      const sel = String(selector2 ?? '').trim().toUpperCase()
+                                                      const t = normalizeSingleToken(rawToken)
+                                                      const alias = sel ? String((bundleVariantTokenAliasOverrides?.[sel] ?? {})?.[t] ?? '').trim() : ''
+                                                      return alias || t
+                                                    }
+                                                    return (
+                                                      <Space key={`attr-sel-${selKey}`} size={2} align="center">
+                                                        <Button
+                                                          size="small"
+                                                          type="text"
+                                                          className="bt-model-reorder-btn"
+                                                          icon={<LeftOutlined />}
+                                                          disabled={!canLeft}
+                                                          onClick={() => {
+                                                            const next = baseOrder.slice()
+                                                            if (pos <= 0) return
+                                                            const tmp = next[pos - 1]
+                                                            next[pos - 1] = next[pos]
+                                                            next[pos] = tmp
+                                                            setBundleGroupOrderByPresetComponent((prev) => ({ ...(prev ?? {}), [groupOrderKey]: next }))
+                                                          }}
+                                                        />
+                                                        <Select
+                                                          size="small"
+                                                          style={{ width: 150 }}
+                                                          value={value}
+                                                          onChange={(v) =>
+                                                            setBundleAttributeGroupSelections((prev) => ({
+                                                              ...(prev ?? {}),
+                                                              [selKey]: String(v ?? ''),
+                                                            }))
+                                                          }
+                                                          options={uniq
+                                                            .filter((x) => (g.isZeroCostGroup ? true : !!String(x).trim()))
+                                                            .map((t) => ({
+                                                              value: t,
+                                                              label: t ? displayVariantToken(presetSelector2, t) : '（无）',
+                                                            }))}
+                                                        />
+                                                        <Button
+                                                          size="small"
+                                                          type="text"
+                                                          className="bt-model-reorder-btn"
+                                                          icon={<RightOutlined />}
+                                                          disabled={!canRight}
+                                                          onClick={() => {
+                                                            const next = baseOrder.slice()
+                                                            if (pos < 0 || pos >= next.length - 1) return
+                                                            const tmp = next[pos + 1]
+                                                            next[pos + 1] = next[pos]
+                                                            next[pos] = tmp
+                                                            setBundleGroupOrderByPresetComponent((prev) => ({ ...(prev ?? {}), [groupOrderKey]: next }))
+                                                          }}
+                                                        />
+                                                      </Space>
+                                                    )
+                                                  })}
+                                                </Space>
+                                              )
+                                            })}
+                                          </Space>
+                                        ) : (
+                                          <Text type="secondary">提示：该属性规格暂无可用的互斥组下拉（可能尚未配置筛选/强制或兜底别名）。</Text>
+                                        )}
+                                      </div>
+                                    </Space>
+                                  </div>
+                                )
+                              })()
+                            )
+                          ) : null}
                           <Text type="secondary">
                             预演时会按选择器拼接：{' '}
                             <Text code>

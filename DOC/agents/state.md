@@ -1,5 +1,19 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-22（产品上架测试台：同步套装模板抽屉“自动生成”整块 + 修复 build）
+  - 本轮范围：仅前端测试台 UI/辅助生成器补齐；不改后端业务逻辑。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/ProductListingPage.tsx`
+      - 修复构建错误：补齐 `CopyOutlined` 缺失的图标导入（避免 `TS2304 Cannot find name 'CopyOutlined'`）。
+      - 套装测试（`/costing/product-listing` → “套装测试”）：把 `/costing/bundle-templates` 抽屉里的“自动生成：”整块能力复制过来：
+        - 显示“自动生成”文本（按互斥组下拉选择实时生成），并支持一键复制。
+        - 下方按“模型编码 pill + 互斥组下拉”一行展示，可组合下拉；支持模型行上下排序、互斥组左右排序（复用模板 metadata 的 order 配置）。
+        - 数据来源：复用套装模板 metadata（`phrase_variant_presets / fallback_token_overrides / variant_token_alias_overrides / component_order_by_preset / group_order_by_preset_component`），并按涉及版本拉取版本清单与变体规则，确保下拉候选完整。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+  - 下一步：
+    - 若需要进一步“与 bundle-templates 100% 一致”：可将该块抽成复用组件（避免两处逻辑漂移），并补充 UI 截图/手工验收步骤到接力包。
+
 - **最近校对（北京时间 GMT+8）**：2026-01-22（测试台：移除短语生成器 + Debug 默认开启 + 工序明细兜底展示）
   - 本轮范围：仅 UI 体验收口，不改业务逻辑。
   - 本轮产物：

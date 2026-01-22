@@ -1298,10 +1298,21 @@ export default function BundleTemplatesPage() {
         for (const baseLineId of tokenDepBaseLineIds) {
           const base = baseMap.get(String(baseLineId))
           const baseName = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
+          const isZeroCostFallback = baseName.includes('兜底-零成本')
           const forcedVariantId = String(forceMapForComp?.[String(baseLineId)] ?? '').trim()
           if (!forcedVariantId) {
-            okThisComp = false
-            issues.push({ level: 'error', message: `组件${cIdx + 1}：Z 模式下「${baseName}」依赖触发词但未强制指定（请在“筛选”里选中对应规则并保存）` })
+            if (isZeroCostFallback) {
+              issues.push({
+                level: 'warn',
+                message: `组件${cIdx + 1}：Z 模式下「${baseName}」存在依赖触发词的规则，但当前未强制指定；将按兜底分支执行（默认“无/不选”）。如需“有/选中”请在“筛选”里勾选对应强制规则并保存。`,
+              })
+            } else {
+              okThisComp = false
+              issues.push({
+                level: 'error',
+                message: `组件${cIdx + 1}：Z 模式下「${baseName}」依赖触发词但未强制指定（请在“筛选”里选中对应规则并保存）`,
+              })
+            }
             continue
           }
           const vv = variantsById.get(forcedVariantId)

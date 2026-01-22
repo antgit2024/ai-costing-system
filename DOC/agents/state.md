@@ -1,5 +1,15 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-22（标准模型：移除“当前结构标准/结构骨架”说明）
+  - 本轮范围：仅移除 UI 文案说明，不改结构标准过滤逻辑。
+  - 本轮产物：
+    - 前端：`frontend/src/components/costing/ProductModelEditorDrawer.tsx`
+      - 删除“当前结构标准：xxx（选择工艺模块候选将自动按该结构过滤）”与“结构骨架：拉链/侧边/…”的说明展示。
+    - 恢复包：更新 `DOC/agents/state.md`（本条）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+
 - **最近校对（北京时间 GMT+8）**：2026-01-22（物料组/工序组：来源模块彩色条去白框）
   - 本轮范围：仅 UI 视觉收口，不改业务逻辑。
   - 本轮产物：

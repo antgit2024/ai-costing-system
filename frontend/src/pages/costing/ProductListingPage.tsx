@@ -1158,6 +1158,7 @@ export default function ProductListingPage() {
           >
             <Space direction="vertical" style={{ width: '100%' }} size={12}>
               <Tabs
+                className="product-listing-tabs product-listing-tabs--left"
                 activeKey={mode}
                 onChange={(k) => {
                   setMode(k as any)
@@ -2221,6 +2222,7 @@ export default function ProductListingPage() {
               </Space>
             ) : (
               <Tabs
+                className="product-listing-tabs product-listing-tabs--right"
                 items={[
                 ...(mode === 'single'
                   ? ([

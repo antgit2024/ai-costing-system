@@ -1,5 +1,17 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-22（产品上架测试台：Tabs 选中态改为淡蓝高对比）
+  - 本轮范围：仅 UI 视觉收口，不改业务逻辑。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/ProductListingPage.tsx`
+      - 左侧模式 Tabs（模型测试/套装测试/规格生成/利润推演/店铺预演）与右侧结果 Tabs（解析结果/命中情况/最终 BOM/套装组件命中）：为 Tabs 添加页面级 className。
+    - 样式：`frontend/src/index.css`
+      - 新增 `.product-listing-tabs` 的 active tab 颜色与 ink bar，使用与提示 icon 一致的淡蓝（`--ant-color-info` / `--ant-color-primary`），避免选中态灰色贴底不易识别。
+    - 恢复包：更新 `DOC/agents/state.md`（本条）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+
 - **最近校对（北京时间 GMT+8）**：2026-01-22（标准模型：移除“当前结构标准/结构骨架”说明）
   - 本轮范围：仅移除 UI 文案说明，不改结构标准过滤逻辑。
   - 本轮产物：

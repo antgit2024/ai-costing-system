@@ -545,6 +545,17 @@ a {
   color: rgba(255, 214, 102, 0.98) !important;
 }
 
+/* ===== Product listing testbench tabs: active color should be readable ===== */
+.product-listing-tabs {
+  --product-listing-active-tab-color: var(--ant-color-info, var(--ant-color-primary, #1677ff));
+}
+.product-listing-tabs .ant-tabs-tab.ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: var(--product-listing-active-tab-color) !important;
+}
+.product-listing-tabs .ant-tabs-ink-bar {
+  background: var(--product-listing-active-tab-color) !important;
+}
+
 .planner-toolbar {
   margin-bottom: 16px;
   display: flex;

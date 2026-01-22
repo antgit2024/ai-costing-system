@@ -4230,7 +4230,6 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                             height: 14,
                                             borderRadius: 2,
                                             background: getColorForModuleKey(k),
-                                            border: '1px solid #e5e5e5',
                                             display: 'inline-block',
                                           }}
                                         />
@@ -4277,7 +4276,6 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                     background: r?.source_module_id || r?.source_module_code
                                       ? getColorForModuleKey(String(r.source_module_id ?? r.source_module_code))
                                       : '#ffffff',
-                                    border: '1px solid #e5e5e5',
                                   }}
                                 />
                                 {r.material_code ? (
@@ -5024,7 +5022,6 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                             height: 14,
                                             borderRadius: 2,
                                             background: getColorForModuleKey(k),
-                                            border: '1px solid #e5e5e5',
                                             display: 'inline-block',
                                           }}
                                         />
@@ -5072,7 +5069,6 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                     background: r?.source_module_id || r?.source_module_code
                                       ? getColorForModuleKey(String(r.source_module_id ?? r.source_module_code))
                                       : '#ffffff',
-                                    border: '1px solid #e5e5e5',
                                   }}
                                 />
                                 {r.process_code ? <CodePill code={r.process_code} color="#595959" /> : null}

@@ -1,5 +1,15 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-22（物料组/工序组：来源模块彩色条去白框）
+  - 本轮范围：仅 UI 视觉收口，不改业务逻辑。
+  - 本轮产物：
+    - 前端：`frontend/src/components/costing/ProductModelEditorDrawer.tsx`
+      - 右侧“物料组/工序组”列表中，每条记录前的“来源模块彩色条”（含汇总视图与明细视图）移除白色边框（去掉 `border: 1px solid #e5e5e5`），避免出现白框噪音。
+    - 恢复包：更新 `DOC/agents/state.md`（本条）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+
 - **最近校对（北京时间 GMT+8）**：2026-01-22（工艺模块：编码前竖条色块收口为 1px）
   - 本轮范围：仅 UI 视觉收口，不改业务逻辑。
   - 本轮产物：

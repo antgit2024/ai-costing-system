@@ -2326,7 +2326,7 @@ export default function BundleTemplatesPage() {
                                     {hasChild ? (
                                       <Tag color="orange">一级（含二级×{childRows.length}）</Tag>
                                     ) : (
-                                      <Tag color={v?.enabled ? 'green' : 'default'}>{v?.enabled ? 'enabled' : 'disabled'}</Tag>
+                                      <Tag color={v?.enabled ? 'green' : 'default'}>{v?.enabled ? '已启用' : '未启用'}</Tag>
                                     )}
                                     <Tag>priority: {String(v?.priority ?? '-')}</Tag>
                                     <Tag>stop_on_hit: {String(!!v?.stop_on_hit)}</Tag>

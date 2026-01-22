@@ -2403,14 +2403,14 @@ export default function ProductListingPage() {
                         columns={[
                           { title: '编码', dataIndex: 'material_code', width: 120, render: (v) => v ?? '-' },
                           { title: '名称', dataIndex: 'material_name', width: 220, ellipsis: true, render: (v) => v ?? '-' },
-                          { title: '数量', dataIndex: 'computed_quantity', width: 120, render: (v) => (v == null ? '-' : String(v)) },
+                          { title: '数量', dataIndex: 'computed_quantity', width: 90, render: (v) => (v == null ? '-' : String(v)) },
                           { title: '单位', dataIndex: 'unit_of_measure', width: 90, render: (v) => v ?? '-' },
-                          { title: '计量方式', dataIndex: 'calculation_method', width: 110, render: (v) => String(v ?? '-') },
+                          { title: '计量方式', dataIndex: 'calculation_method', width: 90, render: (v) => String(v ?? '-') },
                           { title: '损耗%', dataIndex: 'loss_rate', width: 90, render: (v) => (v == null ? '-' : String(v)) },
                           {
                             title: 'BOM单价',
                             dataIndex: 'bom_unit_price',
-                            width: 130,
+                            width: 90,
                             render: (v) => {
                               const miss = v == null || v === ''
                               return (
@@ -2424,7 +2424,7 @@ export default function ProductListingPage() {
                           {
                             title: '行成本',
                             dataIndex: 'line_cost',
-                            width: 130,
+                            // 最后一列不固定宽度，保持整体更自然
                             render: (v, r: any) => {
                               const miss = (r as any)?.bom_unit_price == null || (r as any)?.bom_unit_price === ''
                               return (
@@ -2490,11 +2490,11 @@ export default function ProductListingPage() {
                             { title: '物料编码', dataIndex: 'material_code', width: 120, ellipsis: true },
                             { title: '物料名称', dataIndex: 'material_name', width: 220, ellipsis: true },
                             { title: '单位', dataIndex: 'unit_of_measure', width: 90 },
-                            { title: '扣库数量', dataIndex: 'quantity', width: 140 },
+                            { title: '扣库数量', dataIndex: 'quantity', width: 90 },
                             {
                               title: '来源(展开)',
                               dataIndex: 'sources',
-                              width: 110,
+                              // 最后一列不固定宽度，保持整体更自然
                               render: (v) => (Array.isArray(v) ? v.length : 0),
                             },
                           ]}

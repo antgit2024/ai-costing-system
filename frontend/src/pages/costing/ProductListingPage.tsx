@@ -1203,24 +1203,35 @@ export default function ProductListingPage() {
     const traceAny = (bom?.trace ?? {}) as any
     const arr = traceAny?.costing?.process_lines
     if (Array.isArray(arr) && arr.length) return arr
-    // 套装合并BOM：后端可能把工序明细放在 components.trace.costing.process_lines
-    const comps = traceAny?.components
-    if (!Array.isArray(comps) || !comps.length) return []
     const out: any[] = []
-    for (let i = 0; i < comps.length; i += 1) {
-      const c = comps[i] as any
-      const lines =
-        (((c?.trace ?? {}) as any)?.costing ?? {})?.process_lines ??
-        (((c ?? {}) as any)?.costing ?? {})?.process_lines ??
-        (((c?.trace ?? {}) as any)?.costing ?? {})?.processes ??
-        (((c ?? {}) as any)?.costing ?? {})?.processes
-      if (!Array.isArray(lines) || !lines.length) continue
-      for (const r of lines) {
-        out.push({ ...(r as any), component_index: c?.component_index ?? i })
+
+    const collectFromComponents = (comps: any[]) => {
+      for (let i = 0; i < comps.length; i += 1) {
+        const c = comps[i] as any
+        const lines =
+          (((c?.trace ?? {}) as any)?.costing ?? {})?.process_lines ??
+          (((c ?? {}) as any)?.costing ?? {})?.process_lines ??
+          (((c?.trace ?? {}) as any)?.costing ?? {})?.processes ??
+          (((c ?? {}) as any)?.costing ?? {})?.processes
+        if (!Array.isArray(lines) || !lines.length) continue
+        for (const r of lines) out.push({ ...(r as any), component_index: c?.component_index ?? i })
       }
     }
+
+    // 兜底 1：合并 BOM trace 里若包含 components
+    const compsInTrace = traceAny?.components
+    if (Array.isArray(compsInTrace) && compsInTrace.length) collectFromComponents(compsInTrace)
+
+    // 兜底 2：套装 debug 返回的 components（常见：工序明细只在 debug components 内）
+    if (!out.length && mode === 'multi') {
+      const compsDebug = (bundleComponentsDebug ?? []) as any[]
+      if (Array.isArray(compsDebug) && compsDebug.length) collectFromComponents(compsDebug)
+      const compsDebugRaw = (bundleDebugRaw?.components ?? []) as any[]
+      if (!out.length && Array.isArray(compsDebugRaw) && compsDebugRaw.length) collectFromComponents(compsDebugRaw)
+    }
+
     return out
-  }, [bom])
+  }, [bom, mode, bundleComponentsDebug, bundleDebugRaw])
 
   const inventoryLines = useMemo(() => {
     const traceAny = (bom?.trace ?? {}) as any

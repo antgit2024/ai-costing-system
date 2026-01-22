@@ -1,5 +1,13 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-22（产品上架测试台：套装工序明细从 debug components 兜底汇总）
+  - 本轮范围：仅前端展示兜底；不改后端业务逻辑。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/ProductListingPage.tsx`
+      - 套装预演时，若合并 BOM 的 `trace.costing.process_lines` 与 `trace.components` 均为空，则从 `bundleComponentsDebug` / `bundleDebugRaw.components` 汇总 `process_lines`，避免右侧“工序”持续显示空态。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-22（产品上架测试台：工序兜底解析增强 + 过滤兜底-零成本虚拟物料警告 + 自动生成空行修复）
   - 本轮范围：仅前端展示/提示收口；不改后端业务逻辑。
   - 本轮产物：

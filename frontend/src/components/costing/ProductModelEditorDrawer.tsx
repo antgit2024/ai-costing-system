@@ -2512,6 +2512,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   const [versionOpLoading, setVersionOpLoading] = useState(false)
   const [derivingStandardFromSampleId, setDerivingStandardFromSampleId] = useState<string | null>(null)
 
+  const hasPublishedStandardVersion = useMemo(() => {
+    return (versions ?? []).some((v: any) => String(v?.version_kind ?? '') === 'standard' && String(v?.version_status ?? '') === 'published')
+  }, [versions])
+
   const stripCopySuffixIfAny = (label: string): string => {
     const s = String(label ?? '').trim()
     // 兼容旧行为：去掉末尾 “（复制）”
@@ -3062,7 +3066,18 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                       name="model_name"
                       rules={[{ required: true, message: entryContext === 'sample' ? '请输入打样名称' : '请输入模型名称' }]}
                     >
-                      <Input style={{ width: 260 }} />
+                      <Tooltip
+                        title={
+                          entryContext !== 'sample' && hasPublishedStandardVersion
+                            ? '该模型已有“已发布标准版本”，为避免线上映射口径变化，模型名称已锁定不可编辑。'
+                            : undefined
+                        }
+                      >
+                        <Input
+                          style={{ width: 260 }}
+                          disabled={entryContext !== 'sample' && hasPublishedStandardVersion}
+                        />
+                      </Tooltip>
                     </Form.Item>
                     {entryContext === 'sample' ? (
                       <Form.Item label="打样人员" name="sample_owner">

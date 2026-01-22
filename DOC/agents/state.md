@@ -1,5 +1,14 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-22（模型发布后锁定模型名称不可编辑）
+  - 本轮范围：仅 UI 限制，不改后端接口。
+  - 本轮产物：
+    - 前端：`frontend/src/components/costing/ProductModelEditorDrawer.tsx`
+      - 当模型存在“已发布 standard 版本”时，基础信息中的“模型名称”输入框禁用，并提示“名称已锁定不可编辑”。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+
 - **最近校对（北京时间 GMT+8）**：2026-01-22（标准模型：复制版本命名规则与复制失败修复）
   - 本轮范围：仅修复“复制版本失败”的稳定性与默认命名规则，不改业务逻辑。
   - 本轮产物：

@@ -2459,7 +2459,7 @@ export default function ProductListingPage() {
                             {
                               title: '警告',
                               dataIndex: 'warnings',
-                              width: 220,
+                              // 最后一列自然宽度：吸收剩余空间，避免把额外宽度挤到“工序名称”
                               render: (v) =>
                                 Array.isArray(v) && v.length ? <Text type="warning">{String(v.join('；'))}</Text> : '-',
                             },

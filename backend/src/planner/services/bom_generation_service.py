@@ -9,6 +9,90 @@ from .. import models
 from . import bundle_template_service, line_variant_service, product_model_service, spec_parser_service
 
 
+def _stable_base_line_key_from_row(row: models.ModelVersionMaterial) -> str:
+    meta = row.metadata_json or {}
+    t = str(getattr(row, "material_type", "") or "").strip()
+    ref = str(getattr(row, "material_ref_id", "") or "").strip()
+    code = str(getattr(row, "material_code", "") or "").strip()
+    mod = str(meta.get("source_module_id") or getattr(row, "source_module_id", "") or "").strip()
+    slot = str(meta.get("structure_slot") or "").strip()
+    seq = str(getattr(row, "sequence_order", "") or "").strip()
+    parts = [f"t={t}", f"ref={ref}", f"code={code}", f"mod={mod}", f"slot={slot}", f"seq={seq}"]
+    return "|".join([p for p in parts if p and not p.endswith("=")])
+
+
+def _stable_variant_key_from_variant(v: models.ProductModelLineVariant) -> str:
+    cond = v.conditions_json or {}
+    any_tokens = cond.get("spec_contains_any") or []
+    all_tokens = cond.get("spec_contains_all") or []
+    tokens_raw: List[str] = []
+    for x in list(any_tokens) + list(all_tokens):
+        s = str(x or "").strip()
+        if not s:
+            continue
+        up = s.upper()
+        if up.startswith("MODEL:") or up.startswith("M:") or up.startswith("BOUND_VERSION:") or up.startswith("SKU:"):
+            continue
+        tokens_raw.append(s)
+    tok = ",".join(sorted(set(tokens_raw)))
+    outs: List[str] = []
+    for it in list(v.items or []):
+        outs.append(str(getattr(it, "material_ref_id", None) or getattr(it, "material_code", None) or "").strip())
+    out = ",".join([x for x in outs if x])
+    act = str(v.action or "").strip()
+    pr = str(v.priority if v.priority is not None else "").strip()
+    stop = "true" if bool(v.stop_on_hit) else "false"
+    parts = [f"act={act}", f"prio={pr}", f"stop={stop}", f"out={out}"]
+    if tok:
+        parts.append(f"tok={tok}")
+    return "|".join([p for p in parts if p and not p.endswith("=")])
+
+
+def _rebind_force_map_by_stable_keys(
+    *,
+    base_lines: List[models.ModelVersionMaterial],
+    variants_by_line: Dict[str, List[models.ProductModelLineVariant]],
+    stable_map_raw: Any,
+    include_disabled_variants: bool,
+) -> Dict[str, str]:
+    """
+    stable_map_raw shape: { "<base_line_key>": "<variant_key>" }
+    returns: { "<base_line_id>": "<variant_id>" } best-effort
+    """
+    if not isinstance(stable_map_raw, dict):
+        return {}
+    base_key_to_id: Dict[str, str] = {}
+    for row in base_lines:
+        k = _stable_base_line_key_from_row(row)
+        if k and k not in base_key_to_id:
+            base_key_to_id[k] = str(row.id)
+    variant_key_to_id_by_base: Dict[str, Dict[str, str]] = {}
+    for base_id, arr in (variants_by_line or {}).items():
+        inner: Dict[str, str] = {}
+        for v in arr or []:
+            if (not include_disabled_variants) and (v.enabled is False):
+                continue
+            vk = _stable_variant_key_from_variant(v)
+            if vk and vk not in inner:
+                inner[vk] = str(v.id)
+        variant_key_to_id_by_base[str(base_id)] = inner
+
+    out: Dict[str, str] = {}
+    for base_key, variant_key in stable_map_raw.items():
+        bk = str(base_key or "").strip()
+        vk = str(variant_key or "").strip()
+        if not bk or not vk:
+            continue
+        base_id = base_key_to_id.get(bk)
+        if not base_id:
+            continue
+        variant_id = (variant_key_to_id_by_base.get(str(base_id)) or {}).get(vk)
+        if not variant_id:
+            continue
+        out[str(base_id)] = str(variant_id)
+    return out
+
+
 def _parse_bundle_scoped_phrases(spec_text: str) -> List[Dict[str, Any]]:
     """
     Parse customer-facing spec_text to extract scoped phrases with counts, e.g.:
@@ -373,6 +457,9 @@ def generate_bom_by_spec(
                         # Optional: force a specific line-variant per base_line_id (used by bundle template UI "指定(强制命中)")
                         # Shape: { "<base_line_id>": "<variant_id>" }
                         "force_variant_by_base_line": c.get("force_variant_by_base_line") or {},
+                        # Optional: stable key mapping for cross-version rebinding
+                        # Shape: { "<base_line_key>": "<variant_key>" }
+                        "force_variant_by_base_line_stable": c.get("force_variant_by_base_line_stable") or {},
                     }
                 )
             if not comps_new:
@@ -1011,6 +1098,13 @@ def generate_bom_bundle(
                 vv = str(v or "").strip()
                 if kk and vv:
                     force_map[kk] = vv
+        # Rebind by stable keys (for copied/new-published versions where base_line_id/variant_id changed)
+        stable_force_by_base = _rebind_force_map_by_stable_keys(
+            base_lines=list(base_lines),
+            variants_by_line=variants_by_line,
+            stable_map_raw=comp.get("force_variant_by_base_line_stable") or {},
+            include_disabled_variants=include_disabled_variants,
+        )
 
         spec_text = str(comp.get("spec_text") or "").strip()
         spec_result = spec_parser_service.parse_spec(spec_text)
@@ -1044,12 +1138,26 @@ def generate_bom_bundle(
             additions: List[Dict[str, Any]] = []
 
             forced_variant_id = force_map.get(str(row.id))
+            if not forced_variant_id:
+                forced_variant_id = stable_force_by_base.get(str(row.id))
+
             if forced_variant_id:
                 forced_variant = next((v for v in variant_rules if str(v.id) == str(forced_variant_id)), None)
                 if not forced_variant:
+                    rebound_id = stable_force_by_base.get(str(row.id))
+                    if rebound_id and str(rebound_id) != str(forced_variant_id):
+                        forced_variant_id = str(rebound_id)
+                        forced_variant = next((v for v in variant_rules if str(v.id) == str(forced_variant_id)), None)
+                if not forced_variant:
                     raise ValueError(f"components[{idx}] 强制命中失败：base_line_id={row.id} 未找到 variant_id={forced_variant_id}")
-                if not forced_variant.enabled and not include_disabled_variants:
-                    raise ValueError(f"components[{idx}] 强制命中失败：所选规则已禁用 variant_id={forced_variant_id}")
+
+                if (forced_variant.enabled is False) and (not include_disabled_variants):
+                    rebound_id = stable_force_by_base.get(str(row.id))
+                    if rebound_id and str(rebound_id) != str(forced_variant_id):
+                        forced_variant_id = str(rebound_id)
+                        forced_variant = next((v for v in variant_rules if str(v.id) == str(forced_variant_id)), None)
+                    if (not forced_variant) or (forced_variant.enabled is False):
+                        raise ValueError(f"components[{idx}] 强制命中失败：所选规则已禁用 variant_id={forced_variant_id}")
 
                 produced = [
                     _materialize_variant_item(

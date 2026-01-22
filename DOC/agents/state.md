@@ -1,5 +1,18 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-22（Z 强制绑定：引入稳定键并支持跨版本重绑定）
+  - 本轮范围：补齐“发布版不可编辑 + 新版本发布”场景下的引用稳定性；避免 `base_line_id/variant_id` 复制后失效导致套装乱套。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/BundleTemplatesPage.tsx`
+      - 在“指定(强制命中)”写入 `force_variant_by_base_line_stable`（稳定键映射：`base_line_key -> variant_key`），与现有 `force_variant_by_base_line` 并存，兼容旧数据。
+    - 后端：`backend/src/planner/services/bom_generation_service.py`
+      - 组件执行强制命中时，若 `base_line_id/variant_id` 在新版本中失效/变化，尝试用稳定键映射自动重绑定到新版本对应行/规则，再执行。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+  - 下一步：
+    - 把“清理失效规则”扩展为：对 `enabled=false` 的强制规则也可一键清理/提示（进一步防呆）。
+    - 若出现稳定键碰撞（同 module/slot 下重复材料位），再补充更强的 disambiguation 字段（例如 sequence_order 或结构位 index）。
+
 - **最近校对（北京时间 GMT+8）**：2026-01-22（筛选弹窗：规则状态改为中文“已启用/未启用”）
   - 本轮范围：仅文案展示；不改业务逻辑。
   - 本轮产物：

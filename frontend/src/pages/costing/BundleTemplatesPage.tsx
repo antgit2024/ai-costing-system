@@ -65,6 +65,9 @@ type ComponentRow = {
   // 指定(强制命中)：可选强制指定某个 base_line_id 使用某条 line-variant
   // shape: { "<base_line_id>": "<variant_id>" }
   force_variant_by_base_line?: Record<string, string>
+  // 指定(强制命中)：稳定键映射（用于跨版本复制/新发布后的自动重绑定）
+  // shape: { "<base_line_key>": "<variant_key>" }
+  force_variant_by_base_line_stable?: Record<string, string>
 }
 
 type PhrasePresetRow = {
@@ -134,6 +137,45 @@ const extractTokensForVariant = (v: any): string[] => {
     uniq.push(k)
   }
   return uniq
+}
+
+const buildBaseLineStableKey = (line: any): string => {
+  if (!line || typeof line !== 'object') return ''
+  const meta = (line?.metadata_json ?? line?.metadata ?? {}) as any
+  const t = String(line?.material_type ?? '').trim()
+  const ref = String(line?.material_ref_id ?? '').trim()
+  const code = String(line?.material_code ?? '').trim()
+  const slot = String(meta?.structure_slot ?? '').trim()
+  const mod = String(meta?.source_module_id ?? line?.source_module_id ?? '').trim()
+  const seq = Number.isFinite(Number(line?.sequence_order)) ? String(Number(line.sequence_order)) : ''
+  // Stable key: prioritize ref + module + slot + seq; keep type/code for debug/readability.
+  return [`t=${t}`, `ref=${ref}`, `code=${code}`, `mod=${mod}`, `slot=${slot}`, `seq=${seq}`].filter(Boolean).join('|')
+}
+
+const buildVariantStableKey = (v: any): string => {
+  if (!v || typeof v !== 'object') return ''
+  const cond = (v?.conditions ?? v?.conditions_json ?? {}) as any
+  const anyTokens = Array.isArray(cond?.spec_contains_any) ? cond.spec_contains_any : []
+  const allTokens = Array.isArray(cond?.spec_contains_all) ? cond.spec_contains_all : []
+  const tokensRaw = [...anyTokens, ...allTokens]
+    .map((x) => String(x ?? '').trim())
+    .filter(Boolean)
+    .filter((s) => {
+      const up = s.toUpperCase()
+      return !(up.startsWith('MODEL:') || up.startsWith('M:') || up.startsWith('BOUND_VERSION:') || up.startsWith('SKU:'))
+    })
+  const tok = Array.from(new Set(tokensRaw)).sort((a, b) => a.localeCompare(b, 'zh-Hans-CN')).join(',')
+  const items = Array.isArray(v?.items) ? v.items : []
+  const out = items
+    .slice()
+    .sort((a: any, b: any) => Number(a?.sequence_order ?? 0) - Number(b?.sequence_order ?? 0))
+    .map((it: any) => String(it?.material_ref_id ?? it?.material_code ?? '').trim())
+    .filter(Boolean)
+    .join(',')
+  const act = String(v?.action ?? '').trim()
+  const pr = String(v?.priority ?? '').trim()
+  const stop = String(!!v?.stop_on_hit)
+  return [`act=${act}`, `prio=${pr}`, `stop=${stop}`, `out=${out}`, tok ? `tok=${tok}` : ''].filter(Boolean).join('|')
 }
 
 const normalizeBundleToken = (raw: any): string => {
@@ -1590,7 +1632,27 @@ export default function BundleTemplatesPage() {
                 // 变体：填充 spec_text（需要交易规格解析命中）
                 // 指定：注入 tokens（不依赖交易规格解析，直接强制命中）
                 if (presetApplyMode === 'force') {
-                  return { ...cc, spec_text: '', tokens, force_variant_by_base_line: forceVariantByBaseLine }
+                  // 同时写入“稳定键映射”，用于跨版本复制/新发布后的自动重绑定
+                  const versionId = String((cc as any)?.model_version_id ?? '').trim()
+                  const baseMap = baseLineMapByVersion.get(versionId) ?? new Map<string, any>()
+                  const stableMap: Record<string, string> = {}
+                  for (const [baseLineId, variantId] of Object.entries(forceVariantByBaseLine)) {
+                    const baseLine = baseMap.get(String(baseLineId))
+                    const baseKey = buildBaseLineStableKey(baseLine)
+                    if (!baseKey) continue
+                    const variants = presetVariantsByBaseLine.get(String(baseLineId)) ?? []
+                    const vv = variants.find((x: any) => String(x?.id ?? '') === String(variantId))
+                    const variantKey = buildVariantStableKey(vv)
+                    if (!variantKey) continue
+                    stableMap[baseKey] = variantKey
+                  }
+                  return {
+                    ...cc,
+                    spec_text: '',
+                    tokens,
+                    force_variant_by_base_line: forceVariantByBaseLine,
+                    force_variant_by_base_line_stable: Object.keys(stableMap).length ? stableMap : undefined,
+                  }
                 }
                 return { ...cc, spec_text: nextText, tokens: [], force_variant_by_base_line: undefined }
               }),
@@ -1703,6 +1765,10 @@ export default function BundleTemplatesPage() {
                     tokens: Array.isArray(c?.tokens) ? c.tokens.map((x: any) => String(x)).filter(Boolean) : [],
                     force_variant_by_base_line:
                       c?.force_variant_by_base_line && typeof c.force_variant_by_base_line === 'object' ? c.force_variant_by_base_line : undefined,
+                    force_variant_by_base_line_stable:
+                      c?.force_variant_by_base_line_stable && typeof c.force_variant_by_base_line_stable === 'object'
+                        ? c.force_variant_by_base_line_stable
+                        : undefined,
                   }))
                   .filter((c: any) => !!c.model_version_id)
               : [],

@@ -1998,8 +1998,12 @@ export default function ProductListingPage() {
                               <Alert
                                 type="info"
                                 showIcon
-                                message="Z 指定型：无需 TOKEN 和尺寸编码，直接解析。"
-                                description="说明：Z 模式不依赖交易规格里的触发词/尺寸段来命中组件；系统会自动按 Z 前缀选择对应属性规格并生成最终 BOM。"
+                                message={<span style={{ fontSize: 12 }}>Z 指定型：无需 TOKEN 和尺寸编码，直接解析。</span>}
+                                description={
+                                  <span style={{ fontSize: 12 }}>
+                                    说明：Z 模式不依赖交易规格里的触发词/尺寸段来命中组件；系统会自动按 Z 前缀选择对应属性规格并生成最终 BOM。
+                                  </span>
+                                }
                               />
                             ) : (
                               (() => {
@@ -2018,10 +2022,6 @@ export default function ProductListingPage() {
                                 const hit = hitInfo.hit
                                 const presetIndex = hitInfo.presetIndex
                                 const presetSelector2 = String((hit as any)?.selector ?? '').trim().toUpperCase() || (presetIndex >= 0 ? toSelector2(presetIndex) : sel)
-                                const phrase = String(hit?.phrase ?? '').trim()
-                                const code = String(bundleDraft.bundle_code ?? '').trim()
-                                const token = code ? toBundleTokenDash(code, sel, selectedBundlePresetPrefix) : ''
-                                const autoText = phrase && token ? `${phrase}(${token})` : phrase || token
                                 const componentRowsRaw = Array.isArray((hit as any)?.components) ? ((hit as any).components as any[]) : []
                                 const componentRows = componentRowsRaw.map((c: any) => ({
                                   ...c,
@@ -2065,38 +2065,6 @@ export default function ProductListingPage() {
                                     }}
                                   >
                                     <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                                      <Space wrap size={8}>
-                                        <Text type="secondary">自动拼接（用于预演 spec_text）：</Text>
-                                        <Text code style={{ marginBottom: 0 }}>
-                                          <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' }}>
-                                            {autoText || '-'}
-                                          </span>
-                                        </Text>
-                                        <Button
-                                          size="small"
-                                          type="text"
-                                          icon={<CopyOutlined />}
-                                          disabled={!autoText}
-                                          onClick={async () => {
-                                            if (!autoText) return
-                                            const ok = await copyTextToClipboard(autoText)
-                                            if (ok) message.success('已复制自动生成内容')
-                                            else message.error('复制失败：请手动复制')
-                                          }}
-                                        />
-                                        <Button
-                                          size="small"
-                                          disabled={!autoText}
-                                          onClick={() => {
-                                            if (!autoText) return
-                                            setBundleDraft((d) => ({ ...d, spec_text: autoText }))
-                                            message.success('已写入 spec_text')
-                                          }}
-                                        >
-                                          写入 spec_text
-                                        </Button>
-                                      </Space>
-
                                       <style>{`
                                         .bt-model-pill {
                                           display: inline-flex;

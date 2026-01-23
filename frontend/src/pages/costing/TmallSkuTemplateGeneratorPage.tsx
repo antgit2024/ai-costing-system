@@ -331,6 +331,7 @@ type MainPatternOption = { key: string; label: string }
 type PersistedConfigV1 = {
   merchantSkuPrefix: string
   merchantSkuSuffix: string
+  listingChannel?: 'tmall' | 'jd' | 'xhs' | 'douyin'
   sizes: SizeRow[]
   colors: Array<TmallColorOption & { enabledSizes?: Record<string, boolean>; source_code?: string }>
   mainPatternTypes: Array<MainPatternOption & { remark?: string }>
@@ -371,6 +372,8 @@ const copyText = async (text: string) => {
 }
 
 type DisplayMode = 'table' | 'matrix'
+
+type ListingChannel = 'tmall' | 'jd' | 'xhs' | 'douyin'
 
 type SpecRow = {
   row_key: string
@@ -415,6 +418,7 @@ export default function TmallSkuTemplateGeneratorPage() {
 
   const [merchantSkuPrefix, setMerchantSkuPrefix] = useState('BZPB008XXXXX-')
   const [merchantSkuSuffix, setMerchantSkuSuffix] = useState('')
+  const [listingChannel, setListingChannel] = useState<ListingChannel>('tmall')
 
   const [sizes, setSizes] = useState<SizeRow[]>([
     { key: 'size_1', label: '枕芯+枕套', size_code: 'C1', source_code: '' },
@@ -509,6 +513,7 @@ export default function TmallSkuTemplateGeneratorPage() {
         saveTemplateConfig(templateId, legacyParsed as any)
         if (legacyParsed?.merchantSkuPrefix) setMerchantSkuPrefix(legacyParsed.merchantSkuPrefix)
         if (legacyParsed?.merchantSkuSuffix !== undefined) setMerchantSkuSuffix(legacyParsed.merchantSkuSuffix)
+        if ((legacyParsed as any)?.listingChannel) setListingChannel((legacyParsed as any).listingChannel as any)
         if (Array.isArray(legacyParsed?.sizes) && legacyParsed.sizes.length) setSizes(legacyParsed.sizes)
         if (Array.isArray(legacyParsed?.colors) && legacyParsed.colors.length) {
           setColors(
@@ -538,6 +543,7 @@ export default function TmallSkuTemplateGeneratorPage() {
       }
       if (parsed?.merchantSkuPrefix) setMerchantSkuPrefix(parsed.merchantSkuPrefix)
       if (parsed?.merchantSkuSuffix !== undefined) setMerchantSkuSuffix(parsed.merchantSkuSuffix)
+      if ((parsed as any)?.listingChannel) setListingChannel((parsed as any).listingChannel as any)
       if (Array.isArray(parsed?.sizes) && parsed.sizes.length) setSizes(parsed.sizes)
       if (Array.isArray(parsed?.colors) && parsed.colors.length) {
         setColors(
@@ -675,6 +681,7 @@ export default function TmallSkuTemplateGeneratorPage() {
       const data: PersistedConfigV1 = {
         merchantSkuPrefix,
         merchantSkuSuffix,
+        listingChannel,
         sizes,
         colors,
         mainPatternTypes,
@@ -707,6 +714,7 @@ export default function TmallSkuTemplateGeneratorPage() {
     templateType,
     merchantSkuPrefix,
     merchantSkuSuffix,
+    listingChannel,
     sizes,
     colors,
     mainPatternTypes,
@@ -1122,6 +1130,15 @@ export default function TmallSkuTemplateGeneratorPage() {
     }
   }
 
+  const doExportTemplateXlsxByChannel = async () => {
+    // 预留：后续按渠道导出不同字段/表头/映射
+    if (listingChannel !== 'tmall') {
+      message.info('暂仅支持导出“天猫”模板（其他渠道后续按字段差异补齐）')
+      return
+    }
+    await doExport()
+  }
+
   const doFillTemplateAndDownload = async () => {
     if (!templateFile) {
       message.warning('请先上传天猫官方模板（xls/xlsx）')
@@ -1449,6 +1466,27 @@ export default function TmallSkuTemplateGeneratorPage() {
                 <Text type="secondary">行数：{specRows.length}</Text>
                 <Button size="small" onClick={validateAllSpecRows}>
                   检验
+                </Button>
+                <Text type="secondary">上架渠道</Text>
+                <Select
+                  size="small"
+                  style={{ width: 160 }}
+                  value={listingChannel}
+                  options={[
+                    { label: '天猫', value: 'tmall' },
+                    { label: '京东', value: 'jd' },
+                    { label: '小红书', value: 'xhs' },
+                    { label: '抖音', value: 'douyin' },
+                  ]}
+                  onChange={(v) => setListingChannel(v as ListingChannel)}
+                />
+                <Button
+                  size="small"
+                  icon={<DownloadOutlined />}
+                  loading={loadingExport}
+                  onClick={doExportTemplateXlsxByChannel}
+                >
+                  导出模板xlsx
                 </Button>
               </Space>
             }

@@ -55,7 +55,7 @@ const App = () => {
           <Route path="/costing/product-listing" element={<ProductListingPage />} />
           <Route path="/costing/bundle-templates" element={<BundleTemplatesPage />} />
           <Route path="/costing/tmall-sku-generator" element={<SpecModulesPage />} />
-          <Route path="/costing/tmall-sku-generator/mvp" element={<TmallSkuTemplateGeneratorPage />} />
+          <Route path="/costing/tmall-sku-generator/:templateId" element={<TmallSkuTemplateGeneratorPage />} />
           <Route path="/costing/sku-master" element={<SkuMasterWorkspacePage />} />
           <Route path="/costing/production-scan" element={<ProductionScanPage />} />
           <Route path="/costing/spec-matching" element={<SkuSpecMatchingPage />} />

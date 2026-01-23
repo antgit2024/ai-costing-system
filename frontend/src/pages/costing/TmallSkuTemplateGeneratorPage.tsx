@@ -12,6 +12,7 @@ import {
   UploadOutlined,
 } from '@ant-design/icons'
 import * as XLSX from 'xlsx'
+import { useParams } from 'react-router-dom'
 
 import {
   exportTmallSkuTemplateXlsx,
@@ -24,6 +25,15 @@ import {
   type TmallSkuCell,
   type TmallSkuRow,
 } from '@/services/planner'
+
+import {
+  computeMatrixCountFromConfig,
+  loadTemplateConfig,
+  loadTemplateIndex,
+  saveTemplateConfig,
+  upsertTemplateMeta,
+  type SpecModuleType,
+} from './tmallSkuGeneratorTemplates'
 
 const { Text } = Typography
 
@@ -258,7 +268,6 @@ type PersistedConfigV1 = {
   }
 }
 
-const STORAGE_KEY = 'tmall_sku_generator_config_v1'
 const STORAGE_PROFILES_KEY = 'tmall_sku_generator_profiles_v1'
 
 const downloadText = (text: string, filename: string) => {
@@ -318,6 +327,11 @@ type SpecEdits = Record<
 >
 
 export default function TmallSkuTemplateGeneratorPage() {
+  const params = useParams()
+  const templateId = String((params as any)?.templateId ?? 'mvp').trim() || 'mvp'
+  const [templateName, setTemplateName] = useState<string>('')
+  const [templateType, setTemplateType] = useState<SpecModuleType>('家居布艺')
+
   const [merchantSkuPrefix, setMerchantSkuPrefix] = useState('BZPB008XXXXX-')
   const [merchantSkuSuffix, setMerchantSkuSuffix] = useState('')
 
@@ -389,12 +403,69 @@ export default function TmallSkuTemplateGeneratorPage() {
   const [profileNames, setProfileNames] = useState<string[]>([])
   const [selectedProfileName, setSelectedProfileName] = useState<string>('')
 
-  // Persist config in browser storage (MVP; makes it usable as "系统主体" without backend yet)
+  // Load per-template meta (name/type) from index
+  useEffect(() => {
+    const rows = loadTemplateIndex()
+    const hit = rows.find((r) => String((r as any)?.id ?? '').trim() === templateId)
+    if (hit) {
+      setTemplateName(String((hit as any)?.name ?? '').trim() || '未命名模板')
+      setTemplateType(((hit as any)?.type as any) || '家居布艺')
+      return
+    }
+    const now = new Date().toISOString()
+    const seedName = templateId === 'mvp' ? '天猫布艺 SKU规格生成器（MVP）' : '未命名模板'
+    const seedType: SpecModuleType = '家居布艺'
+    setTemplateName(seedName)
+    setTemplateType(seedType)
+    upsertTemplateMeta({
+      id: templateId,
+      name: seedName,
+      type: seedType,
+      published_at: now,
+      matrix_count: null,
+    })
+  }, [templateId])
+
+  // Load per-template config (fallback: migrate legacy single-config)
   useEffect(() => {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY)
-      if (!raw) return
-      const parsed = JSON.parse(raw) as PersistedConfigV1
+      const parsed = loadTemplateConfig(templateId) as any as PersistedConfigV1 | null
+      if (!parsed) {
+        // migrate legacy single-config storage if exists (best-effort)
+        const legacyRaw = localStorage.getItem('tmall_sku_generator_config_v1')
+        if (!legacyRaw) return
+        const legacyParsed = JSON.parse(legacyRaw) as PersistedConfigV1
+        if (!legacyParsed) return
+        saveTemplateConfig(templateId, legacyParsed as any)
+        if (legacyParsed?.merchantSkuPrefix) setMerchantSkuPrefix(legacyParsed.merchantSkuPrefix)
+        if (legacyParsed?.merchantSkuSuffix !== undefined) setMerchantSkuSuffix(legacyParsed.merchantSkuSuffix)
+        if (Array.isArray(legacyParsed?.sizes) && legacyParsed.sizes.length) setSizes(legacyParsed.sizes)
+        if (Array.isArray(legacyParsed?.colors) && legacyParsed.colors.length) {
+          setColors(
+            legacyParsed.colors.map((c) => ({
+              key: c.key,
+              label: c.label,
+              width_cm: c.width_cm,
+              height_cm: c.height_cm,
+              thickness_cm: (c as any).thickness_cm,
+              length_cm: (c as any).length_cm,
+              main_pattern_type: (c as any).main_pattern_type,
+              source_code: (c as any)?.source_code ?? '',
+              enabledSizes: (c as any).enabledSizes ?? {},
+            })),
+          )
+        }
+        if (Array.isArray(legacyParsed?.mainPatternTypes) && legacyParsed.mainPatternTypes.length) setMainPatternTypes(legacyParsed.mainPatternTypes)
+        if (legacyParsed?.ui) {
+          if (typeof legacyParsed.ui.enableColorImages === 'boolean') setEnableColorImages(legacyParsed.ui.enableColorImages)
+          if (typeof legacyParsed.ui.enableSizeImages === 'boolean') setEnableSizeImages(legacyParsed.ui.enableSizeImages)
+          if (typeof legacyParsed.ui.enableColorRemarks === 'boolean') setEnableColorRemarks(legacyParsed.ui.enableColorRemarks)
+          if (typeof legacyParsed.ui.enableSizeRemarks === 'boolean') setEnableSizeRemarks(legacyParsed.ui.enableSizeRemarks)
+          if (typeof legacyParsed.ui.enablePatternRemarks === 'boolean') setEnablePatternRemarks(legacyParsed.ui.enablePatternRemarks)
+          if (typeof legacyParsed.ui.includeMainPatternType === 'boolean') setIncludeMainPatternType(legacyParsed.ui.includeMainPatternType)
+        }
+        return
+      }
       if (parsed?.merchantSkuPrefix) setMerchantSkuPrefix(parsed.merchantSkuPrefix)
       if (parsed?.merchantSkuSuffix !== undefined) setMerchantSkuSuffix(parsed.merchantSkuSuffix)
       if (Array.isArray(parsed?.sizes) && parsed.sizes.length) setSizes(parsed.sizes)
@@ -426,7 +497,7 @@ export default function TmallSkuTemplateGeneratorPage() {
       // ignore storage corruption
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [templateId])
 
   useEffect(() => {
     try {
@@ -531,11 +602,24 @@ export default function TmallSkuTemplateGeneratorPage() {
           includeMainPatternType,
         },
       }
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
+      saveTemplateConfig(templateId, data as any)
+
+      const now = new Date().toISOString()
+      const name = String(templateName ?? '').trim() || (templateId === 'mvp' ? '天猫布艺 SKU规格生成器（MVP）' : '未命名模板')
+      upsertTemplateMeta({
+        id: templateId,
+        name,
+        type: templateType,
+        published_at: now,
+        matrix_count: computeMatrixCountFromConfig(data as any),
+      })
     } catch {
       // ignore quota/disabled storage
     }
   }, [
+    templateId,
+    templateName,
+    templateType,
     merchantSkuPrefix,
     merchantSkuSuffix,
     sizes,
@@ -1130,8 +1214,29 @@ export default function TmallSkuTemplateGeneratorPage() {
     <div style={{ padding: 16 }}>
       <Space direction="vertical" style={{ width: '100%' }} size={12}>
         <Card
-          title="天猫布艺 SKU规格生成器（MVP）"
-          extra={<Tag color="gold">颜色分类=图案/工艺款式；尺寸可按款式禁用</Tag>}
+          title={
+            <Space wrap size={10} style={{ width: '100%', justifyContent: 'space-between' }}>
+              <Space wrap size={8}>
+                <Text type="secondary">模板名称</Text>
+                <Input
+                  style={{ width: 360 }}
+                  value={templateName}
+                  onChange={(e) => setTemplateName(e.target.value)}
+                  placeholder="未命名模板"
+                />
+                <Select
+                  style={{ width: 140 }}
+                  value={templateType}
+                  onChange={(v) => setTemplateType(v as SpecModuleType)}
+                  options={[
+                    { label: '家居布艺', value: '家居布艺' },
+                    { label: '家居饰品', value: '家居饰品' },
+                  ]}
+                />
+              </Space>
+              <Tag color="gold">颜色分类=图案/工艺款式；尺寸可按款式禁用</Tag>
+            </Space>
+          }
         >
           <Space direction="vertical" style={{ width: '100%' }} size={10}>
             <Space wrap size={8}>

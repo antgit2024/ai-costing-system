@@ -1,12 +1,19 @@
 ## 当前状态（崩了也能继续）
 
-- **最近校对（北京时间 GMT+8）**：2026-01-22（规格模块：新增列表页，进入天猫布艺 SKU规格生成器详情）
-  - 本轮范围：在现有“天猫布艺 SKU规格生成器（MVP）”前加一级列表页（规格模块）。
+- **最近校对（北京时间 GMT+8）**：2026-01-22（规格模块：列表风格对齐标准模型 + 新建模板 + 详情可编辑名称）
+  - 本轮范围：`/costing/tmall-sku-generator` 的列表风格与 `standard-models` 一致（筛选框 + 操作框 + 列表），并支持新建模板；进入详情页后可编辑模板名称（回写列表）。
   - 本轮产物：
     - 前端：
-      - 新增 `frontend/src/pages/costing/SpecModulesPage.tsx`：规格模块列表（字段：模板名称 / 类型 / 矩阵(数量) / 发布时间 / 操作）。
-      - 路由调整：`/costing/tmall-sku-generator` → 列表页；`/costing/tmall-sku-generator/mvp` → 现有详情页（生成器）。
-      - 侧边栏选中态：`/costing/tmall-sku-generator*` 会正确高亮菜单项。
+      - `frontend/src/pages/costing/SpecModulesPage.tsx`
+        - 列表页采用“标准模型”同款布局：筛选（名称/ID、类型）+ 操作（新建模板、刷新）+ Table（模板名称/类型/矩阵数量/发布时间/操作）。
+      - `frontend/src/pages/costing/TmallSkuTemplateGeneratorPage.tsx`
+        - 详情页顶部支持编辑“模板名称/类型”，并写回列表展示。
+        - 配置从“单一全局 localStorage”调整为“按 templateId 分开存储”，支持多模板。
+      - `frontend/src/pages/costing/tmallSkuGeneratorTemplates.ts`
+        - 本地模板索引与按模板配置存储（localStorage）的小工具。
+      - 路由调整：
+        - `/costing/tmall-sku-generator` → 列表页
+        - `/costing/tmall-sku-generator/:templateId` → 详情页（`mvp` 作为默认种子模板 id）
   - 验收命令（必须，全部 0 退出码）：
     - Frontend：`npm -C frontend run build`
 

@@ -128,6 +128,45 @@ const mmToCmText = (mm: unknown): string => {
   return fmtNum(n / 10)
 }
 
+const parseExpectedDimsFromFormula = (formulaRaw: string): Array<{ w: string; h: string }> => {
+  const text = String(formulaRaw ?? '')
+  if (!text.trim()) return []
+
+  const normalizeToCmText = (value: number, unitRaw?: string | null) => {
+    const u = String(unitRaw ?? 'cm').trim().toLowerCase()
+    let cm = value
+    if (u === 'mm' || u === '毫米') cm = value / 10
+    else if (u === 'm' || u === '米') cm = value * 100
+    return fmtNum(cm)
+  }
+
+  // best-effort: find all "W*H" occurrences (ignore qty); keep order
+  const re =
+    /(约|大约|约等)?(?<w>\d{1,4}(?:\.\d+)?)\s*(?:[xX×\*＊]\s*(?<h>\d{1,4}(?:\.\d+)?))\s*(?<unit>cm|厘米|mm|毫米|m|米)?/gi
+  const out: Array<{ w: string; h: string }> = []
+  let m: RegExpExecArray | null
+  while ((m = re.exec(text))) {
+    const w = Number((m.groups as any)?.w ?? '')
+    const h = Number((m.groups as any)?.h ?? '')
+    const unit = ((m.groups as any)?.unit as any) ?? null
+    if (!Number.isFinite(w) || !Number.isFinite(h)) continue
+    const ww = normalizeToCmText(w, unit)
+    const hh = normalizeToCmText(h, unit)
+    if (!ww || !hh) continue
+    out.push({ w: ww, h: hh })
+  }
+  // uniq by "w×h"
+  const seen = new Set<string>()
+  const uniq: Array<{ w: string; h: string }> = []
+  for (const x of out) {
+    const k = `${x.w}×${x.h}`
+    if (seen.has(k)) continue
+    seen.add(k)
+    uniq.push(x)
+  }
+  return uniq
+}
+
 // 说明（前置校验台）：
 // - 本页用于在“同步 ERP/发货扣库”之前，把“商品规格（网店）spec_text + 商家编码 + 尺寸(B/Z口径)”提前跑通并暴露问题
 // - 解析口径尽量与后端一致，避免“前端看着对、后端扣库失败”
@@ -396,6 +435,7 @@ export default function TmallSkuTemplateGeneratorPage() {
     okTokens: string[]
     multiTokens: string[]
     missingGroupIndexes: number[]
+    sizeMatched?: boolean
   }
   const [rowValidation, setRowValidation] = useState<Record<string, RowValidationDetail>>({})
   // Model dropdown sources (for colors & sizes)
@@ -955,18 +995,33 @@ export default function TmallSkuTemplateGeneratorPage() {
       // Z-：不依赖公式解析；且避免任何红/绿高亮（不生成 tokens/missing）
       if (r.is_z_source) {
         const ok = issues.length === 0
-        out[r.row_key] = { ok, issues, okTokens: [], multiTokens: [], missingGroupIndexes: [] }
+        out[r.row_key] = { ok, issues, okTokens: [], multiTokens: [], missingGroupIndexes: [], sizeMatched: false }
         if (ok) okCount++
         else badCount++
         continue
       }
       if (!formula) {
         const ok = issues.length === 0
-        out[r.row_key] = { ok, issues, okTokens: [], multiTokens: [], missingGroupIndexes: [] }
+        out[r.row_key] = { ok, issues, okTokens: [], multiTokens: [], missingGroupIndexes: [], sizeMatched: false }
         if (ok) okCount++
         else badCount++
         continue
       }
+
+      // 尺寸配对（B 解析型）：TOKEN/公式里通常包含尺寸段（例如 45*45*1），这里用解析尺寸去配对
+      let sizeMatched = false
+      if (displaySource.toUpperCase().startsWith('B-')) {
+        const expected = parseExpectedDimsFromFormula(formula)
+        const pw = String(dims.width_cm ?? '').trim()
+        const ph = String(dims.height_cm ?? '').trim()
+        if (expected.length && pw && ph) {
+          sizeMatched = expected.some((x) => x.w === pw && x.h === ph) || expected.some((x) => x.w === ph && x.h === pw)
+          if (!sizeMatched) {
+            issues.push(`尺寸未命中 TOKEN/公式：期望 ${expected.map((x) => `${x.w}×${x.h}cm`).join(' / ')}`)
+          }
+        }
+      }
+
       const groups = parseFormulaTokenGroups(formula)
       const okTokens: string[] = []
       const multiTokens: string[] = []
@@ -996,6 +1051,7 @@ export default function TmallSkuTemplateGeneratorPage() {
         okTokens: Array.from(new Set(okTokens)),
         multiTokens: Array.from(new Set(multiTokens)),
         missingGroupIndexes: Array.from(new Set(missingGroupIndexes)),
+        sizeMatched,
       }
       if (ok) okCount++
       else badCount++
@@ -1450,17 +1506,19 @@ export default function TmallSkuTemplateGeneratorPage() {
                   ),
                 },
                 {
-                  title: '尺寸',
+                  title: '解析尺寸',
                   width: 280,
                   render: (_: any, r: SpecRow) => {
-                    const pill = (textRaw: string) => (
+                    const v = rowValidation?.[r.row_key]
+                    const pill = (textRaw: string, opts?: { highlight?: boolean }) => (
                       <span
                         style={{
                           display: 'inline-block',
                           padding: '1px 8px',
                           borderRadius: 999,
                           background: 'var(--ant-color-fill-tertiary)',
-                          color: 'var(--ant-color-text-secondary)',
+                          color: opts?.highlight ? 'var(--ant-color-error)' : 'var(--ant-color-text-secondary)',
+                          fontWeight: opts?.highlight ? 700 : 400,
                           fontSize: 12,
                           lineHeight: '18px',
                           whiteSpace: 'nowrap',
@@ -1479,15 +1537,10 @@ export default function TmallSkuTemplateGeneratorPage() {
 
                     const pills: React.ReactNode[] = []
 
-                    const pushParsed = () => {
-                      if (pw && ph) pills.push(pill(`解析:${pw}×${ph}cm`))
-                      else if (pw) pills.push(pill(`解析:宽${pw}cm`))
-                    }
-
-                    const pushBundleComponents = (prefix: string) => {
+                    const pushZComponents = () => {
                       const comps = Array.isArray(bm?.components) ? (bm?.components as any[]) : []
                       if (!comps.length) {
-                        pills.push(pill(`${prefix}无组件`))
+                        pills.push(pill('无尺寸'))
                         return
                       }
                       for (let i = 0; i < comps.length; i += 1) {
@@ -1497,25 +1550,19 @@ export default function TmallSkuTemplateGeneratorPage() {
                         const qn = Number((c as any)?.quantity ?? 0)
                         const q = Number.isFinite(qn) && qn > 0 ? String(Math.floor(qn) === qn ? qn : fmtNum(qn)) : ''
                         if (!w || !h) continue
-                        pills.push(pill(`${prefix}${i + 1}:${w}×${h}cm${q ? `×${q}` : ''}`))
+                        pills.push(pill(`${w}×${h}cm${q ? `×${q}` : ''}`))
                       }
                     }
 
                     // Z：指定型，尺寸来自套版组件（不依赖网店规格解析）
                     if (String(r.is_z_source ?? '').trim()) {
-                      pushBundleComponents('指定')
+                      pushZComponents()
                       return pills.length ? <Space wrap size={6}>{pills}</Space> : <Text type="secondary">-</Text>
                     }
 
-                    // B：解析型，同时展示“解析尺寸 + 模板组件尺寸”（便于对照后端命中/扣库口径）
-                    if (displaySource.toUpperCase().startsWith('B-')) {
-                      pushParsed()
-                      pushBundleComponents('模板')
-                      return pills.length ? <Space wrap size={6}>{pills}</Space> : <Text type="secondary">-</Text>
-                    }
-
-                    // 模型码/未绑定：仅展示解析尺寸（与后端 spec parser 同口径）
-                    pushParsed()
+                    // B/模型码/未绑定：只展示解析尺寸；当“检验”尺寸配对命中时，将尺寸字标红
+                    if (pw && ph) pills.push(pill(`${pw}×${ph}cm`, { highlight: !!v?.sizeMatched }))
+                    else if (pw) pills.push(pill(`宽${pw}cm`, { highlight: !!v?.sizeMatched }))
                     return pills.length ? <Space wrap size={6}>{pills}</Space> : <Text type="secondary">-</Text>
                   },
                 },

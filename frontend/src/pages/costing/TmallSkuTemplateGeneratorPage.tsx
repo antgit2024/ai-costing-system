@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Alert, Button, Card, Checkbox, Divider, Drawer, Input, message, Radio, Select, Space, Switch, Table, Tag, Typography, Upload } from 'antd'
 import {
-  CheckCircleFilled,
-  CloseCircleFilled,
   DeleteOutlined,
   DownloadOutlined,
   EyeOutlined,
@@ -16,8 +14,6 @@ import { useParams } from 'react-router-dom'
 
 import {
   exportTmallSkuTemplateXlsx,
-  fetchBundleTemplates,
-  fetchBundleTemplateByCode,
   fetchPublishedStandardModels,
   previewTmallSkuTemplate,
   type TmallColorOption,
@@ -65,14 +61,6 @@ type SizeRow = TmallSizeOption & {
 
 type SourceOptionGroup = { label: string; options: Array<{ label: string; value: string }> }
 
-type BundleTokenMeta = { mode: 'B' | 'Z'; phrase?: string; name?: string }
-
-type BundleTokenInputParsed = {
-  modeHint?: 'B' | 'Z'
-  templateCode: string
-  selector: string
-}
-
 const readFileAsArrayBuffer = (file: File): Promise<ArrayBuffer> =>
   new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -99,88 +87,6 @@ const buildMerchantSku = (args: {
     return `${source}${suffix}`.trim()
   }
   return `${prefix}${suffix}`.trim()
-}
-
-const parseBundleTokenInput = (raw: string): BundleTokenInputParsed | null => {
-  const s0 = String(raw ?? '').trim()
-  if (!s0) return null
-  const s = s0
-    .replace(/^BUNDLE:/i, '')
-    .replace(/^B:/i, 'B-')
-    .replace(/^Z:/i, 'Z-')
-    .trim()
-
-  // accept: B-3U3PAA / Z-3U3PAA / 3U3PAA
-  const m = /^([BZ])?-?([0-9A-Z]+?)([A-Z]{2})$/i.exec(s.replace(/\s+/g, '').toUpperCase())
-  if (!m) return null
-  const modeHint = m[1] ? (m[1].toUpperCase() as 'B' | 'Z') : undefined
-  const templateCode = String(m[2] ?? '').toUpperCase()
-  const selector = String(m[3] ?? '').toUpperCase()
-  if (!templateCode || !selector) return null
-  return { modeHint, templateCode, selector }
-}
-
-const uniqueKeepOrder = (xs: string[]) => {
-  const out: string[] = []
-  const seen = new Set<string>()
-  for (const x of xs) {
-    const k = String(x ?? '')
-    if (seen.has(k)) continue
-    seen.add(k)
-    out.push(k)
-  }
-  return out
-}
-
-const parseBundleAttributeFormula = (formulaRaw: string): { groups: string[][]; dims?: { w: number; h: number } } => {
-  const formula = String(formulaRaw ?? '')
-  const groups: string[][] = []
-
-  // 1) extract option groups: each `[...]` contains `{a}{b}{}` etc
-  for (let i = 0; i < formula.length; i++) {
-    if (formula[i] !== '[') continue
-    const j = formula.indexOf(']', i + 1)
-    if (j < 0) break
-    const seg = formula.slice(i + 1, j)
-    const opts: string[] = []
-    const re = /\{([^}]*)\}/g
-    let mm: RegExpExecArray | null
-    while ((mm = re.exec(seg))) {
-      const t = String(mm[1] ?? '').trim()
-      // keep empty option `{}` as '' (means “无/不选”)
-      opts.push(t)
-    }
-    if (opts.length) groups.push(uniqueKeepOrder(opts))
-    i = j
-  }
-
-  // 2) best-effort dims: find first `w*h*qty` / `w×h×qty`
-  const dm = /(\d+(?:\.\d+)?)\s*[*xX×]\s*(\d+(?:\.\d+)?)\s*[*xX×]\s*(\d+(?:\.\d+)?)/.exec(formula)
-  const w = dm ? Number(dm[1]) : NaN
-  const h = dm ? Number(dm[2]) : NaN
-  const dims = Number.isFinite(w) && Number.isFinite(h) ? { w, h } : undefined
-  return { groups, dims }
-}
-
-const cartesianProduct = (groups: string[][], limit: number): Array<{ tokens: string[] }> => {
-  const out: Array<{ tokens: string[] }> = []
-  if (!groups.length) return out
-  const step = (idx: number, acc: string[]) => {
-    if (out.length >= limit) return
-    if (idx >= groups.length) {
-      out.push({ tokens: acc.slice() })
-      return
-    }
-    const opts = groups[idx] ?? []
-    for (const o of opts) {
-      acc.push(String(o ?? ''))
-      step(idx + 1, acc)
-      acc.pop()
-      if (out.length >= limit) return
-    }
-  }
-  step(0, [])
-  return out
 }
 
 const normalizeAttrValue = (v: unknown) => {
@@ -304,7 +210,6 @@ type SpecRow = {
   size_label: string
   merchant_sku: string
   attribute_spec?: string
-  token_formula?: string
   spec_text?: string
   sku_status: 0 | 1
   main_pattern_type?: string | null
@@ -372,31 +277,10 @@ export default function TmallSkuTemplateGeneratorPage() {
   const [enablePatternRemarks, setEnablePatternRemarks] = useState(false)
   const [displayMode, setDisplayMode] = useState<DisplayMode>('table')
   const [specEdits, setSpecEdits] = useState<SpecEdits>({})
-  type RowValidationDetail = {
-    ok: boolean
-    issues: string[]
-    okTokens: string[]
-    multiTokens: string[]
-    missingGroupIndexes: number[]
-  }
-  const [rowValidation, setRowValidation] = useState<Record<string, RowValidationDetail>>({})
-
-  // Bundle-template assisted generation (B/Z) for token-driven Tmall attributes
-  const [bundleTokenInput, setBundleTokenInput] = useState<string>('B-3U3PAA')
-  const [bundleLoading, setBundleLoading] = useState(false)
-  const [bundlePresetMode, setBundlePresetMode] = useState<'B' | 'Z' | null>(null)
-  const [bundlePresetPhrase, setBundlePresetPhrase] = useState<string>('')
-  const [bundleGroups, setBundleGroups] = useState<string[][]>([])
-  const [bundleDims, setBundleDims] = useState<{ w: number; h: number } | null>(null)
-  const [bundleMaxCombos, setBundleMaxCombos] = useState<number>(120)
-  const [bundleIncludeDimsInColorLabel, setBundleIncludeDimsInColorLabel] = useState(true)
-  const [bundleGeneratedColorLabels, setBundleGeneratedColorLabels] = useState<string>('')
-
-  // Model/bundle dropdown sources (for colors & sizes)
+  // Model dropdown sources (for colors & sizes)
   const [sourceGroups, setSourceGroups] = useState<SourceOptionGroup[]>([])
   const [loadingSourceGroups, setLoadingSourceGroups] = useState(false)
   const [sourceRefreshKey, setSourceRefreshKey] = useState(0)
-  const [bundleTokenMetaByValue, setBundleTokenMetaByValue] = useState<Record<string, BundleTokenMeta>>({})
 
   // Explicit save/load profiles (in addition to auto localStorage)
   const [profileName, setProfileName] = useState('')
@@ -517,10 +401,10 @@ export default function TmallSkuTemplateGeneratorPage() {
     void (async () => {
       setLoadingSourceGroups(true)
       try {
-        // cache-bust: new models/bundles might not show up immediately if upstream caches GET
+        // cache-bust: new models might not show up immediately if upstream caches GET
         const ts = Date.now()
 
-        // 1) Published standard models (increase limit to avoid pagination hiding new items)
+        // Published standard models (increase limit to avoid pagination hiding new items)
         const modelsResp = await fetchPublishedStandardModels({ limit: 1000, _ts: ts } as any)
 
         const modelItems = Array.isArray((modelsResp as any)?.items) ? ((modelsResp as any).items as any[]) : Array.isArray(modelsResp as any) ? (modelsResp as any) : []
@@ -533,49 +417,13 @@ export default function TmallSkuTemplateGeneratorPage() {
           })
           .filter(Boolean) as Array<{ value: string; label: string }>
 
-        // 2) Bundle templates: page through to avoid new items being outside first page
-        const bundleItems: any[] = []
-        const pageSize = 200
-        const maxPages = 20 // hard cap: 4000 templates max (should be enough for now)
-        for (let page = 1; page <= maxPages; page++) {
-          const resp = await fetchBundleTemplates({ page, page_size: pageSize, include_archived: true, _ts: ts } as any)
-          const items = Array.isArray((resp as any)?.items) ? ((resp as any).items as any[]) : []
-          bundleItems.push(...items)
-          if (items.length < pageSize) break
-        }
-        const bundleOptions: Array<{ value: string; label: string }> = []
-        const bundleMeta: Record<string, BundleTokenMeta> = {}
-        for (const t of bundleItems) {
-          const code = safeUpper((t as any)?.code)
-          if (!code) continue
-          const name = String((t as any)?.name ?? '').trim()
-          const pp = Array.isArray((t as any)?.metadata?.phrase_presets) ? ((t as any).metadata.phrase_presets as any[]) : []
-          for (const p of pp) {
-            const sel = safeUpper((p as any)?.selector)
-            if (!sel) continue
-            const mode = String((p as any)?.mode ?? '').trim() === 'force' ? 'Z' : 'B'
-            const token = `${mode}-${code}${sel}`
-            const phrase = String((p as any)?.phrase ?? '').trim()
-            bundleOptions.push({
-              value: token,
-              label: `${token}${name ? `（${name}）` : ''}${phrase ? `：${phrase}` : ''}`,
-            })
-            bundleMeta[token] = { mode: mode as any, phrase: phrase || undefined, name: name || undefined }
-          }
-        }
         // stable sort
         modelOptions.sort((a, b) => a.value.localeCompare(b.value))
-        bundleOptions.sort((a, b) => a.value.localeCompare(b.value))
 
-        const groups: SourceOptionGroup[] = [
-          { label: '标准模型（已发布）', options: modelOptions },
-          { label: '套装模板（B/Z + AA/AB...）', options: bundleOptions },
-        ].filter((g) => g.options.length)
-
+        const groups: SourceOptionGroup[] = [{ label: '标准模型（已发布）', options: modelOptions }].filter((g) => g.options.length)
         if (!cancelled) setSourceGroups(groups)
-        if (!cancelled) setBundleTokenMetaByValue(bundleMeta)
       } catch (e: any) {
-        if (!cancelled) message.warning(`加载“模型/套版”下拉失败：${String(e?.message ?? e)}`)
+        if (!cancelled) message.warning(`加载“模型”下拉失败：${String(e?.message ?? e)}`)
       } finally {
         if (!cancelled) setLoadingSourceGroups(false)
       }
@@ -695,8 +543,6 @@ export default function TmallSkuTemplateGeneratorPage() {
         })
 
         const attribute_spec = displaySource ? sourceLabelByValue.get(displaySource) || displaySource : ''
-        const bm = displaySource ? bundleTokenMetaByValue[displaySource] : undefined
-        const token_formula = bm && bm.mode === 'B' ? String(bm.phrase ?? '').trim() : ''
         const spec_text = `${String(c.label ?? '').trim()} ${String(s.label ?? '').trim()}`.trim()
         rows.push({
           row_key,
@@ -706,7 +552,6 @@ export default function TmallSkuTemplateGeneratorPage() {
           size_label: s.label,
           merchant_sku,
           attribute_spec,
-          token_formula,
           spec_text,
           sku_status,
           main_pattern_type: includeMainPatternType ? (c.main_pattern_type ?? null) : null,
@@ -717,192 +562,7 @@ export default function TmallSkuTemplateGeneratorPage() {
       }
     }
     return rows
-  }, [colors, sizes, merchantSkuPrefix, merchantSkuSuffix, includeMainPatternType, sourceLabelByValue, bundleTokenMetaByValue, specEdits])
-
-  const getSpecTextForRow = (r: SpecRow): string => String(r.spec_text ?? '').trim()
-
-  const parseFormulaTokenGroups = (formulaRaw: string): Array<{ tokens: string[]; allowEmpty: boolean }> => {
-    const formula = String(formulaRaw ?? '')
-    const groups: Array<{ tokens: string[]; allowEmpty: boolean }> = []
-    const bracketRe = /\[([^\]]+)\]/g
-    let m: RegExpExecArray | null
-    while ((m = bracketRe.exec(formula))) {
-      const seg = String(m[1] ?? '')
-      const tokenRe = /\{([^}]*)\}/g
-      let mm: RegExpExecArray | null
-      const tokens: string[] = []
-      let allowEmpty = false
-      while ((mm = tokenRe.exec(seg))) {
-        const t = String(mm[1] ?? '').trim()
-        if (!t) {
-          allowEmpty = true
-          continue
-        }
-        tokens.push(t)
-      }
-      const uniq = Array.from(new Set(tokens))
-      if (uniq.length || allowEmpty) groups.push({ tokens: uniq, allowEmpty })
-    }
-    return groups
-  }
-
-  const highlightTextByTokens = (
-    textRaw: string,
-    rules: { red: string[]; green?: string[]; orange?: string[] } = { red: [] },
-  ) => {
-    const text = String(textRaw ?? '')
-    const red = Array.from(new Set((rules.red ?? []).map((x) => String(x ?? '').trim()).filter(Boolean)))
-    const orange = Array.from(new Set((rules.orange ?? []).map((x) => String(x ?? '').trim()).filter(Boolean)))
-
-    // Prefer longer tokens to avoid partial overlaps.
-    const all = Array.from(new Set([...red, ...orange])).sort((a, b) => b.length - a.length)
-    if (!text || !all.length) return <>{text}</>
-
-    const pickStyle = (tk: string) => {
-      if (orange.includes(tk)) return { color: '#d46b08', fontWeight: 700 } // orange (ambiguous)
-      if (red.includes(tk)) return { color: '#cf1322', fontWeight: 700 } // red (matched)
-      return undefined
-    }
-
-    const out: React.ReactNode[] = []
-    let i = 0
-    while (i < text.length) {
-      let matched: string | null = null
-      for (const tk of all) {
-        if (!tk) continue
-        if (text.startsWith(tk, i)) {
-          matched = tk
-          break
-        }
-      }
-      if (!matched) {
-        out.push(text[i])
-        i += 1
-        continue
-      }
-      out.push(
-        <span key={`hl-${i}-${matched}`} style={pickStyle(matched)}>
-          {matched}
-        </span>,
-      )
-      i += matched.length
-    }
-    return <>{out}</>
-  }
-
-  const renderFormulaWithValidation = (formulaRaw: string, v?: RowValidationDetail | null) => {
-    const formula = String(formulaRaw ?? '')
-    if (!formula.trim()) return <Text type="secondary">-</Text>
-
-    const okSet = new Set((v?.okTokens ?? []).map((x) => String(x)))
-    const multiSet = new Set((v?.multiTokens ?? []).map((x) => String(x)))
-    const missingGroups = new Set(v?.missingGroupIndexes ?? [])
-
-    // Render by scanning groups: `[ ... {token} ... ]`
-    const nodes: React.ReactNode[] = []
-    let groupIdx = 0
-    for (let i = 0; i < formula.length; i++) {
-      const ch = formula[i]
-      if (ch !== '[') {
-        nodes.push(ch)
-        continue
-      }
-      const j = formula.indexOf(']', i + 1)
-      if (j < 0) {
-        nodes.push(formula.slice(i))
-        break
-      }
-      const seg = formula.slice(i, j + 1) // include brackets
-      // render seg with token highlighting
-      const inner = seg.slice(1, -1)
-      const parts: React.ReactNode[] = ['[']
-      const re = /\{([^}]*)\}/g
-      let last = 0
-      let mm: RegExpExecArray | null
-      while ((mm = re.exec(inner))) {
-        const start = mm.index
-        const end = re.lastIndex
-        if (start > last) parts.push(inner.slice(last, start))
-        const token = String(mm[1] ?? '').trim()
-        const isMissingGroup = missingGroups.has(groupIdx)
-        const style =
-          token && okSet.has(token)
-            ? { color: '#389e0d', fontWeight: 700 } // green
-            : token && multiSet.has(token)
-              ? { color: '#d46b08', fontWeight: 700 } // orange
-              : token && isMissingGroup
-                ? { color: '#cf1322', fontWeight: 700 } // red (missing)
-                : undefined
-        parts.push(
-          <span key={`f-${groupIdx}-${start}`} style={style}>
-            {'{'}
-            {token || ''}
-            {'}'}
-          </span>,
-        )
-        last = end
-      }
-      if (last < inner.length) parts.push(inner.slice(last))
-      parts.push(']')
-      nodes.push(<span key={`g-${groupIdx}-${i}`}>{parts}</span>)
-      groupIdx += 1
-      i = j
-    }
-    return <div style={{ whiteSpace: 'normal', lineHeight: 1.2 }}>{nodes}</div>
-  }
-
-  const validateAllSpecRows = () => {
-    const out: Record<string, RowValidationDetail> = {}
-    let okCount = 0
-    let badCount = 0
-    for (const r of specRows) {
-      const specText = getSpecTextForRow(r)
-      const formula = String(r.token_formula ?? '').trim()
-      if (!formula) {
-        // 指定型(Z) / 模型码：暂不要求规格触发 token
-        out[r.row_key] = { ok: true, issues: [], okTokens: [], multiTokens: [], missingGroupIndexes: [] }
-        okCount++
-        continue
-      }
-      const groups = parseFormulaTokenGroups(formula)
-      const issues: string[] = []
-      const okTokens: string[] = []
-      const multiTokens: string[] = []
-      const missingGroupIndexes: number[] = []
-      for (let gi = 0; gi < groups.length; gi++) {
-        const g = groups[gi]
-        if (!g.tokens.length) continue
-        const hits = g.tokens.filter((tk) => tk && specText.includes(tk))
-        if (hits.length === 0) {
-          if (!g.allowEmpty) {
-            issues.push(`缺失互斥组：${g.tokens.join(' / ')}`)
-            missingGroupIndexes.push(gi)
-          }
-          continue
-        }
-        if (hits.length === 1) {
-          okTokens.push(hits[0])
-          continue
-        }
-        // High-safety: multiple hits in one mutually-exclusive group => FAIL
-        multiTokens.push(...hits)
-        issues.push(`互斥组多命中：${hits.join(' / ')}`)
-      }
-      const ok = issues.length === 0
-      out[r.row_key] = {
-        ok,
-        issues,
-        okTokens: Array.from(new Set(okTokens)),
-        multiTokens: Array.from(new Set(multiTokens)),
-        missingGroupIndexes: Array.from(new Set(missingGroupIndexes)),
-      }
-      if (ok) okCount++
-      else badCount++
-    }
-    setRowValidation(out)
-    if (badCount) message.warning(`检验完成：通过 ${okCount} 条；未通过 ${badCount} 条（请检查“商品规格（网店）”是否包含需要的 TOKEN）`)
-    else message.success(`检验完成：全部通过（${okCount} 条）`)
-  }
+  }, [colors, sizes, merchantSkuPrefix, merchantSkuSuffix, includeMainPatternType, sourceLabelByValue, specEdits])
 
   const setSkuEnabled = (colorKey: string, sizeKey: string, enabled: boolean) => {
     setColors((prev) =>
@@ -1128,88 +788,6 @@ export default function TmallSkuTemplateGeneratorPage() {
     return lines.join('\n')
   }, [colors, sizes, mainPatternTypes])
 
-  const loadBundlePreset = async () => {
-    const parsed = parseBundleTokenInput(bundleTokenInput)
-    if (!parsed) {
-      message.warning('请输入套装短码，例如：B-3U3PAA 或 Z-3U3PAA')
-      return
-    }
-    setBundleLoading(true)
-    try {
-      const tpl = await fetchBundleTemplateByCode(parsed.templateCode)
-      const pp = Array.isArray((tpl as any)?.metadata?.phrase_presets) ? ((tpl as any).metadata.phrase_presets as any[]) : []
-      const preset =
-        pp.find((x) => String(x?.selector ?? '').trim().toUpperCase() === parsed.selector.toUpperCase()) ??
-        pp.find((x) => String(x?.selector ?? '').trim()) ??
-        null
-      if (!preset) {
-        throw new Error(`模板 ${parsed.templateCode} 未找到 selector=${parsed.selector} 的属性组`)
-      }
-      const mode = String(preset?.mode ?? '').trim() === 'force' ? 'Z' : 'B'
-      setBundlePresetMode(mode)
-      const phrase = String(preset?.phrase ?? '').trim()
-      setBundlePresetPhrase(phrase)
-      if (mode === 'Z') {
-        // 指定型不依赖解析；这里只展示备注/短语（如有）
-        setBundleGroups([])
-        setBundleDims(null)
-        setBundleGeneratedColorLabels('')
-        return
-      }
-      if (!phrase) {
-        throw new Error('解析型(B) 的“属性名称/公式”为空；请先在套装模板里点击“重新生成/保存当前属性”')
-      }
-      const built = parseBundleAttributeFormula(phrase)
-      setBundleGroups(built.groups)
-      setBundleDims(built.dims ?? null)
-      setBundleGeneratedColorLabels('')
-    } catch (e: any) {
-      message.error(String(e?.message ?? e))
-    } finally {
-      setBundleLoading(false)
-    }
-  }
-
-  const generateColorsFromBundleGroups = (opts: { append: boolean }) => {
-    if (bundlePresetMode === 'Z') {
-      message.warning('Z（指定型）不需要解析 TOKEN；这里只建议把商家编码回填为 Z-XXXXAA')
-      return
-    }
-    if (!bundleGroups.length) {
-      message.warning('未解析到互斥组选项（请先加载套装短码，并确保公式包含 [{A}{B}] 结构）')
-      return
-    }
-
-    const limit = Math.max(1, Math.min(500, Number(bundleMaxCombos || 0) || 120))
-    const combos = cartesianProduct(bundleGroups, limit)
-    if (!combos.length) {
-      message.warning('暂无可生成组合')
-      return
-    }
-    const labelLines: string[] = []
-    const newRows: ColorRow[] = []
-    for (const x of combos) {
-      const tokens = (x.tokens ?? []).map((t) => String(t ?? '').trim()).filter(Boolean)
-      const tokenText = tokens.length ? tokens.join(' ') : '无'
-      const dimText =
-        bundleIncludeDimsInColorLabel && bundleDims && Number.isFinite(bundleDims.w) && Number.isFinite(bundleDims.h)
-          ? ` ${fmtNum(bundleDims.w)}X${fmtNum(bundleDims.h)}`
-          : ''
-      const label = `${tokenText}${dimText}`.trim()
-      labelLines.push(label)
-      newRows.push({
-        key: `c_${uid()}`,
-        label,
-        width_cm: bundleDims?.w ?? null,
-        height_cm: bundleDims?.h ?? null,
-        enabledSizes: Object.fromEntries(sizes.map((s) => [s.key, true])),
-      })
-    }
-    setBundleGeneratedColorLabels(labelLines.join('\n'))
-    setColors((prev) => (opts.append ? [...prev, ...newRows] : newRows))
-    message.success(`已生成颜色分类：${newRows.length} 条${combos.length >= limit ? '（已按上限截断）' : ''}`)
-  }
-
   return (
     <div style={{ padding: 16 }}>
       <Space direction="vertical" style={{ width: '100%' }} size={12}>
@@ -1338,112 +916,12 @@ export default function TmallSkuTemplateGeneratorPage() {
           </Space>
         </Card>
 
-        <Card
-          title="套装模板（B/Z）→ 天猫属性词（占主动权）"
-          extra={<Tag color="blue">B：解析型（用互斥组生成属性值域）；Z：指定型（不依赖解析）</Tag>}
-        >
-          <Space direction="vertical" style={{ width: '100%' }} size={10}>
-            <Alert
-              type="info"
-              showIcon
-              message="用法"
-              description={
-                <div>
-                  <div>输入套装短码（例如 B-3U3PAA / Z-3U3PAA），加载套装抽屉里保存的“属性名称/公式”。</div>
-                  <div>
-                    B（解析型）会把公式中的互斥组（例如 <Text code>{'[{}{毛球}][{黄金绒}{雪尼尔}]...'}</Text>）拆成天猫可建属性的值域，并按组合生成“颜色分类”。
-                  </div>
-                  <div>
-                    Z（指定型）不需要解析 TOKEN；建议仅用于模板回填商家编码为 <Text code>{'Z-XXXXAA'}</Text>（颜色分类可按对客展示自由定义）。
-                  </div>
-                </div>
-              }
-            />
-
-            <Space wrap size={8}>
-              <Text type="secondary">套装短码</Text>
-              <Input
-                style={{ width: 220 }}
-                value={bundleTokenInput}
-                onChange={(e) => setBundleTokenInput(e.target.value)}
-                placeholder="B-3U3PAA"
-              />
-              <Button loading={bundleLoading} onClick={() => void loadBundlePreset()}>
-                加载套版规则
-              </Button>
-              <Divider type="vertical" />
-              <Text type="secondary">最大组合数</Text>
-              <Input style={{ width: 90 }} value={String(bundleMaxCombos)} onChange={(e) => setBundleMaxCombos(Number(e.target.value || 0))} />
-              <Text type="secondary">颜色分类包含尺寸</Text>
-              <Switch checked={bundleIncludeDimsInColorLabel} onChange={setBundleIncludeDimsInColorLabel} />
-            </Space>
-
-            {bundlePresetMode ? (
-              <Space direction="vertical" style={{ width: '100%' }} size={8}>
-                <Text type="secondary">
-                  已加载模式：<Text strong>{bundlePresetMode}</Text>
-                  {bundleDims ? (
-                    <Text type="secondary">
-                      {' '}
-                      （识别尺寸：{fmtNum(bundleDims.w)}X{fmtNum(bundleDims.h)}）
-                    </Text>
-                  ) : null}
-                </Text>
-                {bundlePresetPhrase ? (
-                  <Input.TextArea value={bundlePresetPhrase} autoSize={{ minRows: 2, maxRows: 4 }} readOnly />
-                ) : (
-                  <Text type="secondary">（无公式/备注）</Text>
-                )}
-                {bundlePresetMode === 'B' ? (
-                  <div>
-                    <Text type="secondary">互斥组：</Text>
-                    <div style={{ marginTop: 6 }}>
-                      {bundleGroups.length ? (
-                        <Space wrap size={6}>
-                          {bundleGroups.map((g, i) => (
-                            <Tag key={`bg-${i}`} color="geekblue">
-                              G{i + 1}: {g.map((x) => (String(x).trim() ? String(x).trim() : '（无）')).join(' / ')}
-                            </Tag>
-                          ))}
-                        </Space>
-                      ) : (
-                        <Text type="secondary">未识别到互斥组（请确认公式包含 [...] 且内部使用 {'{'}...{'}'}）</Text>
-                      )}
-                    </div>
-                  </div>
-                ) : null}
-
-                <Space wrap size={8}>
-                  <Button type="primary" disabled={bundlePresetMode !== 'B' || !bundleGroups.length} onClick={() => generateColorsFromBundleGroups({ append: false })}>
-                    生成颜色分类（覆盖）
-                  </Button>
-                  <Button disabled={bundlePresetMode !== 'B' || !bundleGroups.length} onClick={() => generateColorsFromBundleGroups({ append: true })}>
-                    生成颜色分类（追加）
-                  </Button>
-                  <Button disabled={!bundleGeneratedColorLabels.trim()} onClick={() => void copyText(bundleGeneratedColorLabels)}>
-                    复制颜色分类清单
-                  </Button>
-                </Space>
-
-                {bundleGeneratedColorLabels.trim() ? (
-                  <Input.TextArea value={bundleGeneratedColorLabels} autoSize={{ minRows: 4, maxRows: 8 }} readOnly />
-                ) : null}
-              </Space>
-            ) : (
-              <Text type="secondary">尚未加载套版规则</Text>
-            )}
-          </Space>
-        </Card>
-
         {displayMode === 'table' ? (
           <Card
             title="SKU规格（表格样式）"
             extra={
               <Space wrap size={10}>
                 <Text type="secondary">行数：{specRows.length}</Text>
-                <Button size="small" onClick={validateAllSpecRows}>
-                  检验
-                </Button>
               </Space>
             }
           >
@@ -1462,13 +940,10 @@ export default function TmallSkuTemplateGeneratorPage() {
                   fixed: 'left',
                   width: 420,
                   render: (_: any, r: SpecRow) => {
-                    const v = rowValidation?.[r.row_key]
                     const specText = String(r.spec_text ?? '').trim()
                     return (
                       <div style={{ whiteSpace: 'normal', lineHeight: 1.2 }}>
-                        {v
-                          ? highlightTextByTokens(specText, { red: v.okTokens ?? [], orange: v.multiTokens ?? [] })
-                          : specText || '-'}
+                        {specText || '-'}
                       </div>
                     )
                   },
@@ -1500,7 +975,7 @@ export default function TmallSkuTemplateGeneratorPage() {
                     <Select
                       allowClear
                       showSearch
-                      placeholder="行级覆盖：选择模型/套版"
+                      placeholder="行级覆盖：选择模型"
                       loading={loadingSourceGroups}
                       popupMatchSelectWidth={false}
                       listHeight={520}
@@ -1555,24 +1030,12 @@ export default function TmallSkuTemplateGeneratorPage() {
                   render: (v: any) => <div style={{ whiteSpace: 'normal', lineHeight: 1.2 }}>{String(v ?? '').trim() || '-'}</div>,
                 },
                 {
-                  title: 'TOKEN/公式',
-                  dataIndex: 'token_formula',
-                  width: 360,
-                  render: (_: any, r: SpecRow) => renderFormulaWithValidation(String(r.token_formula ?? ''), rowValidation?.[r.row_key]),
-                },
-                {
                   title: '是否上架',
                   width: 110,
                   fixed: 'right',
-                  render: (_: any, r: SpecRow) => {
-                    const v = rowValidation?.[r.row_key]
-                    return (
-                      <Space size={6}>
-                        {v ? (v.ok ? <CheckCircleFilled style={{ color: '#52c41a' }} /> : <CloseCircleFilled style={{ color: '#ff4d4f' }} />) : null}
-                        <Switch checked={r.sku_status === 1} onChange={(x) => setSkuEnabled(r.color_key, r.size_key, x)} />
-                      </Space>
-                    )
-                  },
+                  render: (_: any, r: SpecRow) => (
+                    <Switch checked={r.sku_status === 1} onChange={(x) => setSkuEnabled(r.color_key, r.size_key, x)} />
+                  ),
                 },
                 {
                   title: '操作',

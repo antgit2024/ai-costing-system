@@ -43,6 +43,14 @@
   - 验收命令（必须，全部 0 退出码）：
     - Frontend：`npm -C frontend run build`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-23（标准模型：清单编辑/标签色统一为 antd 主题色）
+  - 本轮范围：在“标准模型管理 → 清单编辑”中，将彩色文字/标签/提示色从硬编码色值统一替换为 antd 主题色变量（success/error/warning/text-secondary/fill-tertiary/link/primary），使暗色主题下不刺眼、风格一致。
+  - 产物（前端）：
+    - `frontend/src/components/costing/ProductModelEditorDrawer.tsx`
+    - `frontend/src/pages/costing/StandardModelsPage.tsx`
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-22（天猫SKU生成器：仅移除“套装模板(B/Z)→天猫属性词”展示区块，保留检验/公式渲染）
   - 本轮范围：只删除天猫SKU生成器里“套装模板（B/Z）→ 天猫属性词（占主动权）”那块展示 Card；保留表格中的“检验 / TOKEN/公式渲染 / 命中高亮”等能力。
   - 本轮产物：

@@ -19,17 +19,14 @@ import ProductModelEditorDrawer from '@/components/costing/ProductModelEditorDra
 
 const { Title, Text } = Typography
 
-const KEYWORD_COLOR_PALETTE = [
-  '#1677ff', // blue
-  '#52c41a', // green
-  '#faad14', // gold
-  '#722ed1', // purple
-  '#eb2f96', // magenta
-  '#13c2c2', // cyan
-  '#fa541c', // volcano
-  '#2f54eb', // geekblue
-  '#a0d911', // lime
-  '#f5222d', // red
+// 使用 antd 主题色变量（避免硬编码亮色；暗色主题下也更柔和）
+const KEYWORD_TONE_PALETTE = [
+  'var(--ant-color-primary)',
+  'var(--ant-color-success)',
+  'var(--ant-color-warning)',
+  'var(--ant-color-error)',
+  'var(--ant-color-info)',
+  'var(--ant-color-link)',
 ] as const
 
 const hashToIndex = (s: string, mod: number) => {
@@ -38,29 +35,28 @@ const hashToIndex = (s: string, mod: number) => {
   return mod === 0 ? 0 : h % mod
 }
 
-const getKeywordColor = (keyword?: string | null) => {
+const getKeywordTone = (keyword?: string | null) => {
   const key = String(keyword ?? '').trim() || 'keyword'
-  const idx = hashToIndex(key, KEYWORD_COLOR_PALETTE.length)
-  return KEYWORD_COLOR_PALETTE[idx]
+  const idx = hashToIndex(key, KEYWORD_TONE_PALETTE.length)
+  return KEYWORD_TONE_PALETTE[idx]
 }
 
 const KeywordPill = ({ keyword }: { keyword: string }) => {
   const k = String(keyword ?? '').trim()
-  const color = getKeywordColor(k)
-  // Cursor-like：保留彩色，但用 alpha 把亮度/饱和压下来（更中性）
-  // 进一步降 alpha：避免“太鲜艳”，更贴近按钮/标签整体灰度层级
-  const border = `${color}26` // ~15%
-  const background = `${color}0F` // ~6%
-  const text = `${color}99` // ~60%
+  const tone = getKeywordTone(k)
   return (
     <span
       style={{
         display: 'inline-block',
         padding: '1px 8px',
         borderRadius: 999,
-        border: `1px solid ${border}`,
-        background,
-        color: text,
+        border: '1px solid var(--ant-color-border)',
+        // fallback (no color-mix support)
+        backgroundColor: 'var(--ant-color-fill-tertiary)',
+        // tinted when supported
+        background: `color-mix(in srgb, ${tone} 18%, var(--ant-color-fill-tertiary))`,
+        borderColor: `color-mix(in srgb, ${tone} 45%, var(--ant-color-border))`,
+        color: 'var(--ant-color-text-secondary)',
         fontSize: 11, // 字体缩小一号
         lineHeight: '18px',
         whiteSpace: 'nowrap',
@@ -343,12 +339,13 @@ export default function StandardModelsPage() {
               display: 'inline-block',
               padding: '0px 6px',
               borderRadius: 6,
-              /* 与“标准版本列表：已发布行”保持同一语义色（深绿 + alpha） */
-              border: '1px solid rgba(35, 134, 54, 0.35)',
-              background: 'rgba(35, 134, 54, 0.22)',
+              border: '1px solid var(--ant-color-border)',
+              backgroundColor: 'var(--ant-color-fill-tertiary)',
+              background: 'color-mix(in srgb, var(--ant-color-success) 18%, var(--ant-color-fill-tertiary))',
+              borderColor: 'color-mix(in srgb, var(--ant-color-success) 45%, var(--ant-color-border))',
               fontSize: 11,
               lineHeight: '18px',
-              color: 'rgba(35, 134, 54, 0.92)',
+              color: 'var(--ant-color-success)',
               whiteSpace: 'nowrap',
             }}
           >
@@ -366,7 +363,17 @@ export default function StandardModelsPage() {
         if (audit.error) {
           return (
             <Tooltip title={audit.error}>
-              <Tag color="red">失败</Tag>
+              <Tag
+                style={{
+                  border: '1px solid var(--ant-color-border)',
+                  backgroundColor: 'var(--ant-color-fill-tertiary)',
+                  background: 'color-mix(in srgb, var(--ant-color-error) 18%, var(--ant-color-fill-tertiary))',
+                  borderColor: 'color-mix(in srgb, var(--ant-color-error) 45%, var(--ant-color-border))',
+                  color: 'var(--ant-color-error)',
+                }}
+              >
+                失败
+              </Tag>
             </Tooltip>
           )
         }
@@ -375,7 +382,23 @@ export default function StandardModelsPage() {
         const abs = Math.abs(diff)
         const warn = abs >= 5
         const text = `${diff >= 0 ? '+' : ''}${diff.toFixed(1)}%`
-        return <Tag color={warn ? 'red' : 'green'}>{warn ? `预警 ${text}` : text}</Tag>
+        return (
+          <Tag
+            style={{
+              border: '1px solid var(--ant-color-border)',
+              backgroundColor: 'var(--ant-color-fill-tertiary)',
+              background: warn
+                ? 'color-mix(in srgb, var(--ant-color-warning) 18%, var(--ant-color-fill-tertiary))'
+                : 'color-mix(in srgb, var(--ant-color-success) 18%, var(--ant-color-fill-tertiary))',
+              borderColor: warn
+                ? 'color-mix(in srgb, var(--ant-color-warning) 45%, var(--ant-color-border))'
+                : 'color-mix(in srgb, var(--ant-color-success) 45%, var(--ant-color-border))',
+              color: warn ? 'var(--ant-color-warning)' : 'var(--ant-color-success)',
+            }}
+          >
+            {warn ? `预警 ${text}` : text}
+          </Tag>
+        )
       },
     },
     {

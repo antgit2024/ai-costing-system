@@ -165,33 +165,14 @@ const FIRST_COL_WIDTH = 280
 
 // 班组从 taxonomy(team) 动态加载（不再硬编码）
 
-// Wider palette to reduce collisions when multiple modules are used in one model.
-// Note: colors are only used as a visual cue; module code/name remains the primary identity.
-const MODULE_COLOR_PALETTE = [
-  '#1677ff', // blue
-  '#52c41a', // green
-  '#faad14', // gold
-  '#722ed1', // purple
-  '#eb2f96', // magenta
-  '#13c2c2', // cyan
-  '#fa541c', // volcano
-  '#2f54eb', // geekblue
-  '#a0d911', // lime
-  '#f5222d', // red
-  '#9254de', // purple-2
-  '#36cfc9', // cyan-2
-  '#597ef7', // blue-2
-  '#73d13d', // green-2
-  '#ffc53d', // gold-2
-  '#ff7a45', // volcano-2
-  '#ff4d4f', // red-2
-  '#40a9ff', // geekblue-2
-  '#5cdbd3', // cyan-3
-  '#95de64', // green-3
-  '#ffec3d', // yellow
-  '#d3f261', // lime-2
-  '#ff85c0', // magenta-2
-  '#b37feb', // purple-3
+// antd 主题色（避免硬编码亮色；暗色主题下更柔和）
+const MODULE_TONE_PALETTE = [
+  'var(--ant-color-primary)',
+  'var(--ant-color-success)',
+  'var(--ant-color-warning)',
+  'var(--ant-color-error)',
+  'var(--ant-color-info)',
+  'var(--ant-color-link)',
 ] as const
 
 const hashToIndex = (s: string, mod: number) => {
@@ -200,14 +181,13 @@ const hashToIndex = (s: string, mod: number) => {
   return mod === 0 ? 0 : h % mod
 }
 
-const hexToRgba = (hex: string, alpha: number) => {
-  const h = hex.replace('#', '').trim()
-  if (h.length !== 6) return `rgba(0,0,0,${alpha})`
-  const r = parseInt(h.slice(0, 2), 16)
-  const g = parseInt(h.slice(2, 4), 16)
-  const b = parseInt(h.slice(4, 6), 16)
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`
-}
+const buildTintStyle = (tone: string) => ({
+  border: '1px solid var(--ant-color-border)',
+  backgroundColor: 'var(--ant-color-fill-tertiary)',
+  // tinted when supported
+  background: `color-mix(in srgb, ${tone} 18%, var(--ant-color-fill-tertiary))`,
+  borderColor: `color-mix(in srgb, ${tone} 45%, var(--ant-color-border))`,
+})
 
 const compressImageToTarget = async (file: File, targetBytes: number): Promise<File> => {
   try {
@@ -257,14 +237,14 @@ const compressImageToTarget = async (file: File, targetBytes: number): Promise<F
 
 const getModuleColor = (moduleKey?: string | null) => {
   const key = String(moduleKey ?? 'model')
-  const idx = hashToIndex(key, MODULE_COLOR_PALETTE.length)
-  return MODULE_COLOR_PALETTE[idx]
+  const idx = hashToIndex(key, MODULE_TONE_PALETTE.length)
+  return MODULE_TONE_PALETTE[idx]
 }
 
 const getMaterialKindColor = (k?: MaterialKind) => {
-  if (k === 'bom') return '#fa8c16'
-  if (k === 'virtual') return '#722ed1'
-  return '#1677ff'
+  if (k === 'bom') return 'var(--ant-color-warning)'
+  if (k === 'virtual') return 'var(--ant-color-info)'
+  return 'var(--ant-color-primary)'
 }
 
 const CodePill = ({
@@ -284,9 +264,11 @@ const CodePill = ({
         display: 'inline-block',
         padding,
         borderRadius: 999,
-        border: `1px solid ${hexToRgba(color, 0.35)}`,
-        background: hexToRgba(color, 0.1),
-        color,
+        border: '1px solid var(--ant-color-border)',
+        backgroundColor: 'var(--ant-color-fill-tertiary)',
+        background: `color-mix(in srgb, ${color} 16%, var(--ant-color-fill-tertiary))`,
+        borderColor: `color-mix(in srgb, ${color} 45%, var(--ant-color-border))`,
+        color: 'var(--ant-color-text-secondary)',
         fontVariantNumeric: 'tabular-nums',
         fontSize,
       }}
@@ -975,7 +957,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       const it: any = list[i]
       const mid = String(it?.module_id ?? '').trim()
       const mcode = String(it?.module?.module_code ?? '').trim()
-      const color = MODULE_COLOR_PALETTE[i % MODULE_COLOR_PALETTE.length]
+      const color = MODULE_TONE_PALETTE[i % MODULE_TONE_PALETTE.length]
       if (mid) m.set(mid, color)
       if (mcode) m.set(mcode, color)
     }
@@ -2871,7 +2853,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
 
         .pm-lines-scope .pm-lines-muted {
           font-size: var(--pm-lines-font-size);
-          color: #8c8c8c;
+          color: var(--ant-color-text-secondary);
         }
 
         /* Group cards (物料组/工序组): title uses B */
@@ -2882,10 +2864,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
 
         /* 标准版本列表：已发布(运行中)版本行高亮（深绿色 + 透明度） */
         .pm-versions-table .pm-version-row--published > td {
-          background: rgba(35, 134, 54, 0.22) !important; /* deep green w/ alpha */
+          background: color-mix(in srgb, var(--ant-color-success) 18%, transparent) !important;
         }
         .pm-versions-table .pm-version-row--published:hover > td {
-          background: rgba(35, 134, 54, 0.28) !important;
+          background: color-mix(in srgb, var(--ant-color-success) 24%, transparent) !important;
         }
 
         /* “新增物料/新增工序”：改为深灰按钮（避免白底在深色面板里突兀） */
@@ -3117,7 +3099,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                 style={{
                                   objectFit: 'cover',
                                   borderRadius: 6,
-                                  border: idx === versionImageCursor ? '2px solid #1677ff' : '1px solid #f0f0f0',
+                                  border:
+                                    idx === versionImageCursor
+                                      ? '2px solid var(--ant-color-primary)'
+                                      : '1px solid var(--ant-color-border)',
                                   cursor: 'pointer',
                                 }}
                                 preview={{ mask: '预览' }}
@@ -3821,10 +3806,22 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                   title={entryContext === 'standard' ? '口径（锁定）' : '打样尺寸'}
                   extra={
                     <Space>
-                      <Tag color="blue">
+                      <Tag
+                        style={{
+                          ...buildTintStyle('var(--ant-color-primary)'),
+                          color: 'var(--ant-color-text-secondary)',
+                        }}
+                      >
                         sample: {formatCm(sampleSpec.width_mm)}×{formatCm(sampleSpec.height_mm)}×{String(sampleSpec.quantity)}
                       </Tag>
-                      <Tag color="purple">standard: {formatCm(1000)}×{formatCm(1000)}×1（cm）</Tag>
+                      <Tag
+                        style={{
+                          ...buildTintStyle('var(--ant-color-success)'),
+                          color: 'var(--ant-color-text-secondary)',
+                        }}
+                      >
+                        standard: {formatCm(1000)}×{formatCm(1000)}×1（cm）
+                      </Tag>
                     </Space>
                   }
                 >
@@ -3983,13 +3980,19 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                   }
                 >
                   <Space wrap>
-                    <Tag color="blue">物料费：{summary.material_cost.toFixed(2)}</Tag>
-                    <Tag color="purple">人工费：{summary.labor_cost.toFixed(2)}</Tag>
-                    <Tag color="orange">制造费（23%）：{summary.overhead_cost.toFixed(2)}</Tag>
-                    <Tag color="green">
+                    <Tag style={{ ...buildTintStyle('var(--ant-color-primary)'), color: 'var(--ant-color-text-secondary)' }}>
+                      物料费：{summary.material_cost.toFixed(2)}
+                    </Tag>
+                    <Tag style={{ ...buildTintStyle('var(--ant-color-info)'), color: 'var(--ant-color-text-secondary)' }}>
+                      人工费：{summary.labor_cost.toFixed(2)}
+                    </Tag>
+                    <Tag style={{ ...buildTintStyle('var(--ant-color-warning)'), color: 'var(--ant-color-warning)' }}>
+                      制造费（23%）：{summary.overhead_cost.toFixed(2)}
+                    </Tag>
+                    <Tag style={{ ...buildTintStyle('var(--ant-color-success)'), color: 'var(--ant-color-success)' }}>
                       合计：{summary.total_cost.toFixed(2)}{' '}
                       <Text
-                        style={{ color: '#1677ff', cursor: 'pointer', marginLeft: 6, fontSize: 12 }}
+                        style={{ color: 'var(--ant-color-link)', cursor: 'pointer', marginLeft: 6, fontSize: 12 }}
                         onClick={() => setPriceGuideOpen(true)}
                       >
                         计算指南
@@ -4070,11 +4073,16 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                             width: 80,
                             onCell: (_r: any) => {
                               const key = String(_r?.module_id ?? '').trim()
-                              const color = key ? getColorForModuleKey(key) : '#ffffff'
+                              const color = key ? getColorForModuleKey(key) : 'var(--ant-color-text-secondary)'
                               return {
                                 style: {
                                   // 与“物料组/工序组”的模块色底一致（避免模块区更亮）
-                                  background: key ? hexToRgba(color, 0.06) : undefined,
+                                  ...(key
+                                    ? {
+                                        backgroundColor: 'var(--ant-color-fill-tertiary)',
+                                        background: `color-mix(in srgb, ${color} 12%, var(--ant-color-fill-tertiary))`,
+                                      }
+                                    : {}),
                                   borderLeft: key ? `1px solid ${color}` : undefined,
                                 },
                               }
@@ -4082,7 +4090,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                             render: (_: any, r: any) => {
                               const code = r.module?.module_code ?? '-'
                               const key = String(r?.module_id ?? '').trim()
-                              const color = key ? getColorForModuleKey(key) : '#595959'
+                              const color = key ? getColorForModuleKey(key) : 'var(--ant-color-text-secondary)'
                               return (
                                 <CodePill code={String(code)} color={color} size="sm" />
                               )
@@ -4092,8 +4100,15 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                             title: '名称',
                             onCell: (_r: any) => {
                               const key = String(_r?.module_id ?? '').trim()
-                              const color = key ? getColorForModuleKey(key) : '#ffffff'
-                              return { style: { background: key ? hexToRgba(color, 0.06) : undefined } }
+                              const color = key ? getColorForModuleKey(key) : 'var(--ant-color-text-secondary)'
+                              return {
+                                style: key
+                                  ? {
+                                      backgroundColor: 'var(--ant-color-fill-tertiary)',
+                                      background: `color-mix(in srgb, ${color} 12%, var(--ant-color-fill-tertiary))`,
+                                    }
+                                  : undefined,
+                              }
                             },
                             render: (_: any, r: any) => (
                               <span style={{ fontSize: TABLE_FONT_SIZE }}>{r.module?.module_name ?? '-'}</span>
@@ -4104,8 +4119,15 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                             width: 44,
                             onCell: (_r: any) => {
                               const key = String(_r?.module_id ?? '').trim()
-                              const color = key ? getColorForModuleKey(key) : '#ffffff'
-                              return { style: { background: key ? hexToRgba(color, 0.06) : undefined } }
+                              const color = key ? getColorForModuleKey(key) : 'var(--ant-color-text-secondary)'
+                              return {
+                                style: key
+                                  ? {
+                                      backgroundColor: 'var(--ant-color-fill-tertiary)',
+                                      background: `color-mix(in srgb, ${color} 12%, var(--ant-color-fill-tertiary))`,
+                                    }
+                                  : undefined,
+                              }
                             },
                             render: (_: any, __: any, idx: number) => (
                               <Button
@@ -4206,7 +4228,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                           <Tooltip title="汇总视图仅用于查看（合并相同物料/工序），不影响保存；要编辑请切回明细。">
                             <Space size={6}>
                               <Text
-                                style={{ color: '#1677ff', cursor: 'pointer', fontSize: 12, marginRight: 6 }}
+                                style={{ color: 'var(--ant-color-link)', cursor: 'pointer', fontSize: 12, marginRight: 6 }}
                                 onClick={() => setUsageGuideOpen(true)}
                               >
                                 计算说明
@@ -4246,12 +4268,28 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                   <span>{String(r.material_name ?? r.material_ref_id ?? '-')}</span>
                                   <Tag style={{ fontSize: 10, padding: '0 4px', lineHeight: '16px' }}>×{r.line_count}</Tag>
                                   {r.placeholder ? (
-                                    <Tag color="red" style={{ fontSize: 10, padding: '0 4px', lineHeight: '16px' }}>
+                                    <Tag
+                                      style={{
+                                        ...buildTintStyle('var(--ant-color-error)'),
+                                        color: 'var(--ant-color-error)',
+                                        fontSize: 10,
+                                        padding: '0 4px',
+                                        lineHeight: '16px',
+                                      }}
+                                    >
                                       含占位
                                     </Tag>
                                   ) : null}
                                   {r.anchor ? (
-                                    <Tag color="blue" style={{ fontSize: 10, padding: '0 4px', lineHeight: '16px' }}>
+                                    <Tag
+                                      style={{
+                                        ...buildTintStyle('var(--ant-color-info)'),
+                                        color: 'var(--ant-color-text-secondary)',
+                                        fontSize: 10,
+                                        padding: '0 4px',
+                                        lineHeight: '16px',
+                                      }}
+                                    >
                                       含锚点
                                     </Tag>
                                   ) : null}
@@ -4285,7 +4323,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                           alignItems: 'center',
                                           gap: 6,
                                           fontSize: 11,
-                                          color: '#595959',
+                                          color: 'var(--ant-color-text-secondary)',
                                         }}
                                       >
                                         <span
@@ -4322,7 +4360,12 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                             if (!hasSource) return { style: { background: 'var(--color-theme-bg-tertiary)' } }
                             const key = r.source_module_id ?? r.source_module_code ?? 'model'
                             const color = getColorForModuleKey(String(key))
-                            return { style: { background: hexToRgba(color, 0.06) } }
+                            return {
+                              style: {
+                                backgroundColor: 'var(--ant-color-fill-tertiary)',
+                                background: `color-mix(in srgb, ${color} 12%, var(--ant-color-fill-tertiary))`,
+                              },
+                            }
                           }}
                           columns={[
                           {
@@ -4339,7 +4382,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                     borderRadius: 2,
                                     background: r?.source_module_id || r?.source_module_code
                                       ? getColorForModuleKey(String(r.source_module_id ?? r.source_module_code))
-                                      : '#ffffff',
+                                      : 'var(--ant-color-text-secondary)',
                                   }}
                                 />
                                 {r.material_code ? (
@@ -4357,12 +4400,30 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                   {String(r.material_name ?? r.material_ref_id ?? '-')}
                                 </Button>
                                 {isPlaceholderMaterialRow(r) ? (
-                                  <Tag color="red" style={{ marginInlineStart: 4, fontSize: 10, padding: '0 4px', lineHeight: '16px' }}>
+                                  <Tag
+                                    style={{
+                                      ...buildTintStyle('var(--ant-color-error)'),
+                                      color: 'var(--ant-color-error)',
+                                      marginInlineStart: 4,
+                                      fontSize: 10,
+                                      padding: '0 4px',
+                                      lineHeight: '16px',
+                                    }}
+                                  >
                                     请替换物料
                                   </Tag>
                                 ) : null}
                                 {isAnchorMaterialRow(r) ? (
-                                  <Tag color="blue" style={{ marginInlineStart: 4, fontSize: 10, padding: '0 4px', lineHeight: '16px' }}>
+                                  <Tag
+                                    style={{
+                                      ...buildTintStyle('var(--ant-color-info)'),
+                                      color: 'var(--ant-color-text-secondary)',
+                                      marginInlineStart: 4,
+                                      fontSize: 10,
+                                      padding: '0 4px',
+                                      lineHeight: '16px',
+                                    }}
+                                  >
                                     锚点
                                   </Tag>
                                 ) : null}
@@ -4596,11 +4657,13 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                             return Number.isFinite(totalWithLoss) ? totalWithLoss.toFixed(2) : '-'
                                           })()}
                                         </div>
-                                        <div style={{ color: '#8c8c8c' }}>{getCalcHint(r.calculation_method, sampleSpec)}</div>
+                                        <div style={{ color: 'var(--ant-color-text-secondary)' }}>
+                                          {getCalcHint(r.calculation_method, sampleSpec)}
+                                        </div>
                                       </div>
                                     }
                                   >
-                                    <InfoCircleOutlined style={{ color: '#8c8c8c', fontSize: 12 }} />
+                                    <InfoCircleOutlined style={{ color: 'var(--ant-color-text-secondary)', fontSize: 12 }} />
                                   </Tooltip>
                                 </Space>
                               )
@@ -4696,7 +4759,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                   }}
                                 />
                                 <Tooltip getPopupContainer={() => document.body} title={getCalcHint(r.calculation_method, sampleSpec)}>
-                                  <InfoCircleOutlined style={{ color: '#8c8c8c', fontSize: 12 }} />
+                                  <InfoCircleOutlined style={{ color: 'var(--ant-color-text-secondary)', fontSize: 12 }} />
                                 </Tooltip>
                               </Space>
                             ),
@@ -4745,7 +4808,11 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                 <Button
                                   size="small"
                                   type="text"
-                                  icon={<FileTextOutlined style={{ color: has ? '#1677ff' : '#bfbfbf' }} />}
+                                  icon={
+                                    <FileTextOutlined
+                                      style={{ color: has ? 'var(--ant-color-link)' : 'var(--ant-color-text-secondary)' }}
+                                    />
+                                  }
                                   title={has ? '查看/编辑备注' : '添加备注'}
                                   onClick={() => openTuningPanelForMaterial(idx)}
                                 />
@@ -4857,7 +4924,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                                   {b.material_code ?? '-'} {b.material_name ?? ''}
                                                 </Text>
                                               </div>
-                                              <div style={{ color: '#8c8c8c', fontSize: 12 }}>
+                                              <div style={{ color: 'var(--ant-color-text-secondary)', fontSize: 12 }}>
                                                 {(b.binding_type ?? 'ratio') === 'quantity' ? '数量' : '配比'}：{String(b.quantity_ratio ?? '-')}
                                                 {'；'}损耗%：{String(b.loss_rate ?? 0)}
                                               </div>
@@ -5006,7 +5073,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                           <Tooltip title="汇总视图仅用于查看（合并相同工序口径），不影响保存；要编辑请看下方明细表。">
                             <Space size={6}>
                               <Text
-                                style={{ color: '#1677ff', cursor: 'pointer', fontSize: 12, marginRight: 6 }}
+                                style={{ color: 'var(--ant-color-link)', cursor: 'pointer', fontSize: 12, marginRight: 6 }}
                                 onClick={() => setUsageGuideOpen(true)}
                               >
                                 计算说明
@@ -5041,7 +5108,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                 width: FIRST_COL_WIDTH,
                                 render: (_: any, r: any) => (
                                   <Space>
-                                    {r.process_code ? <CodePill code={r.process_code} color="#595959" /> : null}
+                                    {r.process_code ? <CodePill code={r.process_code} color="var(--ant-color-text-secondary)" /> : null}
                                     <span style={{ whiteSpace: 'nowrap' }}>{r.process_name ?? r.process_id ?? '-'}</span>
                                     <Tag style={{ fontSize: 10, padding: '0 4px', lineHeight: '16px' }}>×{r.line_count}</Tag>
                                   </Space>
@@ -5077,7 +5144,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                           alignItems: 'center',
                                           gap: 6,
                                           fontSize: 11,
-                                          color: '#595959',
+                                          color: 'var(--ant-color-text-secondary)',
                                         }}
                                       >
                                         <span
@@ -5115,7 +5182,12 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                           if (!hasSource) return { style: { background: 'var(--color-theme-bg-tertiary)' } }
                           const key = r.source_module_id ?? r.source_module_code ?? 'model'
                           const color = getColorForModuleKey(String(key))
-                          return { style: { background: hexToRgba(color, 0.06) } }
+                          return {
+                            style: {
+                              backgroundColor: 'var(--ant-color-fill-tertiary)',
+                              background: `color-mix(in srgb, ${color} 12%, var(--ant-color-fill-tertiary))`,
+                            },
+                          }
                         }}
                         columns={[
                           {
@@ -5132,10 +5204,10 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                     borderRadius: 2,
                                     background: r?.source_module_id || r?.source_module_code
                                       ? getColorForModuleKey(String(r.source_module_id ?? r.source_module_code))
-                                      : '#ffffff',
+                                      : 'var(--ant-color-text-secondary)',
                                   }}
                                 />
-                                {r.process_code ? <CodePill code={r.process_code} color="#595959" /> : null}
+                                {r.process_code ? <CodePill code={r.process_code} color="var(--ant-color-text-secondary)" /> : null}
                                 <span style={{ whiteSpace: 'nowrap' }}>{r.process_name ?? r.process_id}</span>
                               </Space>
                             ),
@@ -5397,7 +5469,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                     )
                                   })()}
                                 >
-                                  <ExclamationCircleOutlined style={{ color: '#8c8c8c', cursor: 'help' }} />
+                                  <ExclamationCircleOutlined style={{ color: 'var(--ant-color-text-secondary)', cursor: 'help' }} />
                                 </Tooltip>
                               </Space>
                             ),
@@ -5426,7 +5498,11 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                 <Button
                                   size="small"
                                   type="text"
-                                  icon={<FileTextOutlined style={{ color: has ? '#1677ff' : '#bfbfbf' }} />}
+                                  icon={
+                                    <FileTextOutlined
+                                      style={{ color: has ? 'var(--ant-color-link)' : 'var(--ant-color-text-secondary)' }}
+                                    />
+                                  }
                                   title={has ? '查看/编辑备注' : '添加备注'}
                                   onClick={() => openTuningPanelForProcess(idx)}
                                 />
@@ -6163,7 +6239,11 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
             message="提示"
             description={
               <span>
-                标记为 <Tag color="blue">通用（GLOBAL）</Tag> 的模块可跨结构复用；其余为结构相关模块（会随结构标准过滤）。
+                标记为{' '}
+                <Tag style={{ ...buildTintStyle('var(--ant-color-info)'), color: 'var(--ant-color-text-secondary)' }}>
+                  通用（GLOBAL）
+                </Tag>{' '}
+                的模块可跨结构复用；其余为结构相关模块（会随结构标准过滤）。
               </span>
             }
           />
@@ -6186,7 +6266,15 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                   const meta: any = r?.metadata_json ?? {}
                   const tags = Array.isArray(meta?.structure_tags) ? meta.structure_tags.map((x: any) => String(x)) : []
                   const isGlobal = tags.includes('GLOBAL')
-                  return isGlobal ? <Tag color="blue">通用（GLOBAL）</Tag> : <Tag>结构相关</Tag>
+                  return isGlobal ? (
+                    <Tag style={{ ...buildTintStyle('var(--ant-color-info)'), color: 'var(--ant-color-text-secondary)' }}>
+                      通用（GLOBAL）
+                    </Tag>
+                  ) : (
+                    <Tag style={{ border: '1px solid var(--ant-color-border)', backgroundColor: 'var(--ant-color-fill-tertiary)', color: 'var(--ant-color-text-secondary)' }}>
+                      结构相关
+                    </Tag>
+                  )
                 },
               },
               {

@@ -249,6 +249,9 @@ const AppLayout = ({ children }: AppLayoutProps) => {
       if (location.pathname.startsWith('/costing/spec-matching')) {
         return ['/costing/spec-matching']
       }
+      if (location.pathname.startsWith('/costing/tmall-sku-generator')) {
+        return ['/costing/tmall-sku-generator']
+      }
       return ['/costing/materials']
     }
     return ['/']

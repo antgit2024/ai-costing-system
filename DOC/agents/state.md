@@ -1,5 +1,15 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-22（规格模块：新增列表页，进入天猫布艺 SKU规格生成器详情）
+  - 本轮范围：在现有“天猫布艺 SKU规格生成器（MVP）”前加一级列表页（规格模块）。
+  - 本轮产物：
+    - 前端：
+      - 新增 `frontend/src/pages/costing/SpecModulesPage.tsx`：规格模块列表（字段：模板名称 / 类型 / 矩阵(数量) / 发布时间 / 操作）。
+      - 路由调整：`/costing/tmall-sku-generator` → 列表页；`/costing/tmall-sku-generator/mvp` → 现有详情页（生成器）。
+      - 侧边栏选中态：`/costing/tmall-sku-generator*` 会正确高亮菜单项。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-22（套装模板：切换模型版本时自动迁移 FORCE/筛选别名，避免只剩 id）
   - 本轮范围：前端防呆增强；当组件行的 `model_version_id` 被切换时，尽量用稳定键把旧版本的强制规则与筛选配置迁移到新版本，避免 UI 退化为“（无 TOKEN）+ UUID”导致运营无法识别原选择。
   - 本轮产物：

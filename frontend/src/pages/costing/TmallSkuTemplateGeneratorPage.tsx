@@ -1288,9 +1288,9 @@ export default function TmallSkuTemplateGeneratorPage() {
                           display: 'inline-block',
                           padding: '1px 8px',
                           borderRadius: 999,
-                          background: 'rgba(0,0,0,0.06)',
-                          color: 'rgba(0,0,0,0.65)',
-                          fontSize: 11,
+                          background: 'var(--ant-color-fill-tertiary)',
+                          color: 'var(--ant-color-text-secondary)',
+                          fontSize: 12,
                           lineHeight: '18px',
                           whiteSpace: 'nowrap',
                         }}
@@ -1339,9 +1339,9 @@ export default function TmallSkuTemplateGeneratorPage() {
                           display: 'inline-block',
                           padding: '1px 8px',
                           borderRadius: 999,
-                          background: 'rgba(0,0,0,0.06)',
-                          // 与“TOKEN/公式”列整体风格一致（偏次级，不做红绿高亮）
-                          color: 'rgba(0,0,0,0.45)',
+                          background: 'var(--ant-color-fill-tertiary)',
+                          // 与“TOKEN/公式”列整体风格一致（不做红绿高亮，且适配黑底主题）
+                          color: 'var(--ant-color-text-secondary)',
                           fontSize: 12,
                           lineHeight: '18px',
                           whiteSpace: 'nowrap',

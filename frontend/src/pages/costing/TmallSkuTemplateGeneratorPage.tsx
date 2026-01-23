@@ -214,6 +214,8 @@ type SpecRow = {
   color_label: string
   size_label: string
   merchant_sku: string
+  display_source?: string
+  is_z_source?: boolean
   attribute_spec?: string
   token_formula?: string
   spec_text?: string
@@ -222,6 +224,7 @@ type SpecRow = {
   length_cm?: string
   thickness_cm?: string
   width_cm?: string
+  height_cm?: string
 }
 
 type SpecEdits = Record<
@@ -587,6 +590,7 @@ export default function TmallSkuTemplateGeneratorPage() {
         // - row override (table) > color binding (drawer) > size binding (drawer) > prefix/suffix
         const merchantSource = rowOverride || colorSource || sizeSource
         const displaySource = rowOverride || sizeSource
+        const isZSource = !!displaySource && displaySource.toUpperCase().startsWith('Z-')
 
         const merchant_sku = buildMerchantSku({
           merchantSkuPrefix,
@@ -607,6 +611,8 @@ export default function TmallSkuTemplateGeneratorPage() {
           color_label: c.label,
           size_label: s.label,
           merchant_sku,
+          display_source: displaySource || undefined,
+          is_z_source: isZSource || undefined,
           attribute_spec,
           token_formula,
           spec_text,
@@ -615,6 +621,7 @@ export default function TmallSkuTemplateGeneratorPage() {
           length_cm: fmtNum(c.length_cm),
           thickness_cm: fmtNum(c.thickness_cm),
           width_cm: fmtNum(c.width_cm),
+          height_cm: fmtNum((c as any).height_cm),
         })
       }
     }
@@ -756,6 +763,12 @@ export default function TmallSkuTemplateGeneratorPage() {
     let okCount = 0
     let badCount = 0
     for (const r of specRows) {
+      if (r.is_z_source) {
+        // Z-：不依赖公式解析；且避免任何红/绿高亮（不生成 tokens/missing）
+        out[r.row_key] = { ok: true, issues: [], okTokens: [], multiTokens: [], missingGroupIndexes: [] }
+        okCount++
+        continue
+      }
       const specText = getSpecTextForRow(r)
       const formula = String(r.token_formula ?? '').trim()
       if (!formula) {
@@ -1185,7 +1198,9 @@ export default function TmallSkuTemplateGeneratorPage() {
                     const specText = String(r.spec_text ?? '').trim()
                     return (
                       <div style={{ whiteSpace: 'normal', lineHeight: 1.2 }}>
-                        {v ? highlightTextByTokens(specText, { red: v.okTokens ?? [], orange: v.multiTokens ?? [] }) : specText || '-'}
+                        {v && !r.is_z_source
+                          ? highlightTextByTokens(specText, { red: v.okTokens ?? [], orange: v.multiTokens ?? [] })
+                          : specText || '-'}
                       </div>
                     )
                   },
@@ -1245,19 +1260,45 @@ export default function TmallSkuTemplateGeneratorPage() {
                   ),
                 },
                 {
-                  title: '长度',
-                  width: 100,
-                  render: (_: any, r: SpecRow) => <Text>{String(r.length_cm ?? '').trim() || '-'}</Text>,
-                },
-                {
-                  title: '厚度(cm)',
-                  width: 120,
-                  render: (_: any, r: SpecRow) => <Text>{String(r.thickness_cm ?? '').trim() || '-'}</Text>,
-                },
-                {
-                  title: '宽度',
-                  width: 100,
-                  render: (_: any, r: SpecRow) => <Text>{String(r.width_cm ?? '').trim() || '-'}</Text>,
+                  title: '尺寸',
+                  width: 210,
+                  render: (_: any, r: SpecRow) => {
+                    const v = rowValidation?.[r.row_key]
+                    if (!v) return <Text type="secondary">-</Text>
+
+                    const pill = (textRaw: string) => (
+                      <span
+                        style={{
+                          display: 'inline-block',
+                          padding: '1px 8px',
+                          borderRadius: 999,
+                          background: 'rgba(0,0,0,0.06)',
+                          color: 'rgba(0,0,0,0.65)',
+                          fontSize: 11,
+                          lineHeight: '18px',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {textRaw}
+                      </span>
+                    )
+
+                    const w = String(r.width_cm ?? '').trim()
+                    const h = String(r.height_cm ?? '').trim()
+                    const l = String(r.length_cm ?? '').trim()
+                    const t = String(r.thickness_cm ?? '').trim()
+
+                    const pills: React.ReactNode[] = []
+                    if (w && h) pills.push(pill(`${w}×${h}cm`))
+                    else if (w) pills.push(pill(`宽${w}cm`))
+
+                    const secondParts: string[] = []
+                    if (l) secondParts.push(`长${l}cm`)
+                    if (t) secondParts.push(`厚${t}cm`)
+                    if (secondParts.length) pills.push(pill(secondParts.join(' ')))
+
+                    return pills.length ? <Space wrap size={6}>{pills}</Space> : <Text type="secondary">-</Text>
+                  },
                 },
                 {
                   title: '商家编码',
@@ -1266,16 +1307,33 @@ export default function TmallSkuTemplateGeneratorPage() {
                   render: (v: any) => <Text code>{String(v ?? '').trim() || '-'}</Text>,
                 },
                 {
-                  title: '属性规格',
-                  dataIndex: 'attribute_spec',
-                  width: 320,
-                  render: (v: any) => <div style={{ whiteSpace: 'normal', lineHeight: 1.2 }}>{String(v ?? '').trim() || '-'}</div>,
-                },
-                {
                   title: 'TOKEN/公式',
                   dataIndex: 'token_formula',
                   width: 360,
-                  render: (_: any, r: SpecRow) => renderFormulaWithValidation(String(r.token_formula ?? ''), rowValidation?.[r.row_key]),
+                  render: (_: any, r: SpecRow) => {
+                    const formula = String(r.token_formula ?? '').trim()
+                    if (formula && !r.is_z_source) {
+                      return renderFormulaWithValidation(formula, rowValidation?.[r.row_key])
+                    }
+                    const spec = String(r.attribute_spec ?? '').trim()
+                    if (!spec) return <Text type="secondary">-</Text>
+                    return (
+                      <span
+                        style={{
+                          display: 'inline-block',
+                          padding: '1px 8px',
+                          borderRadius: 999,
+                          background: 'rgba(0,0,0,0.06)',
+                          color: 'rgba(0,0,0,0.65)',
+                          fontSize: 11,
+                          lineHeight: '18px',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {spec}
+                      </span>
+                    )
+                  },
                 },
                 {
                   title: '是否上架',

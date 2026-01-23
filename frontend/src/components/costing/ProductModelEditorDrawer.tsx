@@ -289,6 +289,8 @@ const CodePill = ({
 export default function ProductModelEditorDrawer(props: ProductModelEditorDrawerProps) {
   const { open, onClose, entryContext, modelId, initialVersionId, includeArchived } = props
   const queryClient = useQueryClient()
+  // 打样管理：表格底色更“黑”一点（更贴近暗色背景，降低亮度/对比刺眼感）
+  const listBaseFill = entryContext === 'sample' ? 'var(--ant-color-fill-quaternary)' : 'var(--ant-color-fill-tertiary)'
   const [form] = Form.useForm()
   const navigate = useNavigate()
 
@@ -4079,8 +4081,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                                   // 与“物料组/工序组”的模块色底一致（避免模块区更亮）
                                   ...(key
                                     ? {
-                                        backgroundColor: 'var(--ant-color-fill-tertiary)',
-                                        background: `color-mix(in srgb, ${color} 12%, var(--ant-color-fill-tertiary))`,
+                                        backgroundColor: listBaseFill,
+                                        background: `color-mix(in srgb, ${color} 12%, ${listBaseFill})`,
                                       }
                                     : {}),
                                   borderLeft: key ? `1px solid ${color}` : undefined,
@@ -4104,8 +4106,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                               return {
                                 style: key
                                   ? {
-                                      backgroundColor: 'var(--ant-color-fill-tertiary)',
-                                      background: `color-mix(in srgb, ${color} 12%, var(--ant-color-fill-tertiary))`,
+                                      backgroundColor: listBaseFill,
+                                      background: `color-mix(in srgb, ${color} 12%, ${listBaseFill})`,
                                     }
                                   : undefined,
                               }
@@ -4123,8 +4125,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                               return {
                                 style: key
                                   ? {
-                                      backgroundColor: 'var(--ant-color-fill-tertiary)',
-                                      background: `color-mix(in srgb, ${color} 12%, var(--ant-color-fill-tertiary))`,
+                                      backgroundColor: listBaseFill,
+                                      background: `color-mix(in srgb, ${color} 12%, ${listBaseFill})`,
                                     }
                                   : undefined,
                               }
@@ -4362,8 +4364,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                             const color = getColorForModuleKey(String(key))
                             return {
                               style: {
-                                backgroundColor: 'var(--ant-color-fill-tertiary)',
-                                background: `color-mix(in srgb, ${color} 12%, var(--ant-color-fill-tertiary))`,
+                                backgroundColor: listBaseFill,
+                                background: `color-mix(in srgb, ${color} 12%, ${listBaseFill})`,
                               },
                             }
                           }}
@@ -5184,8 +5186,8 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                           const color = getColorForModuleKey(String(key))
                           return {
                             style: {
-                              backgroundColor: 'var(--ant-color-fill-tertiary)',
-                              background: `color-mix(in srgb, ${color} 12%, var(--ant-color-fill-tertiary))`,
+                              backgroundColor: listBaseFill,
+                              background: `color-mix(in srgb, ${color} 12%, ${listBaseFill})`,
                             },
                           }
                         }}

@@ -3,6 +3,8 @@
   align-items: center;
   gap: 10px;
   width: 100%;
+  /* 二级菜单整体右移：与一级菜单“图标后”的文字起点对齐 */
+  padding-left: 22px;
 }
 
 .sidebar-sub-link--disabled {

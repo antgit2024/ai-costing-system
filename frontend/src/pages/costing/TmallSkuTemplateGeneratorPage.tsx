@@ -128,6 +128,13 @@ const mmToCmText = (mm: unknown): string => {
   return fmtNum(n / 10)
 }
 
+// 说明（前置校验台）：
+// - 本页用于在“同步 ERP/发货扣库”之前，把“商品规格（网店）spec_text + 商家编码 + 尺寸(B/Z口径)”提前跑通并暴露问题
+// - 解析口径尽量与后端一致，避免“前端看着对、后端扣库失败”
+// - 相关后端口径：
+//   - spec 解析：backend/src/planner/services/spec_parser_service.py::parse_spec
+//   - B/Z 尺寸策略：backend/src/planner/services/bom_generation_service.py（generate-by-spec 的 B / Z dimension strategy）
+//
 // 与后端 spec_parser_service.parse_spec 尽量一致：用于“商品规格（网店）”解析宽高（B 解析型命中/扣库口径）
 const parseDimsFromSpecText = (specTextRaw: string): { width_cm?: string; height_cm?: string; diameter_cm?: string } => {
   const text = String(specTextRaw ?? '').trim()
@@ -935,6 +942,16 @@ export default function TmallSkuTemplateGeneratorPage() {
         }
       }
 
+      // 标准模型/未绑定：若 spec_text 明显包含“尺寸段”，但解析失败，提示运营修正（避免后端尺寸条件/扣库口径走不通）
+      if (!displaySource.toUpperCase().startsWith('B-') && !displaySource.toUpperCase().startsWith('Z-')) {
+        const looksLikeHasDims =
+          /(\d{1,4}(?:\.\d+)?)\s*[xX×\*＊]\s*(\d{1,4}(?:\.\d+)?)/.test(specText) ||
+          /(直径|φ|Φ|圆形|圆)\s*[（(]?\s*\d{1,4}/.test(specText)
+        if (looksLikeHasDims && !(dims.width_cm && dims.height_cm)) {
+          issues.push('尺寸：商品规格（网店）包含尺寸段但未解析到宽高（建议写成 45X45 / 45*45 / 45×45 或 宽120×高150）')
+        }
+      }
+
       // Z-：不依赖公式解析；且避免任何红/绿高亮（不生成 tokens/missing）
       if (r.is_z_source) {
         const ok = issues.length === 0
@@ -1400,7 +1417,7 @@ export default function TmallSkuTemplateGeneratorPage() {
                 },
                 {
                   title: '模型属性',
-                  width: 320,
+                  width: 210,
                   render: (_: any, r: SpecRow) => (
                     <Select
                       allowClear
@@ -1434,7 +1451,7 @@ export default function TmallSkuTemplateGeneratorPage() {
                 },
                 {
                   title: '尺寸',
-                  width: 210,
+                  width: 280,
                   render: (_: any, r: SpecRow) => {
                     const pill = (textRaw: string) => (
                       <span
@@ -1505,7 +1522,7 @@ export default function TmallSkuTemplateGeneratorPage() {
                 {
                   title: '商家编码',
                   dataIndex: 'merchant_sku',
-                  width: 220,
+                  width: 150,
                   render: (v: any) => <Text code>{String(v ?? '').trim() || '-'}</Text>,
                 },
                 {

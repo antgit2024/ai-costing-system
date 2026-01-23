@@ -150,6 +150,8 @@ const parseExpectedDimsFromFormula = (formulaRaw: string): Array<{ w: string; h:
     const h = Number((m.groups as any)?.h ?? '')
     const unit = ((m.groups as any)?.unit as any) ?? null
     if (!Number.isFinite(w) || !Number.isFinite(h)) continue
+    // 0*0*0 视为占位（由“商品规格（网店）”解析尺寸为准）
+    if (w <= 0 || h <= 0) continue
     const ww = normalizeToCmText(w, unit)
     const hh = normalizeToCmText(h, unit)
     if (!ww || !hh) continue
@@ -175,7 +177,9 @@ const parseExpectedDimsFromFormula = (formulaRaw: string): Array<{ w: string; h:
 //   - B/Z 尺寸策略：backend/src/planner/services/bom_generation_service.py（generate-by-spec 的 B / Z dimension strategy）
 //
 // 与后端 spec_parser_service.parse_spec 尽量一致：用于“商品规格（网店）”解析宽高（B 解析型命中/扣库口径）
-const parseDimsFromSpecText = (specTextRaw: string): { width_cm?: string; height_cm?: string; diameter_cm?: string } => {
+const parseDimsFromSpecText = (
+  specTextRaw: string,
+): { width_cm?: string; height_cm?: string; diameter_cm?: string; dimension_qty?: number } => {
   const text = String(specTextRaw ?? '').trim()
   if (!text) return {}
 
@@ -189,6 +193,7 @@ const parseDimsFromSpecText = (specTextRaw: string): { width_cm?: string; height
   let widthCm: number | null = null
   let heightCm: number | null = null
   let diameterCm: number | null = null
+  let dimensionQty: number | null = null
 
   const isHeightLabel = (lbl: string) => ['竖', '高'].includes(String(lbl || '').trim())
   const isWidthLabel = (lbl: string) => ['横', '宽', '长'].includes(String(lbl || '').trim())
@@ -228,6 +233,22 @@ const parseDimsFromSpecText = (specTextRaw: string): { width_cm?: string; height
     if (heightCm === null && Number.isFinite(h)) heightCm = normalizeToCm(h, unit)
   }
 
+  // Optional quantity parsing: "W*H*Q" (qty defaults to 1 when dims exist)
+  const dimQtyRe =
+    /(约|大约|约等)?(\d{1,4}(?:\.\d+)?)\s*(?:[xX×\*＊]\s*(\d{1,4}(?:\.\d+)?))\s*(cm|厘米|mm|毫米|m|米)?(?:\s*[xX×\*＊]\s*(\d{1,4}))?/i
+  const dimQty = dimQtyRe.exec(text)
+  if (dimQty) {
+    try {
+      const raw = String(dimQty[5] ?? '').trim()
+      if (raw) {
+        const q = Number(raw)
+        if (Number.isFinite(q) && q > 0) dimensionQty = Math.floor(q)
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   // e.g. "直径50" / "φ50" / "圆形(50)"
   const diaRe = /(直径|φ|Φ|D|圆形|圆)\s*[（(]?\s*(\d{1,4}(?:\.\d+)?)\s*(cm|厘米|mm|毫米|m|米)?\s*[）)]?/i
   const dia = diaRe.exec(text)
@@ -247,6 +268,9 @@ const parseDimsFromSpecText = (specTextRaw: string): { width_cm?: string; height
   if (widthCm !== null && widthCm > 0) out.width_cm = fmtNum(widthCm)
   if (heightCm !== null && heightCm > 0) out.height_cm = fmtNum(heightCm)
   if (diameterCm !== null && diameterCm > 0) out.diameter_cm = fmtNum(diameterCm)
+  // When dims exist but qty missing, default=1 (same as backend)
+  if (dimensionQty === null && out.width_cm && out.height_cm) dimensionQty = 1
+  if (dimensionQty !== null && dimensionQty > 0) (out as any).dimension_qty = dimensionQty
   return out
 }
 
@@ -835,8 +859,8 @@ export default function TmallSkuTemplateGeneratorPage() {
     if (!text || !all.length) return <>{text}</>
 
     const pickStyle = (tk: string) => {
-      if (orange.includes(tk)) return { color: '#d46b08', fontWeight: 700 } // orange (ambiguous)
-      if (red.includes(tk)) return { color: '#cf1322', fontWeight: 700 } // red (matched)
+      if (orange.includes(tk)) return { color: 'var(--ant-color-warning)', fontWeight: 700 } // ambiguous
+      if (red.includes(tk)) return { color: 'var(--ant-color-error)', fontWeight: 700 } // matched
       return undefined
     }
 
@@ -901,11 +925,11 @@ export default function TmallSkuTemplateGeneratorPage() {
         const isMissingGroup = missingGroups.has(groupIdx)
         const style =
           token && okSet.has(token)
-            ? { color: '#389e0d', fontWeight: 700 } // green
+            ? { color: 'var(--ant-color-success)', fontWeight: 700 }
             : token && multiSet.has(token)
-              ? { color: '#d46b08', fontWeight: 700 } // orange
+              ? { color: 'var(--ant-color-warning)', fontWeight: 700 }
               : token && isMissingGroup
-                ? { color: '#cf1322', fontWeight: 700 } // red (missing)
+                ? { color: 'var(--ant-color-error)', fontWeight: 700 }
                 : undefined
         parts.push(
           <span key={`f-${groupIdx}-${start}`} style={style}>
@@ -1014,7 +1038,11 @@ export default function TmallSkuTemplateGeneratorPage() {
         const expected = parseExpectedDimsFromFormula(formula)
         const pw = String(dims.width_cm ?? '').trim()
         const ph = String(dims.height_cm ?? '').trim()
-        if (expected.length && pw && ph) {
+        // 若公式里只有 0*0*0 这类占位尺寸，则以“能解析出尺寸”为主：只要有尺寸就通过
+        const hasPlaceholder000 = /(?:^|[^0-9])0\s*[xX×\*＊]\s*0\s*[xX×\*＊]\s*0(?:$|[^0-9])/.test(formula)
+        if (hasPlaceholder000) {
+          sizeMatched = !!(pw && ph)
+        } else if (expected.length && pw && ph) {
           sizeMatched = expected.some((x) => x.w === pw && x.h === ph) || expected.some((x) => x.w === ph && x.h === pw)
           if (!sizeMatched) {
             issues.push(`尺寸未命中 TOKEN/公式：期望 ${expected.map((x) => `${x.w}×${x.h}cm`).join(' / ')}`)
@@ -1534,6 +1562,8 @@ export default function TmallSkuTemplateGeneratorPage() {
                     const dims = parsedDimsByRowKey?.[r.row_key] || {}
                     const pw = String(dims.width_cm ?? '').trim()
                     const ph = String(dims.height_cm ?? '').trim()
+                    const pq = Number((dims as any)?.dimension_qty ?? 0)
+                    const qtyText = Number.isFinite(pq) && pq > 0 ? String(Math.floor(pq)) : '1'
 
                     const pills: React.ReactNode[] = []
 
@@ -1550,7 +1580,7 @@ export default function TmallSkuTemplateGeneratorPage() {
                         const qn = Number((c as any)?.quantity ?? 0)
                         const q = Number.isFinite(qn) && qn > 0 ? String(Math.floor(qn) === qn ? qn : fmtNum(qn)) : ''
                         if (!w || !h) continue
-                        pills.push(pill(`${w}×${h}cm${q ? `×${q}` : ''}`))
+                        pills.push(pill(`${w}×${h}cm${q ? `*${q}` : '*1'}`))
                       }
                     }
 
@@ -1561,8 +1591,8 @@ export default function TmallSkuTemplateGeneratorPage() {
                     }
 
                     // B/模型码/未绑定：只展示解析尺寸；当“检验”尺寸配对命中时，将尺寸字标红
-                    if (pw && ph) pills.push(pill(`${pw}×${ph}cm`, { highlight: !!v?.sizeMatched }))
-                    else if (pw) pills.push(pill(`宽${pw}cm`, { highlight: !!v?.sizeMatched }))
+                    if (pw && ph) pills.push(pill(`${pw}×${ph}cm*${qtyText}`, { highlight: !!v?.sizeMatched }))
+                    else if (pw) pills.push(pill(`宽${pw}cm*${qtyText}`, { highlight: !!v?.sizeMatched }))
                     return pills.length ? <Space wrap size={6}>{pills}</Space> : <Text type="secondary">-</Text>
                   },
                 },
@@ -1610,7 +1640,13 @@ export default function TmallSkuTemplateGeneratorPage() {
                     const v = rowValidation?.[r.row_key]
                     return (
                       <Space size={6}>
-                        {v ? (v.ok ? <CheckCircleFilled style={{ color: '#52c41a' }} /> : <CloseCircleFilled style={{ color: '#ff4d4f' }} />) : null}
+                        {v ? (
+                          v.ok ? (
+                            <CheckCircleFilled style={{ color: 'var(--ant-color-success)' }} />
+                          ) : (
+                            <CloseCircleFilled style={{ color: 'var(--ant-color-error)' }} />
+                          )
+                        ) : null}
                         <Switch checked={r.sku_status === 1} onChange={(x) => setSkuEnabled(r.color_key, r.size_key, x)} />
                       </Space>
                     )

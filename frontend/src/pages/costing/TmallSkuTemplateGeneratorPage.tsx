@@ -214,6 +214,7 @@ type SpecRow = {
   color_label: string
   size_label: string
   merchant_sku: string
+  merchant_source?: string
   display_source?: string
   is_z_source?: boolean
   attribute_spec?: string
@@ -611,6 +612,7 @@ export default function TmallSkuTemplateGeneratorPage() {
           color_label: c.label,
           size_label: s.label,
           merchant_sku,
+          merchant_source: merchantSource || undefined,
           display_source: displaySource || undefined,
           is_z_source: isZSource || undefined,
           attribute_spec,
@@ -763,21 +765,38 @@ export default function TmallSkuTemplateGeneratorPage() {
     let okCount = 0
     let badCount = 0
     for (const r of specRows) {
-      if (r.is_z_source) {
-        // Z-：不依赖公式解析；且避免任何红/绿高亮（不生成 tokens/missing）
-        out[r.row_key] = { ok: true, issues: [], okTokens: [], multiTokens: [], missingGroupIndexes: [] }
-        okCount++
-        continue
-      }
       const specText = getSpecTextForRow(r)
       const formula = String(r.token_formula ?? '').trim()
+      const issues: string[] = []
+
+      // 商家编码：用于“系统命中”的稳定锚点；这里做基础校验，提示运营是否需要补绑定/修正
+      const merchantSku = String(r.merchant_sku ?? '').trim()
+      const merchantSource = String((r as any)?.merchant_source ?? '').trim()
+      if (!merchantSku) {
+        issues.push('商家编码为空')
+      }
+      if (!merchantSource) {
+        issues.push('商家编码未绑定模型/套版（请在颜色/尺寸/行级覆盖里选择来源编码）')
+      } else if (merchantSku && !merchantSku.startsWith(merchantSource)) {
+        issues.push(`商家编码未命中来源编码：期望以 ${merchantSource} 开头`)
+      }
+
+      // Z-：不依赖公式解析；且避免任何红/绿高亮（不生成 tokens/missing）
+      if (r.is_z_source) {
+        const ok = issues.length === 0
+        out[r.row_key] = { ok, issues, okTokens: [], multiTokens: [], missingGroupIndexes: [] }
+        if (ok) okCount++
+        else badCount++
+        continue
+      }
       if (!formula) {
-        out[r.row_key] = { ok: true, issues: [], okTokens: [], multiTokens: [], missingGroupIndexes: [] }
-        okCount++
+        const ok = issues.length === 0
+        out[r.row_key] = { ok, issues, okTokens: [], multiTokens: [], missingGroupIndexes: [] }
+        if (ok) okCount++
+        else badCount++
         continue
       }
       const groups = parseFormulaTokenGroups(formula)
-      const issues: string[] = []
       const okTokens: string[] = []
       const multiTokens: string[] = []
       const missingGroupIndexes: number[] = []
@@ -1263,9 +1282,6 @@ export default function TmallSkuTemplateGeneratorPage() {
                   title: '尺寸',
                   width: 210,
                   render: (_: any, r: SpecRow) => {
-                    const v = rowValidation?.[r.row_key]
-                    if (!v) return <Text type="secondary">-</Text>
-
                     const pill = (textRaw: string) => (
                       <span
                         style={{
@@ -1324,8 +1340,9 @@ export default function TmallSkuTemplateGeneratorPage() {
                           padding: '1px 8px',
                           borderRadius: 999,
                           background: 'rgba(0,0,0,0.06)',
-                          color: 'rgba(0,0,0,0.65)',
-                          fontSize: 11,
+                          // 与“TOKEN/公式”列整体风格一致（偏次级，不做红绿高亮）
+                          color: 'rgba(0,0,0,0.45)',
+                          fontSize: 12,
                           lineHeight: '18px',
                           whiteSpace: 'nowrap',
                         }}

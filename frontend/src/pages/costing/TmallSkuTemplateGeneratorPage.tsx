@@ -776,9 +776,10 @@ export default function TmallSkuTemplateGeneratorPage() {
         const colorSource = String((c as any)?.source_code ?? '').trim()
         const sizeSource = String((s as any)?.source_code ?? '').trim()
 
-        // Priority:
-        // - row override (table) > color binding (drawer) > size binding (drawer) > prefix/suffix
-        const merchantSource = rowOverride || colorSource || sizeSource
+        // Priority (商家编码锚点)：
+        // - row override（行级覆盖） > size binding（尺寸绑定：通常是系统编码，如 B-3U3PAE / Z-...） > color binding
+        // 说明：颜色分类更多用于对客展示/款式区分，商家编码优先使用系统的“模型/套版编码”作为稳定锚点。
+        const merchantSource = rowOverride || sizeSource || colorSource
         const displaySource = rowOverride || sizeSource
         const isZSource = !!displaySource && displaySource.toUpperCase().startsWith('Z-')
 

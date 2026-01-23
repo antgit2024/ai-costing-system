@@ -1,0 +1,28 @@
+.sidebar-sub-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+
+.sidebar-sub-link--disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.sidebar-sub-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.55);
+  flex: 0 0 auto;
+}
+
+.sidebar-sub-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+

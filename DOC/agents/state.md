@@ -26,6 +26,23 @@
   - 验收命令（必须，全部 0 退出码）：
     - Frontend：`npm -C frontend run build`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-23（侧边栏菜单：按业务分组重排 + 一级图标 + 二级圆点）
+  - 本轮范围：按业务分组重排左侧菜单结构，并将“总览/PLANNER/场景列表/场景Builder”整体移到底部；一级菜单带图标，二级菜单统一“圆点 + 名称”风格。
+  - 产物（前端）：
+    - `frontend/src/components/layout/AppLayout.tsx`
+    - `frontend/src/components/layout/appLayoutMenu.css`
+  - 菜单分组（路由均为站内相对路径，不包含域名）：
+    - 基础设置：`/costing/materials` `/costing/virtual-materials` `/costing/structure-standards` `/costing/process-modules` `/costing/processes` `/costing/taxonomy`
+    - 模型管理：`/costing/sample-models` `/costing/standard-models` `/costing/bundle-templates`
+    - 上架测试：`/costing/product-listing` `/costing/tmall-sku-generator` `/costing/pricing-tools`
+    - 货品管理：`/costing/sku-master` `/costing/spec-matching` `/costing/shipments` `/costing/shipping-rules`
+    - 生产工具：`/costing/production-scan`
+    - PLANNER（移至最下）：`/` `/planner` `/planner/scenarios` `/planner/scenario-builder`
+  - 备注（缺失功能/占位）：
+    - “数据洞察：售后分析/模型分析/店铺数据”当前无对应路由，已作为 disabled 占位菜单项保留。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-22（天猫SKU生成器：仅移除“套装模板(B/Z)→天猫属性词”展示区块，保留检验/公式渲染）
   - 本轮范围：只删除天猫SKU生成器里“套装模板（B/Z）→ 天猫属性词（占主动权）”那块展示 Card；保留表格中的“检验 / TOKEN/公式渲染 / 命中高亮”等能力。
   - 本轮产物：

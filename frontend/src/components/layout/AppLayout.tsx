@@ -1,15 +1,13 @@
 import { Badge, Button, Layout, Menu, Space } from 'antd'
-import AreaChartOutlined from '@ant-design/icons/lib/icons/AreaChartOutlined'
-import CalculatorOutlined from '@ant-design/icons/lib/icons/CalculatorOutlined'
 import AppstoreOutlined from '@ant-design/icons/lib/icons/AppstoreOutlined'
 import BarChartOutlined from '@ant-design/icons/lib/icons/BarChartOutlined'
 import DatabaseOutlined from '@ant-design/icons/lib/icons/DatabaseOutlined'
 import DeploymentUnitOutlined from '@ant-design/icons/lib/icons/DeploymentUnitOutlined'
 import ExperimentOutlined from '@ant-design/icons/lib/icons/ExperimentOutlined'
-import HomeOutlined from '@ant-design/icons/lib/icons/HomeOutlined'
 import SettingOutlined from '@ant-design/icons/lib/icons/SettingOutlined'
 import ShopOutlined from '@ant-design/icons/lib/icons/ShopOutlined'
 import UnorderedListOutlined from '@ant-design/icons/lib/icons/UnorderedListOutlined'
+import ToolOutlined from '@ant-design/icons/lib/icons/ToolOutlined'
 import type { MenuProps } from 'antd'
 import { useMemo, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
@@ -17,6 +15,7 @@ import { useQuery } from '@tanstack/react-query'
 
 import TaskCenterDrawer from '@/components/common/TaskCenterDrawer'
 import { fetchTaskCenter } from '@/services/planner'
+import './appLayoutMenu.css'
 
 const { Header, Sider, Content } = Layout
 
@@ -26,56 +25,52 @@ type TaskProbe = {
   runningCount: number
 }
 
+const subItemLabel = (text: string, to: string) => (
+  <Link to={to} className="sidebar-sub-link">
+    <span className="sidebar-sub-dot" />
+    <span className="sidebar-sub-text">{text}</span>
+  </Link>
+)
+
+const disabledSubItemLabel = (text: string) => (
+  <span className="sidebar-sub-link sidebar-sub-link--disabled">
+    <span className="sidebar-sub-dot" />
+    <span className="sidebar-sub-text">{text}</span>
+  </span>
+)
+
 const menuItems: MenuProps['items'] = [
   {
-    key: '/',
-    icon: <HomeOutlined />,
-    label: <Link to="/">总览</Link>,
-  },
-  {
-    key: '/planner',
-    icon: <DeploymentUnitOutlined />,
-    label: <Link to="/planner">Planner 工作区</Link>,
-  },
-  {
-    key: '/planner/scenarios',
-    icon: <UnorderedListOutlined />,
-    label: <Link to="/planner/scenarios">场景列表</Link>,
-  },
-  {
-    key: '/planner/scenario-builder',
-    icon: <AreaChartOutlined />,
-    label: <Link to="/planner/scenario-builder">场景 Builder</Link>,
+    key: '/costing/base',
+    icon: <SettingOutlined />,
+    label: '基础设置',
+    children: [
+      { key: '/costing/materials', label: subItemLabel('采购物料', '/costing/materials') },
+      { key: '/costing/virtual-materials', label: subItemLabel('虚拟物料', '/costing/virtual-materials') },
+      { key: '/costing/structure-standards', label: subItemLabel('结构标准', '/costing/structure-standards') },
+      { key: '/costing/process-modules', label: subItemLabel('工艺模块', '/costing/process-modules') },
+      { key: '/costing/processes', label: subItemLabel('工序管理', '/costing/processes') },
+      { key: '/costing/taxonomy', label: subItemLabel('分类管理', '/costing/taxonomy') },
+    ],
   },
   {
     key: '/costing/models',
     icon: <AppstoreOutlined />,
     label: '模型管理',
     children: [
-      {
-        key: '/costing/sample-models',
-        label: <Link to="/costing/sample-models">打样模型</Link>,
-      },
-      {
-        key: '/costing/standard-models',
-        label: <Link to="/costing/standard-models">标准模型</Link>,
-      },
-      {
-        key: '/costing/structure-standards',
-        label: <Link to="/costing/structure-standards">结构标准</Link>,
-      },
-      {
-        key: '/costing/process-modules',
-        label: <Link to="/costing/process-modules">工艺模块</Link>,
-      },
-      {
-        key: '/costing/processes',
-        label: <Link to="/costing/processes">工序管理</Link>,
-      },
-      {
-        key: '/costing/bundle-templates',
-        label: <Link to="/costing/bundle-templates">套装模板</Link>,
-      },
+      { key: '/costing/sample-models', label: subItemLabel('打样模型', '/costing/sample-models') },
+      { key: '/costing/standard-models', label: subItemLabel('标准模型', '/costing/standard-models') },
+      { key: '/costing/bundle-templates', label: subItemLabel('套装模板', '/costing/bundle-templates') },
+    ],
+  },
+  {
+    key: '/costing/listing',
+    icon: <ShopOutlined />,
+    label: '上架测试',
+    children: [
+      { key: '/costing/product-listing', label: subItemLabel('测试台', '/costing/product-listing') },
+      { key: '/costing/tmall-sku-generator', label: subItemLabel('规格生成', '/costing/tmall-sku-generator') },
+      { key: '/costing/pricing-tools', label: subItemLabel('价格预推', '/costing/pricing-tools') },
     ],
   },
   {
@@ -83,67 +78,38 @@ const menuItems: MenuProps['items'] = [
     icon: <DatabaseOutlined />,
     label: '货品管理',
     children: [
-      {
-        key: '/costing/materials',
-        label: <Link to="/costing/materials">物料主数据</Link>,
-      },
-      {
-        key: '/costing/virtual-materials',
-        label: <Link to="/costing/virtual-materials">虚拟物料</Link>,
-      },
-      {
-        key: '/costing/sku-master',
-        label: <Link to="/costing/sku-master">SKU 主档 / 商品关联</Link>,
-      },
-      {
-        key: '/costing/taxonomy',
-        icon: <SettingOutlined />,
-        label: <Link to="/costing/taxonomy">分类管理</Link>,
-      },
+      { key: '/costing/sku-master', label: subItemLabel('商品关联', '/costing/sku-master') },
+      { key: '/costing/spec-matching', label: subItemLabel('规格解析', '/costing/spec-matching') },
+      { key: '/costing/shipments', label: subItemLabel('发货订单', '/costing/shipments') },
+      { key: '/costing/shipping-rules', label: subItemLabel('发货规则', '/costing/shipping-rules') },
     ],
   },
   {
-    key: '/costing/publish',
-    icon: <ShopOutlined />,
-    label: '货品发布',
-    children: [
-      {
-        key: '/costing/product-listing',
-        label: <Link to="/costing/product-listing">产品上架（测试台）</Link>,
-      },
-      {
-        key: '/costing/tmall-sku-generator',
-        icon: <CalculatorOutlined />,
-        label: <Link to="/costing/tmall-sku-generator">天猫布艺 SKU规格生成器</Link>,
-      },
-    ],
-  },
-  {
-    key: '/costing/analytics',
+    key: '/costing/insights',
     icon: <BarChartOutlined />,
-    label: '数据分析',
+    label: '数据洞察',
     children: [
-      {
-        key: '/costing/pricing-tools',
-        icon: <CalculatorOutlined />,
-        label: <Link to="/costing/pricing-tools">核价工具</Link>,
-      },
-      {
-        key: '/costing/shipments',
-        label: <Link to="/costing/shipments">发货批次 / BOM快照</Link>,
-      },
-      {
-        key: '/costing/shipping-rules',
-        label: <Link to="/costing/shipping-rules">发货规则（条件物料）</Link>,
-      },
-      {
-        key: '/costing/production-scan',
-        label: <Link to="/costing/production-scan">生产扫码看板</Link>,
-      },
-      {
-        key: '/costing/spec-matching',
-        label: <Link to="/costing/spec-matching">规格匹配工作台（尺寸解析）</Link>,
-      },
+      { key: '/costing/insights/after-sales', label: disabledSubItemLabel('售后分析'), disabled: true },
+      { key: '/costing/insights/models', label: disabledSubItemLabel('模型分析'), disabled: true },
+      { key: '/costing/insights/shops', label: disabledSubItemLabel('店铺数据'), disabled: true },
+    ],
+  },
+  {
+    key: '/costing/tools',
+    icon: <ToolOutlined />,
+    label: '生产工具',
+    children: [{ key: '/costing/production-scan', label: subItemLabel('生产扫码', '/costing/production-scan') }],
+  },
+  // 规划区：保持入口，但放到底部
+  {
+    key: '/planner_group',
+    icon: <DeploymentUnitOutlined />,
+    label: 'PLANNER',
+    children: [
+      { key: '/', label: subItemLabel('总览', '/') },
+      { key: '/planner', label: subItemLabel('PLANNER 工作区', '/planner') },
+      { key: '/planner/scenarios', label: subItemLabel('场景列表', '/planner/scenarios') },
+      { key: '/planner/scenario-builder', label: subItemLabel('场景 BUILDER', '/planner/scenario-builder') },
     ],
   },
   {

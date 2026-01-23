@@ -64,7 +64,20 @@ type SizeRow = TmallSizeOption & {
 
 type SourceOptionGroup = { label: string; options: Array<{ label: string; value: string }> }
 
-type BundleTokenMeta = { mode: 'B' | 'Z'; phrase?: string; name?: string }
+type BundleTokenMeta = {
+  mode: 'B' | 'Z'
+  phrase?: string
+  name?: string
+  // phrase_preset.components 优先；否则回退模板顶层 components（best-effort）
+  components?: Array<{
+    model_version_id?: string
+    width_mm?: number
+    height_mm?: number
+    quantity?: number
+    spec_text?: string
+    label?: string
+  }>
+}
 
 const readFileAsArrayBuffer = (file: File): Promise<ArrayBuffer> =>
   new Promise((resolve, reject) => {
@@ -107,6 +120,88 @@ const fmtNum = (v: unknown): string => {
   const n = Number(v)
   if (!Number.isFinite(n)) return ''
   return n.toFixed(2).replace(/\.?0+$/, '')
+}
+
+const mmToCmText = (mm: unknown): string => {
+  const n = Number(mm)
+  if (!Number.isFinite(n) || n <= 0) return ''
+  return fmtNum(n / 10)
+}
+
+// 与后端 spec_parser_service.parse_spec 尽量一致：用于“商品规格（网店）”解析宽高（B 解析型命中/扣库口径）
+const parseDimsFromSpecText = (specTextRaw: string): { width_cm?: string; height_cm?: string; diameter_cm?: string } => {
+  const text = String(specTextRaw ?? '').trim()
+  if (!text) return {}
+
+  const normalizeToCm = (value: number, unitRaw?: string | null) => {
+    const u = String(unitRaw ?? 'cm').trim().toLowerCase()
+    if (u === 'mm' || u === '毫米') return value / 10
+    if (u === 'm' || u === '米') return value * 100
+    return value
+  }
+
+  let widthCm: number | null = null
+  let heightCm: number | null = null
+  let diameterCm: number | null = null
+
+  const isHeightLabel = (lbl: string) => ['竖', '高'].includes(String(lbl || '').trim())
+  const isWidthLabel = (lbl: string) => ['横', '宽', '长'].includes(String(lbl || '').trim())
+
+  // e.g. "竖120CM*横150CM" / "横150*竖120" / "宽120×高150"
+  const labeledRe =
+    /(竖|横|宽|高|长)\s*(\d{1,4}(?:\.\d+)?)\s*(cm|厘米|mm|毫米|m|米)?\s*(?:[xX×\*＊]\s*(竖|横|宽|高|长)\s*(\d{1,4}(?:\.\d+)?)\s*(cm|厘米|mm|毫米|m|米)?)/i
+  const labeled = labeledRe.exec(text)
+  if (labeled) {
+    const l1 = String(labeled[1] ?? '').trim()
+    const v1 = Number(labeled[2])
+    const u1 = labeled[3]
+    const l2 = String(labeled[4] ?? '').trim()
+    const v2 = Number(labeled[5])
+    const u2 = labeled[6]
+    const v1cm = Number.isFinite(v1) ? normalizeToCm(v1, u1) : null
+    const v2cm = Number.isFinite(v2) ? normalizeToCm(v2, u2) : null
+
+    if (v1cm !== null && isHeightLabel(l1)) heightCm = v1cm
+    if (v1cm !== null && isWidthLabel(l1)) widthCm = v1cm
+    if (v2cm !== null && isHeightLabel(l2)) heightCm = v2cm
+    if (v2cm !== null && isWidthLabel(l2)) widthCm = v2cm
+
+    if (widthCm === null && v1cm !== null) widthCm = v1cm
+    if (heightCm === null && v2cm !== null) heightCm = v2cm
+  }
+
+  // e.g. "45*45" / "45×45" / "45X45"
+  const dimRe =
+    /(约|大约|约等)?(\d{1,4}(?:\.\d+)?)\s*(?:[xX×\*＊]\s*(\d{1,4}(?:\.\d+)?))\s*(cm|厘米|mm|毫米|m|米)?/i
+  const dim = dimRe.exec(text)
+  if (dim) {
+    const w = Number(dim[2])
+    const h = Number(dim[3])
+    const unit = dim[4]
+    if (widthCm === null && Number.isFinite(w)) widthCm = normalizeToCm(w, unit)
+    if (heightCm === null && Number.isFinite(h)) heightCm = normalizeToCm(h, unit)
+  }
+
+  // e.g. "直径50" / "φ50" / "圆形(50)"
+  const diaRe = /(直径|φ|Φ|D|圆形|圆)\s*[（(]?\s*(\d{1,4}(?:\.\d+)?)\s*(cm|厘米|mm|毫米|m|米)?\s*[）)]?/i
+  const dia = diaRe.exec(text)
+  if (dia) {
+    const v = Number(dia[2])
+    const unit = dia[3]
+    if (Number.isFinite(v)) {
+      diameterCm = normalizeToCm(v, unit)
+      if (widthCm === null && heightCm === null) {
+        widthCm = diameterCm
+        heightCm = diameterCm
+      }
+    }
+  }
+
+  const out: { width_cm?: string; height_cm?: string; diameter_cm?: string } = {}
+  if (widthCm !== null && widthCm > 0) out.width_cm = fmtNum(widthCm)
+  if (heightCm !== null && heightCm > 0) out.height_cm = fmtNum(heightCm)
+  if (diameterCm !== null && diameterCm > 0) out.diameter_cm = fmtNum(diameterCm)
+  return out
 }
 
 const normalizeHeaderLabel = (v: unknown) => {
@@ -460,11 +555,26 @@ export default function TmallSkuTemplateGeneratorPage() {
             const mode = String((p as any)?.mode ?? '').trim() === 'force' ? 'Z' : 'B'
             const token = `${mode}-${code}${sel}`
             const phrase = String((p as any)?.phrase ?? '').trim()
+            // phrase_preset.components 优先：selector 模式下更稳定；否则回退模板顶层 components（best-effort）
+            const presetComps = Array.isArray((p as any)?.components) ? ((p as any).components as any[]) : []
+            const tplComps = Array.isArray((t as any)?.components) ? ((t as any).components as any[]) : []
+            const compsRaw = presetComps.length ? presetComps : tplComps
+            const comps =
+              compsRaw
+                .map((c: any) => ({
+                  model_version_id: String(c?.model_version_id ?? '').trim() || undefined,
+                  width_mm: typeof c?.width_mm === 'number' ? c.width_mm : Number(c?.width_mm ?? 0),
+                  height_mm: typeof c?.height_mm === 'number' ? c.height_mm : Number(c?.height_mm ?? 0),
+                  quantity: typeof c?.quantity === 'number' ? c.quantity : Number(c?.quantity ?? 0),
+                  spec_text: String(c?.spec_text ?? '').trim() || undefined,
+                  label: String(c?.label ?? '').trim() || undefined,
+                }))
+                .filter((c: any) => Number.isFinite(c.width_mm) || Number.isFinite(c.height_mm) || Number.isFinite(c.quantity))
             bundleOptions.push({
               value: token,
               label: `${token}${name ? `（${name}）` : ''}${phrase ? `：${phrase}` : ''}`,
             })
-            bundleMeta[token] = { mode: mode as any, phrase: phrase || undefined, name: name || undefined }
+            bundleMeta[token] = { mode: mode as any, phrase: phrase || undefined, name: name || undefined, components: comps }
           }
         }
 
@@ -632,6 +742,14 @@ export default function TmallSkuTemplateGeneratorPage() {
 
   const getSpecTextForRow = (r: SpecRow): string => String(r.spec_text ?? '').trim()
 
+  const parsedDimsByRowKey = useMemo(() => {
+    const out: Record<string, { width_cm?: string; height_cm?: string; diameter_cm?: string }> = {}
+    for (const r of specRows) {
+      out[r.row_key] = parseDimsFromSpecText(getSpecTextForRow(r))
+    }
+    return out
+  }, [specRows])
+
   const parseFormulaTokenGroups = (formulaRaw: string): Array<{ tokens: string[]; allowEmpty: boolean }> => {
     const formula = String(formulaRaw ?? '')
     const groups: Array<{ tokens: string[]; allowEmpty: boolean }> = []
@@ -779,6 +897,42 @@ export default function TmallSkuTemplateGeneratorPage() {
         issues.push('商家编码未绑定模型/套版（请在颜色/尺寸/行级覆盖里选择来源编码）')
       } else if (merchantSku && !merchantSku.startsWith(merchantSource)) {
         issues.push(`商家编码未命中来源编码：期望以 ${merchantSource} 开头`)
+      }
+
+      // 尺寸策略（与后端 generate-by-spec 的 B/Z 口径对齐）
+      const displaySource = String((r as any)?.display_source ?? '').trim()
+      const bm = displaySource ? bundleTokenMetaByValue?.[displaySource] : undefined
+      const dims = parsedDimsByRowKey?.[r.row_key] || {}
+      const hasParsedWH = !!(dims.width_cm && dims.height_cm)
+      if (displaySource.toUpperCase().startsWith('Z-')) {
+        const comps = Array.isArray(bm?.components) ? (bm?.components as any[]) : []
+        if (!comps.length) {
+          issues.push('指定型(Z-)：未获取到套版组件尺寸（请刷新“模型/套版”下拉）')
+        } else {
+          for (let i = 0; i < comps.length; i += 1) {
+            const c = comps[i] ?? {}
+            const w = Number((c as any)?.width_mm ?? 0)
+            const h = Number((c as any)?.height_mm ?? 0)
+            const q = Number((c as any)?.quantity ?? 0)
+            if (!(Number.isFinite(w) && w > 0 && Number.isFinite(h) && h > 0)) {
+              issues.push(`指定型(Z-)：组件${i + 1} 缺少尺寸（width_mm/height_mm 必须 >0）`)
+              break
+            }
+            if (!(Number.isFinite(q) && q > 0)) {
+              issues.push(`指定型(Z-)：组件${i + 1} 缺少数量（quantity 必须 >0）`)
+              break
+            }
+          }
+        }
+      }
+      if (displaySource.toUpperCase().startsWith('B-')) {
+        const comps = Array.isArray(bm?.components) ? (bm?.components as any[]) : []
+        const anyMissing = comps.some((c) => Number((c as any)?.width_mm ?? 0) <= 0 || Number((c as any)?.height_mm ?? 0) <= 0)
+        if (anyMissing && !hasParsedWH) {
+          issues.push('解析型(B-)：套版组件未填尺寸，且“商品规格（网店）”未解析到宽高（后端将直接失败进异常队列）')
+        } else if (!hasParsedWH) {
+          issues.push('解析型(B-)：商品规格（网店）未解析到宽高（建议包含如 45X45 / 45*45 / 45×45）')
+        }
       }
 
       // Z-：不依赖公式解析；且避免任何红/绿高亮（不生成 tokens/missing）
@@ -1299,20 +1453,52 @@ export default function TmallSkuTemplateGeneratorPage() {
                       </span>
                     )
 
-                    const w = String(r.width_cm ?? '').trim()
-                    const h = String(r.height_cm ?? '').trim()
-                    const l = String(r.length_cm ?? '').trim()
-                    const t = String(r.thickness_cm ?? '').trim()
+                    const displaySource = String((r as any)?.display_source ?? '').trim()
+                    const bm = displaySource ? bundleTokenMetaByValue?.[displaySource] : undefined
+
+                    const dims = parsedDimsByRowKey?.[r.row_key] || {}
+                    const pw = String(dims.width_cm ?? '').trim()
+                    const ph = String(dims.height_cm ?? '').trim()
 
                     const pills: React.ReactNode[] = []
-                    if (w && h) pills.push(pill(`${w}×${h}cm`))
-                    else if (w) pills.push(pill(`宽${w}cm`))
 
-                    const secondParts: string[] = []
-                    if (l) secondParts.push(`长${l}cm`)
-                    if (t) secondParts.push(`厚${t}cm`)
-                    if (secondParts.length) pills.push(pill(secondParts.join(' ')))
+                    const pushParsed = () => {
+                      if (pw && ph) pills.push(pill(`解析:${pw}×${ph}cm`))
+                      else if (pw) pills.push(pill(`解析:宽${pw}cm`))
+                    }
 
+                    const pushBundleComponents = (prefix: string) => {
+                      const comps = Array.isArray(bm?.components) ? (bm?.components as any[]) : []
+                      if (!comps.length) {
+                        pills.push(pill(`${prefix}无组件`))
+                        return
+                      }
+                      for (let i = 0; i < comps.length; i += 1) {
+                        const c = comps[i] ?? {}
+                        const w = mmToCmText((c as any)?.width_mm)
+                        const h = mmToCmText((c as any)?.height_mm)
+                        const qn = Number((c as any)?.quantity ?? 0)
+                        const q = Number.isFinite(qn) && qn > 0 ? String(Math.floor(qn) === qn ? qn : fmtNum(qn)) : ''
+                        if (!w || !h) continue
+                        pills.push(pill(`${prefix}${i + 1}:${w}×${h}cm${q ? `×${q}` : ''}`))
+                      }
+                    }
+
+                    // Z：指定型，尺寸来自套版组件（不依赖网店规格解析）
+                    if (String(r.is_z_source ?? '').trim()) {
+                      pushBundleComponents('指定')
+                      return pills.length ? <Space wrap size={6}>{pills}</Space> : <Text type="secondary">-</Text>
+                    }
+
+                    // B：解析型，同时展示“解析尺寸 + 模板组件尺寸”（便于对照后端命中/扣库口径）
+                    if (displaySource.toUpperCase().startsWith('B-')) {
+                      pushParsed()
+                      pushBundleComponents('模板')
+                      return pills.length ? <Space wrap size={6}>{pills}</Space> : <Text type="secondary">-</Text>
+                    }
+
+                    // 模型码/未绑定：仅展示解析尺寸（与后端 spec parser 同口径）
+                    pushParsed()
                     return pills.length ? <Space wrap size={6}>{pills}</Space> : <Text type="secondary">-</Text>
                   },
                 },

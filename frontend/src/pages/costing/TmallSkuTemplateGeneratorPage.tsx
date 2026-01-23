@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Alert, Button, Card, Checkbox, Divider, Drawer, Input, message, Radio, Select, Space, Switch, Table, Tag, Typography, Upload } from 'antd'
 import {
+  CheckCircleFilled,
+  CloseCircleFilled,
   DeleteOutlined,
   DownloadOutlined,
   EyeOutlined,
@@ -14,6 +16,7 @@ import { useParams } from 'react-router-dom'
 
 import {
   exportTmallSkuTemplateXlsx,
+  fetchBundleTemplates,
   fetchPublishedStandardModels,
   previewTmallSkuTemplate,
   type TmallColorOption,
@@ -60,6 +63,8 @@ type SizeRow = TmallSizeOption & {
 }
 
 type SourceOptionGroup = { label: string; options: Array<{ label: string; value: string }> }
+
+type BundleTokenMeta = { mode: 'B' | 'Z'; phrase?: string; name?: string }
 
 const readFileAsArrayBuffer = (file: File): Promise<ArrayBuffer> =>
   new Promise((resolve, reject) => {
@@ -210,6 +215,7 @@ type SpecRow = {
   size_label: string
   merchant_sku: string
   attribute_spec?: string
+  token_formula?: string
   spec_text?: string
   sku_status: 0 | 1
   main_pattern_type?: string | null
@@ -228,6 +234,7 @@ type SpecEdits = Record<
     reserved_qty?: string
     selling_point?: string
     model_source_code?: string
+    token_formula?: string
   }
 >
 
@@ -277,10 +284,19 @@ export default function TmallSkuTemplateGeneratorPage() {
   const [enablePatternRemarks, setEnablePatternRemarks] = useState(false)
   const [displayMode, setDisplayMode] = useState<DisplayMode>('table')
   const [specEdits, setSpecEdits] = useState<SpecEdits>({})
+  type RowValidationDetail = {
+    ok: boolean
+    issues: string[]
+    okTokens: string[]
+    multiTokens: string[]
+    missingGroupIndexes: number[]
+  }
+  const [rowValidation, setRowValidation] = useState<Record<string, RowValidationDetail>>({})
   // Model dropdown sources (for colors & sizes)
   const [sourceGroups, setSourceGroups] = useState<SourceOptionGroup[]>([])
   const [loadingSourceGroups, setLoadingSourceGroups] = useState(false)
   const [sourceRefreshKey, setSourceRefreshKey] = useState(0)
+  const [bundleTokenMetaByValue, setBundleTokenMetaByValue] = useState<Record<string, BundleTokenMeta>>({})
 
   // Explicit save/load profiles (in addition to auto localStorage)
   const [profileName, setProfileName] = useState('')
@@ -401,10 +417,10 @@ export default function TmallSkuTemplateGeneratorPage() {
     void (async () => {
       setLoadingSourceGroups(true)
       try {
-        // cache-bust: new models might not show up immediately if upstream caches GET
+        // cache-bust: new models/bundles might not show up immediately if upstream caches GET
         const ts = Date.now()
 
-        // Published standard models (increase limit to avoid pagination hiding new items)
+        // 1) Published standard models (increase limit to avoid pagination hiding new items)
         const modelsResp = await fetchPublishedStandardModels({ limit: 1000, _ts: ts } as any)
 
         const modelItems = Array.isArray((modelsResp as any)?.items) ? ((modelsResp as any).items as any[]) : Array.isArray(modelsResp as any) ? (modelsResp as any) : []
@@ -417,13 +433,49 @@ export default function TmallSkuTemplateGeneratorPage() {
           })
           .filter(Boolean) as Array<{ value: string; label: string }>
 
+        // 2) Bundle templates: page through to avoid new items being outside first page
+        const bundleItems: any[] = []
+        const pageSize = 200
+        const maxPages = 20 // hard cap: 4000 templates max (should be enough for now)
+        for (let page = 1; page <= maxPages; page++) {
+          const resp = await fetchBundleTemplates({ page, page_size: pageSize, include_archived: true, _ts: ts } as any)
+          const items = Array.isArray((resp as any)?.items) ? ((resp as any).items as any[]) : []
+          bundleItems.push(...items)
+          if (items.length < pageSize) break
+        }
+        const bundleOptions: Array<{ value: string; label: string }> = []
+        const bundleMeta: Record<string, BundleTokenMeta> = {}
+        for (const t of bundleItems) {
+          const code = safeUpper((t as any)?.code)
+          if (!code) continue
+          const name = String((t as any)?.name ?? '').trim()
+          const pp = Array.isArray((t as any)?.metadata?.phrase_presets) ? ((t as any).metadata.phrase_presets as any[]) : []
+          for (const p of pp) {
+            const sel = safeUpper((p as any)?.selector)
+            if (!sel) continue
+            const mode = String((p as any)?.mode ?? '').trim() === 'force' ? 'Z' : 'B'
+            const token = `${mode}-${code}${sel}`
+            const phrase = String((p as any)?.phrase ?? '').trim()
+            bundleOptions.push({
+              value: token,
+              label: `${token}${name ? `（${name}）` : ''}${phrase ? `：${phrase}` : ''}`,
+            })
+            bundleMeta[token] = { mode: mode as any, phrase: phrase || undefined, name: name || undefined }
+          }
+        }
+
         // stable sort
         modelOptions.sort((a, b) => a.value.localeCompare(b.value))
+        bundleOptions.sort((a, b) => a.value.localeCompare(b.value))
 
-        const groups: SourceOptionGroup[] = [{ label: '标准模型（已发布）', options: modelOptions }].filter((g) => g.options.length)
+        const groups: SourceOptionGroup[] = [
+          { label: '标准模型（已发布）', options: modelOptions },
+          { label: '套装模板（B/Z + AA/AB...）', options: bundleOptions },
+        ].filter((g) => g.options.length)
         if (!cancelled) setSourceGroups(groups)
+        if (!cancelled) setBundleTokenMetaByValue(bundleMeta)
       } catch (e: any) {
-        if (!cancelled) message.warning(`加载“模型”下拉失败：${String(e?.message ?? e)}`)
+        if (!cancelled) message.warning(`加载“模型/套版”下拉失败：${String(e?.message ?? e)}`)
       } finally {
         if (!cancelled) setLoadingSourceGroups(false)
       }
@@ -543,6 +595,10 @@ export default function TmallSkuTemplateGeneratorPage() {
         })
 
         const attribute_spec = displaySource ? sourceLabelByValue.get(displaySource) || displaySource : ''
+        const bm = displaySource ? bundleTokenMetaByValue[displaySource] : undefined
+        const token_formula =
+          String(specEdits?.[row_key]?.token_formula ?? '').trim() ||
+          (bm && bm.mode === 'B' ? String(bm.phrase ?? '').trim() : '')
         const spec_text = `${String(c.label ?? '').trim()} ${String(s.label ?? '').trim()}`.trim()
         rows.push({
           row_key,
@@ -552,6 +608,7 @@ export default function TmallSkuTemplateGeneratorPage() {
           size_label: s.label,
           merchant_sku,
           attribute_spec,
+          token_formula,
           spec_text,
           sku_status,
           main_pattern_type: includeMainPatternType ? (c.main_pattern_type ?? null) : null,
@@ -562,7 +619,188 @@ export default function TmallSkuTemplateGeneratorPage() {
       }
     }
     return rows
-  }, [colors, sizes, merchantSkuPrefix, merchantSkuSuffix, includeMainPatternType, sourceLabelByValue, specEdits])
+  }, [colors, sizes, merchantSkuPrefix, merchantSkuSuffix, includeMainPatternType, sourceLabelByValue, bundleTokenMetaByValue, specEdits])
+
+  const getSpecTextForRow = (r: SpecRow): string => String(r.spec_text ?? '').trim()
+
+  const parseFormulaTokenGroups = (formulaRaw: string): Array<{ tokens: string[]; allowEmpty: boolean }> => {
+    const formula = String(formulaRaw ?? '')
+    const groups: Array<{ tokens: string[]; allowEmpty: boolean }> = []
+    const bracketRe = /\[([^\]]+)\]/g
+    let m: RegExpExecArray | null
+    while ((m = bracketRe.exec(formula))) {
+      const seg = String(m[1] ?? '')
+      const tokenRe = /\{([^}]*)\}/g
+      let mm: RegExpExecArray | null
+      const tokens: string[] = []
+      let allowEmpty = false
+      while ((mm = tokenRe.exec(seg))) {
+        const t = String(mm[1] ?? '').trim()
+        if (!t) {
+          allowEmpty = true
+          continue
+        }
+        tokens.push(t)
+      }
+      const uniq = Array.from(new Set(tokens))
+      if (uniq.length || allowEmpty) groups.push({ tokens: uniq, allowEmpty })
+    }
+    return groups
+  }
+
+  const highlightTextByTokens = (
+    textRaw: string,
+    rules: { red: string[]; green?: string[]; orange?: string[] } = { red: [] },
+  ) => {
+    const text = String(textRaw ?? '')
+    const red = Array.from(new Set((rules.red ?? []).map((x) => String(x ?? '').trim()).filter(Boolean)))
+    const orange = Array.from(new Set((rules.orange ?? []).map((x) => String(x ?? '').trim()).filter(Boolean)))
+
+    // Prefer longer tokens to avoid partial overlaps.
+    const all = Array.from(new Set([...red, ...orange])).sort((a, b) => b.length - a.length)
+    if (!text || !all.length) return <>{text}</>
+
+    const pickStyle = (tk: string) => {
+      if (orange.includes(tk)) return { color: '#d46b08', fontWeight: 700 } // orange (ambiguous)
+      if (red.includes(tk)) return { color: '#cf1322', fontWeight: 700 } // red (matched)
+      return undefined
+    }
+
+    const out: React.ReactNode[] = []
+    let i = 0
+    while (i < text.length) {
+      let matched: string | null = null
+      for (const tk of all) {
+        if (!tk) continue
+        if (text.startsWith(tk, i)) {
+          matched = tk
+          break
+        }
+      }
+      if (!matched) {
+        out.push(text[i])
+        i += 1
+        continue
+      }
+      out.push(
+        <span key={`hl-${i}-${matched}`} style={pickStyle(matched)}>
+          {matched}
+        </span>,
+      )
+      i += matched.length
+    }
+    return <>{out}</>
+  }
+
+  const renderFormulaWithValidation = (formulaRaw: string, v?: RowValidationDetail | null) => {
+    const formula = String(formulaRaw ?? '')
+    if (!formula.trim()) return <Text type="secondary">-</Text>
+
+    const okSet = new Set((v?.okTokens ?? []).map((x) => String(x)))
+    const multiSet = new Set((v?.multiTokens ?? []).map((x) => String(x)))
+    const missingGroups = new Set(v?.missingGroupIndexes ?? [])
+
+    // Render by scanning groups: `[ ... {token} ... ]`
+    const nodes: React.ReactNode[] = []
+    let groupIdx = 0
+    for (let i = 0; i < formula.length; i++) {
+      const ch = formula[i]
+      if (ch !== '[') {
+        nodes.push(ch)
+        continue
+      }
+      const j = formula.indexOf(']', i + 1)
+      if (j < 0) {
+        nodes.push(formula.slice(i))
+        break
+      }
+      const inner = formula.slice(i + 1, j)
+      const parts: React.ReactNode[] = ['[']
+      const re = /\{([^}]*)\}/g
+      let last = 0
+      let mm: RegExpExecArray | null
+      while ((mm = re.exec(inner))) {
+        const start = mm.index
+        const end = re.lastIndex
+        if (start > last) parts.push(inner.slice(last, start))
+        const token = String(mm[1] ?? '').trim()
+        const isMissingGroup = missingGroups.has(groupIdx)
+        const style =
+          token && okSet.has(token)
+            ? { color: '#389e0d', fontWeight: 700 } // green
+            : token && multiSet.has(token)
+              ? { color: '#d46b08', fontWeight: 700 } // orange
+              : token && isMissingGroup
+                ? { color: '#cf1322', fontWeight: 700 } // red (missing)
+                : undefined
+        parts.push(
+          <span key={`f-${groupIdx}-${start}`} style={style}>
+            {'{'}
+            {token || ''}
+            {'}'}
+          </span>,
+        )
+        last = end
+      }
+      if (last < inner.length) parts.push(inner.slice(last))
+      parts.push(']')
+      nodes.push(<span key={`g-${groupIdx}-${i}`}>{parts}</span>)
+      groupIdx += 1
+      i = j
+    }
+    return <div style={{ whiteSpace: 'normal', lineHeight: 1.2 }}>{nodes}</div>
+  }
+
+  const validateAllSpecRows = () => {
+    const out: Record<string, RowValidationDetail> = {}
+    let okCount = 0
+    let badCount = 0
+    for (const r of specRows) {
+      const specText = getSpecTextForRow(r)
+      const formula = String(r.token_formula ?? '').trim()
+      if (!formula) {
+        out[r.row_key] = { ok: true, issues: [], okTokens: [], multiTokens: [], missingGroupIndexes: [] }
+        okCount++
+        continue
+      }
+      const groups = parseFormulaTokenGroups(formula)
+      const issues: string[] = []
+      const okTokens: string[] = []
+      const multiTokens: string[] = []
+      const missingGroupIndexes: number[] = []
+      for (let gi = 0; gi < groups.length; gi++) {
+        const g = groups[gi]
+        if (!g.tokens.length) continue
+        const hits = g.tokens.filter((tk) => tk && specText.includes(tk))
+        if (hits.length === 0) {
+          if (!g.allowEmpty) {
+            issues.push(`缺失互斥组：${g.tokens.join(' / ')}`)
+            missingGroupIndexes.push(gi)
+          }
+          continue
+        }
+        if (hits.length === 1) {
+          okTokens.push(hits[0])
+          continue
+        }
+        multiTokens.push(...hits)
+        issues.push(`互斥组多命中：${hits.join(' / ')}`)
+      }
+      const ok = issues.length === 0
+      out[r.row_key] = {
+        ok,
+        issues,
+        okTokens: Array.from(new Set(okTokens)),
+        multiTokens: Array.from(new Set(multiTokens)),
+        missingGroupIndexes: Array.from(new Set(missingGroupIndexes)),
+      }
+      if (ok) okCount++
+      else badCount++
+    }
+    setRowValidation(out)
+    if (badCount) message.warning(`检验完成：通过 ${okCount} 条；未通过 ${badCount} 条（请检查“商品规格（网店）”是否包含需要的 TOKEN）`)
+    else message.success(`检验完成：全部通过（${okCount} 条）`)
+  }
 
   const setSkuEnabled = (colorKey: string, sizeKey: string, enabled: boolean) => {
     setColors((prev) =>
@@ -922,6 +1160,9 @@ export default function TmallSkuTemplateGeneratorPage() {
             extra={
               <Space wrap size={10}>
                 <Text type="secondary">行数：{specRows.length}</Text>
+                <Button size="small" onClick={validateAllSpecRows}>
+                  检验
+                </Button>
               </Space>
             }
           >
@@ -940,10 +1181,11 @@ export default function TmallSkuTemplateGeneratorPage() {
                   fixed: 'left',
                   width: 420,
                   render: (_: any, r: SpecRow) => {
+                    const v = rowValidation?.[r.row_key]
                     const specText = String(r.spec_text ?? '').trim()
                     return (
                       <div style={{ whiteSpace: 'normal', lineHeight: 1.2 }}>
-                        {specText || '-'}
+                        {v ? highlightTextByTokens(specText, { red: v.okTokens ?? [], orange: v.multiTokens ?? [] }) : specText || '-'}
                       </div>
                     )
                   },
@@ -975,7 +1217,7 @@ export default function TmallSkuTemplateGeneratorPage() {
                     <Select
                       allowClear
                       showSearch
-                      placeholder="行级覆盖：选择模型"
+                      placeholder="行级覆盖：选择模型/套版"
                       loading={loadingSourceGroups}
                       popupMatchSelectWidth={false}
                       listHeight={520}
@@ -1030,12 +1272,24 @@ export default function TmallSkuTemplateGeneratorPage() {
                   render: (v: any) => <div style={{ whiteSpace: 'normal', lineHeight: 1.2 }}>{String(v ?? '').trim() || '-'}</div>,
                 },
                 {
+                  title: 'TOKEN/公式',
+                  dataIndex: 'token_formula',
+                  width: 360,
+                  render: (_: any, r: SpecRow) => renderFormulaWithValidation(String(r.token_formula ?? ''), rowValidation?.[r.row_key]),
+                },
+                {
                   title: '是否上架',
                   width: 110,
                   fixed: 'right',
-                  render: (_: any, r: SpecRow) => (
-                    <Switch checked={r.sku_status === 1} onChange={(x) => setSkuEnabled(r.color_key, r.size_key, x)} />
-                  ),
+                  render: (_: any, r: SpecRow) => {
+                    const v = rowValidation?.[r.row_key]
+                    return (
+                      <Space size={6}>
+                        {v ? (v.ok ? <CheckCircleFilled style={{ color: '#52c41a' }} /> : <CloseCircleFilled style={{ color: '#ff4d4f' }} />) : null}
+                        <Switch checked={r.sku_status === 1} onChange={(x) => setSkuEnabled(r.color_key, r.size_key, x)} />
+                      </Space>
+                    )
+                  },
                 },
                 {
                   title: '操作',

@@ -14,6 +14,7 @@ from ..schemas import (
     ShipmentExceptionRetryRequest,
     ShipmentExceptionRetryResponse,
     ShipmentImportBatchRead,
+    ShipmentProfitLinesResponse,
 )
 from ..services import shipment_import_service
 
@@ -151,6 +152,24 @@ def recompute_bom_snapshot(
     try:
         return shipment_import_service.recompute_bom_snapshot(
             db, snapshot_id=snapshot_id, operator_id=payload.operator_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/profit-lines", response_model=ShipmentProfitLinesResponse)
+def profit_lines_by_batch(
+    batch_id: str,
+    limit: int = 2000,
+    include_missing: bool = False,
+    db: Session = Depends(get_db_session),
+):
+    try:
+        return shipment_import_service.list_profit_lines_by_batch(
+            db,
+            batch_id=batch_id,
+            limit=limit,
+            include_missing=include_missing,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

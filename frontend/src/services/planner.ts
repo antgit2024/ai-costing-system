@@ -108,6 +108,7 @@ import type {
   ProfitBySkuResponse,
   ProfitByChannelResponse,
   ProfitByModelResponse,
+  ShipmentProfitLinesResponse,
   AfterSalesImportBatch,
   ProductModelVersionPatchPayload,
   SkuMaster,
@@ -1708,6 +1709,15 @@ export const fetchShipmentBomSnapshots = async (
 ): Promise<BomSnapshot[]> => {
   const response = await plannerClient.get('/shipments/bom-snapshots', { params: sanitizeParams(params) })
   return response.data
+}
+
+export const fetchShipmentProfitLines = async (params: {
+  batch_id: string
+  limit?: number
+  include_missing?: boolean
+}): Promise<ShipmentProfitLinesResponse> => {
+  const resp = await plannerClient.get('/shipments/profit-lines', { params: sanitizeParams(params as any) })
+  return resp.data
 }
 
 export const recomputeShipmentBomSnapshot = async (snapshot_id: string, payload?: { operator_id?: string }): Promise<BomSnapshot> => {

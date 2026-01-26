@@ -2564,6 +2564,45 @@ class ProfitByModelResponse(BaseModel):
     note: Optional[str] = None
 
 
+class ShipmentProfitLineItem(BaseModel):
+    shipment_line_id: str
+    row_index: Optional[int] = None
+    shipment_no: Optional[str] = None
+    completed_at: Optional[datetime] = None
+    channel: Optional[str] = None
+    sku_code: Optional[str] = None
+    spec_text: Optional[str] = None
+    qty: Optional[Decimal] = None
+    revenue_amount: Optional[Decimal] = None
+
+    bom_snapshot_id: Optional[str] = None
+    model_version_id: Optional[str] = None
+    spec_hash: Optional[str] = None
+    generated_at: Optional[datetime] = None
+
+    cost_amount: Optional[Decimal] = None
+    gross_profit: Optional[Decimal] = None
+    gross_margin: Optional[Decimal] = None
+
+    status: str = "unknown"  # costed | missing_snapshot | missing_costing
+    note: Optional[str] = None
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ShipmentProfitLinesResponse(BaseModel):
+    batch_id: str
+    total_shipment_lines: int = 0
+    lines_with_bom_snapshots: int = 0
+    lines_missing_costing: int = 0
+    items: List[ShipmentProfitLineItem] = Field(default_factory=list)
+    note: Optional[str] = None
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
 class ReturnsRateByChannelItem(BaseModel):
     period: str
     channel: Optional[str] = None

@@ -843,6 +843,139 @@ def list_bom_snapshots(
     return items
 
 
+def list_profit_lines_by_batch(
+    db: Session,
+    *,
+    batch_id: str,
+    limit: int = 2000,
+    include_missing: bool = False,
+) -> Dict[str, Any]:
+    """
+    Profit sheet for a shipment import batch (line-level).
+    - Revenue baseline: shipment_lines.revenue_amount (as imported).
+    - Cost baseline: bom_snapshots.trace.costing.total_cost (generated at import-time for each shipment line).
+    - Join strategy: left join shipment_lines with latest bom_snapshot per shipment_line_id (within this batch).
+    """
+    bid = (batch_id or "").strip()
+    if not bid:
+        raise ValueError("batch_id 不能为空")
+    lim = max(min(int(limit or 2000), 5000), 1)
+
+    def _d(v: Any) -> Decimal:
+        if v in (None, ""):
+            return Decimal("0")
+        if isinstance(v, Decimal):
+            return v
+        try:
+            return Decimal(str(v))
+        except Exception:
+            return Decimal("0")
+
+    def _extract_total_cost(trace_json: Any) -> Tuple[Optional[Decimal], str]:
+        trace = (trace_json or {}) if isinstance(trace_json, dict) else {}
+        costing = (trace.get("costing") or {}) if isinstance(trace.get("costing"), dict) else {}
+        total_cost = costing.get("total_cost")
+        if total_cost in (None, ""):
+            total_cost = _d(costing.get("material_cost_total")) + _d(costing.get("process_cost_total")) + _d(costing.get("overhead_cost"))
+        cost = _d(total_cost)
+        if cost == 0 and total_cost in (None, "", 0):
+            return None, "missing_costing"
+        return cost, "costed"
+
+    # Latest snapshot per shipment_line_id within this batch.
+    # Note: Postgres supports DISTINCT ON; SQLAlchemy maps distinct(column) to it.
+    snap_sq = (
+        db.query(
+            models.BomSnapshot.id.label("bom_snapshot_id"),
+            models.BomSnapshot.shipment_line_id.label("shipment_line_id"),
+            models.BomSnapshot.model_version_id.label("model_version_id"),
+            models.BomSnapshot.spec_hash.label("spec_hash"),
+            models.BomSnapshot.generated_at.label("generated_at"),
+            models.BomSnapshot.trace_json.label("trace_json"),
+            models.BomSnapshot.created_at.label("created_at"),
+        )
+        .filter(models.BomSnapshot.batch_id == bid)
+        .filter(models.BomSnapshot.shipment_line_id.isnot(None))
+        .order_by(models.BomSnapshot.shipment_line_id.asc(), models.BomSnapshot.created_at.desc())
+        .distinct(models.BomSnapshot.shipment_line_id)
+        .subquery()
+    )
+
+    q = (
+        db.query(models.ShipmentLine, snap_sq)
+        .outerjoin(snap_sq, models.ShipmentLine.id == snap_sq.c.shipment_line_id)
+        .filter(models.ShipmentLine.batch_id == bid, models.ShipmentLine.is_archived.is_(False))
+        .order_by(models.ShipmentLine.row_index.asc().nullslast(), models.ShipmentLine.created_at.asc())
+        .limit(lim)
+    )
+    rows = q.all()
+
+    total_lines = (
+        db.query(models.ShipmentLine)
+        .filter(models.ShipmentLine.batch_id == bid, models.ShipmentLine.is_archived.is_(False))
+        .count()
+    )
+
+    items: List[Dict[str, Any]] = []
+    lines_with_bom = 0
+    missing_costing = 0
+
+    for line, snap in rows:
+        has_snap = bool(getattr(snap, "bom_snapshot_id", None))
+        if not include_missing and not has_snap:
+            continue
+
+        revenue = _d(getattr(line, "revenue_amount", None))
+        qty = _d(getattr(line, "qty", None))
+
+        cost_amount: Optional[Decimal] = None
+        status = "missing_snapshot"
+        note = None
+        if has_snap:
+            lines_with_bom += 1
+            cost_amount, status = _extract_total_cost(getattr(snap, "trace_json", None))
+            if status == "missing_costing":
+                missing_costing += 1
+                note = "快照缺成本字段（trace.costing.total_cost 为空）"
+        else:
+            note = "未生成 BOM 快照（未计价/未扣库）"
+
+        gross_profit = (revenue - cost_amount) if (cost_amount is not None) else None
+        gross_margin = (gross_profit / revenue) if (gross_profit is not None and revenue > 0) else None
+
+        items.append(
+            {
+                "shipment_line_id": str(getattr(line, "id", "")),
+                "row_index": getattr(line, "row_index", None),
+                "shipment_no": getattr(line, "shipment_no", None),
+                "completed_at": getattr(line, "completed_at", None),
+                "channel": getattr(line, "channel", None),
+                "sku_code": getattr(line, "sku_code", None),
+                "spec_text": getattr(line, "spec_text", None),
+                "qty": qty if qty != 0 else None,
+                "revenue_amount": revenue if revenue != 0 else None,
+                "bom_snapshot_id": str(getattr(snap, "bom_snapshot_id", "")) if has_snap else None,
+                "model_version_id": getattr(snap, "model_version_id", None) if has_snap else None,
+                "spec_hash": getattr(snap, "spec_hash", None) if has_snap else None,
+                "generated_at": getattr(snap, "generated_at", None) if has_snap else None,
+                "cost_amount": cost_amount,
+                "gross_profit": gross_profit,
+                "gross_margin": gross_margin,
+                "status": status,
+                "note": note,
+            }
+        )
+
+    return {
+        "batch_id": bid,
+        "total_shipment_lines": int(total_lines),
+        "lines_with_bom_snapshots": int(lines_with_bom),
+        "lines_missing_costing": int(missing_costing),
+        "items": items,
+        "note": "利润表口径：revenue=发货行金额；cost=快照 trace.costing.total_cost（导入时生成）；profit=revenue-cost。",
+    }
+
+
 def recompute_bom_snapshot(db: Session, *, snapshot_id: str, operator_id: Optional[str]) -> models.BomSnapshot:
     """
     Recompute and backfill an existing BOM snapshot (for historical records).

@@ -1514,6 +1514,36 @@ export interface BomSnapshot {
   updated_at: string
 }
 
+export interface ShipmentProfitLineItem {
+  shipment_line_id: string
+  row_index?: number | null
+  shipment_no?: string | null
+  completed_at?: string | null
+  channel?: string | null
+  sku_code?: string | null
+  spec_text?: string | null
+  qty?: string | null
+  revenue_amount?: string | null
+  bom_snapshot_id?: string | null
+  model_version_id?: string | null
+  spec_hash?: string | null
+  generated_at?: string | null
+  cost_amount?: string | null
+  gross_profit?: string | null
+  gross_margin?: string | null
+  status: 'costed' | 'missing_snapshot' | 'missing_costing' | 'unknown'
+  note?: string | null
+}
+
+export interface ShipmentProfitLinesResponse {
+  batch_id: string
+  total_shipment_lines: number
+  lines_with_bom_snapshots: number
+  lines_missing_costing: number
+  items: ShipmentProfitLineItem[]
+  note?: string | null
+}
+
 export interface ReturnsRateBySkuItem {
   period: string
   channel?: string | null

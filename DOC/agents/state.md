@@ -49,6 +49,7 @@
         - 新增页面：`/costing/insights/sales`（数据洞察→销售分析）
         - 后端新增：`GET /api/planner/analytics/sales/lines?start=...&end=...&include_missing=...` 返回发货明细行并回填成本（缺快照显示 `-`）。
         - 字段：支持展示付款时间/完成时间/渠道/条码/交易规格/数量/金额/成本单价/成本金额/原始单号/商品链接ID/物流信息（若原始发货表存在则从 raw_row 回填，否则显示 `-`）。
+        - 修复：上线后若出现 500（`too many values to unpack`），已修正查询返回形态（显式选取子查询列），避免 Row 解包错误。
     - `frontend/src/services/planner.ts`
       - 发货预览/执行/导入使用更长超时（5 分钟），避免大文件导入在前端 20s 超时误报失败。
       - `execute/import` 超时进一步放宽（默认 30 分钟）；即便浏览器超时/断开，也可通过批次列表按 `file_hash` 自动定位确认是否已落库。

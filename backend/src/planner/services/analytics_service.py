@@ -838,7 +838,11 @@ def sales_lines(
     )
 
     base_q = (
-        db.query(models.ShipmentLine, snap_sq)
+        db.query(
+            models.ShipmentLine,
+            snap_sq.c.bom_snapshot_id,
+            snap_sq.c.trace_json,
+        )
         .outerjoin(snap_sq, models.ShipmentLine.id == snap_sq.c.shipment_line_id)
         .filter(
             models.ShipmentLine.is_archived.is_(False),
@@ -870,7 +874,7 @@ def sales_lines(
     with_bom = 0
     missing_costing = 0
 
-    for line, snap in rows:
+    for line, bom_snapshot_id, trace_json in rows:
         raw = getattr(line, "raw_row_json", None) or getattr(line, "raw_row", None) or {}
         payment_at = _guess(raw, ["付款时间", "支付时间", "pay_time", "paid_at", "付款日期", "payment_at", "payment_time"])
         sku_no = _guess(raw, ["货品编号", "商品编号", "货品编码", "goods_code", "sku_no", "product_code"])
@@ -882,14 +886,14 @@ def sales_lines(
         revenue = _d(getattr(line, "revenue_amount", None))
         sale_unit = (revenue / qty) if qty > 0 else None
 
-        has_snap = bool(getattr(snap, "bom_snapshot_id", None))
+        has_snap = bool(bom_snapshot_id)
         cost_amount: Optional[Decimal] = None
         cost_unit: Optional[Decimal] = None
         status = "missing_snapshot"
         note = None
         if has_snap:
             with_bom += 1
-            cost_amount, status = _extract_total_cost(getattr(snap, "trace_json", None))
+            cost_amount, status = _extract_total_cost(trace_json)
             if status == "missing_costing":
                 missing_costing += 1
                 note = "快照缺成本字段（trace.costing.total_cost 为空）"
@@ -929,7 +933,7 @@ def sales_lines(
                 "logistics_company": logistics_company,
                 "logistics_no": logistics_no,
                 "mark": mark,
-                "bom_snapshot_id": str(getattr(snap, "bom_snapshot_id", "")) if has_snap else None,
+                "bom_snapshot_id": str(bom_snapshot_id) if has_snap else None,
                 "status": status,
                 "note": note,
             }

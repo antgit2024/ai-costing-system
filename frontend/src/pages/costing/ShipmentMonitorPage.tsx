@@ -108,6 +108,22 @@ const formatExceptionReason = (reasonRaw: unknown): { label: string; tooltip?: s
   return { label: map[r] ? `${label}（${r}）` : label, tooltip: r0 }
 }
 
+const reasonStepHint = (reasonRaw: unknown): { stepLabel: string; step: 1 | 2 | 3 } | null => {
+  const r = safeString(reasonRaw).trim().toUpperCase()
+  if (!r) return null
+  // 业务流程：1) 绑定 2) 规格解析 3) BOM生成
+  if (r === 'SKU_NOT_BOUND' || r === 'MODEL_VERSION_NOT_FOUND' || r === 'MODEL_VERSION_NOT_PUBLISHED') {
+    return { stepLabel: '绑定', step: 1 }
+  }
+  if (r === 'SPEC_EMPTY' || r === 'SPEC_PARSE_FAILED') {
+    return { stepLabel: '规格解析', step: 2 }
+  }
+  if (r === 'BOM_GENERATION_FAILED') {
+    return { stepLabel: 'BOM生成', step: 3 }
+  }
+  return null
+}
+
 const formatVersionStatus = (statusRaw: unknown): string => {
   const s0 = safeString(statusRaw).trim()
   const s = s0.toLowerCase()
@@ -1348,6 +1364,7 @@ const ShipmentMonitorPage = () => {
                               {
                                 title: '交易规格',
                                 dataIndex: 'spec_text',
+                                width: 360,
                                 render: (v) => {
                                   const s = safeString(v)
                                   if (!s) return '-'
@@ -1361,16 +1378,31 @@ const ShipmentMonitorPage = () => {
                               {
                                 title: '状态',
                                 key: 'status',
-                                width: 220,
+                                width: 320,
                                 render: (_v, r: any) => {
                                   const tags: any[] = []
-                                  if (r?.snapshot) tags.push(<Tag key="snap" color="green">成功：已生成快照</Tag>)
+                                  const hasSnapshot = !!r?.snapshot
+                                  const snapLineId = safeString(r?.snapshot?.shipment_line_id).trim()
+                                  if (hasSnapshot) {
+                                    tags.push(<Tag key="snap" color="green">成功：已落库快照</Tag>)
+                                    // 旧快照可能没有 shipment_line_id，导致无法回填 channel/spec_text
+                                    if (!snapLineId && !safeString(r?.channel).trim() && !safeString(r?.spec_text).trim()) {
+                                      tags.push(
+                                        <Text key="snap-hint" type="secondary">
+                                          （旧快照缺关联行，渠道/规格可能为空）
+                                        </Text>,
+                                      )
+                                    }
+                                  }
                                   const rawReason = safeString(r?.exception?.reason || r?.reason).trim()
                                   if (rawReason) {
                                     const x = formatExceptionReason(rawReason)
+                                    const step = reasonStepHint(rawReason)
                                     tags.push(
                                       <Tag key="exc" color="orange">
-                                        <span title={x.tooltip}>{`异常：${x.label}`}</span>
+                                        <span title={x.tooltip}>
+                                          {`异常：${x.label}${step ? `（${step.step}/3 ${step.stepLabel}）` : ''}`}
+                                        </span>
                                       </Tag>,
                                     )
                                   }

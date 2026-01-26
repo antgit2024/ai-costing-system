@@ -129,6 +129,10 @@ def _norm_header(value: Any) -> Optional[str]:
 SHIPMENT_FIELD_ALIASES: Dict[str, List[str]] = {
     # Excel headers / future API keys (keep most common first)
     "shipment_no": ["发货单号", "单号", "订单号", "shipment_no"],
+    # 网店原始订单号（天猫订单编号等）
+    "order_no": ["原始单号", "网店订单号", "订单编号", "order_no", "shop_order_no"],
+    # 商品链接ID（天猫链接ID等）
+    "product_link_id": ["商品链接ID", "商品链接Id", "商品链接id", "product_link_id", "productLinkId"],
     "completed_at": ["完成时间", "付款时间", "completed_at", "finished_at"],
     "channel": ["销售渠道", "店铺", "渠道", "channel", "shop_name"],
     # ERP: 货品条码（系统）是主键；但发货表里通常写成“货品条码”
@@ -220,6 +224,8 @@ def _normalize_rows_from_xlsx(file_bytes: bytes) -> Tuple[List[Dict[str, Any]], 
             continue
 
         shipment_no = _norm_str(_get_field(row_list, headers, "shipment_no"))
+        order_no = _norm_str(_get_field(row_list, headers, "order_no"))
+        product_link_id = _norm_str(_get_field(row_list, headers, "product_link_id"))
         completed_at = _parse_excel_datetime(_get_field(row_list, headers, "completed_at"))
         channel = _norm_str(_get_field(row_list, headers, "channel"))
         # ERP: 货品条码（系统）是主键；发货表可能写成“货品条码”
@@ -240,6 +246,8 @@ def _normalize_rows_from_xlsx(file_bytes: bytes) -> Tuple[List[Dict[str, Any]], 
             {
                 "row_index": i,
                 "shipment_no": shipment_no,
+                "order_no": order_no,
+                "product_link_id": product_link_id,
                 "completed_at": completed_at,
                 "channel": channel,
                 "sku_code": sku_code,
@@ -473,6 +481,8 @@ def import_shipment_xlsx(
             batch_id=batch.id,
             row_index=int(payload.get("row_index") or 0),
             shipment_no=shipment_no,
+            order_no=payload.get("order_no"),
+            product_link_id=payload.get("product_link_id"),
             completed_at=payload.get("completed_at"),
             channel=payload.get("channel"),
             sku_code=sku_code,
@@ -804,7 +814,33 @@ def list_bom_snapshots(
         query = query.filter(models.BomSnapshot.shipment_no == shipment_no)
     if spec_hash:
         query = query.filter(models.BomSnapshot.spec_hash == spec_hash)
-    return query.order_by(models.BomSnapshot.created_at.desc()).limit(limit).all()
+    items = query.order_by(models.BomSnapshot.created_at.desc()).limit(limit).all()
+
+    # Attach shipment line fields for readability (Excel-like columns)
+    line_ids = [getattr(x, "shipment_line_id", None) for x in items if getattr(x, "shipment_line_id", None)]
+    if not line_ids:
+        return items
+    lines = (
+        db.query(models.ShipmentLine)
+        .filter(models.ShipmentLine.id.in_(list(set(line_ids))))
+        .all()
+    )
+    by_id = {l.id: l for l in lines}
+    for snap in items:
+        line = by_id.get(getattr(snap, "shipment_line_id", None))
+        if not line:
+            continue
+        # Pydantic orm_mode will read these dynamic attributes
+        snap.row_index = getattr(line, "row_index", None)
+        snap.shipment_no = getattr(line, "shipment_no", None)
+        snap.completed_at = getattr(line, "completed_at", None)
+        snap.channel = getattr(line, "channel", None)
+        snap.sku_code = getattr(line, "sku_code", None)
+        snap.spec_text = getattr(line, "spec_text", None)
+        snap.spec_hash = getattr(line, "spec_hash", None)
+        snap.qty = getattr(line, "qty", None)
+        snap.revenue_amount = getattr(line, "revenue_amount", None)
+    return items
 
 
 def recompute_bom_snapshot(db: Session, *, snapshot_id: str, operator_id: Optional[str]) -> models.BomSnapshot:
@@ -867,6 +903,12 @@ def recompute_bom_snapshot(db: Session, *, snapshot_id: str, operator_id: Option
     snap.final_lines_json = _json_safe(list(bom.get("final_material_lines") or []))
     snap.trace_json = _json_safe(trace)
     snap.generated_at = _utcnow()
+    # Attach shipment line fields for readability (Pydantic orm_mode will read these dynamic attributes)
+    snap.row_index = getattr(line, "row_index", None)
+    snap.completed_at = getattr(line, "completed_at", None)
+    snap.channel = getattr(line, "channel", None)
+    snap.spec_text = getattr(line, "spec_text", None)
+    snap.revenue_amount = getattr(line, "revenue_amount", None)
     db.add(snap)
     db.commit()
     db.refresh(snap)

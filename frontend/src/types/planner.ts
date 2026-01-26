@@ -1497,14 +1497,160 @@ export interface BomSnapshot {
   id: string
   batch_id: string
   shipment_line_id: string
+  row_index?: number | null
   shipment_no?: string | null
+  completed_at?: string | null
+  channel?: string | null
   sku_code?: string | null
+  spec_text?: string | null
   model_version_id?: string | null
   spec_hash?: string | null
   qty?: string | null
+  revenue_amount?: string | null
   final_material_lines: Array<Record<string, unknown>>
   trace: Record<string, unknown>
   generated_at?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ReturnsRateBySkuItem {
+  period: string
+  channel?: string | null
+  sku_code?: string | null
+  shipped_qty: string
+  returned_qty: string
+  return_rate?: string | null
+  shipped_amount: string
+  refund_amount: string
+  refund_rate?: string | null
+}
+
+export interface ReturnsRateBySkuResponse {
+  group_by: 'day' | 'month'
+  start: string
+  end: string
+  items: ReturnsRateBySkuItem[]
+  unmatched_returns_missing_order_no: number
+}
+
+export interface ProfitBySkuItem {
+  period: string
+  channel?: string | null
+  sku_code?: string | null
+  shipped_qty: string
+  revenue_amount: string
+  cost_amount: string
+  gross_profit: string
+  gross_margin?: string | null
+  refund_amount: string
+  returned_qty: string
+  net_revenue: string
+  net_profit: string
+  net_margin?: string | null
+}
+
+export interface ProfitBySkuResponse {
+  group_by: 'day' | 'month'
+  start: string
+  end: string
+  total_shipment_lines: number
+  lines_with_bom_snapshots: number
+  lines_missing_costing: number
+  items: ProfitBySkuItem[]
+  note?: string | null
+}
+
+export interface ProfitByModelItem {
+  period: string
+  channel?: string | null
+  model_id: string
+  model_code: string
+  model_name: string
+  version_id: string
+  version_kind: string
+  version_status: string
+  shipped_qty: string
+  revenue_amount: string
+  cost_amount: string
+  gross_profit: string
+  gross_margin?: string | null
+  refund_amount: string
+  net_revenue: string
+  net_profit: string
+  net_margin?: string | null
+}
+
+export interface ProfitByModelResponse {
+  group_by: 'day' | 'month'
+  start: string
+  end: string
+  items: ProfitByModelItem[]
+  note?: string | null
+}
+
+export interface ReturnsRateByChannelItem {
+  period: string
+  channel?: string | null
+  shipped_qty: string
+  returned_qty: string
+  return_rate?: string | null
+  shipped_amount: string
+  refund_amount: string
+  refund_rate?: string | null
+  shipment_lines_total: number
+}
+
+export interface ReturnsRateByChannelResponse {
+  group_by: 'day' | 'month'
+  start: string
+  end: string
+  items: ReturnsRateByChannelItem[]
+  unmatched_returns_missing_order_no: number
+}
+
+export interface ProfitByChannelItem {
+  period: string
+  channel?: string | null
+  shipped_qty: string
+  revenue_amount: string
+  cost_amount: string
+  gross_profit: string
+  gross_margin?: string | null
+  refund_amount: string
+  returned_qty: string
+  net_revenue: string
+  net_profit: string
+  net_margin?: string | null
+  shipment_lines_total: number
+  lines_with_bom_snapshots: number
+  lines_missing_costing: number
+}
+
+export interface ProfitByChannelResponse {
+  group_by: 'day' | 'month'
+  start: string
+  end: string
+  total_shipment_lines: number
+  lines_with_bom_snapshots: number
+  lines_missing_costing: number
+  items: ProfitByChannelItem[]
+  note?: string | null
+}
+
+export interface AfterSalesImportBatch {
+  id: string
+  file_name?: string | null
+  file_hash: string
+  export_date?: string | null
+  requested_by?: string | null
+  status: string
+  total_rows: number
+  inserted_rows: number
+  skipped_rows: number
+  exception_rows: number
+  warnings_json: Array<Record<string, unknown>>
+  result_json: Record<string, unknown>
   created_at: string
   updated_at: string
 }
@@ -1539,6 +1685,7 @@ export interface SkuMaster {
   preparse_parser_version?: string | null
   preparse_dimensions?: Record<string, unknown>
   preparse_tokens?: string[]
+  preparse_has_dims?: boolean | null
   preparse_saved_at?: string | null
   preparse_saved_by?: string | null
   spec_mismatch?: boolean

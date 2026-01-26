@@ -2378,11 +2378,17 @@ class BomSnapshotRead(BaseModel):
     id: str
     batch_id: str
     shipment_line_id: str
+    # fields mirrored from shipment_lines for readability (Excel-like columns)
+    row_index: Optional[int] = None
     shipment_no: Optional[str] = None
+    completed_at: Optional[datetime] = None
+    channel: Optional[str] = None
     sku_code: Optional[str] = None
+    spec_text: Optional[str] = None
     model_version_id: Optional[str] = None
     spec_hash: Optional[str] = None
     qty: Optional[Decimal] = None
+    revenue_amount: Optional[Decimal] = None
     final_material_lines: List[Dict[str, Any]] = Field(default_factory=list)
     trace: Dict[str, Any] = Field(default_factory=dict)
     generated_at: Optional[datetime] = None
@@ -2396,6 +2402,222 @@ class BomSnapshotRead(BaseModel):
 
 class BomSnapshotRecomputeRequest(BaseModel):
     operator_id: Optional[str] = Field(None, max_length=64)
+
+
+class AfterSalesImportBatchRead(BaseModel):
+    id: str
+    file_name: Optional[str] = None
+    file_hash: str
+    export_date: Optional[str] = None
+    requested_by: Optional[str] = None
+    status: str
+    total_rows: int
+    inserted_rows: int
+    skipped_rows: int
+    exception_rows: int
+    warnings: List[Dict[str, Any]] = Field(default_factory=list, alias="warnings_json")
+    result: Dict[str, Any] = Field(default_factory=dict, alias="result_json")
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        orm_mode = True
+        allow_population_by_field_name = True
+
+
+class PaginatedAfterSalesImportBatchResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: List[AfterSalesImportBatchRead]
+
+
+class AfterSalesLineRead(BaseModel):
+    id: str
+    batch_id: str
+    row_index: int
+    after_sales_no: Optional[str] = None
+    occurred_at: Optional[datetime] = None
+    applied_at: Optional[datetime] = None
+    channel: Optional[str] = None
+    reason: Optional[str] = None
+    order_no: Optional[str] = None
+    product_link_id: Optional[str] = None
+    product_code: Optional[str] = None
+    product_name: Optional[str] = None
+    spec_text: Optional[str] = None
+    unit: Optional[str] = None
+    sale_unit_price: Optional[Decimal] = None
+    return_qty: Optional[Decimal] = None
+    actual_return_qty: Optional[Decimal] = None
+    refund_amount: Optional[Decimal] = None
+    allocated_refund_amount: Optional[Decimal] = None
+    sku_code: Optional[str] = None
+    normalize_warnings: List[Dict[str, Any]] = Field(default_factory=list, alias="normalize_warnings_json")
+    metadata: Dict[str, Any] = Field(default_factory=dict, alias="metadata_json")
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        orm_mode = True
+        allow_population_by_field_name = True
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class AfterSalesExceptionRead(BaseModel):
+    id: str
+    batch_id: str
+    after_sales_line_id: Optional[str] = None
+    reason: str
+    message: Optional[str] = None
+    payload: Dict[str, Any] = Field(default_factory=dict, alias="payload_json")
+    resolved_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        orm_mode = True
+        allow_population_by_field_name = True
+
+
+class ReturnsRateBySkuItem(BaseModel):
+    period: str
+    channel: Optional[str] = None
+    sku_code: Optional[str] = None
+    shipped_qty: Decimal
+    returned_qty: Decimal
+    return_rate: Optional[Decimal] = None
+    shipped_amount: Decimal
+    refund_amount: Decimal
+    refund_rate: Optional[Decimal] = None
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ReturnsRateBySkuResponse(BaseModel):
+    group_by: Literal["day", "month"]
+    start: str
+    end: str
+    items: List[ReturnsRateBySkuItem] = Field(default_factory=list)
+    unmatched_returns_missing_order_no: int = 0
+
+
+class ProfitBySkuItem(BaseModel):
+    period: str
+    channel: Optional[str] = None
+    sku_code: Optional[str] = None
+    shipped_qty: Decimal
+    revenue_amount: Decimal
+    cost_amount: Decimal
+    gross_profit: Decimal
+    gross_margin: Optional[Decimal] = None
+    refund_amount: Decimal
+    returned_qty: Decimal
+    net_revenue: Decimal
+    net_profit: Decimal
+    net_margin: Optional[Decimal] = None
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ProfitBySkuResponse(BaseModel):
+    group_by: Literal["day", "month"]
+    start: str
+    end: str
+    total_shipment_lines: int = 0
+    lines_with_bom_snapshots: int = 0
+    lines_missing_costing: int = 0
+    items: List[ProfitBySkuItem] = Field(default_factory=list)
+    note: Optional[str] = None
+
+
+class ProfitByModelItem(BaseModel):
+    period: str
+    channel: Optional[str] = None
+    model_id: str
+    model_code: str
+    model_name: str
+    version_id: str
+    version_kind: str
+    version_status: str
+    shipped_qty: Decimal
+    revenue_amount: Decimal
+    cost_amount: Decimal
+    gross_profit: Decimal
+    gross_margin: Optional[Decimal] = None
+    refund_amount: Decimal
+    net_revenue: Decimal
+    net_profit: Decimal
+    net_margin: Optional[Decimal] = None
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ProfitByModelResponse(BaseModel):
+    group_by: Literal["day", "month"]
+    start: str
+    end: str
+    items: List[ProfitByModelItem] = Field(default_factory=list)
+    note: Optional[str] = None
+
+
+class ReturnsRateByChannelItem(BaseModel):
+    period: str
+    channel: Optional[str] = None
+    shipped_qty: Decimal
+    returned_qty: Decimal
+    return_rate: Optional[Decimal] = None
+    shipped_amount: Decimal
+    refund_amount: Decimal
+    refund_rate: Optional[Decimal] = None
+    shipment_lines_total: int = 0
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ReturnsRateByChannelResponse(BaseModel):
+    group_by: Literal["day", "month"]
+    start: str
+    end: str
+    items: List[ReturnsRateByChannelItem] = Field(default_factory=list)
+    unmatched_returns_missing_order_no: int = 0
+
+
+class ProfitByChannelItem(BaseModel):
+    period: str
+    channel: Optional[str] = None
+    shipped_qty: Decimal
+    revenue_amount: Decimal
+    cost_amount: Decimal
+    gross_profit: Decimal
+    gross_margin: Optional[Decimal] = None
+    refund_amount: Decimal
+    returned_qty: Decimal
+    net_revenue: Decimal
+    net_profit: Decimal
+    net_margin: Optional[Decimal] = None
+    shipment_lines_total: int = 0
+    lines_with_bom_snapshots: int = 0
+    lines_missing_costing: int = 0
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ProfitByChannelResponse(BaseModel):
+    group_by: Literal["day", "month"]
+    start: str
+    end: str
+    total_shipment_lines: int = 0
+    lines_with_bom_snapshots: int = 0
+    lines_missing_costing: int = 0
+    items: List[ProfitByChannelItem] = Field(default_factory=list)
+    note: Optional[str] = None
+
 
 class SkuMasterRead(BaseModel):
     id: str
@@ -2430,6 +2652,7 @@ class SkuMasterRead(BaseModel):
     preparse_parser_version: Optional[str] = None
     preparse_dimensions: Dict[str, Any] = Field(default_factory=dict)
     preparse_tokens: List[str] = Field(default_factory=list)
+    preparse_has_dims: Optional[bool] = None
     preparse_saved_at: Optional[str] = None
     preparse_saved_by: Optional[str] = None
     spec_mismatch: bool = False
@@ -2507,6 +2730,10 @@ class SkuMasterSpecPreparseBulkRequest(BaseModel):
     include_terms: Optional[str] = None
     exclude_terms: Optional[str] = None
     match_scope: Optional[str] = None
+    # optional state filter: parsed/unparsed
+    preparse_state: Optional[str] = None
+    # cross-page exclude list (implicit select-all UX)
+    excluded_sku_ids: List[str] = Field(default_factory=list)
     # behavior
     skip_if_same_hash: bool = True
     requested_by: Optional[str] = None
@@ -2517,6 +2744,9 @@ class SkuMasterSpecPreparseBulkResponse(BaseModel):
     saved: int
     skipped_same_hash: int
     errors: List[Dict[str, Any]] = Field(default_factory=list)
+    # loop/run-all hints
+    batch_candidates: int = 0
+    has_more: bool = False
 
 
 class SkuMasterSpecPreparsePreviewItem(BaseModel):

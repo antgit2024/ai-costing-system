@@ -32,11 +32,13 @@ import {
   fetchShipmentExceptions,
   fetchShipmentImportBatches,
   generateBom,
+  parseSpec,
+  fetchSkuMasterByBarcode,
   previewShipmentsXlsx,
   recomputeShipmentBomSnapshot,
   retryShipmentExceptions,
 } from '@/services/planner'
-import type { BomGenerateResponse, BomSnapshot, ShipmentException, ShipmentImportBatch } from '@/types/planner'
+import type { BomGenerateResponse, BomSnapshot, ShipmentException, ShipmentImportBatch, SkuMasterScanResponse } from '@/types/planner'
 
 const { Title, Text } = Typography
 
@@ -137,13 +139,151 @@ const guessLineQty = (line: Record<string, unknown>) =>
 const guessLineUnit = (line: Record<string, unknown>) =>
   safeString(line.unit ?? line.unit_of_measure ?? line.unitOfMeasure ?? line.bom_unit)
 
+const HandoffRowExpanded = (props: {
+  skuCode: string
+  channel?: string | null
+  erpSpecText?: string | null
+  preparseSpecText?: string | null
+  shipmentSpecText?: string | null
+  boundModelCode?: string | null
+  boundModelName?: string | null
+  boundVersionLabel?: string | null
+  boundVersionStatus?: string | null
+}) => {
+  const [parseShipmentSpec, setParseShipmentSpec] = useState(false)
+  const [parsePreparseSpec, setParsePreparseSpec] = useState(false)
+
+  const skuQuery = useQuery({
+    queryKey: ['sku-master', 'by-barcode', props.skuCode, props.channel],
+    queryFn: () => fetchSkuMasterByBarcode(props.skuCode, { channel: props.channel ?? undefined, limit: 1 }),
+    enabled: !!props.skuCode,
+  })
+
+  const skuMaster = (skuQuery.data as SkuMasterScanResponse | undefined)?.sku_master
+
+  const preparseText =
+    props.preparseSpecText ?? skuMaster?.preparse_spec_text ?? skuMaster?.spec_text ?? skuMaster?.last_shipment_spec_text ?? null
+  const shipmentText = props.shipmentSpecText ?? null
+
+  const preparseParseQuery = useQuery({
+    queryKey: ['spec-parse', 'preparse', props.skuCode, preparseText],
+    queryFn: () => parseSpec({ spec_text: String(preparseText ?? '') }),
+    enabled: !!preparseText && parsePreparseSpec,
+  })
+
+  const shipmentParseQuery = useQuery({
+    queryKey: ['spec-parse', 'shipment', props.skuCode, shipmentText],
+    queryFn: () => parseSpec({ spec_text: String(shipmentText ?? '') }),
+    enabled: !!shipmentText && parseShipmentSpec,
+  })
+
+  const renderDims = (dims: any) => {
+    if (!dims || typeof dims !== 'object') return '-'
+    const w = dims.width_cm ?? dims.width ?? null
+    const h = dims.height_cm ?? dims.height ?? null
+    const d = dims.diameter_cm ?? dims.diameter ?? null
+    const a = dims.area_m2 ?? dims.area ?? null
+    const p = dims.perimeter_m ?? dims.perimeter ?? null
+    const parts = []
+    if (w !== null || h !== null) parts.push(`宽=${w ?? '-'}cm 高=${h ?? '-'}cm`)
+    if (d !== null) parts.push(`直径=${d}cm`)
+    if (a !== null) parts.push(`面积=${a}㎡`)
+    if (p !== null) parts.push(`周长=${p}m`)
+    return parts.length ? parts.join('；') : '-'
+  }
+
+  return (
+    <Row gutter={[16, 16]}>
+      <Col xs={24} lg={12}>
+        <Card size="small" title="前置（SKU 主档：绑定 + 预解析缓存）">
+          {skuQuery.isFetching ? <Text type="secondary">加载中…</Text> : null}
+          {skuQuery.isError ? (
+            <Text type="danger">SKU 主档加载失败：{String((skuQuery.error as any)?.message ?? 'unknown')}</Text>
+          ) : null}
+          <Descriptions bordered size="small" column={1}>
+            <Descriptions.Item label="SKU（条码）">{props.skuCode}</Descriptions.Item>
+            <Descriptions.Item label="绑定模型">
+              {props.boundModelCode || skuMaster?.bound_model_code ? (
+                <Space size={6}>
+                  <Tag color="blue">{props.boundModelCode ?? skuMaster?.bound_model_code}</Tag>
+                  <span style={{ color: '#666' }}>{props.boundModelName ?? skuMaster?.bound_model_name}</span>
+                </Space>
+              ) : (
+                <Text type="warning">未绑定</Text>
+              )}
+            </Descriptions.Item>
+            <Descriptions.Item label="版本">
+              {props.boundVersionLabel ?? skuMaster?.bound_version_label ?? '-'}{' '}
+              <span style={{ color: '#999' }}>{props.boundVersionStatus ?? skuMaster?.bound_version_status ?? ''}</span>
+            </Descriptions.Item>
+            <Descriptions.Item label="预解析 spec_text">{preparseText ? <Text code>{preparseText}</Text> : '-'}</Descriptions.Item>
+            <Descriptions.Item label="预解析 dimensions（已落库）">
+              {renderDims(skuMaster?.preparse_dimensions)}
+            </Descriptions.Item>
+            <Descriptions.Item label="预解析 tokens（已落库）">
+              {Array.isArray(skuMaster?.preparse_tokens) && skuMaster!.preparse_tokens!.length ? (
+                <Text code>{skuMaster!.preparse_tokens!.slice(0, 24).join(' ')}</Text>
+              ) : (
+                '-'
+              )}
+            </Descriptions.Item>
+            <Descriptions.Item label="解析（按 spec/parse 现场计算）">
+              <Space>
+                <Button size="small" onClick={() => setParsePreparseSpec(true)} disabled={!preparseText}>
+                  解析预解析 spec_text
+                </Button>
+                <Text type="secondary">
+                  {preparseParseQuery.isFetching
+                    ? '解析中…'
+                    : preparseParseQuery.data
+                      ? `dims=${renderDims((preparseParseQuery.data as any)?.dimensions)}`
+                      : ''}
+                </Text>
+              </Space>
+            </Descriptions.Item>
+          </Descriptions>
+        </Card>
+      </Col>
+
+      <Col xs={24} lg={12}>
+        <Card size="small" title="后置（发货导入：交易规格解析 + 快照/异常）">
+          <Descriptions bordered size="small" column={1}>
+            <Descriptions.Item label="交易规格（本批次）">
+              {shipmentText ? <Text code>{shipmentText}</Text> : <Text type="secondary">（无：可能未返回/未落库）</Text>}
+            </Descriptions.Item>
+            <Descriptions.Item label="解析（按 spec/parse 现场计算）">
+              <Space>
+                <Button size="small" onClick={() => setParseShipmentSpec(true)} disabled={!shipmentText}>
+                  解析交易规格
+                </Button>
+                <Text type="secondary">
+                  {shipmentParseQuery.isFetching
+                    ? '解析中…'
+                    : shipmentParseQuery.data
+                      ? `dims=${renderDims((shipmentParseQuery.data as any)?.dimensions)}`
+                      : ''}
+                </Text>
+              </Space>
+            </Descriptions.Item>
+          </Descriptions>
+          <div style={{ marginTop: 10 }}>
+            <Text type="secondary">
+              说明：左侧是“前置缓存/绑定”，右侧是“本次发货导入的交易规格”；两者不一致时，以发货交易规格为准并可走异常队列重试。
+            </Text>
+          </div>
+        </Card>
+      </Col>
+    </Row>
+  )
+}
+
 const ShipmentMonitorPage = () => {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const [batchPage, setBatchPage] = useState(1)
   const [batchPageSize, setBatchPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<'batches' | 'exceptions' | 'snapshots' | 'parse-queue'>('batches')
+  const [activeTab, setActiveTab] = useState<'batches' | 'handoff' | 'exceptions' | 'snapshots' | 'parse-queue'>('batches')
 
   const [uploading, setUploading] = useState(false)
   const [uploadFile, setUploadFile] = useState<File | null>(null)
@@ -175,6 +315,11 @@ const ShipmentMonitorPage = () => {
   const [snapshotDrawerOpen, setSnapshotDrawerOpen] = useState(false)
   const [activeSnapshot, setActiveSnapshot] = useState<BomSnapshot | null>(null)
   const [recomputingSnapshotId, setRecomputingSnapshotId] = useState<string | null>(null)
+
+  // Handoff view (SKU master preparse/binding ↔ shipment rows in current batch)
+  const [handoffLimit, setHandoffLimit] = useState(500)
+  const [handoffExceptionResolved, setHandoffExceptionResolved] = useState<'unresolved' | 'resolved' | 'all'>('unresolved')
+  const [handoffExpandedRowKeys, setHandoffExpandedRowKeys] = useState<Array<string>>([])
 
   const batchesQuery = useQuery({
     queryKey: ['shipments', 'import-batches', batchPage, batchPageSize],
@@ -246,6 +391,111 @@ const ShipmentMonitorPage = () => {
       }),
     enabled: activeTab === 'snapshots',
   })
+
+  const handoffExceptionsQuery = useQuery({
+    queryKey: ['shipments', 'handoff', 'exceptions', selectedBatchId, handoffExceptionResolved, handoffLimit],
+    queryFn: () =>
+      fetchShipmentExceptions({
+        batch_id: selectedBatchId || undefined,
+        resolved:
+          handoffExceptionResolved === 'all'
+            ? undefined
+            : handoffExceptionResolved === 'resolved'
+              ? true
+              : false,
+        limit: Math.max(Math.min(handoffLimit, 1000), 1),
+      }),
+    enabled: activeTab === 'handoff' && !!selectedBatchId,
+  })
+
+  const handoffSnapshotsQuery = useQuery({
+    queryKey: ['shipments', 'handoff', 'bom-snapshots', selectedBatchId, handoffLimit],
+    queryFn: () =>
+      fetchShipmentBomSnapshots({
+        batch_id: selectedBatchId || undefined,
+        limit: Math.max(Math.min(handoffLimit, 1000), 1),
+      }),
+    enabled: activeTab === 'handoff' && !!selectedBatchId,
+  })
+
+  type HandoffRow = {
+    key: string
+    shipment_line_id?: string | null
+    row_index?: number | null
+    shipment_no?: string | null
+    channel?: string | null
+    completed_at?: string | null
+    sku_code?: string | null
+    spec_text?: string | null
+    spec_hash?: string | null
+    qty?: string | number | null
+    revenue_amount?: string | number | null
+    snapshot?: BomSnapshot
+    exception?: ShipmentException
+  }
+
+  const handoffRows = useMemo<HandoffRow[]>(() => {
+    const snaps = handoffSnapshotsQuery.data ?? []
+    const excs = handoffExceptionsQuery.data ?? []
+    const byLineId = new Map<string, HandoffRow>()
+
+    for (const s of snaps) {
+      const lineId = safeString((s as any).shipment_line_id).trim()
+      const key = lineId || `snap:${safeString(s.id)}`
+      const row: HandoffRow = {
+        key,
+        shipment_line_id: lineId || null,
+        row_index: (s as any).row_index ?? null,
+        shipment_no: (s as any).shipment_no ?? null,
+        channel: (s as any).channel ?? null,
+        completed_at: (s as any).completed_at ?? null,
+        sku_code: (s as any).sku_code ?? null,
+        spec_text: (s as any).spec_text ?? null,
+        spec_hash: (s as any).spec_hash ?? null,
+        qty: (s as any).qty ?? null,
+        revenue_amount: (s as any).revenue_amount ?? null,
+        snapshot: s,
+      }
+      if (lineId) byLineId.set(lineId, row)
+      else byLineId.set(key, row)
+    }
+
+    for (const e of excs) {
+      const lineId = safeString((e as any).shipment_line_id).trim()
+      const existing = lineId ? byLineId.get(lineId) : undefined
+      if (existing) {
+        existing.exception = e
+        continue
+      }
+      const key = lineId || `exc:${safeString(e.id)}`
+      byLineId.set(key, {
+        key,
+        shipment_line_id: lineId || null,
+        row_index: (e as any).row_index ?? null,
+        shipment_no: (e as any).shipment_no ?? null,
+        channel: (e as any).channel ?? null,
+        completed_at: (e as any).completed_at ?? null,
+        sku_code: (e as any).sku_code ?? null,
+        spec_text: (e as any).spec_text ?? null,
+        spec_hash: (e as any).spec_hash ?? null,
+        qty: (e as any).qty ?? null,
+        revenue_amount: (e as any).revenue_amount ?? null,
+        exception: e,
+      })
+    }
+
+    const rows = Array.from(byLineId.values())
+    // Prefer stable sort by row_index asc; fallback to key
+    rows.sort((a, b) => {
+      const ai = a.row_index ?? null
+      const bi = b.row_index ?? null
+      if (ai !== null && bi !== null) return ai - bi
+      if (ai !== null && bi === null) return -1
+      if (ai === null && bi !== null) return 1
+      return a.key.localeCompare(b.key)
+    })
+    return rows
+  }, [handoffExceptionsQuery.data, handoffLimit, handoffSnapshotsQuery.data])
 
   // When user changes current batch, keep snapshots form in sync (default: filter by current batch).
   const prevSelectedBatchIdRef = useRef<string | null>(null)
@@ -933,6 +1183,164 @@ const ShipmentMonitorPage = () => {
               ),
             },
             {
+              key: 'handoff',
+              label: '交接视图（主档 ↔ 发货）',
+              children: (
+                <Row gutter={[16, 16]}>
+                  <Col span={24}>
+                    <Card
+                      title="交接视图（前置主档预解析/绑定 ↔ 本批次交易规格/快照/异常）"
+                      extra={
+                        <Space>
+                          <Segmented
+                            value={handoffExceptionResolved}
+                            onChange={(v) => setHandoffExceptionResolved(v as any)}
+                            options={[
+                              { label: '未解决异常', value: 'unresolved' },
+                              { label: '已解决异常', value: 'resolved' },
+                              { label: '全部异常', value: 'all' },
+                            ]}
+                          />
+                          <Input
+                            style={{ width: 120 }}
+                            placeholder="limit"
+                            value={String(handoffLimit)}
+                            onChange={(e) => setHandoffLimit(Number(e.target.value) || 500)}
+                          />
+                          <Button
+                            onClick={() => {
+                              handoffExceptionsQuery.refetch()
+                              handoffSnapshotsQuery.refetch()
+                            }}
+                            disabled={!selectedBatchId}
+                          >
+                            刷新
+                          </Button>
+                        </Space>
+                      }
+                    >
+                      {!selectedBatchId ? (
+                        <Alert
+                          type="info"
+                          showIcon
+                          message="请先在“发货批次列表”选择一个批次"
+                          description="交接视图默认围绕当前 batch_id，把“快照（已成功）”与“异常（未绑定/缺规格/失败等）”合并展示，便于对账与推动下一步动作。"
+                        />
+                      ) : (
+                        <>
+                          <Alert
+                            type="info"
+                            showIcon
+                            style={{ marginBottom: 12 }}
+                            message={`当前批次：${selectedBatchId}${selectedBatch?.file_name ? `（${String(selectedBatch.file_name)}）` : ''}`}
+                            description={
+                              <Text type="secondary">
+                                说明：点击“展开”可看到两列对账——左侧为 SKU 主档预解析/绑定，右侧为本批次交易规格解析。建议先处理
+                                <Text code style={{ margin: '0 4px' }}>
+                                  SKU_NOT_BOUND
+                                </Text>
+                                再“重试本批未解决异常”生成更多快照。
+                              </Text>
+                            }
+                          />
+                          <Table
+                            rowKey="key"
+                            size="small"
+                            loading={handoffExceptionsQuery.isFetching || handoffSnapshotsQuery.isFetching}
+                            dataSource={handoffRows}
+                            expandable={{
+                              expandedRowKeys: handoffExpandedRowKeys,
+                              onExpandedRowsChange: (keys) => setHandoffExpandedRowKeys(keys as string[]),
+                              expandedRowRender: (r: any) => (
+                                <HandoffRowExpanded
+                                  skuCode={safeString(r?.sku_code)}
+                                  channel={r?.channel ?? null}
+                                  erpSpecText={null}
+                                  preparseSpecText={null}
+                                  shipmentSpecText={r?.spec_text ?? null}
+                                  boundModelCode={null}
+                                  boundModelName={null}
+                                  boundVersionLabel={null}
+                                  boundVersionStatus={null}
+                                />
+                              ),
+                              rowExpandable: (r: any) => !!safeString(r?.sku_code).trim(),
+                            }}
+                            pagination={{ pageSize: 20 }}
+                            columns={[
+                              { title: '行号', dataIndex: 'row_index', width: 80 },
+                              { title: '发货单号', dataIndex: 'shipment_no', width: 160, ellipsis: true },
+                              { title: '渠道', dataIndex: 'channel', width: 140, ellipsis: true },
+                              {
+                                title: 'SKU',
+                                dataIndex: 'sku_code',
+                                width: 160,
+                                ellipsis: true,
+                                render: (v) => safeString(v) || '-',
+                              },
+                              {
+                                title: '交易规格',
+                                dataIndex: 'spec_text',
+                                render: (v) => (
+                                  <div style={{ whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.2 }}>
+                                    {safeString(v) || '-'}
+                                  </div>
+                                ),
+                              },
+                              {
+                                title: '状态',
+                                key: 'status',
+                                width: 120,
+                                render: (_v, r: any) => {
+                                  if (r?.snapshot) return <Tag color="green">已生成快照</Tag>
+                                  const reason = safeString(r?.exception?.reason || r?.reason)
+                                  if (reason) return <Tag color="orange">{reason}</Tag>
+                                  return <Tag>未知</Tag>
+                                },
+                              },
+                              {
+                                title: '操作',
+                                key: 'actions',
+                                width: 180,
+                                render: (_v, r: any) => {
+                                  const reason = safeString(r?.exception?.reason || r?.reason)
+                                  const sku = safeString(r?.sku_code).trim()
+                                  return (
+                                    <Space size={8}>
+                                      {r?.snapshot ? (
+                                        <Button
+                                          size="small"
+                                          onClick={() => {
+                                            setActiveSnapshot(r.snapshot)
+                                            setSnapshotDrawerOpen(true)
+                                          }}
+                                        >
+                                          看快照
+                                        </Button>
+                                      ) : null}
+                                      {reason === 'SKU_NOT_BOUND' && sku ? (
+                                        <Button
+                                          size="small"
+                                          type="link"
+                                          onClick={() => navigate(`/costing/sku-master?search=${encodeURIComponent(sku)}`)}
+                                        >
+                                          去绑定
+                                        </Button>
+                                      ) : null}
+                                    </Space>
+                                  )
+                                },
+                              },
+                            ]}
+                          />
+                        </>
+                      )}
+                    </Card>
+                  </Col>
+                </Row>
+              ),
+            },
+            {
               key: 'exceptions',
               label: '异常队列',
               children: (
@@ -1022,9 +1430,14 @@ const ShipmentMonitorPage = () => {
               children: (
                 <Row gutter={[16, 16]}>
                   <Col span={24}>
-                    <Card title="解析队列（来自“预览”结果）" size="small">
+                    <Card title="解析队列（来自“预览”结果，仅用于执行前抽查）" size="small">
                       {!previewData ? (
-                        <Alert type="info" showIcon message="请先在上方上传区点击“预览”，这里会展示可执行的记录列表。" />
+                        <Alert
+                          type="info"
+                          showIcon
+                          message="请先在上方上传区点击“预览”"
+                          description="本 Tab 展示的是“本次上传文件的预览临时结果（ready_items）”，用于执行前抽查几行并预演 BOM；历史/本批次结果请用“交接视图/异常队列/快照”。"
+                        />
                       ) : (
                         <>
                           <Alert

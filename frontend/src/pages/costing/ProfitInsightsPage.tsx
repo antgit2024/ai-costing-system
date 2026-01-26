@@ -135,6 +135,52 @@ const ProfitInsightsPage = () => {
     const n = Number((detail as any)?.sample_qty ?? 1)
     return Number.isFinite(n) && n > 0 ? n : 1
   }, [detail])
+  const bomCostingTotals = useMemo(() => {
+    const toNum = (v: any) => {
+      const n = Number(v)
+      return Number.isFinite(n) ? n : NaN
+    }
+    const perPieceUnit = (() => {
+      const unit = toNum(bomCosting?.unit_cost)
+      if (Number.isFinite(unit)) return unit
+      const total = toNum(bomCosting?.total_cost)
+      if (!Number.isFinite(total)) return NaN
+      return total / sampleQtyNum
+    })()
+
+    const perPieceMaterial = (() => {
+      const raw = toNum(bomCosting?.material_cost_total)
+      return Number.isFinite(raw) ? raw / sampleQtyNum : NaN
+    })()
+    const perPieceProcess = (() => {
+      const raw = toNum(bomCosting?.process_cost_total)
+      return Number.isFinite(raw) ? raw / sampleQtyNum : NaN
+    })()
+    const perPieceOverhead = (() => {
+      const raw = toNum(bomCosting?.overhead_cost)
+      return Number.isFinite(raw) ? raw / sampleQtyNum : NaN
+    })()
+    const perPieceTotal = (() => {
+      const raw = toNum(bomCosting?.total_cost)
+      if (Number.isFinite(raw)) return raw / sampleQtyNum
+      return perPieceUnit
+    })()
+
+    const scale = (perPiece: number) => (Number.isFinite(perPiece) ? perPiece * rangeShippedQtyNum : NaN)
+
+    return {
+      perPieceUnit,
+      perPieceMaterial,
+      perPieceProcess,
+      perPieceOverhead,
+      perPieceTotal,
+      rangeTotal: scale(perPieceTotal),
+      rangeMaterial: scale(perPieceMaterial),
+      rangeProcess: scale(perPieceProcess),
+      rangeOverhead: scale(perPieceOverhead),
+      overheadRate: bomCosting?.overhead_rate,
+    }
+  }, [bomCosting, rangeShippedQtyNum, sampleQtyNum])
 
   // 右侧表格列宽：完全对齐 ProductListingPage（测试台）
   const bomMaterialColumns = useMemo<ColumnsType<any>>(
@@ -432,23 +478,19 @@ const ProfitInsightsPage = () => {
             <Divider style={{ margin: '12px 0' }} />
 
             {summary ? (
-              <Alert
-                type={(summary.mapped_model_lines ?? 0) === (summary.total_shipment_lines ?? 0) ? 'success' : 'warning'}
-                showIcon
-                style={{ marginBottom: 12 }}
-                message="覆盖率（按行数｜本次范围内）"
-                description={
-                  <div>
-                    <div>
-                      总发货行：{summary.total_shipment_lines ?? 0}；已归因到模型：{summary.mapped_model_lines ?? 0}（覆盖率{' '}
-                      {formatCoveragePercent(summary.mapped_model_lines ?? 0, summary.total_shipment_lines ?? 0)}）
-                    </div>
-                    <div>
-                      已计价行：{summary.costed_lines ?? 0}；缺成本字段行：{summary.lines_missing_costing ?? 0}
-                    </div>
-                  </div>
-                }
-              />
+              <Typography.Text
+                type="secondary"
+                style={{
+                  display: 'block',
+                  marginBottom: 10,
+                  fontSize: 12,
+                  lineHeight: '18px',
+                }}
+              >
+                总发货行：{summary.total_shipment_lines ?? 0}；已归因到模型：{summary.mapped_model_lines ?? 0}（覆盖率{' '}
+                {formatCoveragePercent(summary.mapped_model_lines ?? 0, summary.total_shipment_lines ?? 0)}）&nbsp;&nbsp;已计价行：
+                {summary.costed_lines ?? 0}；缺成本字段行：{summary.lines_missing_costing ?? 0}
+              </Typography.Text>
             ) : null}
 
             <Table<ModelInsightsSummaryItem>
@@ -541,13 +583,13 @@ const ProfitInsightsPage = () => {
                         <Space direction="vertical" style={{ width: '100%' }} size={12}>
                           <Descriptions bordered size="small" column={3}>
                             <Descriptions.Item label="合计成本（CNY）">
-                              <b>{formatMoney(String(bomCosting?.total_cost ?? ''))}</b>
+                              <b>{formatMoney(bomCostingTotals.rangeTotal)}</b>
                             </Descriptions.Item>
-                            <Descriptions.Item label="物料成本（CNY）">{formatMoney(String(bomCosting?.material_cost_total ?? ''))}</Descriptions.Item>
-                            <Descriptions.Item label="工序成本（CNY）">{formatMoney(String(bomCosting?.process_cost_total ?? ''))}</Descriptions.Item>
-                            <Descriptions.Item label="制造费用（CNY）">{formatMoney(String(bomCosting?.overhead_cost ?? ''))}</Descriptions.Item>
-                            <Descriptions.Item label="制造费率">{bomCosting?.overhead_rate == null ? '-' : String(bomCosting?.overhead_rate)}</Descriptions.Item>
-                            <Descriptions.Item label="单位成本（CNY/件）">{formatMoney(String(bomCosting?.unit_cost ?? ''))}</Descriptions.Item>
+                            <Descriptions.Item label="物料成本（CNY）">{formatMoney(bomCostingTotals.rangeMaterial)}</Descriptions.Item>
+                            <Descriptions.Item label="工序成本（CNY）">{formatMoney(bomCostingTotals.rangeProcess)}</Descriptions.Item>
+                            <Descriptions.Item label="制造费用（CNY）">{formatMoney(bomCostingTotals.rangeOverhead)}</Descriptions.Item>
+                            <Descriptions.Item label="制造费率">{formatPercent(bomCostingTotals.overheadRate)}</Descriptions.Item>
+                            <Descriptions.Item label="单位成本（CNY/件）">{formatMoney(bomCostingTotals.perPieceUnit)}</Descriptions.Item>
                           </Descriptions>
 
                           <Divider style={{ margin: '4px 0' }} />
@@ -559,6 +601,29 @@ const ProfitInsightsPage = () => {
                             dataSource={bomFinalLines}
                             columns={bomMaterialColumns}
                             scroll={{ x: 950 }}
+                            summary={(pageData) => {
+                              const total = pageData.reduce((acc, r: any) => {
+                                const lineCost = Number((r as any)?.line_cost)
+                                const perPiece = Number.isFinite(lineCost) ? lineCost / sampleQtyNum : NaN
+                                const t = Number.isFinite(perPiece) ? perPiece * rangeShippedQtyNum : NaN
+                                return acc + (Number.isFinite(t) ? t : 0)
+                              }, 0)
+                              return (
+                                <Table.Summary fixed>
+                                  <Table.Summary.Row>
+                                    <Table.Summary.Cell index={0} colSpan={9}>
+                                      <Typography.Text strong>总计</Typography.Text>
+                                    </Table.Summary.Cell>
+                                    <Table.Summary.Cell index={9} align="right">
+                                      <Typography.Text strong>{formatQty(rangeShippedQtyRaw as any)}</Typography.Text>
+                                    </Table.Summary.Cell>
+                                    <Table.Summary.Cell index={10} align="right">
+                                      <Typography.Text strong>{formatMoney(total)}</Typography.Text>
+                                    </Table.Summary.Cell>
+                                  </Table.Summary.Row>
+                                </Table.Summary>
+                              )
+                            }}
                           />
 
                           <Divider style={{ margin: '4px 0' }} />
@@ -571,6 +636,29 @@ const ProfitInsightsPage = () => {
                             columns={bomProcessColumns}
                             locale={{ emptyText: '暂无工序明细（样本BOM未返回 process_lines）' }}
                             scroll={{ x: 1100 }}
+                            summary={(pageData) => {
+                              const total = pageData.reduce((acc, r: any) => {
+                                const cost = Number((r as any)?.total_cost)
+                                const perPiece = Number.isFinite(cost) ? cost / sampleQtyNum : NaN
+                                const t = Number.isFinite(perPiece) ? perPiece * rangeShippedQtyNum : NaN
+                                return acc + (Number.isFinite(t) ? t : 0)
+                              }, 0)
+                              return (
+                                <Table.Summary fixed>
+                                  <Table.Summary.Row>
+                                    <Table.Summary.Cell index={0} colSpan={11}>
+                                      <Typography.Text strong>总计</Typography.Text>
+                                    </Table.Summary.Cell>
+                                    <Table.Summary.Cell index={11} align="right">
+                                      <Typography.Text strong>{formatQty(rangeShippedQtyRaw as any)}</Typography.Text>
+                                    </Table.Summary.Cell>
+                                    <Table.Summary.Cell index={12} align="right">
+                                      <Typography.Text strong>{formatMoney(total)}</Typography.Text>
+                                    </Table.Summary.Cell>
+                                  </Table.Summary.Row>
+                                </Table.Summary>
+                              )
+                            }}
                           />
                         </Space>
                       ),

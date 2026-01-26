@@ -95,15 +95,16 @@
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
 
-- **最近校对（北京时间 GMT+8）**：2026-01-26（模型分析：最终 BOM 表补“按发货数量估算合计” + 变体物料标识）
-  - 调整：移除右侧“发货合计（真实明细汇总）”区块，改用现有“最终 BOM（final_material_lines）”做展示与估算。
-  - 物料（最终 BOM）：
-    - 增加“来源”列：基准/变体（变体物料会标识为 `变体`）。
-    - 末尾增加两列：`发货数量`（该版本在本次范围内的发货量）与 `合计`（按“每件行成本 × 发货数量”估算）。
-  - 工序（最终 BOM）：
-    - 末尾增加两列：`发货数量` 与 `合计`（按“每件工序成本 × 发货数量”估算）。
-  - 说明：
-    - 这里的“合计”是以右侧样本 BOM 的**单件成本**推算本次范围发货量的估算；若变体在不同交易规格中会变化，应以“变体物料标识 + 换样本规格”来校准。
+- **最近校对（北京时间 GMT+8）**：2026-01-26（模型分析：最终 BOM 估算合计增强 + 覆盖率提示精简）
+  - 成本概览（最终 BOM 顶部表格）：
+    - 改为按“本次范围内发货数量”显示合计：合计成本/物料成本/工序成本/制造费用均为区间合计。
+    - “制造费率”改为百分比显示（例如 23%）。
+  - 物料/工序（最终 BOM）：
+    - 保留末尾两列：`发货数量` 与 `合计`（按“单件行成本 × 发货数量”估算）。
+    - 在表格底部增加一行加粗汇总：发货数量总计、合计总计（用于快速核对）。
+    - 物料表新增“来源”列：基准/变体（变体物料会标识为 `变体`）。
+  - 左侧覆盖率提示：
+    - 移除 Alert 卡片样式，改为一排精致小字：总发货行/已归因（覆盖率）/已计价/缺成本字段。
   - 验收命令（必须，全部 0 退出码）：
     - Frontend：`npm -C frontend run build`
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`

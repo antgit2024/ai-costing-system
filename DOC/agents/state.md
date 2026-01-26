@@ -20,6 +20,14 @@
 
 > 注：若需要对外一句话解释本项目——“以 SKU 绑定已发布标准版本为入口，在发货导入时解析交易规格并生成可追溯的 BOM 快照，用异常队列兜底，支撑扣库与成本核算对账”。
 
+- **最近校对（北京时间 GMT+8）**：2026-01-26（模型分析页面：修复 TypeScript 未使用变量错误）
+  - 背景：前端构建时报 `TS6133: 'r' is declared but its value is never read`（ProfitInsightsPage.tsx 第 162 行）。
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/ProfitInsightsPage.tsx`
+      - 修复：移除 BOM 单价列 render 函数中未使用的 `r` 参数。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`（已通过）
+
 - **最近校对（北京时间 GMT+8）**：2026-01-26（发货单上传：413 失败提示收口 + 文件大小引导）
   - 背景：线上 `/costing/shipments` 上传发货单预览报 `Request failed with status code 413`（请求体过大），通常是网关/Nginx `client_max_body_size` 限制触发。
   - 本轮产物（前端）：

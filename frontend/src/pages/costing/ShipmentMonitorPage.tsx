@@ -40,6 +40,20 @@ import type { BomGenerateResponse, BomSnapshot, ShipmentException, ShipmentImpor
 const { Title, Text } = Typography
 
 const DEFAULT_PAGE_SIZE = 10
+const MB = 1024 * 1024
+
+const formatBytes = (bytes: number): string => {
+  const b = Number(bytes || 0)
+  if (!Number.isFinite(b) || b <= 0) return '0B'
+  if (b < 1024) return `${b}B`
+  if (b < MB) return `${(b / 1024).toFixed(1)}KB`
+  return `${(b / MB).toFixed(2)}MB`
+}
+
+const tryGetHttpStatus = (err: any): number | null => {
+  const n = Number(err?.response?.status)
+  return Number.isFinite(n) ? n : null
+}
 
 const formatTime = (v?: string | null) => {
   if (!v) return '-'
@@ -486,6 +500,11 @@ const ShipmentMonitorPage = () => {
     }
     try {
       setUploading(true)
+      if (uploadFile.size >= 2 * MB) {
+        message.info(
+          `当前文件大小约 ${formatBytes(uploadFile.size)}。若预览/上传报 413（请求体过大），通常需要拆分文件或让运维调大网关/Nginx 上传限制（client_max_body_size）。`,
+        )
+      }
       const res = await previewShipmentsXlsx({
         file: uploadFile,
         export_date: uploadExportDate,
@@ -495,7 +514,40 @@ const ShipmentMonitorPage = () => {
       message.success(`预览完成：可执行 ${res.ready_rows}/${res.total_rows}`)
     } catch (err: any) {
       setPreviewData(null)
-      message.error(`预览失败：${err?.response?.data?.detail ?? err?.message ?? 'unknown error'}`)
+      const status = tryGetHttpStatus(err)
+      if (status === 413) {
+        Modal.error({
+          title: '预览失败：413（上传体积超限）',
+          content: (
+            <div>
+              <div style={{ marginBottom: 8 }}>
+                当前文件：<Text code>{uploadFile?.name ?? '-'}</Text>（约{' '}
+                <Text code>{formatBytes(uploadFile?.size ?? 0)}</Text>）
+              </div>
+              <div style={{ marginBottom: 8 }}>
+                这通常是反向代理/Nginx 的请求体大小限制触发（常见默认 1MB）。前端无法绕过限制。
+              </div>
+              <div style={{ marginBottom: 8 }}>
+                处理建议：
+                <ul style={{ margin: '6px 0 0 18px' }}>
+                  <li>拆分发货单文件（按日期/店铺/导出批次拆分）后再上传</li>
+                  <li>
+                    或让运维在网关/Nginx 放开上传限制（例如：
+                    <Text code>client_max_body_size 20m;</Text>），并确保{' '}
+                    <Text code>/api/planner/shipments/import/preview</Text> 与{' '}
+                    <Text code>/api/planner/shipments/import</Text> 生效
+                  </li>
+                </ul>
+              </div>
+              <div>
+                原始错误：<Text type="secondary">{err?.message ?? 'unknown error'}</Text>
+              </div>
+            </div>
+          ),
+        })
+      } else {
+        message.error(`预览失败：${err?.response?.data?.detail ?? err?.message ?? 'unknown error'}`)
+      }
     } finally {
       setUploading(false)
     }

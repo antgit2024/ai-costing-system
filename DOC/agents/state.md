@@ -1,5 +1,36 @@
 ## 当前状态（崩了也能继续）
 
+### 项目定义（仓库单一真相：当前项目是什么）
+
+本仓库（`/home/admin/ai-costing-system`）是一个 **ERP 级的“SKU 绑定 + 规格解析 + 动态 BOM 生成 + 发货对账/扣库/成本核算”系统**，核心理念是 **“发货时再解析（Shipment-time parse）”**：  
+导入发货单（xlsx）→ 以 `sku_code + spec_text` 为输入解析规格（`spec_hash` 缓存）→ 生成 **BOM 快照**（可追溯/可重跑/历史不回写）→ 解析/绑定异常进入 **异常队列** 兜底。
+
+- **主线蓝图（以此为准）**：`DOC/costing/blueprints/sku_binding_bom_shipment_plan.md`
+  - 明确：SKU 主键=货品条码（`sku_code`）、spec_text 不稳定、快照不回写、异常队列与重跑语义等。
+- **发货单样例（字段与列位移风险证据）**：`DOC/index/extracted/shipment_xlsx_extracted_20251222T000000+0800.md`
+- **30% 复杂产品（套装/非规则型）的“编码/模型套模型”方案**：`DOC/基础表单/BOM系统优化完整方案_最终版.md`
+  - 该文档聚焦“复杂套装/编码抽取/模型套模型/自动编码”的可运营落地；与“发货时再解析”主链互补，但**不替代**主链蓝图。
+- **数据分析（利润/退货，2025 校准 Run / 2026 扣库落库）蓝图**：`DOC/costing/blueprints/profit_and_returns_analytics_plan_2025_2026_v0_1.md`
+  - 已落地（后端 MVP）：售后导入 `/api/planner/after-sales/import`（xlsx 幂等落库）+ 退货率 API `/api/planner/analytics/returns-rate/sku`（按发货完成时间归属期，强关联键：订单号+商品链接ID+货品条码）。
+  - 已落地（前端 MVP）：左侧菜单“数据洞察→售后分析”可点，页面 `/costing/insights/after-sales`（仅按用户选择范围查询；不做默认全量计算）。
+  - 已落地（利润 MVP）：后端 `/api/planner/analytics/profit/sku`（货品利润）与 `/api/planner/analytics/profit/model`（模型利润）；前端“数据洞察→模型分析”页面 `/costing/insights/models`（货品/模型两Tab，需手动选择范围再查询）。
+  - 已落地（店铺数据 MVP）：后端 `/api/planner/analytics/profit/channel` 与 `/api/planner/analytics/returns-rate/channel`；前端页面 `/costing/insights/shops`（利润/退货率两Tab，支持“仅看覆盖率=100%”筛选；仍需手动选择范围再查询）。
+  - 已落地（数据导入 MVP）：发货单上传在 `/costing/shipments`（预览→执行）；售后退货单上传在 `/costing/insights/after-sales`（xlsx 导入）。
+  - 硬验收命令（全部 0 退出码）见：`DOC/agents/commands.md` → “数据洞察（利润/售后）MVP 硬验收（必须）”。
+
+> 注：若需要对外一句话解释本项目——“以 SKU 绑定已发布标准版本为入口，在发货导入时解析交易规格并生成可追溯的 BOM 快照，用异常队列兜底，支撑扣库与成本核算对账”。
+
+- **最近校对（北京时间 GMT+8）**：2026-01-26（发货单上传：413 失败提示收口 + 文件大小引导）
+  - 背景：线上 `/costing/shipments` 上传发货单预览报 `Request failed with status code 413`（请求体过大），通常是网关/Nginx `client_max_body_size` 限制触发。
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/ShipmentMonitorPage.tsx`
+      - 上传前：展示文件大小提示（大文件更容易触发 413）。
+      - 失败时：对 413 弹窗给出可执行动作（拆分文件 / 运维放开 `client_max_body_size`，并覆盖 `/api/planner/shipments/import/preview` 与 `/api/planner/shipments/import`）。
+  - 下一步（需要运维配合，前端无法绕过）：
+    - 在网关/Nginx 放开上传限制（例如 `client_max_body_size 20m;`），并在对应 location / upstream 路径生效。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-22（天猫SKU生成器：尺寸胶囊常显 + Z 规格同列不变色 + 检验补齐商家编码）
   - 本轮范围：对齐业务口径：检验用于校验“商品规格（网店）+ 商家编码”是否能命中系统编码/公式；尺寸展示与检验解绑；Z- 规格字样显示在“TOKEN/公式”列但不做红绿高亮。
   - 本轮产物：

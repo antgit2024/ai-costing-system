@@ -1,4 +1,4 @@
-import { Alert, Button, Card, DatePicker, Form, Input, Segmented, Space, Table, Typography } from 'antd'
+import { Alert, Button, Card, DatePicker, Form, Input, Segmented, Select, Space, Table, Typography } from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { useMemo, useState } from 'react'
@@ -20,6 +20,16 @@ const formatQty = (raw?: string | null) => {
   return n.toFixed(2).replace(/\.00$/, '')
 }
 
+const formatDateToDay = (raw?: string | null) => {
+  if (!raw) return '-'
+  const s = String(raw)
+  // fast path for ISO-like strings
+  if (s.length >= 10 && s[4] === '-' && s[7] === '-') return s.slice(0, 10)
+  const d = dayjs(s)
+  if (!d.isValid()) return s
+  return d.format('YYYY-MM-DD')
+}
+
 const SalesInsightsPage = () => {
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
@@ -28,13 +38,13 @@ const SalesInsightsPage = () => {
   const [includeMissing, setIncludeMissing] = useState(true)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(50)
+  const [shopOptions, setShopOptions] = useState<string[]>([])
 
   const columns = useMemo<ColumnsType<SalesLineItem>>(
     () => [
-      { title: '付款时间', dataIndex: 'payment_at', width: 170, ellipsis: true, render: (v) => String(v ?? '-') },
-      { title: '发货时间', dataIndex: 'completed_at', width: 170, ellipsis: true, render: (v) => String(v ?? '-') },
-      { title: '销售渠道', dataIndex: 'channel', width: 140, ellipsis: true, render: (v) => String(v ?? '-') },
-      { title: '货品编号', dataIndex: 'sku_no', width: 140, ellipsis: true, render: (v) => String(v ?? '-') },
+      { title: '付款时间', dataIndex: 'payment_at', width: 120, ellipsis: true, render: (v) => formatDateToDay(v) },
+      { title: '发货时间', dataIndex: 'completed_at', width: 120, ellipsis: true, render: (v) => formatDateToDay(v) },
+      { title: '店铺', dataIndex: 'channel', width: 160, ellipsis: true, render: (v) => String(v ?? '-') },
       { title: '货品名称', dataIndex: 'sku_name', width: 200, ellipsis: true, render: (v) => String(v ?? '-') },
       { title: '交易规格', dataIndex: 'spec_text', width: 260, ellipsis: true, render: (v) => String(v ?? '-') },
       { title: '货品条码', dataIndex: 'sku_code', width: 160, ellipsis: true, render: (v) => String(v ?? '-') },
@@ -43,10 +53,31 @@ const SalesInsightsPage = () => {
       { title: '销售金额', dataIndex: 'revenue_amount', width: 110, render: (v) => formatMoney(v) },
       { title: '成本单价', dataIndex: 'cost_unit_price', width: 110, render: (v) => formatMoney(v) },
       { title: '成本金额', dataIndex: 'cost_amount', width: 110, render: (v) => formatMoney(v) },
+      {
+        title: '利润',
+        key: 'gross_profit',
+        width: 110,
+        render: (_v, r) => {
+          const revenue = Number(r.revenue_amount ?? '')
+          const cost = Number(r.cost_amount ?? '')
+          if (!Number.isFinite(revenue) || !Number.isFinite(cost)) return '-'
+          return formatMoney(String(revenue - cost))
+        },
+      },
+      {
+        title: '利润率',
+        key: 'gross_margin',
+        width: 110,
+        render: (_v, r) => {
+          const revenue = Number(r.revenue_amount ?? '')
+          const cost = Number(r.cost_amount ?? '')
+          if (!Number.isFinite(revenue) || !Number.isFinite(cost) || revenue === 0) return '-'
+          const margin = ((revenue - cost) / revenue) * 100
+          if (!Number.isFinite(margin)) return '-'
+          return `${margin.toFixed(2)}%`
+        },
+      },
       { title: '原始单号', dataIndex: 'order_no', width: 160, ellipsis: true, render: (v) => String(v ?? '-') },
-      { title: '商品链接ID', dataIndex: 'product_link_id', width: 180, ellipsis: true, render: (v) => String(v ?? '-') },
-      { title: '物流公司', dataIndex: 'logistics_company', width: 140, ellipsis: true, render: (v) => String(v ?? '-') },
-      { title: '物流单号', dataIndex: 'logistics_no', width: 180, ellipsis: true, render: (v) => String(v ?? '-') },
       { title: '标记', dataIndex: 'mark', width: 120, ellipsis: true, render: (v) => String(v ?? '-') },
       { title: '备注', dataIndex: 'note', width: 220, ellipsis: true, render: (v) => String(v ?? '-') },
     ],
@@ -71,13 +102,19 @@ const SalesInsightsPage = () => {
         page: p,
         page_size: ps,
         include_missing: includeMissing,
-        channel: v.channel?.trim() || undefined,
+        channel: v.shop?.trim() || undefined,
         sku_code: v.sku_code?.trim() || undefined,
-        shipment_no: v.shipment_no?.trim() || undefined,
         order_no: v.order_no?.trim() || undefined,
         product_link_id: v.product_link_id?.trim() || undefined,
       })
       setData(resp)
+      setShopOptions((prev) => {
+        const next = new Set(prev)
+        for (const it of resp.items ?? []) {
+          if (it.channel) next.add(it.channel)
+        }
+        return Array.from(next).sort()
+      })
       setPage(p)
       setPageSize(ps)
     } catch (e: any) {
@@ -121,20 +158,24 @@ const SalesInsightsPage = () => {
           layout="inline"
           initialValues={{
             range: [dayjs().subtract(30, 'day'), dayjs()],
-            channel: undefined,
+            shop: undefined,
           }}
         >
           <Form.Item label="时间范围" name="range" rules={[{ required: true, message: '请选择时间范围' }]}>
             <DatePicker.RangePicker allowClear={false} />
           </Form.Item>
-          <Form.Item label="渠道" name="channel">
-            <Input placeholder="可选：店铺/渠道" style={{ width: 180 }} allowClear />
+          <Form.Item label="店铺" name="shop">
+            <Select
+              allowClear
+              showSearch
+              placeholder="可选：选择店铺"
+              style={{ width: 200 }}
+              options={shopOptions.map((s) => ({ label: s, value: s }))}
+              filterOption={(input, option) => String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())}
+            />
           </Form.Item>
           <Form.Item label="货品条码" name="sku_code">
             <Input placeholder="可选：barcode" style={{ width: 180 }} allowClear />
-          </Form.Item>
-          <Form.Item label="发货单号" name="shipment_no">
-            <Input placeholder="可选：S2025..." style={{ width: 180 }} allowClear />
           </Form.Item>
           <Form.Item label="原始单号" name="order_no">
             <Input placeholder="可选：order_no" style={{ width: 180 }} allowClear />
@@ -197,7 +238,7 @@ const SalesInsightsPage = () => {
           columns={columns}
           dataSource={data?.items ?? []}
           pagination={pagination}
-          scroll={{ x: 2200 }}
+          scroll={{ x: 2100 }}
         />
       </Card>
     </div>

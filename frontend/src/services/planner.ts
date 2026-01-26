@@ -1675,6 +1675,7 @@ export const executeShipmentsFromPreview = async (
   file_name?: string
   export_date?: string
   requested_by?: string
+  mode?: '2025' | '2026'
   },
   opts: { signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<ShipmentImportBatch> => {

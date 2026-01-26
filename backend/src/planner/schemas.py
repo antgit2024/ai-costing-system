@@ -2321,6 +2321,7 @@ class ShipmentImportExecuteRequest(BaseModel):
     file_name: Optional[str] = None
     export_date: Optional[str] = None
     requested_by: Optional[str] = None
+    mode: Literal["2025", "2026"] = "2026"
 
 
 class ShipmentExceptionRead(BaseModel):

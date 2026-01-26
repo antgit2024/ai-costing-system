@@ -73,6 +73,7 @@ def execute_shipments_from_preview(
             file_name=payload.file_name,
             export_date=payload.export_date,
             requested_by=payload.requested_by,
+            mode=getattr(payload, "mode", "2026"),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

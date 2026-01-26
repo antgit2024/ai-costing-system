@@ -920,6 +920,8 @@ class ShipmentLine(Base, TimestampMixin, SoftDeleteMixin):
     row_index: Mapped[int] = Column(Integer, nullable=False, default=0)
 
     shipment_no: Mapped[str | None] = Column(String(64), index=True)
+    order_no: Mapped[str | None] = Column(String(64), index=True)
+    product_link_id: Mapped[str | None] = Column(String(128), index=True)
     completed_at: Mapped[datetime | None] = Column(DateTime, index=True)
     channel: Mapped[str | None] = Column(String(128))
     sku_code: Mapped[str | None] = Column(String(64), index=True)
@@ -981,6 +983,66 @@ class BomSnapshot(Base, TimestampMixin):
         return dict(self.trace_json or {})
 
 
+class ShipmentCostingResult(Base, TimestampMixin):
+    """
+    Lightweight, persisted costing result for a shipment line.
+
+    Purpose:
+    - 2025 mode: keep deduction artifacts without storing per-line bom_snapshot trace_json.
+    - 2026 mode: can still be used as a unified analytics source (optional).
+    """
+
+    __tablename__ = "shipment_costing_results"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    shipment_line_id: Mapped[str] = Column(
+        String(36), ForeignKey("shipment_lines.id", ondelete="CASCADE"), nullable=False, unique=True, index=True
+    )
+    batch_id: Mapped[str] = Column(
+        String(36), ForeignKey("shipment_import_batches.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    mode: Mapped[str] = Column(String(16), nullable=False, default="2026", index=True)  # 2025 | 2026
+
+    sku_code: Mapped[str | None] = Column(String(64), index=True)
+    model_version_id: Mapped[str | None] = Column(String(36), ForeignKey("product_model_versions.id"), index=True)
+    spec_hash: Mapped[str | None] = Column(String(64), index=True)
+    parser_version: Mapped[str | None] = Column(String(32))
+    qty: Mapped[float | None] = Column(Numeric(18, 6))
+
+    cost_total: Mapped[float | None] = Column(Numeric(18, 6))
+    cost_material_total: Mapped[float | None] = Column(Numeric(18, 6))
+    cost_process_total: Mapped[float | None] = Column(Numeric(18, 6))
+    cost_overhead_total: Mapped[float | None] = Column(Numeric(18, 6))
+
+    computed_at: Mapped[datetime | None] = Column(DateTime, default=utcnow, index=True)
+    deduction_job_id: Mapped[str | None] = Column(String(36), index=True)
+    metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict)
+
+
+class ShipmentInventoryDeductionLine(Base, TimestampMixin):
+    """
+    Inventory deduction lines aggregated per real material for a shipment line.
+    """
+
+    __tablename__ = "shipment_inventory_deduction_lines"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    shipment_line_id: Mapped[str] = Column(
+        String(36), ForeignKey("shipment_lines.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    batch_id: Mapped[str] = Column(
+        String(36), ForeignKey("shipment_import_batches.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    mode: Mapped[str] = Column(String(16), nullable=False, default="2026", index=True)  # 2025 | 2026
+
+    material_id: Mapped[str | None] = Column(String(36), ForeignKey("materials.id"), index=True)
+    material_code: Mapped[str | None] = Column(String(64), index=True)
+    material_name: Mapped[str | None] = Column(String(255))
+    unit_of_measure: Mapped[str | None] = Column(String(32))
+    quantity: Mapped[float | None] = Column(Numeric(18, 6))
+    metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict)
+
+
 class ShipmentExceptionQueue(Base, TimestampMixin):
     __tablename__ = "shipment_exception_queue"
 
@@ -990,6 +1052,92 @@ class ShipmentExceptionQueue(Base, TimestampMixin):
     )
     shipment_line_id: Mapped[str | None] = Column(
         String(36), ForeignKey("shipment_lines.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    reason: Mapped[str] = Column(String(64), nullable=False, index=True)
+    message: Mapped[str | None] = Column(Text)
+    payload_json: Mapped[Dict[str, Any]] = Column("payload", JSON, default=dict)
+    resolved_at: Mapped[datetime | None] = Column(DateTime)
+
+
+class AfterSalesImportBatch(Base, TimestampMixin):
+    __tablename__ = "after_sales_import_batches"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    file_name: Mapped[str | None] = Column(String(255))
+    file_hash: Mapped[str] = Column(String(64), nullable=False, unique=True, index=True)
+    export_date: Mapped[str | None] = Column(String(32))
+    requested_by: Mapped[str | None] = Column(String(64))
+    status: Mapped[str] = Column(String(32), nullable=False, default="processing")
+    total_rows: Mapped[int] = Column(Integer, nullable=False, default=0)
+    inserted_rows: Mapped[int] = Column(Integer, nullable=False, default=0)
+    skipped_rows: Mapped[int] = Column(Integer, nullable=False, default=0)
+    exception_rows: Mapped[int] = Column(Integer, nullable=False, default=0)
+    warnings_json: Mapped[List[Dict[str, Any]]] = Column("warnings", JSON, default=list)
+    result_json: Mapped[Dict[str, Any]] = Column("result", JSON, default=dict)
+
+    lines: Mapped[List["AfterSalesLine"]] = relationship(
+        "AfterSalesLine",
+        primaryjoin="AfterSalesImportBatch.id==AfterSalesLine.batch_id",
+        back_populates="batch",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    exceptions: Mapped[List["AfterSalesExceptionQueue"]] = relationship(
+        "AfterSalesExceptionQueue",
+        primaryjoin="AfterSalesImportBatch.id==AfterSalesExceptionQueue.batch_id",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class AfterSalesLine(Base, TimestampMixin, SoftDeleteMixin):
+    __tablename__ = "after_sales_lines"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    batch_id: Mapped[str] = Column(
+        String(36), ForeignKey("after_sales_import_batches.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    row_index: Mapped[int] = Column(Integer, nullable=False, default=0)
+
+    after_sales_no: Mapped[str | None] = Column(String(64), index=True)
+    occurred_at: Mapped[datetime | None] = Column(DateTime, index=True)
+    applied_at: Mapped[datetime | None] = Column(DateTime, index=True)
+    channel: Mapped[str | None] = Column(String(128), index=True)
+    reason: Mapped[str | None] = Column(String(255))
+
+    order_no: Mapped[str | None] = Column(String(64), index=True)
+    product_link_id: Mapped[str | None] = Column(String(128), index=True)
+    product_code: Mapped[str | None] = Column(String(128), index=True)
+    product_name: Mapped[str | None] = Column(String(255))
+    spec_text: Mapped[str | None] = Column(Text)
+    unit: Mapped[str | None] = Column(String(32))
+
+    sale_unit_price: Mapped[float | None] = Column(Numeric(18, 6))
+    return_qty: Mapped[float | None] = Column(Numeric(18, 6))
+    actual_return_qty: Mapped[float | None] = Column(Numeric(18, 6))
+    refund_amount: Mapped[float | None] = Column(Numeric(18, 6))
+    allocated_refund_amount: Mapped[float | None] = Column(Numeric(18, 6))
+
+    # Optional resolved key (best-effort): map product_code -> sku_code via SkuMaster
+    sku_code: Mapped[str | None] = Column(String(64), index=True)
+
+    external_line_key_hash: Mapped[str] = Column(String(64), nullable=False, unique=True, index=True)
+    raw_row_json: Mapped[Dict[str, Any]] = Column("raw_row", JSON, default=dict)
+    normalize_warnings_json: Mapped[List[Dict[str, Any]]] = Column("normalize_warnings", JSON, default=list)
+    metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict)
+
+    batch: Mapped["AfterSalesImportBatch"] = relationship("AfterSalesImportBatch", back_populates="lines")
+
+
+class AfterSalesExceptionQueue(Base, TimestampMixin):
+    __tablename__ = "after_sales_exception_queue"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    batch_id: Mapped[str] = Column(
+        String(36), ForeignKey("after_sales_import_batches.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    after_sales_line_id: Mapped[str | None] = Column(
+        String(36), ForeignKey("after_sales_lines.id", ondelete="CASCADE"), nullable=True, index=True
     )
     reason: Mapped[str] = Column(String(64), nullable=False, index=True)
     message: Mapped[str | None] = Column(Text)

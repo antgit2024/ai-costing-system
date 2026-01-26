@@ -53,6 +53,10 @@
         - 修复：分页空页问题：当切换为“仅已计价（include_missing=false）”时，后端 `total` 现按“有 BOM 快照”的行数统计，避免分页器页数虚高导致后面多页为空。
       - 口径澄清（2025 预推 / 扣库 vs 快照）
         - 2025 的“不扣”指**不要求每条发货行落 `bom_snapshots(trace_json)` 快照**，但仍需要扣库相关数据（流水/结存/对账）；建议引入“扣库凭证/轻量结果”表承载 `shipment_line_id + model_version_id + cost_total + deduction_job_id` 等核心字段，避免存大 trace。
+      - 2025 扣库轻量结果（落库，不落大快照）
+        - 后端新增表：`shipment_costing_results`、`shipment_inventory_deduction_lines`（用于承载每条发货行的计价结果与扣库明细，不存 `bom_snapshots.trace_json`）。
+        - 发货执行新增 `mode=2025|2026`：`2025` 模式写轻量结果与扣库明细但不写 `bom_snapshots`；`2026` 模式保持原有快照落库并同步写轻量结果。
+        - 分析接口已兼容：销售/利润接口优先读轻量结果，缺失时回退到历史 `bom_snapshots`（避免老数据无结果导致报表空白）。
     - `frontend/src/services/planner.ts`
       - 发货预览/执行/导入使用更长超时（5 分钟），避免大文件导入在前端 20s 超时误报失败。
       - `execute/import` 超时进一步放宽（默认 30 分钟）；即便浏览器超时/断开，也可通过批次列表按 `file_hash` 自动定位确认是否已落库。

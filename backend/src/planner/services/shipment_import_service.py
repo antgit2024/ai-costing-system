@@ -317,6 +317,8 @@ def _generate_bom_snapshot(
     *,
     batch: models.ShipmentImportBatch,
     line: models.ShipmentLine,
+    persist_snapshot: bool = True,
+    mode: str = "2026",
 ) -> Optional[models.BomSnapshot]:
     sku = (line.sku_code or "").strip()
     if not sku:
@@ -375,6 +377,20 @@ def _generate_bom_snapshot(
         )
         return None
 
+    # Persist lightweight deduction artifacts (2025/2026 unified)
+    _persist_deduction_artifacts(
+        db,
+        batch=batch,
+        line=line,
+        bom=bom,
+        bound_version_id=binding.model_version_id,
+        spec_hash=spec_snap.spec_hash,
+        mode=mode,
+    )
+
+    if not persist_snapshot:
+        return None
+
     trace = dict(bom.get("trace") or {})
     trace.update(
         {
@@ -401,6 +417,106 @@ def _generate_bom_snapshot(
     return snap
 
 
+def _persist_deduction_artifacts(
+    db: Session,
+    *,
+    batch: models.ShipmentImportBatch,
+    line: models.ShipmentLine,
+    bom: Dict[str, Any],
+    bound_version_id: Optional[str],
+    spec_hash: str,
+    mode: str,
+) -> None:
+    """
+    Persist lightweight costing + inventory deduction lines without storing big per-line snapshot trace.
+    This is the backbone for 2025 "deduct but no snapshots" mode.
+    """
+
+    # Idempotent upsert-by-replace for this shipment line
+    db.query(models.ShipmentInventoryDeductionLine).filter(
+        models.ShipmentInventoryDeductionLine.shipment_line_id == line.id
+    ).delete(synchronize_session=False)
+    db.query(models.ShipmentCostingResult).filter(
+        models.ShipmentCostingResult.shipment_line_id == line.id
+    ).delete(synchronize_session=False)
+
+    trace = bom.get("trace") if isinstance(bom.get("trace"), dict) else {}
+    costing = trace.get("costing") if isinstance(trace.get("costing"), dict) else {}
+    inventory = trace.get("inventory") if isinstance(trace.get("inventory"), dict) else {}
+    inv_lines = inventory.get("inventory_lines") if isinstance(inventory.get("inventory_lines"), list) else []
+    inv_warnings = inventory.get("warnings") if isinstance(inventory.get("warnings"), list) else []
+
+    # model_version_id is critical for historical explainability
+    model_version_id = trace.get("model_version_id") or bound_version_id
+
+    qty = line.qty if line.qty is not None else Decimal("1")
+
+    def _d(v: Any) -> Optional[Decimal]:
+        if v in (None, ""):
+            return None
+        if isinstance(v, Decimal):
+            return v
+        try:
+            return Decimal(str(v))
+        except Exception:  # noqa: BLE001
+            return None
+
+    cost_total = _d(costing.get("total_cost"))
+    cost_material = _d(costing.get("material_cost_total"))
+    cost_process = _d(costing.get("process_cost_total"))
+    cost_overhead = _d(costing.get("overhead_cost"))
+
+    # backward-compatible fallback: compute total_cost from components if missing
+    if cost_total is None:
+        parts = [x for x in [cost_material, cost_process, cost_overhead] if x is not None]
+        if parts:
+            cost_total = sum(parts, Decimal("0"))
+
+    result = models.ShipmentCostingResult(
+        shipment_line_id=line.id,
+        batch_id=batch.id,
+        mode=str(mode or "2026"),
+        sku_code=line.sku_code,
+        model_version_id=model_version_id,
+        spec_hash=spec_hash,
+        parser_version=PARSER_VERSION,
+        qty=Decimal(str(qty)),
+        cost_total=cost_total,
+        cost_material_total=cost_material,
+        cost_process_total=cost_process,
+        cost_overhead_total=cost_overhead,
+        computed_at=_utcnow(),
+        metadata_json=_json_safe(
+            {
+                "inventory_warning_count": len(inv_warnings or []),
+                "inventory_warnings": list(inv_warnings or [])[:20],
+            }
+        ),
+    )
+    db.add(result)
+    db.flush()
+
+    for r in inv_lines:
+        if not isinstance(r, dict):
+            continue
+        qty_used = _d(r.get("quantity"))
+        if qty_used is None:
+            continue
+        db.add(
+            models.ShipmentInventoryDeductionLine(
+                shipment_line_id=line.id,
+                batch_id=batch.id,
+                mode=str(mode or "2026"),
+                material_id=str(r.get("material_id") or "") or None,
+                material_code=str(r.get("material_code") or "") or None,
+                material_name=str(r.get("material_name") or "") or None,
+                unit_of_measure=str(r.get("unit_of_measure") or "") or None,
+                quantity=qty_used,
+                metadata_json=_json_safe({"sources": r.get("sources")}),
+            )
+        )
+
+
 def import_shipment_xlsx(
     db: Session,
     *,
@@ -408,6 +524,7 @@ def import_shipment_xlsx(
     file_bytes: bytes,
     export_date: Optional[str],
     requested_by: Optional[str],
+    mode: str = "2026",
 ) -> models.ShipmentImportBatch:
     file_hash = _sha1_bytes(file_bytes)
     batch = (
@@ -536,15 +653,20 @@ def import_shipment_xlsx(
 
         batch.inserted_rows += 1
 
-        existing_snapshot = (
-            db.query(models.BomSnapshot)
-            .filter(models.BomSnapshot.shipment_line_id == line.id)
-            .first()
-        )
-        if not existing_snapshot:
-            snap = _generate_bom_snapshot(db, batch=batch, line=line)
-            if not snap:
-                batch.exception_rows += 1
+        persist_snapshot = str(mode or "2026") != "2025"
+        if persist_snapshot:
+            existing_snapshot = (
+                db.query(models.BomSnapshot)
+                .filter(models.BomSnapshot.shipment_line_id == line.id)
+                .first()
+            )
+            if not existing_snapshot:
+                snap = _generate_bom_snapshot(db, batch=batch, line=line, persist_snapshot=True, mode=mode)
+                if not snap:
+                    batch.exception_rows += 1
+        else:
+            # 2025 mode: no per-line snapshots; still persist deduction artifacts
+            _generate_bom_snapshot(db, batch=batch, line=line, persist_snapshot=False, mode=mode)
 
     batch.status = "success"
     batch.result_json = {
@@ -713,6 +835,7 @@ def execute_shipment_xlsx_from_preview(
     file_name: Optional[str] = None,
     export_date: Optional[str],
     requested_by: Optional[str],
+    mode: str = "2026",
 ) -> models.ShipmentImportBatch:
     """
     Execute import using cached preview file (by file_hash).
@@ -730,6 +853,7 @@ def execute_shipment_xlsx_from_preview(
         file_bytes=file_bytes,
         export_date=export_date,
         requested_by=requested_by,
+        mode=mode,
     )
 
 

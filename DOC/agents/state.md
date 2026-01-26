@@ -57,6 +57,7 @@
         - 后端新增表：`shipment_costing_results`、`shipment_inventory_deduction_lines`（用于承载每条发货行的计价结果与扣库明细，不存 `bom_snapshots.trace_json`）。
         - 发货执行新增 `mode=2025|2026`：`2025` 模式写轻量结果与扣库明细但不写 `bom_snapshots`；`2026` 模式保持原有快照落库并同步写轻量结果。
         - 分析接口已兼容：销售/利润接口优先读轻量结果，缺失时回退到历史 `bom_snapshots`（避免老数据无结果导致报表空白）。
+        - 前端上传执行区新增模式切换：`2026（落快照）` / `2025（不落快照）`，执行时会带上 `mode` 参数。
     - `frontend/src/services/planner.ts`
       - 发货预览/执行/导入使用更长超时（5 分钟），避免大文件导入在前端 20s 超时误报失败。
       - `execute/import` 超时进一步放宽（默认 30 分钟）；即便浏览器超时/断开，也可通过批次列表按 `file_hash` 自动定位确认是否已落库。

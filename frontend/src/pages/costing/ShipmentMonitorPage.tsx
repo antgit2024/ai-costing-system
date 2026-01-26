@@ -374,6 +374,7 @@ const ShipmentMonitorPage = () => {
     dayjs().format('YYYY-MM-DD'),
   )
   const [uploadRequestedBy, setUploadRequestedBy] = useState<string>('planner_user')
+  const [uploadExecuteMode, setUploadExecuteMode] = useState<'2025' | '2026'>('2026')
   const [previewData, setPreviewData] = useState<any>(null)
   const [precheckDrawerOpen, setPrecheckDrawerOpen] = useState(false)
   const [queueDrawerOpen, setQueueDrawerOpen] = useState(false)
@@ -981,6 +982,14 @@ const ShipmentMonitorPage = () => {
               文件：<Text code>{fileName || '-'}</Text>
             </div>
             <div style={{ marginBottom: 8 }}>
+              模式：<Text code>{uploadExecuteMode}</Text>
+              <Text type="secondary" style={{ marginLeft: 8 }}>
+                {uploadExecuteMode === '2025'
+                  ? '不落 BOM 快照（trace），只落计价结果与扣库明细'
+                  : '落 BOM 快照（含 trace），并同步落计价结果与扣库明细'}
+              </Text>
+            </div>
+            <div style={{ marginBottom: 8 }}>
               提示：大文件执行期间你可以关闭窗口继续等待；完成后可在“批次列表（上传文件）”看到新批次并自动定位。
             </div>
             <div>
@@ -1015,6 +1024,14 @@ const ShipmentMonitorPage = () => {
             <div>
               <div style={{ marginBottom: 8 }}>
                 文件：<Text code>{fileName || '-'}</Text>
+              </div>
+              <div style={{ marginBottom: 8 }}>
+                模式：<Text code>{uploadExecuteMode}</Text>
+                <Text type="secondary" style={{ marginLeft: 8 }}>
+                  {uploadExecuteMode === '2025'
+                    ? '不落 BOM 快照（trace），只落计价结果与扣库明细'
+                    : '落 BOM 快照（含 trace），并同步落计价结果与扣库明细'}
+                </Text>
               </div>
               <div style={{ marginBottom: 8 }}>
                 提示：大文件执行期间你可以关闭窗口继续等待；完成后可在“批次列表（上传文件）”看到新批次并自动定位。
@@ -1054,6 +1071,7 @@ const ShipmentMonitorPage = () => {
           file_name: previewData.file_name,
           export_date: uploadExportDate,
           requested_by: uploadRequestedBy?.trim() || undefined,
+          mode: uploadExecuteMode,
         },
         { signal: abortController.signal },
       )
@@ -1199,6 +1217,14 @@ const ShipmentMonitorPage = () => {
                 <Button type="primary" loading={uploading} onClick={handleUploadPreview} block>
                   预览
                 </Button>
+                <Segmented
+                  value={uploadExecuteMode}
+                  onChange={(v) => setUploadExecuteMode(v as any)}
+                  options={[
+                    { label: '2026（落快照）', value: '2026' },
+                    { label: '2025（不落快照）', value: '2025' },
+                  ]}
+                />
                 <Button
                   type="primary"
                   danger

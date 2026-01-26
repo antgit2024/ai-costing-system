@@ -11,6 +11,13 @@
 - 构建（验收门槛）：
   - `npm -C frontend run build`
 
+### 1.3) 数据洞察（售后分析）UI 验收（可选）
+
+- 路由存在性（前端）：
+  - `grep -nF "/costing/insights/after-sales" frontend/src/App.tsx && grep -nF "数据洞察" frontend/src/components/layout/AppLayout.tsx`
+- 构建（必须 0 退出码）：
+  - `npm -C frontend run build`
+
 ### 1.2) 前端静态资源发布（服务器同机部署，强制）
 
 > 口径：每次前端/路由/依赖有改动并准备上线时，必须执行“构建 + 原子发布”两步，
@@ -32,6 +39,10 @@
 
 ### 4) 文档验收（可选）
 
+- 项目定义（仓库单一真相）存在性：
+  - `grep -nF "### 项目定义（仓库单一真相：当前项目是什么）" DOC/agents/state.md`
+- BOM 系统优化方案（最终版）存在性：
+  - `test -f "DOC/基础表单/BOM系统优化完整方案_最终版.md" && grep -nF "# BOM系统优化完整方案" DOC/基础表单/BOM系统优化完整方案_最终版.md`
 - 行级变体运营规范文档存在性：
   - `grep -nF "## 标准模型：行级变体（Overlay）运营/实施规范（v0.1）" DOC/costing/manuals/standard_model_variants_ops_rules.md`
 - 发货时再解析（spec_hash 缓存）评审稿存在性：
@@ -56,6 +67,38 @@
   - `test -d DOC/costing/manuals/guides && grep -nF "UI“新建指南”文档（单一真相）" DOC/costing/manuals/guides/README.md`
 - POD Phase0（后端闭环任务单，备用）存在性：
   - `grep -nF "Backend 闭环任务单：POD 个性化定制 Phase0（先印布）— POD 领域最小对象 + Job + 生产包下载（MVP）" DOC/agents/briefings/backend_pod_personalization_phase0_mvp.md`
+- 售后退货明细账提炼件存在性：
+  - `test -f "DOC/index/extracted/after_sales_xlsx_extracted_20260125T000000+0800.md" && grep -nF "提炼：售后退货明细账.xlsx" DOC/index/extracted/after_sales_xlsx_extracted_20260125T000000+0800.md`
+- 发货单强关联键提炼件存在性：
+  - `test -f "DOC/index/extracted/shipment_xlsx_extracted_20260125T000000+0800.md" && grep -nF "提炼：发货单.xlsx" DOC/index/extracted/shipment_xlsx_extracted_20260125T000000+0800.md`
+- 利润/退货分析方案蓝图存在性：
+  - `grep -nF "数据分析方案：利润与售后退货（2025 仅分析 / 2026 扣库落库）" DOC/costing/blueprints/profit_and_returns_analytics_plan_2025_2026_v0_1.md`
+ - 后端（售后导入 + 退货率分析）最小单测：
+  - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+ - 后端（利润分析）最小单测：
+  - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+
+### 1.4) 数据洞察（利润/售后）MVP 硬验收（必须）
+
+> 口径：这三条必须全部 **0 退出码**，否则不算闭环完成。
+
+- 后端（利润分析）：
+  - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+- 后端（售后导入 + 退货率分析）：
+  - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+- 前端（构建）：
+  - `npm -C frontend run build`
+
+### 1.5) 数据洞察（店铺数据：按渠道汇总）MVP 硬验收（必须）
+
+> 口径：新增“店铺数据”页面与按渠道聚合接口；必须全部 **0 退出码**。
+
+- 路由/菜单存在性（前端）：
+  - `grep -nF "/costing/insights/shops" frontend/src/App.tsx && grep -nF "/costing/insights/shops" frontend/src/components/layout/AppLayout.tsx`
+- 后端（按渠道汇总利润/退货率）最小单测：
+  - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+- 前端（构建）：
+  - `npm -C frontend run build`
 
 ### 2) 本地联调（可选，但强烈建议）
 
@@ -63,7 +106,36 @@
   - 打样模型：`/costing/sample-models`
   - 标准模型：`/costing/standard-models`
   - 发货批次/BOM快照（只读）：`/costing/shipments`
+  - 售后分析（含售后xlsx上传）：`/costing/insights/after-sales`
+  - 模型分析（利润）：`/costing/insights/models`
+  - 店铺数据（按渠道汇总）：`/costing/insights/shops`
   - SKU 主档工作台：`/costing/sku-master`
+
+### 2.1) 数据导入（先文档上传，后续可替换为API接入）
+
+> 口径：三张洞察页“查询结果为空”通常不是 bug，而是**还没导入数据**。
+
+- 发货单导入（xlsx）：
+  - 打开 `/costing/shipments` → “上传发货单（预览→执行）”
+  - 先点“预览”，确认行数/未绑定/缺规格等，再点“执行”
+  - 若“预览”报 413（请求体过大）：通常是网关/Nginx 限制（`client_max_body_size`）。可先拆分文件，或让运维放开限制（例如 `client_max_body_size 20m;`），并确保对 `/api/planner/shipments/import/preview` 与 `/api/planner/shipments/import` 生效。
+- 售后退货单导入（xlsx）：
+  - 打开 `/costing/insights/after-sales` → “上传售后退货单（xlsx 导入）”
+  - 上传后会提示 batch/插入/跳过/异常行数
+- 导入完成后再去洞察页：
+  - 三个页面都必须先选时间范围，再点“查询”
+
+### 2.2) 规格匹配（spec-matching：尺寸 + TOKEN 预解析缓存）
+
+> 口径：`/costing/spec-matching` 用于“已绑定SKU”的规格预解析（尺寸 + TOKEN），属于加速/预填，不回写历史发货快照。
+
+- 页面：
+  - `/costing/spec-matching`
+- 操作：
+  - “预览解析”→右侧默认全选（可取消勾选）→“保存预览解析”
+  - 左侧“单条人工审核”可查看 tokens 并手工覆写尺寸后保存
+- 后端解析接口（可 smoke）：
+  - `curl -sS -X POST http://127.0.0.1:8800/api/planner/spec/parse -H 'Content-Type: application/json' -d '{"spec_text":"约50*140;024画框;B-3U3PAA;WB01176"}' | python -m json.tool`
 
 ### 3) 后端接口 smoke（可选）
 

@@ -24,6 +24,19 @@
 - 本轮只交付一个闭环产物：**把旧编辑器迁到 `ProductModelEditorDrawer.tsx` 并接通两入口页**。
 - 不要顺手重构 unrelated 组件；避免一次改动牵扯几十个文件导致 diff 巨大、交互层卡顿。
 
+### 3.1) `/costing/shipments` 预览/上传 413（Request Entity Too Large）
+
+- **现象**：
+  - 在 `/costing/shipments` 上传发货单（xlsx）点击“预览”时提示：`Request failed with status code 413`。
+- **根因**：
+  - 通常是网关/Nginx 对请求体大小的限制触发（`client_max_body_size`，常见默认 1MB）。
+  - 前端走 `multipart/form-data` 上传，无法在浏览器端“绕过”该限制。
+- **处理**：
+  - 业务侧先行：拆分 Excel（按日期/店铺/导出批次拆分），降低单文件体积。
+  - 运维侧根治：放开网关/Nginx 上传限制（例如 `client_max_body_size 20m;`），并确保对以下接口路径生效：
+    - `/api/planner/shipments/import/preview`
+    - `/api/planner/shipments/import`
+
 ### 5) 行级变体需要 base_line_id（未保存清单无法配置）
 
 - “变体（Overlay）”是 **version-scoped + base_line_id-scoped**：只有当版本清单行已落库（物料行有 `id`）才能创建/绑定变体规则。
@@ -52,6 +65,56 @@
   - 重跑/重算必须显式触发，并产出**新快照**（不回写历史快照）
 - **建议**：统一采用 3 种动作语义（见 `DOC/costing/reviews/erp_guardrails_addendum_20251222.md`）：
   - Retry Exceptions / Rerun Batch / Rebuild Snapshot（单行）
+
+### 16) 数据洞察不要默认“全量计算”（会卡、且数据会逐步补齐）
+
+- **结论**：数据洞察页面必须“按用户选择的时间范围查询/汇总”，默认不要全量拉取 2025 全年/全库。
+- **原因**：
+  - 2025 属于“边搭建边算”，导入数据可能只有部分 SKU 已绑定模型；全量计算会产生大量无意义查询与异常噪音。
+  - 浏览器端全量渲染也会造成卡顿（尤其是表格/图表）。
+- **实现口径（已落地）**：
+  - 前端 `AfterSalesInsightsPage` 仅在用户点击“查询”后请求 `/api/planner/analytics/returns-rate/sku`，并且必须携带 `start/end/group_by` 参数。
+  - 前端 `ProfitInsightsPage` 仅在用户点击“查询”后请求 `/api/planner/analytics/profit/sku` 或 `/api/planner/analytics/profit/model`，并且必须携带 `start/end/group_by` 参数。
+
+### 18) 三张洞察页都是空（最常见原因：未导入数据）
+
+- **现象**：打开“售后分析/模型分析/店铺数据”，选择范围后查询仍然返回空数组。
+- **最常见根因**：库里还没有发货/售后数据（当前阶段先靠 xlsx 上传导入，后续才会接 ERP API）。
+- **处理**：
+  - 发货单：到 `/costing/shipments` 上传发货单（预览→执行）
+  - 售后退货单：到 `/costing/insights/after-sales` 上传售后退货单（xlsx 导入）
+  - 再回到洞察页选范围点“查询”
+
+### 17) pytest（SQLite）报 “no such table …”（测试库建表不完整）
+
+- **现象**：
+  - 运行某些单测（例如 `backend/tests/planner/test_after_sales_import_mvp.py`）报：
+    - `sqlite3.OperationalError: no such table: shipment_import_batches`
+- **根因**：
+  - `Base.metadata.create_all()` 只会创建“已被 import 过、已注册到 Base”的表。
+  - 若测试初始化（`backend/tests/planner/conftest.py`）在 `create_all()` 之前没有 import `src.planner.models`，则发货/售后/分析等表不会被建出来。
+- **修复口径**（已落地）：
+  - 在 `backend/tests/planner/conftest.py` 中提前 `import src.planner.models`（仅用于注册表到 `Base.metadata`），再执行 `Base.metadata.create_all()`。
+
+### 14) 方案文档“方向互补”容易被误读（别拿错主线）
+
+- **现象**：有人把 `DOC/基础表单/BOM系统优化完整方案_最终版.md` 当成“当前发货导入/对账主线”的实施依据，导致讨论跑偏（该文档重点在 30% 复杂套装：编码抽取、模型套模型、自动编码与运营流程）。
+- **口径**：
+  - “发货时再解析（导入 xlsx → spec_hash 缓存解析 → BOM 快照 → 异常队列）”主线以 `DOC/costing/blueprints/sku_binding_bom_shipment_plan.md` 为准，并以快照不回写/可重跑为硬约束。
+  - 《BOM系统优化完整方案》作为 **复杂产品扩展路线**（与主线互补），用于后续迭代“非规则型套装/编码治理/运营流程”。
+
+### 15) 售后/发货导出字段未开启会影响“模型退货率/净利润”归因（必须开启强关联键）
+
+- **现象**：如果 ERP 导出时没有开启“网店订单号/原始单号 + 商品链接ID + 货品条码”，售后行只能做弱匹配，模型归因会不可靠。
+- **影响**：
+  - “退货率（货品维度）”可以直接按 `货品编号 + 渠道 + 规格` 与发货行做弱关联或直接用 `货品编号` 聚合统计。
+  - “退货率（模型维度）/退货导致的成本归因”必须能关联到某条发货行或某个 BOM 快照；否则只能落入“待关联异常队列”，无法严谨归因到模型/版本。
+- **专业做法**：
+  - 必须开启导出字段：
+    - 发货：`原始单号` + `商品链接ID` + `货品条码` + `交易规格` + `完成时间` + `数量` + `金额` + `销售渠道`
+    - 售后：`网店订单号` + `商品链接Id` + `货品条码` + `申请时间` + `退货数量` + `退货金额` + `退换原因` + `销售渠道`
+  - 在强键齐全时：优先用 `order_no + product_link_id + sku_code` 做强匹配；缺失时才回退到弱匹配，并记录 `match_method/confidence/explanation` 供人工确认。
+- **附带提醒**：售后表自带 `货品成本/毛利/毛利率` 多为上游计算列，建议仅留痕；本系统 2025 分析口径以“BOM 快照 + 当前价估算 + 可配置 Run 参数集”为准。
 
 ### 11) 店铺对接（集成）别一上来就做“深 API 对接”
 

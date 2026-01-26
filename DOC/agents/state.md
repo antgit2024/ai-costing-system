@@ -95,6 +95,25 @@
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-26（模型分析：发货真实合计（物料/工序）聚合接口 + 前端展示）
+  - 目标：在“覆盖率不满（例如 34.6%）”情况下，仍能把**已计价/已扣库**的发货行做“真实合计”：
+    - 物料：按 `shipment_inventory_deduction_lines` 汇总（更贴近对账/损耗口径）
+    - 工序：按最新 `bom_snapshots.trace.costing.process_lines` 汇总（2025 轻量结果可能缺工序明细）
+  - 后端新增接口（analytics）：
+    - `GET /api/planner/analytics/models/materials-summary?start=&end=&model_code=&channel=&version_id=`
+    - `GET /api/planner/analytics/models/processes-summary?start=&end=&model_code=&channel=&version_id=`
+  - 前端落点：
+    - `frontend/src/pages/costing/ProfitInsightsPage.tsx` 右侧新增“发货合计（真实明细汇总）”Card：
+      - Tab1：物料合计（含覆盖率：归因行数/有扣库明细行数、归因发货数量/覆盖发货数量）
+      - Tab2：工序合计（含覆盖率：归因行数/有工序明细行数、归因发货数量/覆盖发货数量）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+  - 下一步：
+    - 若要让“工序合计”在 2025 轻量模式也覆盖，需要把 per-line 工序明细也落库（目前仅快照 trace 具备）。
+
 - **最近校对（北京时间 GMT+8）**：2026-01-26（发货单上传：413 失败提示收口 + 文件大小引导）
   - 背景：线上 `/costing/shipments` 上传发货单预览报 `Request failed with status code 413`（请求体过大），通常是网关/Nginx `client_max_body_size` 限制触发。
   - 本轮产物（前端）：

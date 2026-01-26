@@ -2714,6 +2714,77 @@ class ModelInsightsDetailResponse(BaseModel):
         json_encoders = {Decimal: _decimal_to_str, datetime: lambda v: v.isoformat() if v else None}
 
 
+# -----------------------------
+# Model usage aggregates (real shipped lines)
+# -----------------------------
+
+
+class ModelUsageMaterialItem(BaseModel):
+    material_id: Optional[str] = None
+    material_code: Optional[str] = None
+    material_name: Optional[str] = None
+    unit_of_measure: Optional[str] = None
+    total_quantity: Decimal = Decimal("0")
+    line_count: int = 0
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ModelUsageMaterialSummaryResponse(BaseModel):
+    start: str
+    end: str
+    channel: Optional[str] = None
+    model_code: str
+    version_id: Optional[str] = None
+
+    total_shipment_lines: int = 0  # baseline (all shipments in range)
+    mapped_model_lines: int = 0  # lines attributed to the model (and optional version)
+    shipped_qty_total: Decimal = Decimal("0")  # sum(qty) for mapped lines
+
+    lines_with_deductions: int = 0  # mapped lines that have persisted deduction lines
+    shipped_qty_covered: Decimal = Decimal("0")  # sum(qty) for lines_with_deductions
+
+    items: List[ModelUsageMaterialItem] = Field(default_factory=list)
+    note: Optional[str] = None
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ModelUsageProcessItem(BaseModel):
+    process_code: Optional[str] = None
+    process_name: Optional[str] = None
+    team_name: Optional[str] = None
+    total_minutes: Decimal = Decimal("0")
+    total_cost: Decimal = Decimal("0")
+    line_count: int = 0
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ModelUsageProcessSummaryResponse(BaseModel):
+    start: str
+    end: str
+    channel: Optional[str] = None
+    model_code: str
+    version_id: Optional[str] = None
+
+    total_shipment_lines: int = 0
+    mapped_model_lines: int = 0
+    shipped_qty_total: Decimal = Decimal("0")
+
+    lines_with_process_details: int = 0  # mapped lines that have snapshot trace.process_lines
+    shipped_qty_covered: Decimal = Decimal("0")
+
+    items: List[ModelUsageProcessItem] = Field(default_factory=list)
+    note: Optional[str] = None
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
 class ShipmentProfitLineItem(BaseModel):
     shipment_line_id: str
     row_index: Optional[int] = None

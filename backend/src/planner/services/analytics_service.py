@@ -1823,3 +1823,294 @@ def model_insights_detail(
         "note": note,
     }
 
+
+def _latest_bom_snapshot_sq(db: Session):
+    """
+    Cross-dialect "latest snapshot per shipment_line_id" subquery.
+    Avoid DISTINCT ON (postgres-only).
+    """
+    snap_max = (
+        db.query(
+            models.BomSnapshot.shipment_line_id.label("shipment_line_id"),
+            func.max(models.BomSnapshot.created_at).label("max_created_at"),
+        )
+        .filter(models.BomSnapshot.shipment_line_id.isnot(None))
+        .group_by(models.BomSnapshot.shipment_line_id)
+        .subquery()
+    )
+    snap_latest = (
+        db.query(
+            models.BomSnapshot.shipment_line_id.label("shipment_line_id"),
+            models.BomSnapshot.model_version_id.label("model_version_id"),
+            models.BomSnapshot.trace_json.label("trace_json"),
+            models.BomSnapshot.created_at.label("created_at"),
+        )
+        .join(
+            snap_max,
+            and_(
+                models.BomSnapshot.shipment_line_id == snap_max.c.shipment_line_id,
+                models.BomSnapshot.created_at == snap_max.c.max_created_at,
+            ),
+        )
+        .subquery()
+    )
+    return snap_latest
+
+
+def _mapped_model_lines_sq(
+    db: Session,
+    *,
+    start: datetime,
+    end: datetime,
+    channel: Optional[str],
+    model_code: str,
+    version_id: Optional[str],
+):
+    """
+    Return a subquery of mapped shipment lines:
+    - shipment_line_id
+    - qty
+    - model_version_id (resolved by coalesce(costing_result, latest snapshot))
+    """
+    res_sq = (
+        db.query(
+            models.ShipmentCostingResult.shipment_line_id.label("shipment_line_id"),
+            models.ShipmentCostingResult.model_version_id.label("model_version_id"),
+        )
+        .subquery()
+    )
+    snap_latest = _latest_bom_snapshot_sq(db)
+    mv_id_expr = func.coalesce(res_sq.c.model_version_id, snap_latest.c.model_version_id)
+
+    q = (
+        db.query(
+            models.ShipmentLine.id.label("shipment_line_id"),
+            models.ShipmentLine.qty.label("qty"),
+            mv_id_expr.label("model_version_id"),
+        )
+        .outerjoin(res_sq, models.ShipmentLine.id == res_sq.c.shipment_line_id)
+        .outerjoin(snap_latest, models.ShipmentLine.id == snap_latest.c.shipment_line_id)
+        .join(
+            models.ProductModelVersion,
+            and_(models.ProductModelVersion.id == mv_id_expr, models.ProductModelVersion.is_archived.is_(False)),
+        )
+        .join(
+            models.ProductModel,
+            and_(models.ProductModel.id == models.ProductModelVersion.model_id, models.ProductModel.is_archived.is_(False)),
+        )
+        .filter(
+            models.ShipmentLine.completed_at.isnot(None),
+            models.ShipmentLine.completed_at >= start,
+            models.ShipmentLine.completed_at < end,
+            models.ShipmentLine.is_archived.is_(False),
+            models.ProductModel.model_code == model_code,
+        )
+    )
+    if channel:
+        q = q.filter(models.ShipmentLine.channel == channel)
+    if version_id:
+        q = q.filter(mv_id_expr == version_id)
+    return q.subquery()
+
+
+def model_usage_materials_summary(
+    db: Session,
+    *,
+    start: datetime,
+    end: datetime,
+    model_code: str,
+    channel: Optional[str] = None,
+    version_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Aggregate REAL material usage across shipped lines for a model (and optional version),
+    based on persisted inventory deduction lines.
+    """
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    start = start.astimezone(timezone.utc)
+    end = end.astimezone(timezone.utc)
+
+    # baseline shipments (all lines in range)
+    ship_q = db.query(models.ShipmentLine).filter(
+        models.ShipmentLine.completed_at.isnot(None),
+        models.ShipmentLine.completed_at >= start,
+        models.ShipmentLine.completed_at < end,
+        models.ShipmentLine.is_archived.is_(False),
+    )
+    if channel:
+        ship_q = ship_q.filter(models.ShipmentLine.channel == channel)
+    total_ship_lines = int(ship_q.count() or 0)
+
+    mapped_sq = _mapped_model_lines_sq(db, start=start, end=end, channel=channel, model_code=model_code, version_id=version_id)
+    mapped_lines = int(db.query(func.count(mapped_sq.c.shipment_line_id)).scalar() or 0)
+    shipped_qty_total = _d(db.query(func.coalesce(func.sum(mapped_sq.c.qty), 0)).scalar())
+
+    # group by material
+    items_rows = (
+        db.query(
+            models.ShipmentInventoryDeductionLine.material_id.label("material_id"),
+            models.ShipmentInventoryDeductionLine.material_code.label("material_code"),
+            models.ShipmentInventoryDeductionLine.material_name.label("material_name"),
+            models.ShipmentInventoryDeductionLine.unit_of_measure.label("unit_of_measure"),
+            func.coalesce(func.sum(models.ShipmentInventoryDeductionLine.quantity), 0).label("total_quantity"),
+            func.count(func.distinct(models.ShipmentInventoryDeductionLine.shipment_line_id)).label("line_count"),
+        )
+        .join(mapped_sq, models.ShipmentInventoryDeductionLine.shipment_line_id == mapped_sq.c.shipment_line_id)
+        .group_by(
+            models.ShipmentInventoryDeductionLine.material_id,
+            models.ShipmentInventoryDeductionLine.material_code,
+            models.ShipmentInventoryDeductionLine.material_name,
+            models.ShipmentInventoryDeductionLine.unit_of_measure,
+        )
+        .all()
+    )
+
+    # coverage: distinct shipment_line_id with at least 1 deduction line
+    covered_sq = (
+        db.query(models.ShipmentInventoryDeductionLine.shipment_line_id.label("shipment_line_id"))
+        .join(mapped_sq, models.ShipmentInventoryDeductionLine.shipment_line_id == mapped_sq.c.shipment_line_id)
+        .distinct()
+        .subquery()
+    )
+    lines_with_deductions = int(db.query(func.count(covered_sq.c.shipment_line_id)).scalar() or 0)
+    shipped_qty_covered = _d(
+        db.query(func.coalesce(func.sum(mapped_sq.c.qty), 0))
+        .select_from(mapped_sq)
+        .join(covered_sq, mapped_sq.c.shipment_line_id == covered_sq.c.shipment_line_id)
+        .scalar()
+    )
+
+    items: List[Dict[str, Any]] = []
+    for r in items_rows:
+        items.append(
+            {
+                "material_id": str(r.material_id) if r.material_id else None,
+                "material_code": r.material_code,
+                "material_name": r.material_name,
+                "unit_of_measure": r.unit_of_measure,
+                "total_quantity": _d(r.total_quantity),
+                "line_count": int(r.line_count or 0),
+            }
+        )
+    items.sort(key=lambda x: (str(x.get("material_code") or ""), str(x.get("material_name") or "")))
+
+    return {
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "channel": channel,
+        "model_code": model_code,
+        "version_id": version_id,
+        "total_shipment_lines": total_ship_lines,
+        "mapped_model_lines": mapped_lines,
+        "shipped_qty_total": shipped_qty_total,
+        "lines_with_deductions": lines_with_deductions,
+        "shipped_qty_covered": shipped_qty_covered,
+        "items": items,
+        "note": "物料合计=按发货行汇总的扣库明细（shipment_inventory_deduction_lines）。覆盖率取决于该范围内有无落库扣库明细/计价结果。",
+    }
+
+
+def model_usage_processes_summary(
+    db: Session,
+    *,
+    start: datetime,
+    end: datetime,
+    model_code: str,
+    channel: Optional[str] = None,
+    version_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Aggregate REAL process usage across shipped lines for a model (and optional version),
+    based on latest bom_snapshot.trace.costing.process_lines (when available).
+    Note: 2025 lightweight mode may not persist per-line process details.
+    """
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    start = start.astimezone(timezone.utc)
+    end = end.astimezone(timezone.utc)
+
+    ship_q = db.query(models.ShipmentLine).filter(
+        models.ShipmentLine.completed_at.isnot(None),
+        models.ShipmentLine.completed_at >= start,
+        models.ShipmentLine.completed_at < end,
+        models.ShipmentLine.is_archived.is_(False),
+    )
+    if channel:
+        ship_q = ship_q.filter(models.ShipmentLine.channel == channel)
+    total_ship_lines = int(ship_q.count() or 0)
+
+    mapped_sq = _mapped_model_lines_sq(db, start=start, end=end, channel=channel, model_code=model_code, version_id=version_id)
+    mapped_lines = int(db.query(func.count(mapped_sq.c.shipment_line_id)).scalar() or 0)
+    shipped_qty_total = _d(db.query(func.coalesce(func.sum(mapped_sq.c.qty), 0)).scalar())
+
+    snap_latest = _latest_bom_snapshot_sq(db)
+    rows = (
+        db.query(mapped_sq.c.shipment_line_id, mapped_sq.c.qty, snap_latest.c.trace_json)
+        .join(snap_latest, mapped_sq.c.shipment_line_id == snap_latest.c.shipment_line_id)
+        .all()
+    )
+
+    agg: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+    covered_line_ids: set[str] = set()
+    shipped_qty_covered = Decimal("0")
+
+    for shipment_line_id, qty, trace_json in rows:
+        trace = trace_json if isinstance(trace_json, dict) else {}
+        costing = trace.get("costing") if isinstance(trace.get("costing"), dict) else {}
+        process_lines = costing.get("process_lines")
+        if not isinstance(process_lines, list) or not process_lines:
+            continue
+        sid = str(shipment_line_id)
+        if sid not in covered_line_ids:
+            covered_line_ids.add(sid)
+            shipped_qty_covered += _d(qty)
+        for pl in process_lines:
+            if not isinstance(pl, dict):
+                continue
+            pcode = str(pl.get("process_code") or "").strip()
+            pname = str(pl.get("process_name") or "").strip()
+            team = str(pl.get("team_name") or "").strip()
+            key = (pcode, pname, team)
+            b = agg.setdefault(
+                key,
+                {
+                    "process_code": pcode or None,
+                    "process_name": pname or None,
+                    "team_name": team or None,
+                    "total_minutes": Decimal("0"),
+                    "total_cost": Decimal("0"),
+                    "line_count": 0,
+                    "_lines": set(),
+                },
+            )
+            b["total_minutes"] += _d(pl.get("total_minutes"))
+            b["total_cost"] += _d(pl.get("total_cost"))
+            b["_lines"].add(sid)
+
+    items: List[Dict[str, Any]] = []
+    for b in agg.values():
+        line_set = b.pop("_lines", set())
+        b["line_count"] = len(line_set)
+        items.append(b)
+    items.sort(key=lambda x: _d(x.get("total_cost")), reverse=True)
+
+    return {
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "channel": channel,
+        "model_code": model_code,
+        "version_id": version_id,
+        "total_shipment_lines": total_ship_lines,
+        "mapped_model_lines": mapped_lines,
+        "shipped_qty_total": shipped_qty_total,
+        "lines_with_process_details": len(covered_line_ids),
+        "shipped_qty_covered": shipped_qty_covered,
+        "items": items,
+        "note": "工序合计=按发货行汇总的最新 BOM 快照 trace.costing.process_lines（若存在）。2025 轻量结果通常不含工序明细，覆盖率可能低于成本覆盖率。",
+    }
+

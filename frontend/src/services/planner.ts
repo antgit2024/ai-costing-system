@@ -110,6 +110,8 @@ import type {
   ProfitByModelResponse,
   ModelInsightsSummaryResponse,
   ModelInsightsDetailResponse,
+  ModelUsageMaterialSummaryResponse,
+  ModelUsageProcessSummaryResponse,
   SalesLinesResponse,
   ShipmentProfitLinesResponse,
   AfterSalesImportBatch,
@@ -1787,6 +1789,32 @@ export const fetchModelInsightsDetail = async (params: {
   version_id?: string
 }): Promise<ModelInsightsDetailResponse> => {
   const response = await plannerClient.get('/analytics/models/detail', {
+    params: sanitizeParams(params as Record<string, unknown>),
+  })
+  return response.data
+}
+
+export const fetchModelUsageMaterialsSummary = async (params: {
+  start: string
+  end: string
+  model_code: string
+  channel?: string
+  version_id?: string
+}): Promise<ModelUsageMaterialSummaryResponse> => {
+  const response = await plannerClient.get('/analytics/models/materials-summary', {
+    params: sanitizeParams(params as Record<string, unknown>),
+  })
+  return response.data
+}
+
+export const fetchModelUsageProcessesSummary = async (params: {
+  start: string
+  end: string
+  model_code: string
+  channel?: string
+  version_id?: string
+}): Promise<ModelUsageProcessSummaryResponse> => {
+  const response = await plannerClient.get('/analytics/models/processes-summary', {
     params: sanitizeParams(params as Record<string, unknown>),
   })
   return response.data

@@ -3,11 +3,13 @@ import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { useMemo, useState } from 'react'
 
-import { fetchModelInsightsDetail, fetchModelInsightsSummary } from '@/services/planner'
+import { fetchModelInsightsDetail, fetchModelInsightsSummary, fetchModelUsageMaterialsSummary, fetchModelUsageProcessesSummary } from '@/services/planner'
 import type {
   ModelInsightsDetailResponse,
   ModelInsightsSummaryItem,
   ModelInsightsSummaryResponse,
+  ModelUsageMaterialSummaryResponse,
+  ModelUsageProcessSummaryResponse,
 } from '@/types/planner'
 
 const hashString = (s: string) => {
@@ -51,6 +53,9 @@ const ProfitInsightsPage = () => {
   const [loadingDetail, setLoadingDetail] = useState(false)
   const [summary, setSummary] = useState<ModelInsightsSummaryResponse | null>(null)
   const [detail, setDetail] = useState<ModelInsightsDetailResponse | null>(null)
+  const [usageMaterials, setUsageMaterials] = useState<ModelUsageMaterialSummaryResponse | null>(null)
+  const [usageProcesses, setUsageProcesses] = useState<ModelUsageProcessSummaryResponse | null>(null)
+  const [loadingUsage, setLoadingUsage] = useState(false)
   const [selectedModelCode, setSelectedModelCode] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -105,6 +110,29 @@ const ProfitInsightsPage = () => {
         version_id: versionId || undefined,
       })
       setDetail(resp)
+      setLoadingUsage(true)
+      try {
+        const [mats, procs] = await Promise.all([
+          fetchModelUsageMaterialsSummary({
+            start,
+            end,
+            channel: v.channel?.trim() || undefined,
+            model_code: modelCode,
+            version_id: versionId || undefined,
+          }),
+          fetchModelUsageProcessesSummary({
+            start,
+            end,
+            channel: v.channel?.trim() || undefined,
+            model_code: modelCode,
+            version_id: versionId || undefined,
+          }),
+        ])
+        setUsageMaterials(mats)
+        setUsageProcesses(procs)
+      } finally {
+        setLoadingUsage(false)
+      }
     } catch (e: any) {
       setError(String(e?.response?.data?.detail ?? e?.message ?? e))
     } finally {
@@ -187,6 +215,29 @@ const ProfitInsightsPage = () => {
       { title: '单位', dataIndex: 'unit_of_measure', width: 90 },
       { title: '扣库数量', dataIndex: 'quantity', width: 90 },
       { title: '来源(展开)', dataIndex: 'sources', render: (v) => (v == null ? '-' : String(v)) },
+    ],
+    [],
+  )
+
+  const usageMaterialColumns = useMemo<ColumnsType<any>>(
+    () => [
+      { title: '物料编码', dataIndex: 'material_code', width: 140, ellipsis: true, render: (v) => v ?? '-' },
+      { title: '物料名称', dataIndex: 'material_name', width: 240, ellipsis: true, render: (v) => v ?? '-' },
+      { title: '单位', dataIndex: 'unit_of_measure', width: 80, render: (v) => v ?? '-' },
+      { title: '合计用量', dataIndex: 'total_quantity', width: 120, align: 'right', render: (v) => formatQty(v as any) },
+      { title: '覆盖行数', dataIndex: 'line_count', width: 90, align: 'right', render: (v) => String(v ?? 0) },
+    ],
+    [],
+  )
+
+  const usageProcessColumns = useMemo<ColumnsType<any>>(
+    () => [
+      { title: '工序编码', dataIndex: 'process_code', width: 140, ellipsis: true, render: (v) => v ?? '-' },
+      { title: '工序名称', dataIndex: 'process_name', width: 240, ellipsis: true, render: (v) => v ?? '-' },
+      { title: '班组', dataIndex: 'team_name', width: 120, ellipsis: true, render: (v) => v ?? '-' },
+      { title: '合计分钟', dataIndex: 'total_minutes', width: 110, align: 'right', render: (v) => formatQty(v as any) },
+      { title: '合计成本', dataIndex: 'total_cost', width: 120, align: 'right', render: (v) => formatMoney(v as any) },
+      { title: '覆盖行数', dataIndex: 'line_count', width: 90, align: 'right', render: (v) => String(v ?? 0) },
     ],
     [],
   )
@@ -462,6 +513,95 @@ const ProfitInsightsPage = () => {
                       String(r.version_id || '') === String(detail.selected_version_id || '') ? 'ant-table-row-selected' : ''
                     }
                     scroll={{ x: 1250 }}
+                  />
+                </Card>
+
+                <Card size="small" title="发货合计（真实明细汇总）" style={{ marginBottom: 12 }}>
+                  <Alert
+                    type="info"
+                    showIcon
+                    style={{ marginBottom: 10 }}
+                    message="口径"
+                    description={
+                      <div>
+                        <div>物料合计：按发货行的“扣库明细（落库）”汇总（更贴近对账/损耗口径）。</div>
+                        <div>工序合计：按发货行最新 BOM 快照 trace.costing.process_lines 汇总（2025 轻量结果可能缺工序明细）。</div>
+                      </div>
+                    }
+                  />
+
+                  <Tabs
+                    defaultActiveKey="materials"
+                    items={[
+                      {
+                        key: 'materials',
+                        label: '物料合计',
+                        children: (
+                          <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                            <Alert
+                              type="warning"
+                              showIcon
+                              message="覆盖率（物料明细）"
+                              description={
+                                <div>
+                                  <div>
+                                    归因发货行：{usageMaterials?.mapped_model_lines ?? '-'}；其中有扣库明细：{usageMaterials?.lines_with_deductions ?? '-'}
+                                  </div>
+                                  <div>
+                                    归因发货数量：{formatQty(usageMaterials?.shipped_qty_total ?? null)}；有扣库明细的发货数量：
+                                    {formatQty(usageMaterials?.shipped_qty_covered ?? null)}
+                                  </div>
+                                </div>
+                              }
+                            />
+                            <Table
+                              size="small"
+                              loading={loadingUsage}
+                              pagination={{ pageSize: 20, showSizeChanger: true }}
+                              rowKey={(r: any) => String(r.material_code ?? r.material_id ?? '')}
+                              dataSource={usageMaterials?.items ?? []}
+                              columns={usageMaterialColumns}
+                              scroll={{ x: 760 }}
+                              locale={{ emptyText: '暂无物料扣库明细（可能覆盖率较低或未落库扣库明细）' }}
+                            />
+                          </Space>
+                        ),
+                      },
+                      {
+                        key: 'processes',
+                        label: '工序合计',
+                        children: (
+                          <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                            <Alert
+                              type="warning"
+                              showIcon
+                              message="覆盖率（工序明细）"
+                              description={
+                                <div>
+                                  <div>
+                                    归因发货行：{usageProcesses?.mapped_model_lines ?? '-'}；其中有工序明细：{usageProcesses?.lines_with_process_details ?? '-'}
+                                  </div>
+                                  <div>
+                                    归因发货数量：{formatQty(usageProcesses?.shipped_qty_total ?? null)}；有工序明细的发货数量：
+                                    {formatQty(usageProcesses?.shipped_qty_covered ?? null)}
+                                  </div>
+                                </div>
+                              }
+                            />
+                            <Table
+                              size="small"
+                              loading={loadingUsage}
+                              pagination={{ pageSize: 20, showSizeChanger: true }}
+                              rowKey={(r: any, idx) => String(r.process_code ?? '') + '-' + String(r.team_name ?? '') + '-' + String(idx)}
+                              dataSource={usageProcesses?.items ?? []}
+                              columns={usageProcessColumns}
+                              scroll={{ x: 860 }}
+                              locale={{ emptyText: '暂无工序明细（可能尚未落 BOM 快照/或 2025 轻量结果缺工序明细）' }}
+                            />
+                          </Space>
+                        ),
+                      },
+                    ]}
                   />
                 </Card>
 

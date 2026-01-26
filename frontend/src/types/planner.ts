@@ -1748,6 +1748,64 @@ export interface ModelInsightsDetailResponse {
   note?: string | null
 }
 
+// -----------------------------
+// Model usage aggregates (real shipped lines)
+// -----------------------------
+
+export interface ModelUsageMaterialItem {
+  material_id?: string | null
+  material_code?: string | null
+  material_name?: string | null
+  unit_of_measure?: string | null
+  total_quantity: string
+  line_count: number
+}
+
+export interface ModelUsageMaterialSummaryResponse {
+  start: string
+  end: string
+  channel?: string | null
+  model_code: string
+  version_id?: string | null
+
+  total_shipment_lines: number
+  mapped_model_lines: number
+  shipped_qty_total: string
+
+  lines_with_deductions: number
+  shipped_qty_covered: string
+
+  items: ModelUsageMaterialItem[]
+  note?: string | null
+}
+
+export interface ModelUsageProcessItem {
+  process_code?: string | null
+  process_name?: string | null
+  team_name?: string | null
+  total_minutes: string
+  total_cost: string
+  line_count: number
+}
+
+export interface ModelUsageProcessSummaryResponse {
+  start: string
+  end: string
+  channel?: string | null
+  model_code: string
+  version_id?: string | null
+
+  total_shipment_lines: number
+  mapped_model_lines: number
+  shipped_qty_total: string
+
+  lines_with_process_details: number
+  shipped_qty_covered: string
+
+  items: ModelUsageProcessItem[]
+  note?: string | null
+}
+
 export interface ReturnsRateByChannelItem {
   period: string
   channel?: string | null

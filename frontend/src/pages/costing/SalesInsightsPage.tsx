@@ -87,6 +87,7 @@ const SalesInsightsPage = () => {
         },
       },
       { title: '原始单号', dataIndex: 'order_no', width: 160, ellipsis: true, render: (v) => String(v ?? '-') },
+      { title: '商品链接ID', dataIndex: 'product_link_id', width: 180, ellipsis: true, render: (v) => String(v ?? '-') },
       { title: '标记', dataIndex: 'mark', width: 120, ellipsis: true, render: (v) => String(v ?? '-') },
       { title: '备注', dataIndex: 'note', width: 220, ellipsis: true, render: (v) => String(v ?? '-') },
     ],

@@ -78,6 +78,46 @@ const safeString = (v: unknown): string => {
   return String(v)
 }
 
+const formatShipmentBatchStatus = (statusRaw: unknown): { label: string; color?: string } => {
+  const s0 = safeString(statusRaw).trim()
+  const s = s0.toLowerCase()
+  if (!s) return { label: '未知', color: 'default' }
+  if (s === 'success') return { label: '成功', color: 'green' }
+  if (s === 'processing') return { label: '处理中', color: 'blue' }
+  if (s === 'failed') return { label: '失败', color: 'red' }
+  if (s === 'pending' || s === 'queued') return { label: '排队中', color: 'default' }
+  return { label: s0, color: 'default' }
+}
+
+const formatExceptionReason = (reasonRaw: unknown): { label: string; tooltip?: string } => {
+  const r0 = safeString(reasonRaw).trim()
+  const r = r0.toUpperCase()
+  if (!r) return { label: '未知' }
+  const map: Record<string, string> = {
+    SKU_NOT_BOUND: 'SKU 未绑定标准版本',
+    SPEC_EMPTY: '缺规格',
+    SPEC_PARSE_FAILED: '规格解析失败',
+    BOM_GENERATION_FAILED: 'BOM 生成失败',
+    MODEL_VERSION_NOT_FOUND: '模型版本不存在',
+    MODEL_VERSION_NOT_PUBLISHED: '模型版本未发布',
+    MISSING_SKU_CODE: '缺条码',
+    MISSING_SKU: '缺条码',
+    UNKNOWN: '未知异常',
+  }
+  const label = map[r] ?? r0
+  return { label: map[r] ? `${label}（${r}）` : label, tooltip: r0 }
+}
+
+const formatVersionStatus = (statusRaw: unknown): string => {
+  const s0 = safeString(statusRaw).trim()
+  const s = s0.toLowerCase()
+  if (!s) return ''
+  if (s === 'published') return '已发布'
+  if (s === 'draft') return '草稿'
+  if (s === 'deprecated') return '已废弃'
+  return s0
+}
+
 const toNumberOrNull = (v: unknown): number | null => {
   if (v === null || v === undefined) return null
   if (typeof v === 'number' && Number.isFinite(v)) return v
@@ -214,7 +254,9 @@ const HandoffRowExpanded = (props: {
             </Descriptions.Item>
             <Descriptions.Item label="版本">
               {props.boundVersionLabel ?? skuMaster?.bound_version_label ?? '-'}{' '}
-              <span style={{ color: '#999' }}>{props.boundVersionStatus ?? skuMaster?.bound_version_status ?? ''}</span>
+              <span style={{ color: '#999' }}>
+                {formatVersionStatus(props.boundVersionStatus ?? skuMaster?.bound_version_status ?? '')}
+              </span>
             </Descriptions.Item>
             <Descriptions.Item label="预解析 spec_text">{preparseText ? <Text code>{preparseText}</Text> : '-'}</Descriptions.Item>
             <Descriptions.Item label="预解析 dimensions（已落库）">
@@ -317,7 +359,8 @@ const ShipmentMonitorPage = () => {
   const [recomputingSnapshotId, setRecomputingSnapshotId] = useState<string | null>(null)
 
   // Handoff view (SKU master preparse/binding ↔ shipment rows in current batch)
-  const [handoffLimit, setHandoffLimit] = useState(500)
+  const [handoffMode, setHandoffMode] = useState<'exceptions' | 'snapshots' | 'both'>('exceptions')
+  const [handoffLimit, setHandoffLimit] = useState(200)
   const [handoffExceptionResolved, setHandoffExceptionResolved] = useState<'unresolved' | 'resolved' | 'all'>('unresolved')
   const [handoffExpandedRowKeys, setHandoffExpandedRowKeys] = useState<Array<string>>([])
 
@@ -405,7 +448,7 @@ const ShipmentMonitorPage = () => {
               : false,
         limit: Math.max(Math.min(handoffLimit, 1000), 1),
       }),
-    enabled: activeTab === 'handoff' && !!selectedBatchId,
+    enabled: activeTab === 'handoff' && !!selectedBatchId && (handoffMode === 'exceptions' || handoffMode === 'both'),
   })
 
   const handoffSnapshotsQuery = useQuery({
@@ -415,7 +458,7 @@ const ShipmentMonitorPage = () => {
         batch_id: selectedBatchId || undefined,
         limit: Math.max(Math.min(handoffLimit, 1000), 1),
       }),
-    enabled: activeTab === 'handoff' && !!selectedBatchId,
+    enabled: activeTab === 'handoff' && !!selectedBatchId && (handoffMode === 'snapshots' || handoffMode === 'both'),
   })
 
   type HandoffRow = {
@@ -435,8 +478,8 @@ const ShipmentMonitorPage = () => {
   }
 
   const handoffRows = useMemo<HandoffRow[]>(() => {
-    const snaps = handoffSnapshotsQuery.data ?? []
-    const excs = handoffExceptionsQuery.data ?? []
+    const snaps = handoffMode === 'snapshots' || handoffMode === 'both' ? handoffSnapshotsQuery.data ?? [] : []
+    const excs = handoffMode === 'exceptions' || handoffMode === 'both' ? handoffExceptionsQuery.data ?? [] : []
     const byLineId = new Map<string, HandoffRow>()
 
     for (const s of snaps) {
@@ -495,7 +538,7 @@ const ShipmentMonitorPage = () => {
       return a.key.localeCompare(b.key)
     })
     return rows
-  }, [handoffExceptionsQuery.data, handoffLimit, handoffSnapshotsQuery.data])
+  }, [handoffExceptionsQuery.data, handoffMode, handoffSnapshotsQuery.data])
 
   // When user changes current batch, keep snapshots form in sync (default: filter by current batch).
   const prevSelectedBatchIdRef = useRef<string | null>(null)
@@ -549,9 +592,8 @@ const ShipmentMonitorPage = () => {
       dataIndex: 'status',
       width: 120,
       render: (v) => {
-        const s = safeString(v) || 'unknown'
-        const color = s === 'success' ? 'green' : s === 'processing' ? 'blue' : 'default'
-        return <Tag color={color}>{s}</Tag>
+        const x = formatShipmentBatchStatus(v)
+        return <Tag color={x.color}>{x.label}</Tag>
       },
     },
     {
@@ -619,7 +661,10 @@ const ShipmentMonitorPage = () => {
       title: '原因',
       dataIndex: 'reason',
       width: 180,
-      render: (v) => safeString(v) || '-',
+      render: (v) => {
+        const x = formatExceptionReason(v)
+        return <span title={x.tooltip}>{x.label || '-'}</span>
+      },
     },
     {
       title: '消息',
@@ -1193,8 +1238,18 @@ const ShipmentMonitorPage = () => {
                       extra={
                         <Space>
                           <Segmented
+                            value={handoffMode}
+                            onChange={(v) => setHandoffMode(v as any)}
+                            options={[
+                              { label: '仅异常（交接）', value: 'exceptions' },
+                              { label: '仅成功（快照）', value: 'snapshots' },
+                              { label: '合并', value: 'both' },
+                            ]}
+                          />
+                          <Segmented
                             value={handoffExceptionResolved}
                             onChange={(v) => setHandoffExceptionResolved(v as any)}
+                            disabled={handoffMode === 'snapshots'}
                             options={[
                               { label: '未解决异常', value: 'unresolved' },
                               { label: '已解决异常', value: 'resolved' },
@@ -1205,12 +1260,12 @@ const ShipmentMonitorPage = () => {
                             style={{ width: 120 }}
                             placeholder="limit"
                             value={String(handoffLimit)}
-                            onChange={(e) => setHandoffLimit(Number(e.target.value) || 500)}
+                            onChange={(e) => setHandoffLimit(Number(e.target.value) || 200)}
                           />
                           <Button
                             onClick={() => {
-                              handoffExceptionsQuery.refetch()
-                              handoffSnapshotsQuery.refetch()
+                              if (handoffMode === 'exceptions' || handoffMode === 'both') handoffExceptionsQuery.refetch()
+                              if (handoffMode === 'snapshots' || handoffMode === 'both') handoffSnapshotsQuery.refetch()
                             }}
                             disabled={!selectedBatchId}
                           >
@@ -1235,18 +1290,22 @@ const ShipmentMonitorPage = () => {
                             message={`当前批次：${selectedBatchId}${selectedBatch?.file_name ? `（${String(selectedBatch.file_name)}）` : ''}`}
                             description={
                               <Text type="secondary">
-                                说明：点击“展开”可看到两列对账——左侧为 SKU 主档预解析/绑定，右侧为本批次交易规格解析。建议先处理
-                                <Text code style={{ margin: '0 4px' }}>
-                                  SKU_NOT_BOUND
-                                </Text>
-                                再“重试本批未解决异常”生成更多快照。
+                                说明：本 Tab 是“本批次交接点”的对账视图，支持仅看异常/仅看成功/合并。点击“展开”可看到两列对账——左侧为 SKU
+                                主档预解析/绑定，右侧为本批次交易规格解析。常见异常如“SKU 未绑定标准版本（SKU_NOT_BOUND）”，可先去绑定再重试生成快照。
                               </Text>
                             }
                           />
                           <Table
                             rowKey="key"
                             size="small"
-                            loading={handoffExceptionsQuery.isFetching || handoffSnapshotsQuery.isFetching}
+                            loading={
+                              ((handoffMode === 'exceptions' || handoffMode === 'both')
+                                ? handoffExceptionsQuery.isFetching
+                                : false) ||
+                              ((handoffMode === 'snapshots' || handoffMode === 'both')
+                                ? handoffSnapshotsQuery.isFetching
+                                : false)
+                            }
                             dataSource={handoffRows}
                             expandable={{
                               expandedRowKeys: handoffExpandedRowKeys,
@@ -1281,21 +1340,33 @@ const ShipmentMonitorPage = () => {
                               {
                                 title: '交易规格',
                                 dataIndex: 'spec_text',
-                                render: (v) => (
-                                  <div style={{ whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.2 }}>
-                                    {safeString(v) || '-'}
-                                  </div>
-                                ),
+                                render: (v) => {
+                                  const s = safeString(v)
+                                  if (!s) return '-'
+                                  return (
+                                    <Text ellipsis={{ tooltip: s }} style={{ maxWidth: 520, display: 'inline-block' }}>
+                                      {s}
+                                    </Text>
+                                  )
+                                },
                               },
                               {
                                 title: '状态',
                                 key: 'status',
-                                width: 120,
+                                width: 220,
                                 render: (_v, r: any) => {
-                                  if (r?.snapshot) return <Tag color="green">已生成快照</Tag>
-                                  const reason = safeString(r?.exception?.reason || r?.reason)
-                                  if (reason) return <Tag color="orange">{reason}</Tag>
-                                  return <Tag>未知</Tag>
+                                  const tags: any[] = []
+                                  if (r?.snapshot) tags.push(<Tag key="snap" color="green">成功：已生成快照</Tag>)
+                                  const rawReason = safeString(r?.exception?.reason || r?.reason).trim()
+                                  if (rawReason) {
+                                    const x = formatExceptionReason(rawReason)
+                                    tags.push(
+                                      <Tag key="exc" color="orange">
+                                        <span title={x.tooltip}>{`异常：${x.label}`}</span>
+                                      </Tag>,
+                                    )
+                                  }
+                                  return tags.length ? <Space size={6}>{tags}</Space> : <Tag>未知</Tag>
                                 },
                               },
                               {
@@ -1303,7 +1374,7 @@ const ShipmentMonitorPage = () => {
                                 key: 'actions',
                                 width: 180,
                                 render: (_v, r: any) => {
-                                  const reason = safeString(r?.exception?.reason || r?.reason)
+                                  const reason = safeString(r?.exception?.reason || r?.reason).trim()
                                   const sku = safeString(r?.sku_code).trim()
                                   return (
                                     <Space size={8}>

@@ -310,7 +310,7 @@ const HandoffRowExpanded = (props: {
           </Descriptions>
           <div style={{ marginTop: 10 }}>
             <Text type="secondary">
-              说明：左侧是“前置缓存/绑定”，右侧是“本次发货导入的交易规格”；两者不一致时，以发货交易规格为准并可走异常队列重试。
+              说明：左侧是“前置缓存/绑定”，右侧是“本次发货导入的交易规格”；两者不一致时，以发货交易规格为准，并可在“异常处理”中重试推进。
             </Text>
           </div>
         </Card>
@@ -325,7 +325,7 @@ const ShipmentMonitorPage = () => {
   const [batchPage, setBatchPage] = useState(1)
   const [batchPageSize, setBatchPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<'batches' | 'handoff' | 'exceptions' | 'snapshots' | 'parse-queue'>('batches')
+  const [activeTab, setActiveTab] = useState<'batches' | 'handoff' | 'exceptions' | 'snapshots'>('batches')
 
   const [uploading, setUploading] = useState(false)
   const [uploadFile, setUploadFile] = useState<File | null>(null)
@@ -334,6 +334,7 @@ const ShipmentMonitorPage = () => {
   )
   const [uploadRequestedBy, setUploadRequestedBy] = useState<string>('planner_user')
   const [previewData, setPreviewData] = useState<any>(null)
+  const [precheckDrawerOpen, setPrecheckDrawerOpen] = useState(false)
   const [queueDrawerOpen, setQueueDrawerOpen] = useState(false)
   const [activeQueueRow, setActiveQueueRow] = useState<any>(null)
   const [queueBomPreview, setQueueBomPreview] = useState<BomGenerateResponse | null>(null)
@@ -925,7 +926,7 @@ const ShipmentMonitorPage = () => {
               文件：<Text code>{fileName || '-'}</Text>
             </div>
             <div style={{ marginBottom: 8 }}>
-              提示：大文件执行期间你可以关闭窗口继续等待；完成后可在“发货批次列表”看到新批次并自动定位。
+              提示：大文件执行期间你可以关闭窗口继续等待；完成后可在“批次列表（上传文件）”看到新批次并自动定位。
             </div>
             <div>
               已等待：<Text code>0s</Text>
@@ -961,7 +962,7 @@ const ShipmentMonitorPage = () => {
                 文件：<Text code>{fileName || '-'}</Text>
               </div>
               <div style={{ marginBottom: 8 }}>
-                提示：大文件执行期间你可以关闭窗口继续等待；完成后可在“发货批次列表”看到新批次并自动定位。
+                提示：大文件执行期间你可以关闭窗口继续等待；完成后可在“批次列表（上传文件）”看到新批次并自动定位。
               </div>
               <div>
                 已等待：<Text code>{waited}s</Text>
@@ -1030,7 +1031,7 @@ const ShipmentMonitorPage = () => {
                 大文件执行可能需要较长时间。前端等待超时并不一定代表后端失败。
               </div>
               <div style={{ marginBottom: 8 }}>
-                建议：先点右上角“刷新”查看“发货批次列表”；若出现新批次，选择后即可查看异常与快照。若未出现，稍等 30–60 秒再刷新。
+                建议：先点右上角“刷新”查看“批次列表（上传文件）”；若出现新批次，选择后即可查看异常与快照。若未出现，稍等 30–60 秒再刷新。
               </div>
               <div>
                 原始错误：<Text type="secondary">{err?.message ?? 'timeout'}</Text>
@@ -1051,7 +1052,7 @@ const ShipmentMonitorPage = () => {
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
         <div>
           <Title level={3} style={{ marginBottom: 4 }}>
-            发货批次 / 异常队列 / BOM 快照（只读）
+            批次列表 / 交接对账 / 异常处理 / 快照结果
           </Title>
           <Text type="secondary">
             入口用于对账与排查：先选批次，再看异常与快照；也可在快照 Tab 按 SKU/单号/SpecHash 查询。
@@ -1089,8 +1090,8 @@ const ShipmentMonitorPage = () => {
             </Descriptions>
             <div style={{ marginTop: 10 }}>
               <Space>
-                <Button onClick={() => setActiveTab('exceptions')}>看异常</Button>
-                <Button onClick={() => setActiveTab('snapshots')}>看快照</Button>
+                <Button onClick={() => setActiveTab('exceptions')}>去异常处理</Button>
+                <Button onClick={() => setActiveTab('snapshots')}>去快照结果</Button>
               </Space>
             </div>
           </Card>
@@ -1153,6 +1154,13 @@ const ShipmentMonitorPage = () => {
                 >
                   执行
                 </Button>
+                <Button
+                  onClick={() => setPrecheckDrawerOpen(true)}
+                  disabled={!previewData}
+                  block
+                >
+                  执行前抽查（预览样本）
+                </Button>
               </Space>
             </Col>
           </Row>
@@ -1188,7 +1196,7 @@ const ShipmentMonitorPage = () => {
           items={[
             {
               key: 'batches',
-              label: '发货批次列表',
+              label: '批次列表（上传文件）',
               children: (
                 <Row gutter={[16, 16]}>
                   <Col span={24}>
@@ -1197,7 +1205,7 @@ const ShipmentMonitorPage = () => {
                         type="info"
                         showIcon
                         message="提示"
-                        description="点击任意批次行即可设置为“当前批次”。异常队列 / BOM快照 默认会用当前批次作为筛选条件。"
+                        description="点击任意批次行即可设置为“当前批次”。交接对账 / 异常处理 / 快照结果 默认会围绕当前批次展示。"
                         style={{ marginBottom: 12 }}
                       />
                       <Table
@@ -1229,12 +1237,12 @@ const ShipmentMonitorPage = () => {
             },
             {
               key: 'handoff',
-              label: '交接视图（主档 ↔ 发货）',
+              label: '交接对账（本批次）',
               children: (
                 <Row gutter={[16, 16]}>
                   <Col span={24}>
                     <Card
-                      title="交接视图（前置主档预解析/绑定 ↔ 本批次交易规格/快照/异常）"
+                      title="交接对账（前置主档绑定/预解析 ↔ 本批次交易规格/成功快照/异常）"
                       extra={
                         <Space>
                           <Segmented
@@ -1278,8 +1286,8 @@ const ShipmentMonitorPage = () => {
                         <Alert
                           type="info"
                           showIcon
-                          message="请先在“发货批次列表”选择一个批次"
-                          description="交接视图默认围绕当前 batch_id，把“快照（已成功）”与“异常（未绑定/缺规格/失败等）”合并展示，便于对账与推动下一步动作。"
+                          message="请先在“批次列表（上传文件）”选择一个批次"
+                          description="交接对账默认围绕当前 batch_id，把“成功快照”与“异常（未绑定/缺规格/失败等）”合并展示，便于对账与推动下一步动作。"
                         />
                       ) : (
                         <>
@@ -1413,12 +1421,12 @@ const ShipmentMonitorPage = () => {
             },
             {
               key: 'exceptions',
-              label: '异常队列',
+              label: '异常处理（本批次）',
               children: (
                 <Row gutter={[16, 16]}>
                   <Col span={24}>
                     <Card
-                      title="异常队列（只读）"
+                      title="异常处理（可重试推进）"
                       extra={
                         <Space>
                           <Segmented
@@ -1496,81 +1504,13 @@ const ShipmentMonitorPage = () => {
               ),
             },
             {
-              key: 'parse-queue',
-              label: '解析队列（预览可执行）',
-              children: (
-                <Row gutter={[16, 16]}>
-                  <Col span={24}>
-                    <Card title="解析队列（来自“预览”结果，仅用于执行前抽查）" size="small">
-                      {!previewData ? (
-                        <Alert
-                          type="info"
-                          showIcon
-                          message="请先在上方上传区点击“预览”"
-                          description="本 Tab 展示的是“本次上传文件的预览临时结果（ready_items）”，用于执行前抽查几行并预演 BOM；历史/本批次结果请用“交接视图/异常队列/快照”。"
-                        />
-                      ) : (
-                        <>
-                          <Alert
-                            type="info"
-                            showIcon
-                            style={{ marginBottom: 12 }}
-                            message={`可执行记录：${previewData.ready_rows}/${previewData.total_rows}（点击行可预览BOM）`}
-                          />
-                          <Table
-                            rowKey={(r) => safeString((r as any).row_index) + '-' + safeString((r as any).sku_code)}
-                            size="small"
-                            dataSource={(previewData.ready_items ?? []) as any[]}
-                            pagination={{ pageSize: 20 }}
-                            columns={[
-                              { title: '行号', dataIndex: 'row_index', width: 80 },
-                              { title: '发货单号', dataIndex: 'shipment_no', width: 160, ellipsis: true },
-                              { title: 'SKU', dataIndex: 'sku_code', width: 160, ellipsis: true },
-                              {
-                                title: '交易规格',
-                                dataIndex: 'spec_text',
-                                render: (v) => (
-                                  <div style={{ whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.2 }}>
-                                    {safeString(v) || '-'}
-                                  </div>
-                                ),
-                              },
-                              { title: 'qty', dataIndex: 'qty', width: 90 },
-                              {
-                                title: '模型',
-                                dataIndex: 'bound_model_code',
-                                width: 220,
-                                render: (_v, r) =>
-                                  safeString((r as any).bound_model_code) ? (
-                                    <Space size={6}>
-                                      <Tag color="blue">{safeString((r as any).bound_model_code)}</Tag>
-                                      <span style={{ color: '#666' }}>{safeString((r as any).bound_model_name)}</span>
-                                    </Space>
-                                  ) : (
-                                    '-'
-                                  ),
-                              },
-                              { title: '标准版本', dataIndex: 'bound_version_label', width: 180, ellipsis: true },
-                            ]}
-                            onRow={(record) => ({
-                              onClick: () => handleQueuePreviewBom(record),
-                            })}
-                          />
-                        </>
-                      )}
-                    </Card>
-                  </Col>
-                </Row>
-              ),
-            },
-            {
               key: 'snapshots',
-              label: 'BOM 快照查询',
+              label: '快照结果',
               children: (
                 <Row gutter={[16, 16]}>
                   <Col span={24}>
                     <Card
-                      title="BOM 快照查询（只读）"
+                      title="快照结果（默认本批次，可切全局检索）"
                       extra={
                         <Space>
                           <Segmented
@@ -1670,7 +1610,75 @@ const ShipmentMonitorPage = () => {
       </div>
 
       <Drawer
-        title="解析队列：BOM预览（扣库存清单）"
+        title="执行前抽查（预览样本）"
+        open={precheckDrawerOpen}
+        onClose={() => setPrecheckDrawerOpen(false)}
+        width={1100}
+      >
+        {!previewData ? (
+          <Alert
+            type="info"
+            showIcon
+            message="请先在上方上传区点击“预览”"
+            description="这里展示的是“本次上传文件的预览临时结果（ready_items）”，用于执行前抽查几行并预演 BOM；执行后的结果请用“交接对账/异常处理/快照结果”。"
+          />
+        ) : (
+          <>
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message={`可执行记录：${previewData.ready_rows}/${previewData.total_rows}（点击行可预览BOM）`}
+            />
+            <Table
+              rowKey={(r) => safeString((r as any).row_index) + '-' + safeString((r as any).sku_code)}
+              size="small"
+              dataSource={(previewData.ready_items ?? []) as any[]}
+              pagination={{ pageSize: 20 }}
+              columns={[
+                { title: '行号', dataIndex: 'row_index', width: 80 },
+                { title: '发货单号', dataIndex: 'shipment_no', width: 160, ellipsis: true },
+                { title: 'SKU', dataIndex: 'sku_code', width: 160, ellipsis: true },
+                {
+                  title: '交易规格',
+                  dataIndex: 'spec_text',
+                  render: (v) => {
+                    const s = safeString(v)
+                    if (!s) return '-'
+                    return (
+                      <Text ellipsis={{ tooltip: s }} style={{ maxWidth: 520, display: 'inline-block' }}>
+                        {s}
+                      </Text>
+                    )
+                  },
+                },
+                { title: 'qty', dataIndex: 'qty', width: 90 },
+                {
+                  title: '模型',
+                  dataIndex: 'bound_model_code',
+                  width: 220,
+                  render: (_v, r) =>
+                    safeString((r as any).bound_model_code) ? (
+                      <Space size={6}>
+                        <Tag color="blue">{safeString((r as any).bound_model_code)}</Tag>
+                        <span style={{ color: '#666' }}>{safeString((r as any).bound_model_name)}</span>
+                      </Space>
+                    ) : (
+                      '-'
+                    ),
+                },
+                { title: '标准版本', dataIndex: 'bound_version_label', width: 180, ellipsis: true },
+              ]}
+              onRow={(record) => ({
+                onClick: () => handleQueuePreviewBom(record),
+              })}
+            />
+          </>
+        )}
+      </Drawer>
+
+      <Drawer
+        title="抽查：BOM预览（扣库存清单）"
         open={queueDrawerOpen}
         onClose={() => {
           setQueueDrawerOpen(false)
@@ -1855,12 +1863,12 @@ const ShipmentMonitorPage = () => {
             )}
           </Space>
         ) : (
-          <Alert type="info" showIcon message="请选择一条解析队列记录" />
+          <Alert type="info" showIcon message="请选择一条抽查记录" />
         )}
       </Drawer>
 
       <Drawer
-        title="BOM 快照详情（只读）"
+        title="快照详情（只读）"
         open={snapshotDrawerOpen}
         onClose={() => {
           setSnapshotDrawerOpen(false)

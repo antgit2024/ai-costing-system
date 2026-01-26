@@ -1613,8 +1613,15 @@ export const fetchShipmentImportBatches = async (
 }
 
 // Large XLSX uploads/imports can easily exceed the default axios timeout (20s).
-// Give shipments import endpoints a longer timeout (minutes) to avoid false-negative UI errors.
-const SHIPMENTS_UPLOAD_TIMEOUT_MS = 5 * 60 * 1000
+// Give shipments import endpoints a longer timeout to avoid false-negative UI errors.
+// Note: execute may take much longer than preview (it writes lines + generates BOM snapshots).
+const SHIPMENTS_PREVIEW_TIMEOUT_MS = 5 * 60 * 1000
+const SHIPMENTS_EXECUTE_TIMEOUT_MS = 30 * 60 * 1000
+
+export const fetchShipmentImportBatch = async (batchId: string): Promise<ShipmentImportBatch> => {
+  const resp = await plannerClient.get(`/shipments/import-batches/${batchId}`)
+  return resp.data
+}
 
 export const importShipmentsXlsx = async (params: {
   file: File
@@ -1627,7 +1634,7 @@ export const importShipmentsXlsx = async (params: {
   if (params.requested_by) formData.append('requested_by', params.requested_by)
   const response = await plannerClient.post('/shipments/import', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
-    timeout: SHIPMENTS_UPLOAD_TIMEOUT_MS,
+    timeout: SHIPMENTS_EXECUTE_TIMEOUT_MS,
   })
   return response.data
 }
@@ -1655,19 +1662,23 @@ export const previewShipmentsXlsx = async (params: {
   if (params.requested_by) formData.append('requested_by', params.requested_by)
   const response = await plannerClient.post('/shipments/import/preview', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
-    timeout: SHIPMENTS_UPLOAD_TIMEOUT_MS,
+    timeout: SHIPMENTS_PREVIEW_TIMEOUT_MS,
   })
   return response.data
 }
 
-export const executeShipmentsFromPreview = async (payload: {
+export const executeShipmentsFromPreview = async (
+  payload: {
   preview_id: string
   file_name?: string
   export_date?: string
   requested_by?: string
-}): Promise<ShipmentImportBatch> => {
+  },
+  opts: { signal?: AbortSignal; timeoutMs?: number } = {},
+): Promise<ShipmentImportBatch> => {
   const response = await plannerClient.post('/shipments/import/execute', payload, {
-    timeout: SHIPMENTS_UPLOAD_TIMEOUT_MS,
+    timeout: opts.timeoutMs ?? SHIPMENTS_EXECUTE_TIMEOUT_MS,
+    signal: opts.signal,
   })
   return response.data
 }

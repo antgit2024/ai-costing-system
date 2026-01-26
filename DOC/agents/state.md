@@ -26,8 +26,10 @@
     - `frontend/src/pages/costing/ShipmentMonitorPage.tsx`
       - 上传前：展示文件大小提示（大文件更容易触发 413）。
       - 失败时：对 413 弹窗给出可执行动作（拆分文件 / 运维放开 `client_max_body_size`，并覆盖 `/api/planner/shipments/import/preview` 与 `/api/planner/shipments/import`）。
+      - 执行长耗时：提供“心跳弹窗（已等待xx秒）+ 可取消执行 + 后台完成后自动定位批次”的 UX，避免误以为卡死。
     - `frontend/src/services/planner.ts`
       - 发货预览/执行/导入使用更长超时（5 分钟），避免大文件导入在前端 20s 超时误报失败。
+      - `execute/import` 超时进一步放宽（默认 30 分钟）；即便浏览器超时/断开，也可通过批次列表按 `file_hash` 自动定位确认是否已落库。
   - 下一步（需要运维配合，前端无法绕过）：
     - 在网关/Nginx 放开上传限制（例如 `client_max_body_size 20m;`），并在对应 location / upstream 路径生效。
   - 验收命令（必须，全部 0 退出码）：

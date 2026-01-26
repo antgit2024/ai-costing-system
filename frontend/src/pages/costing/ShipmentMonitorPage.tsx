@@ -21,12 +21,13 @@ import {
 } from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 import dayjs from 'dayjs'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 
 import {
   executeShipmentsFromPreview,
+  fetchShipmentImportBatch,
   fetchShipmentBomSnapshots,
   fetchShipmentExceptions,
   fetchShipmentImportBatches,
@@ -54,6 +55,8 @@ const tryGetHttpStatus = (err: any): number | null => {
   const n = Number(err?.response?.status)
   return Number.isFinite(n) ? n : null
 }
+
+const sleepMs = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
 const isTimeoutError = (err: any): boolean => {
   const code = String(err?.code ?? '').toUpperCase()
@@ -160,6 +163,7 @@ const ShipmentMonitorPage = () => {
   const [retryingExceptions, setRetryingExceptions] = useState(false)
 
   const [snapshotForm] = Form.useForm()
+  const [snapshotsUseCurrentBatch, setSnapshotsUseCurrentBatch] = useState(true)
   const [snapshotQuery, setSnapshotQuery] = useState<{
     batch_id?: string
     sku_code?: string
@@ -180,6 +184,13 @@ const ShipmentMonitorPage = () => {
 
   const batches = batchesQuery.data?.items ?? []
   const totalBatches = batchesQuery.data?.total ?? 0
+
+  const selectedBatchQuery = useQuery({
+    queryKey: ['shipments', 'import-batch', selectedBatchId],
+    queryFn: () => fetchShipmentImportBatch(String(selectedBatchId)),
+    enabled: !!selectedBatchId,
+  })
+  const selectedBatch = selectedBatchQuery.data
 
   const exceptionsQuery = useQuery({
     queryKey: ['shipments', 'exceptions', selectedBatchId, exceptionResolved, exceptionLimit],
@@ -228,9 +239,25 @@ const ShipmentMonitorPage = () => {
 
   const snapshotsQuery = useQuery({
     queryKey: ['shipments', 'bom-snapshots', snapshotQuery],
-    queryFn: () => fetchShipmentBomSnapshots(snapshotQuery),
+    queryFn: () =>
+      fetchShipmentBomSnapshots({
+        ...snapshotQuery,
+        ...(snapshotsUseCurrentBatch && selectedBatchId ? { batch_id: selectedBatchId } : {}),
+      }),
     enabled: activeTab === 'snapshots',
   })
+
+  // When user changes current batch, keep snapshots form in sync (default: filter by current batch).
+  const prevSelectedBatchIdRef = useRef<string | null>(null)
+  useEffect(() => {
+    const prev = prevSelectedBatchIdRef.current
+    if (prev !== selectedBatchId) {
+      prevSelectedBatchIdRef.current = selectedBatchId
+      if (snapshotsUseCurrentBatch) {
+        snapshotForm.setFieldsValue({ batch_id: selectedBatchId ?? undefined })
+      }
+    }
+  }, [selectedBatchId, snapshotForm, snapshotsUseCurrentBatch])
 
   const handleQueuePreviewBom = async (row: any) => {
     try {
@@ -569,14 +596,123 @@ const ShipmentMonitorPage = () => {
       message.error(`当前选择文件与预览不一致：已选"${uploadFile.name}"，预览的是"${previewData.file_name}"。请重新点击“预览”。`)
       return
     }
+    const previewId = String(previewData.preview_id || '').trim()
+    const fileName = String(previewData.file_name || uploadFile?.name || '').trim()
+
+    const tryLocateBatch = async (opts: { timeoutMs: number; intervalMs: number; signal?: AbortSignal }) => {
+      const deadline = Date.now() + Math.max(1, opts.timeoutMs)
+      while (Date.now() < deadline) {
+        if (opts.signal?.aborted) throw new Error('aborted')
+        try {
+          const res = await fetchShipmentImportBatches({ page: 1, page_size: 50 })
+          const hit = (res.items ?? []).find((b) => String((b as any).file_hash || '').trim() === previewId)
+          if (hit?.id) return hit as any
+        } catch {
+          // ignore transient errors; keep polling
+        }
+        await sleepMs(Math.max(500, opts.intervalMs))
+      }
+      return null
+    }
+
     try {
       setUploading(true)
-      const batch = await executeShipmentsFromPreview({
-        preview_id: previewData.preview_id,
-        file_name: previewData.file_name,
-        export_date: uploadExportDate,
-        requested_by: uploadRequestedBy?.trim() || undefined,
+      const abortController = new AbortController()
+      const startedAt = Date.now()
+      let modalDestroyed = false
+      let cancelled = false
+
+      const modal = Modal.confirm({
+        title: '正在执行导入…',
+        content: (
+          <div>
+            <div style={{ marginBottom: 8 }}>
+              文件：<Text code>{fileName || '-'}</Text>
+            </div>
+            <div style={{ marginBottom: 8 }}>
+              提示：大文件执行期间你可以关闭窗口继续等待；完成后可在“发货批次列表”看到新批次并自动定位。
+            </div>
+            <div>
+              已等待：<Text code>0s</Text>
+            </div>
+          </div>
+        ),
+        okText: '关闭窗口（后台继续）',
+        cancelText: '取消执行',
+        onOk: () => {
+          // close modal but keep polling in background
+          if (!modalDestroyed) {
+            modalDestroyed = true
+            modal.destroy()
+          }
+        },
+        onCancel: () => {
+          cancelled = true
+          abortController.abort()
+          if (!modalDestroyed) {
+            modalDestroyed = true
+            modal.destroy()
+          }
+        },
       })
+
+      const ticker = setInterval(() => {
+        if (modalDestroyed) return
+        const waited = Math.max(0, Math.floor((Date.now() - startedAt) / 1000))
+        modal.update({
+          content: (
+            <div>
+              <div style={{ marginBottom: 8 }}>
+                文件：<Text code>{fileName || '-'}</Text>
+              </div>
+              <div style={{ marginBottom: 8 }}>
+                提示：大文件执行期间你可以关闭窗口继续等待；完成后可在“发货批次列表”看到新批次并自动定位。
+              </div>
+              <div>
+                已等待：<Text code>{waited}s</Text>
+              </div>
+            </div>
+          ),
+        })
+      }, 1000)
+
+      // Background: keep polling until a batch with this file_hash appears (commit happens at end of import).
+      ;(async () => {
+        if (!previewId) return
+        const hit = await tryLocateBatch({
+          timeoutMs: 30 * 60 * 1000,
+          intervalMs: 5000,
+          signal: abortController.signal,
+        })
+        if (!hit?.id || cancelled) return
+        clearInterval(ticker)
+        if (!modalDestroyed) {
+          modalDestroyed = true
+          modal.destroy()
+        }
+        message.success(`后台执行完成：已定位到批次 ${hit.id}`)
+        setSelectedBatchId(hit.id)
+        setActiveTab('batches')
+        setBatchPage(1)
+        queryClient.invalidateQueries({ queryKey: ['shipments'] })
+      })()
+
+      const batch = await executeShipmentsFromPreview(
+        {
+          preview_id: previewData.preview_id,
+          file_name: previewData.file_name,
+          export_date: uploadExportDate,
+          requested_by: uploadRequestedBy?.trim() || undefined,
+        },
+        { signal: abortController.signal },
+      )
+
+      clearInterval(ticker)
+      if (!modalDestroyed) {
+        modalDestroyed = true
+        modal.destroy()
+      }
+
       message.success(`执行完成：batch=${batch.id}（inserted=${batch.inserted_rows}, skipped=${batch.skipped_rows}, exceptions=${batch.exception_rows}）`)
       setSelectedBatchId(batch.id)
       setActiveTab('batches')
@@ -585,21 +721,21 @@ const ShipmentMonitorPage = () => {
       setPreviewData(null)
       queryClient.invalidateQueries({ queryKey: ['shipments'] })
     } catch (err: any) {
+      // If user cancels, keep UI calm.
+      if (String(err?.message ?? '').toLowerCase().includes('aborted')) {
+        message.info('已取消执行请求')
+        return
+      }
       if (isTimeoutError(err)) {
         Modal.info({
           title: '执行超时（前端等待超时）',
           content: (
             <div>
               <div style={{ marginBottom: 8 }}>
-                本次发货单行数较多时，“执行导入”可能需要较长时间。前端等待超时并不一定代表后端失败。
+                大文件执行可能需要较长时间。前端等待超时并不一定代表后端失败。
               </div>
               <div style={{ marginBottom: 8 }}>
-                建议操作：
-                <ul style={{ margin: '6px 0 0 18px' }}>
-                  <li>先点击页面右上角“刷新”，看“发货批次列表”是否出现新的 batch</li>
-                  <li>若出现批次：选择该批次，在“异常队列/快照”查看结果</li>
-                  <li>若未出现：稍等 30–60 秒再刷新；仍无则再尝试执行或查看后端日志</li>
-                </ul>
+                建议：先点右上角“刷新”查看“发货批次列表”；若出现新批次，选择后即可查看异常与快照。若未出现，稍等 30–60 秒再刷新。
               </div>
               <div>
                 原始错误：<Text type="secondary">{err?.message ?? 'timeout'}</Text>
@@ -627,8 +763,11 @@ const ShipmentMonitorPage = () => {
           </Text>
         </div>
         <Space>
-          <Tag color={selectedBatchId ? 'blue' : 'default'}>
+          <Tag color={selectedBatchId ? 'blue' : 'default'} style={{ maxWidth: 520 }}>
             当前批次：{selectedBatchId ? selectedBatchId : '未选择'}
+            {selectedBatch?.file_name ? (
+              <span style={{ marginLeft: 8, color: '#666' }}>（{String(selectedBatch.file_name)}）</span>
+            ) : null}
           </Tag>
           <Button
             onClick={() => {
@@ -641,6 +780,27 @@ const ShipmentMonitorPage = () => {
           </Button>
         </Space>
       </div>
+
+      {selectedBatchId ? (
+        <div style={{ marginTop: 12 }}>
+          <Card size="small" title="当前批次摘要">
+            <Descriptions bordered size="small" column={3}>
+              <Descriptions.Item label="文件名">{selectedBatch?.file_name ?? '-'}</Descriptions.Item>
+              <Descriptions.Item label="导出日期">{selectedBatch?.export_date ?? '-'}</Descriptions.Item>
+              <Descriptions.Item label="导入时间">{formatTime(selectedBatch?.created_at ?? null)}</Descriptions.Item>
+              <Descriptions.Item label="总行">{safeString(selectedBatch?.total_rows) || '-'}</Descriptions.Item>
+              <Descriptions.Item label="写入">{safeString(selectedBatch?.inserted_rows) || '-'}</Descriptions.Item>
+              <Descriptions.Item label="异常">{safeString(selectedBatch?.exception_rows) || '-'}</Descriptions.Item>
+            </Descriptions>
+            <div style={{ marginTop: 10 }}>
+              <Space>
+                <Button onClick={() => setActiveTab('exceptions')}>看异常</Button>
+                <Button onClick={() => setActiveTab('snapshots')}>看快照</Button>
+              </Space>
+            </div>
+          </Card>
+        </div>
+      ) : null}
 
       <div style={{ marginTop: 16 }}>
         <Card title="上传发货单（预览→执行）" size="small">
@@ -929,6 +1089,14 @@ const ShipmentMonitorPage = () => {
                       title="BOM 快照查询（只读）"
                       extra={
                         <Space>
+                          <Segmented
+                            value={snapshotsUseCurrentBatch ? 'current' : 'all'}
+                            onChange={(v) => setSnapshotsUseCurrentBatch(v === 'current')}
+                            options={[
+                              { label: '仅当前批次', value: 'current' },
+                              { label: '全局', value: 'all' },
+                            ]}
+                          />
                           <Button
                             type="primary"
                             onClick={() => {
@@ -941,6 +1109,9 @@ const ShipmentMonitorPage = () => {
                             onClick={() => {
                               snapshotForm.resetFields()
                               setSnapshotQuery({ limit: 200 })
+                              if (snapshotsUseCurrentBatch) {
+                                snapshotForm.setFieldsValue({ batch_id: selectedBatchId ?? undefined })
+                              }
                             }}
                           >
                             重置
@@ -960,9 +1131,10 @@ const ShipmentMonitorPage = () => {
                         }}
                         onFinish={(values) => {
                           const next = {
-                            batch_id: (values.batch_id ?? selectedBatchId ?? undefined) as
-                              | string
-                              | undefined,
+                            batch_id:
+                              snapshotsUseCurrentBatch
+                                ? (selectedBatchId ?? undefined)
+                                : ((values.batch_id ?? selectedBatchId ?? undefined) as string | undefined),
                             sku_code: values.sku_code ? String(values.sku_code).trim() : undefined,
                             shipment_no: values.shipment_no
                               ? String(values.shipment_no).trim()
@@ -974,7 +1146,11 @@ const ShipmentMonitorPage = () => {
                         }}
                       >
                         <Form.Item name="batch_id" label="batch_id">
-                          <Input style={{ width: 260 }} placeholder="可空=全局" />
+                          <Input
+                            style={{ width: 260 }}
+                            placeholder={snapshotsUseCurrentBatch ? '当前批次（自动）' : '可空=全局'}
+                            disabled={snapshotsUseCurrentBatch}
+                          />
                         </Form.Item>
                         <Form.Item name="sku_code" label="SKU">
                           <Input style={{ width: 160 }} placeholder="SKU-001" />

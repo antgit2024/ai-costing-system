@@ -55,6 +55,13 @@ const tryGetHttpStatus = (err: any): number | null => {
   return Number.isFinite(n) ? n : null
 }
 
+const isTimeoutError = (err: any): boolean => {
+  const code = String(err?.code ?? '').toUpperCase()
+  if (code === 'ECONNABORTED') return true
+  const msg = String(err?.message ?? '').toLowerCase()
+  return msg.includes('timeout') && msg.includes('exceeded')
+}
+
 const formatTime = (v?: string | null) => {
   if (!v) return '-'
   const d = dayjs(v)
@@ -578,7 +585,31 @@ const ShipmentMonitorPage = () => {
       setPreviewData(null)
       queryClient.invalidateQueries({ queryKey: ['shipments'] })
     } catch (err: any) {
-      message.error(`执行失败：${err?.response?.data?.detail ?? err?.message ?? 'unknown error'}`)
+      if (isTimeoutError(err)) {
+        Modal.info({
+          title: '执行超时（前端等待超时）',
+          content: (
+            <div>
+              <div style={{ marginBottom: 8 }}>
+                本次发货单行数较多时，“执行导入”可能需要较长时间。前端等待超时并不一定代表后端失败。
+              </div>
+              <div style={{ marginBottom: 8 }}>
+                建议操作：
+                <ul style={{ margin: '6px 0 0 18px' }}>
+                  <li>先点击页面右上角“刷新”，看“发货批次列表”是否出现新的 batch</li>
+                  <li>若出现批次：选择该批次，在“异常队列/快照”查看结果</li>
+                  <li>若未出现：稍等 30–60 秒再刷新；仍无则再尝试执行或查看后端日志</li>
+                </ul>
+              </div>
+              <div>
+                原始错误：<Text type="secondary">{err?.message ?? 'timeout'}</Text>
+              </div>
+            </div>
+          ),
+        })
+      } else {
+        message.error(`执行失败：${err?.response?.data?.detail ?? err?.message ?? 'unknown error'}`)
+      }
     } finally {
       setUploading(false)
     }

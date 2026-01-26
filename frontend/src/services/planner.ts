@@ -103,6 +103,12 @@ import type {
   ShipmentExceptionRetryResponse,
   ShipmentImportBatchListResponse,
   ShipmentImportBatch,
+  ReturnsRateBySkuResponse,
+  ReturnsRateByChannelResponse,
+  ProfitBySkuResponse,
+  ProfitByChannelResponse,
+  ProfitByModelResponse,
+  AfterSalesImportBatch,
   ProductModelVersionPatchPayload,
   SkuMaster,
   SkuMasterScanResponse,
@@ -1606,6 +1612,10 @@ export const fetchShipmentImportBatches = async (
   return response.data
 }
 
+// Large XLSX uploads/imports can easily exceed the default axios timeout (20s).
+// Give shipments import endpoints a longer timeout (minutes) to avoid false-negative UI errors.
+const SHIPMENTS_UPLOAD_TIMEOUT_MS = 5 * 60 * 1000
+
 export const importShipmentsXlsx = async (params: {
   file: File
   export_date?: string
@@ -1617,6 +1627,7 @@ export const importShipmentsXlsx = async (params: {
   if (params.requested_by) formData.append('requested_by', params.requested_by)
   const response = await plannerClient.post('/shipments/import', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: SHIPMENTS_UPLOAD_TIMEOUT_MS,
   })
   return response.data
 }
@@ -1644,6 +1655,7 @@ export const previewShipmentsXlsx = async (params: {
   if (params.requested_by) formData.append('requested_by', params.requested_by)
   const response = await plannerClient.post('/shipments/import/preview', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: SHIPMENTS_UPLOAD_TIMEOUT_MS,
   })
   return response.data
 }
@@ -1654,7 +1666,9 @@ export const executeShipmentsFromPreview = async (payload: {
   export_date?: string
   requested_by?: string
 }): Promise<ShipmentImportBatch> => {
-  const response = await plannerClient.post('/shipments/import/execute', payload)
+  const response = await plannerClient.post('/shipments/import/execute', payload, {
+    timeout: SHIPMENTS_UPLOAD_TIMEOUT_MS,
+  })
   return response.data
 }
 
@@ -1690,6 +1704,69 @@ export const recomputeShipmentBomSnapshot = async (snapshot_id: string, payload?
   return response.data
 }
 
+export const fetchReturnsRateBySku = async (params: {
+  start: string
+  end: string
+  group_by?: 'day' | 'month'
+  channel?: string
+  sku_code?: string
+}): Promise<ReturnsRateBySkuResponse> => {
+  const response = await plannerClient.get('/analytics/returns-rate/sku', {
+    params: sanitizeParams(params as Record<string, unknown>),
+  })
+  return response.data
+}
+
+export const fetchProfitBySku = async (params: {
+  start: string
+  end: string
+  group_by?: 'day' | 'month'
+  channel?: string
+  sku_code?: string
+}): Promise<ProfitBySkuResponse> => {
+  const response = await plannerClient.get('/analytics/profit/sku', {
+    params: sanitizeParams(params as Record<string, unknown>),
+  })
+  return response.data
+}
+
+export const fetchProfitByModel = async (params: {
+  start: string
+  end: string
+  group_by?: 'day' | 'month'
+  channel?: string
+  model_code?: string
+}): Promise<ProfitByModelResponse> => {
+  const response = await plannerClient.get('/analytics/profit/model', {
+    params: sanitizeParams(params as Record<string, unknown>),
+  })
+  return response.data
+}
+
+export const fetchReturnsRateByChannel = async (params: {
+  start: string
+  end: string
+  group_by?: 'day' | 'month'
+  channel?: string
+}): Promise<ReturnsRateByChannelResponse> => {
+  const response = await plannerClient.get('/analytics/returns-rate/channel', {
+    params: sanitizeParams(params as Record<string, unknown>),
+  })
+  return response.data
+}
+
+export const fetchProfitByChannel = async (params: {
+  start: string
+  end: string
+  group_by?: 'day' | 'month'
+  channel?: string
+}): Promise<ProfitByChannelResponse> => {
+  const response = await plannerClient.get('/analytics/profit/channel', {
+    params: sanitizeParams(params as Record<string, unknown>),
+  })
+  return response.data
+}
+
 export const importSkuMasterXlsx = async (params: {
   file: File
   requested_by?: string
@@ -1698,6 +1775,21 @@ export const importSkuMasterXlsx = async (params: {
   formData.append('file', params.file)
   if (params.requested_by) formData.append('requested_by', params.requested_by)
   const response = await plannerClient.post('/sku-master/import', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+  return response.data
+}
+
+export const importAfterSalesXlsx = async (params: {
+  file: File
+  export_date?: string
+  requested_by?: string
+}): Promise<AfterSalesImportBatch> => {
+  const formData = new FormData()
+  formData.append('file', params.file)
+  if (params.export_date) formData.append('export_date', params.export_date)
+  if (params.requested_by) formData.append('requested_by', params.requested_by)
+  const response = await plannerClient.post('/after-sales/import', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
   })
   return response.data
@@ -1844,15 +1936,22 @@ export const bulkSaveSkuMasterSpecPreparse = async (payload: {
   include_terms?: string
   exclude_terms?: string
   match_scope?: string
+  preparse_state?: 'parsed' | 'unparsed'
+  excluded_sku_ids?: string[]
   skip_if_same_hash?: boolean
   requested_by?: string
-} = {}): Promise<{
+} = {}, opts: PlannerRequestOptions = {}): Promise<{
   scanned: number
   saved: number
   skipped_same_hash: number
   errors: Array<Record<string, unknown>>
+  batch_candidates?: number
+  has_more?: boolean
 }> => {
-  const response = await plannerClient.post('/sku-master/spec-preparse/bulk', payload)
+  const response = await plannerClient.post('/sku-master/spec-preparse/bulk', payload, {
+    timeout: opts.timeoutMs,
+    signal: opts.signal,
+  })
   return response.data
 }
 
@@ -1890,13 +1989,16 @@ export const executeSkuMasterSpecPreparse = async (payload: {
   sku_ids: string[]
   skip_if_same_hash?: boolean
   requested_by?: string
-}): Promise<{
+}, opts: PlannerRequestOptions = {}): Promise<{
   scanned: number
   saved: number
   skipped_same_hash: number
   errors: Array<Record<string, unknown>>
 }> => {
-  const response = await plannerClient.post('/sku-master/spec-preparse/execute', payload)
+  const response = await plannerClient.post('/sku-master/spec-preparse/execute', payload, {
+    timeout: opts.timeoutMs,
+    signal: opts.signal,
+  })
   return response.data
 }
 

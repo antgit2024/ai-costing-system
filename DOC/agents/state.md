@@ -26,6 +26,8 @@
     - `frontend/src/pages/costing/ShipmentMonitorPage.tsx`
       - 上传前：展示文件大小提示（大文件更容易触发 413）。
       - 失败时：对 413 弹窗给出可执行动作（拆分文件 / 运维放开 `client_max_body_size`，并覆盖 `/api/planner/shipments/import/preview` 与 `/api/planner/shipments/import`）。
+    - `frontend/src/services/planner.ts`
+      - 发货预览/执行/导入使用更长超时（5 分钟），避免大文件导入在前端 20s 超时误报失败。
   - 下一步（需要运维配合，前端无法绕过）：
     - 在网关/Nginx 放开上传限制（例如 `client_max_body_size 20m;`），并在对应 location / upstream 路径生效。
   - 验收命令（必须，全部 0 退出码）：

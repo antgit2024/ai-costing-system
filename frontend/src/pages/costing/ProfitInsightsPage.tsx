@@ -10,6 +10,14 @@ import type {
   ModelInsightsSummaryResponse,
 } from '@/types/planner'
 
+const hashString = (s: string) => {
+  let h = 0
+  for (let i = 0; i < s.length; i += 1) {
+    h = (h * 31 + s.charCodeAt(i)) | 0
+  }
+  return Math.abs(h)
+}
+
 const formatPercent = (raw?: string | number | null) => {
   if (raw == null || raw === '') return '-'
   const n = Number(raw)
@@ -186,20 +194,55 @@ const ProfitInsightsPage = () => {
   const renderModelCodePill = (code: string) => {
     const text = String(code ?? '').trim()
     if (!text) return <Typography.Text type="secondary">-</Typography.Text>
+
+    // Use Ant Design theme colors (deterministic per code)
+    const palette = [
+      'var(--ant-color-blue)',
+      'var(--ant-color-purple)',
+      'var(--ant-color-cyan)',
+      'var(--ant-color-green)',
+      'var(--ant-color-magenta)',
+      'var(--ant-color-volcano)',
+      'var(--ant-color-gold)',
+      'var(--ant-color-geekblue)',
+    ]
+    const c = palette[hashString(text) % palette.length] ?? 'var(--ant-color-primary)'
     return (
       <span
         style={{
           display: 'inline-flex',
           alignItems: 'center',
           height: 22,
-          padding: '0 10px',
+          padding: '0 8px',
           borderRadius: 999,
-          border: '1px solid var(--ant-color-primary-border)',
-          background: 'var(--ant-color-primary-bg)',
-          color: 'var(--ant-color-primary)',
+          border: `1px solid color-mix(in srgb, ${c} 45%, var(--ant-color-border))`,
+          background: `color-mix(in srgb, ${c} 18%, var(--ant-color-fill-tertiary))`,
+          color: c,
           fontWeight: 600,
           fontSize: 12,
           lineHeight: '22px',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {text}
+      </span>
+    )
+  }
+
+  const renderVersionLabelPill = (label: string) => {
+    const text = String(label ?? '').trim()
+    if (!text) return <Typography.Text type="secondary">-</Typography.Text>
+    return (
+      <span
+        style={{
+          display: 'inline-block',
+          padding: '0px 6px',
+          borderRadius: 6,
+          border: '1px solid color-mix(in srgb, var(--ant-color-success) 45%, var(--ant-color-border))',
+          background: 'color-mix(in srgb, var(--ant-color-success) 18%, var(--ant-color-fill-tertiary))',
+          fontSize: 11,
+          lineHeight: '18px',
+          color: 'var(--ant-color-success)',
           whiteSpace: 'nowrap',
         }}
       >
@@ -213,7 +256,7 @@ const ProfitInsightsPage = () => {
       {
         title: '编码',
         key: 'model_code',
-        width: 130,
+        width: 90,
         fixed: 'left',
         render: (_: any, r) => renderModelCodePill(String(r.model_code ?? '')),
       },
@@ -359,7 +402,7 @@ const ProfitInsightsPage = () => {
                 },
               })}
               rowClassName={(r) => (String(r.model_code ?? '') === String(selectedModelCode ?? '') ? 'ant-table-row-selected' : '')}
-              scroll={{ x: 1020 }}
+              scroll={{ x: 980 }}
             />
           </Card>
         </Col>
@@ -387,14 +430,6 @@ const ProfitInsightsPage = () => {
                   {loadingDetail ? <Tag>加载中…</Tag> : null}
                 </Space>
 
-                <Descriptions bordered size="small" column={2} style={{ marginBottom: 12 }}>
-                  <Descriptions.Item label="样本发货时间">{detail.sample_completed_at ?? '-'}</Descriptions.Item>
-                  <Descriptions.Item label="样本货品条码">{detail.sample_sku_code ?? '-'}</Descriptions.Item>
-                  <Descriptions.Item label="样本交易规格" span={2}>
-                    <Typography.Text>{detail.sample_spec_text ?? '-'}</Typography.Text>
-                  </Descriptions.Item>
-                </Descriptions>
-
                 <Card size="small" title="版本（本次范围内出现过的版本）" style={{ marginBottom: 12 }}>
                   <Table
                     size="small"
@@ -406,15 +441,7 @@ const ProfitInsightsPage = () => {
                         title: '版本',
                         key: 'ver',
                         width: 260,
-                        render: (_: any, r: any) => (
-                          <Space size={8}>
-                            <Typography.Text strong>{String(r.version_label ?? String(r.version_id).slice(0, 8))}</Typography.Text>
-                            {r.version_status ? (
-                              <Tag color={String(r.version_status) === 'published' ? 'green' : 'orange'}>{String(r.version_status)}</Tag>
-                            ) : null}
-                            {r.version_kind ? <Tag>{String(r.version_kind)}</Tag> : null}
-                          </Space>
-                        ),
+                        render: (_: any, r: any) => renderVersionLabelPill(String(r.version_label ?? String(r.version_id).slice(0, 8))),
                       },
                       { title: '发货数量', dataIndex: 'shipped_qty', width: 100, render: formatQty },
                       { title: '销售额', dataIndex: 'revenue_amount', width: 110, render: formatMoney },

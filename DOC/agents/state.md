@@ -79,6 +79,22 @@
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-26（模型分析页面：编码胶囊彩色化 + 列宽收口 + 右侧去掉样本信息块 + 版本号胶囊化）
+  - 左侧榜单：
+    - “编码”列宽收口约 1/3（更紧凑）。
+    - 编码胶囊改为“多色主题色”（按 model_code 稳定 hash 到 antd 色板：blue/purple/cyan/green/magenta/volcano/gold/geekblue）。
+  - 右侧明细：
+    - 移除“样本发货时间/样本货品条码/样本交易规格”描述块，避免误解为模型通用规格（右侧 BOM/扣库仍由样本行触发生成）。
+    - “版本”列不再展示 `archived/standard` 标签；改为 success 主题色胶囊展示版本号（`color-mix + --ant-color-success`）。
+  - 产物：
+    - `frontend/src/pages/costing/ProfitInsightsPage.tsx`
+    - `DOC/agents/state.md`
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-26（发货单上传：413 失败提示收口 + 文件大小引导）
   - 背景：线上 `/costing/shipments` 上传发货单预览报 `Request failed with status code 413`（请求体过大），通常是网关/Nginx `client_max_body_size` 限制触发。
   - 本轮产物（前端）：

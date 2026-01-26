@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from openpyxl import load_workbook
 from openpyxl.utils.datetime import from_excel
+from sqlalchemy import func
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, joinedload
 
@@ -496,9 +497,13 @@ def list_sku_master(
     match_scope: Optional[str] = None,
     page: int,
     page_size: int,
+    page_size_cap: int = 200,
 ) -> Tuple[int, List[models.SkuMaster]]:
     page = max(int(page or 1), 1)
-    page_size = max(min(int(page_size or 20), 200), 1)
+    cap = int(page_size_cap or 200)
+    if cap <= 0:
+        cap = 200
+    page_size = max(min(int(page_size or 20), cap), 1)
     q = db.query(models.SkuMaster).filter(models.SkuMaster.is_archived.is_(False))
     if search:
         s = f"%{search.strip()}%"
@@ -534,9 +539,10 @@ def list_sku_master(
         state = str(preparse_state).strip().lower()
         ph = models.SkuMaster.metadata_json["preparse_spec_hash"].as_string()
         if state in ("parsed", "done", "yes", "1", "true"):
-            q = q.filter(ph.isnot(None)).filter(ph != "")
+            # Use COALESCE instead of IS NULL checks for better cross-db JSON behavior.
+            q = q.filter(func.coalesce(ph, "") != "")
         elif state in ("unparsed", "none", "no", "0", "false"):
-            q = q.filter((ph.is_(None)) | (ph == ""))
+            q = q.filter(func.coalesce(ph, "") == "")
 
     def _parse_terms(raw: Optional[str]) -> List[str]:
         if not raw:
@@ -827,6 +833,7 @@ def _attach_parsed_fields(rows: List[models.SkuMaster]) -> None:
         r.preparse_parser_version = meta.get("preparse_parser_version")
         r.preparse_dimensions = meta.get("preparse_dimensions") or {}
         r.preparse_tokens = meta.get("preparse_tokens") or []
+        r.preparse_has_dims = meta.get("preparse_has_dims")
         r.preparse_saved_at = meta.get("preparse_saved_at")
         r.preparse_saved_by = meta.get("preparse_saved_by")
         r.spec_mismatch = bool(meta.get("spec_mismatch"))
@@ -892,6 +899,7 @@ def save_spec_preparse(
         dims["height_cm"] = height_cm
     if diameter_cm not in (None, ""):
         dims["diameter_cm"] = diameter_cm
+    has_dims = any(dims.get(k) not in (None, "") for k in ("width_cm", "height_cm", "diameter_cm"))
 
     meta = dict(row.metadata_json or {})
     meta.update(
@@ -901,6 +909,9 @@ def save_spec_preparse(
             "preparse_parser_version": PARSER_VERSION,
             "preparse_dimensions": _json_safe(dims),
             "preparse_tokens": list(parsed.get("tokens") or []),
+            # Mark whether this preparse yielded any measurable dimensions.
+            # Some "定制尺寸/联系客服" SKUs will never have dims; treat as processed but show as "无尺寸".
+            "preparse_has_dims": bool(has_dims),
             "preparse_saved_at": _utcnow().isoformat(),
             "preparse_saved_by": (requested_by or meta.get("requested_by") or None),
         }
@@ -929,6 +940,8 @@ def bulk_save_spec_preparse(
     include_terms: Optional[str],
     exclude_terms: Optional[str],
     match_scope: Optional[str],
+    preparse_state: Optional[str] = None,
+    excluded_sku_ids: Optional[List[str]] = None,
     skip_if_same_hash: bool = True,
     requested_by: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -945,13 +958,19 @@ def bulk_save_spec_preparse(
         match_status=match_status,
         bound_state="bound",
         spec_mismatch=None,
+        preparse_state=preparse_state,
         include_terms=include_terms,
         exclude_terms=exclude_terms,
         match_scope=match_scope,
         page=1,
         page_size=limit,
+        page_size_cap=5000,
     )
     _ = total  # kept for future extension
+
+    excluded = set(str(x) for x in (excluded_sku_ids or []) if str(x))
+    if excluded:
+        rows = [r for r in rows if str(getattr(r, "id", "")) not in excluded]
 
     scanned = 0
     saved = 0
@@ -1004,6 +1023,7 @@ def bulk_save_spec_preparse(
                 "area_m2": parsed.get("area_m2"),
                 "perimeter_m": parsed.get("perimeter_m"),
             }
+            has_dims = any(dims.get(k) not in (None, "") for k in ("width_cm", "height_cm", "diameter_cm"))
             meta.update(
                 {
                     "preparse_spec_text": spec_text,
@@ -1011,6 +1031,7 @@ def bulk_save_spec_preparse(
                     "preparse_parser_version": PARSER_VERSION,
                     "preparse_dimensions": _json_safe(dims),
                     "preparse_tokens": list(parsed.get("tokens") or []),
+                    "preparse_has_dims": bool(has_dims),
                     "preparse_saved_at": _utcnow().isoformat(),
                     "preparse_saved_by": (requested_by or meta.get("requested_by") or None),
                 }
@@ -1021,11 +1042,44 @@ def bulk_save_spec_preparse(
             errors.append({"sku_id": getattr(r, "id", None), "sku_code": getattr(r, "erp_sku_barcode", None), "error": str(exc)})
 
     db.commit()
+
+    # For run-all loops: best-effort "has_more" check by reusing the same filters,
+    # but only for the preparse_state='unparsed' case (others are not meaningful for looping).
+    has_more = False
+    try:
+        if preparse_state and str(preparse_state).strip().lower() in ("unparsed", "none", "no", "0", "false"):
+            # Ask list_sku_master for 1 row after this commit to check if any remaining candidates exist.
+            _total2, rows2 = list_sku_master(
+                db,
+                search=search,
+                channel=channel,
+                match_status=match_status,
+                bound_state="bound",
+                spec_mismatch=None,
+                preparse_state=preparse_state,
+                include_terms=include_terms,
+                exclude_terms=exclude_terms,
+                match_scope=match_scope,
+                page=1,
+                page_size=1,
+                page_size_cap=5000,
+            )
+            if excluded and rows2 and str(getattr(rows2[0], "id", "")) in excluded:
+                # If the first remaining row is excluded, conservatively report "has_more"
+                # because there may still be non-excluded rows later. The frontend will stop on "no progress".
+                has_more = True
+            else:
+                has_more = bool(rows2)
+    except Exception:
+        has_more = False
+
     return {
         "scanned": scanned,
         "saved": saved,
         "skipped_same_hash": skipped_same_hash,
         "errors": errors,
+        "batch_candidates": scanned,
+        "has_more": has_more,
     }
 
 
@@ -1058,6 +1112,7 @@ def preview_spec_preparse(
         match_scope=match_scope,
         page=1,
         page_size=limit,
+        page_size_cap=5000,
     )
     items: List[Dict[str, Any]] = []
     skipped_empty_spec = 0
@@ -1161,6 +1216,7 @@ def execute_spec_preparse(
                 "area_m2": parsed.get("area_m2"),
                 "perimeter_m": parsed.get("perimeter_m"),
             }
+            has_dims = any(dims.get(k) not in (None, "") for k in ("width_cm", "height_cm", "diameter_cm"))
             meta.update(
                 {
                     "preparse_spec_text": spec_text,
@@ -1168,6 +1224,7 @@ def execute_spec_preparse(
                     "preparse_parser_version": PARSER_VERSION,
                     "preparse_dimensions": _json_safe(dims),
                     "preparse_tokens": list(parsed.get("tokens") or []),
+                    "preparse_has_dims": bool(has_dims),
                     "preparse_saved_at": _utcnow().isoformat(),
                     "preparse_saved_by": (requested_by or meta.get("requested_by") or None),
                 }
@@ -1372,9 +1429,9 @@ def bind_sku_master_by_model_bulk(
         state = str(preparse_state).strip().lower()
         ph = models.SkuMaster.metadata_json["preparse_spec_hash"].as_string()
         if state in ("parsed", "done", "yes", "1", "true"):
-            q = q.filter(ph.isnot(None)).filter(ph != "")
+            q = q.filter(func.coalesce(ph, "") != "")
         elif state in ("unparsed", "none", "no", "0", "false"):
-            q = q.filter((ph.is_(None)) | (ph == ""))
+            q = q.filter(func.coalesce(ph, "") == "")
 
     def _parse_terms(raw: Optional[str]) -> List[str]:
         if not raw:

@@ -1,7 +1,8 @@
-import { Alert, Button, Card, DatePicker, Descriptions, Divider, Form, Row, Col, Select, Space, Table, Tabs, Tag, Typography } from 'antd'
+import { Alert, Button, Card, DatePicker, Descriptions, Divider, Form, List, Row, Col, Select, Space, Table, Tabs, Tag, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
 
 import { fetchModelInsightsDetail, fetchModelInsightsSummary } from '@/services/planner'
 import type {
@@ -10,22 +11,22 @@ import type {
   ModelInsightsSummaryResponse,
 } from '@/types/planner'
 
-const formatPercent = (raw?: string | null) => {
-  if (!raw) return '-'
+const formatPercent = (raw?: string | number | null) => {
+  if (raw == null || raw === '') return '-'
   const n = Number(raw)
   if (!Number.isFinite(n)) return '-'
   return `${(n * 100).toFixed(2)}%`
 }
 
-const formatMoney = (raw?: string) => {
-  if (raw == null) return '-'
+const formatMoney = (raw?: string | number | null) => {
+  if (raw == null || raw === '') return '-'
   const n = Number(raw)
   if (!Number.isFinite(n)) return String(raw)
   return n.toFixed(2)
 }
 
-const formatQty = (raw?: string) => {
-  if (raw == null) return '-'
+const formatQty = (raw?: string | number | null) => {
+  if (raw == null || raw === '') return '-'
   const n = Number(raw)
   if (!Number.isFinite(n)) return String(raw)
   return n.toFixed(2).replace(/\.00$/, '')
@@ -45,41 +46,6 @@ const ProfitInsightsPage = () => {
   const [detail, setDetail] = useState<ModelInsightsDetailResponse | null>(null)
   const [selectedModelCode, setSelectedModelCode] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-
-  const summaryColumns = useMemo<ColumnsType<ModelInsightsSummaryItem>>(
-    () => [
-      { title: '店铺', dataIndex: 'channel', key: 'channel', width: 140 },
-      { title: '模型编码', dataIndex: 'model_code', key: 'model_code', width: 160 },
-      { title: '模型名称', dataIndex: 'model_name', key: 'model_name', width: 200, ellipsis: true },
-      {
-        title: '主版本',
-        key: 'top_version',
-        width: 200,
-        ellipsis: true,
-        render: (_, r) => {
-          const label = String(r.top_version_label ?? '').trim()
-          const kind = String(r.top_version_kind ?? '').trim()
-          const status = String(r.top_version_status ?? '').trim()
-          const main = [label, [kind, status].filter(Boolean).join('/')].filter(Boolean).join(' ')
-          const cnt = Number(r.version_count ?? 0)
-          if (!main) return '-'
-          return cnt > 1 ? `${main}（${cnt} 个版本）` : main
-        },
-      },
-      { title: '发货数量', dataIndex: 'shipped_qty', key: 'shipped_qty', width: 100, render: formatQty },
-      { title: '销售额', dataIndex: 'revenue_amount', key: 'revenue_amount', width: 110, render: formatMoney },
-      { title: '物料成本', dataIndex: 'cost_material_amount', key: 'cost_material_amount', width: 110, render: formatMoney },
-      { title: '人工成本', dataIndex: 'cost_process_amount', key: 'cost_process_amount', width: 110, render: formatMoney },
-      { title: '制造费用', dataIndex: 'cost_overhead_amount', key: 'cost_overhead_amount', width: 110, render: formatMoney },
-      { title: '成本', dataIndex: 'cost_amount', key: 'cost_amount', width: 110, render: formatMoney },
-      { title: '毛利', dataIndex: 'gross_profit', key: 'gross_profit', width: 110, render: formatMoney },
-      { title: '毛利率', dataIndex: 'gross_margin', key: 'gross_margin', width: 100, render: formatPercent },
-      { title: '退款金额', dataIndex: 'refund_amount', key: 'refund_amount', width: 110, render: formatMoney },
-      { title: '净利润', dataIndex: 'net_profit', key: 'net_profit', width: 110, render: formatMoney },
-      { title: '净利率', dataIndex: 'net_margin', key: 'net_margin', width: 100, render: formatPercent },
-    ],
-    [],
-  )
 
   const shopOptions = useMemo(() => {
     const s = new Set<string>()
@@ -218,6 +184,15 @@ const ProfitInsightsPage = () => {
     [],
   )
 
+  const renderMetric = (label: string, value: ReactNode) => (
+    <span style={{ fontSize: 12, color: 'rgba(0,0,0,0.65)' }}>
+      <span style={{ marginRight: 6 }}>{label}</span>
+      <Typography.Text style={{ fontSize: 12 }} strong>
+        {value}
+      </Typography.Text>
+    </span>
+  )
+
   return (
     <div style={{ padding: 16 }}>
       <Typography.Title level={3} style={{ margin: '0 0 12px' }}>
@@ -315,23 +290,76 @@ const ProfitInsightsPage = () => {
               />
             ) : null}
 
-            <Table<ModelInsightsSummaryItem>
-              rowKey={(r) => `${r.channel ?? ''}-${r.model_id}`}
-              size="small"
+            <List<ModelInsightsSummaryItem>
               loading={loadingSummary}
-              columns={summaryColumns}
-              dataSource={summary?.items ?? []}
-              pagination={{ pageSize: 20, showSizeChanger: true }}
-              scroll={{ x: 1500 }}
-              onRow={(record) => ({
-                onClick: async () => {
-                  const code = String(record.model_code || '').trim()
-                  if (!code) return
-                  setSelectedModelCode(code)
-                  await loadDetail(code)
-                },
-              })}
-              rowClassName={(r) => (String(r.model_code || '') === String(selectedModelCode || '') ? 'ant-table-row-selected' : '')}
+              dataSource={(summary?.items ?? []).slice()}
+              locale={{ emptyText: '暂无数据（请先选择范围并查询）' }}
+              grid={{ gutter: 12, column: 1 }}
+              pagination={{ pageSize: 12, showSizeChanger: true }}
+              renderItem={(r) => {
+                const code = String(r.model_code ?? '').trim()
+                const name = String(r.model_name ?? '').trim()
+                const ch = String(r.channel ?? '').trim()
+                const selected = code && String(selectedModelCode ?? '') === code
+
+                const topVerLabel = String((r as any)?.top_version_label ?? '').trim()
+                const topVerKind = String((r as any)?.top_version_kind ?? '').trim()
+                const topVerStatus = String((r as any)?.top_version_status ?? '').trim()
+                const topVerMain = [topVerLabel, [topVerKind, topVerStatus].filter(Boolean).join('/')].filter(Boolean).join(' ')
+
+                return (
+                  <List.Item style={{ padding: 0, marginBottom: 10 }}>
+                    <Card
+                      size="small"
+                      hoverable
+                      style={{
+                        width: '100%',
+                        borderColor: selected ? '#1677ff' : undefined,
+                        boxShadow: selected ? '0 0 0 2px rgba(22,119,255,0.15)' : undefined,
+                      }}
+                      bodyStyle={{ padding: 12 }}
+                      onClick={async () => {
+                        if (!code) return
+                        setSelectedModelCode(code)
+                        await loadDetail(code)
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+                        <div style={{ minWidth: 0 }}>
+                          <Space size={8} wrap>
+                            <Typography.Text strong style={{ fontSize: 16 }}>
+                              {code || '-'}
+                            </Typography.Text>
+                            <Typography.Text style={{ fontSize: 14 }} ellipsis type="secondary">
+                              {name || '-'}
+                            </Typography.Text>
+                          </Space>
+                          {topVerMain ? (
+                            <div style={{ marginTop: 6 }}>
+                              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                                主版本：{topVerMain}
+                              </Typography.Text>
+                            </div>
+                          ) : null}
+                        </div>
+                        {ch ? <Tag style={{ margin: 0 }}>{ch}</Tag> : null}
+                      </div>
+
+                      <Divider style={{ margin: '10px 0 8px' }} />
+
+                      <Space size={[12, 6]} wrap style={{ width: '100%' }}>
+                        {renderMetric('发货数量', formatQty(r.shipped_qty as any))}
+                        {renderMetric('销售金额', formatMoney(r.revenue_amount as any))}
+                        {renderMetric('成本', formatMoney(r.cost_amount as any))}
+                        {renderMetric('毛利', formatMoney(r.gross_profit as any))}
+                        {renderMetric('毛利率', formatPercent(r.gross_margin as any))}
+                        {renderMetric('退货数量', formatQty((r as any)?.returned_qty ?? r.returned_qty ?? '-'))}
+                        {renderMetric('退货金额', formatMoney(r.refund_amount as any))}
+                      </Space>
+                    </Card>
+                  </List.Item>
+                )
+              }}
             />
           </Card>
         </Col>
@@ -390,6 +418,9 @@ const ProfitInsightsPage = () => {
                       },
                       { title: '发货数量', dataIndex: 'shipped_qty', width: 100, render: formatQty },
                       { title: '销售额', dataIndex: 'revenue_amount', width: 110, render: formatMoney },
+                      { title: '物料成本', dataIndex: 'cost_material_amount', width: 110, render: formatMoney },
+                      { title: '人工成本', dataIndex: 'cost_process_amount', width: 110, render: formatMoney },
+                      { title: '制造费用', dataIndex: 'cost_overhead_amount', width: 110, render: formatMoney },
                       { title: '成本', dataIndex: 'cost_amount', width: 110, render: formatMoney },
                       { title: '毛利率', dataIndex: 'gross_margin', width: 100, render: formatPercent },
                       { title: '行数', dataIndex: 'line_count', width: 80, render: (v) => String(v ?? '-') },
@@ -403,7 +434,7 @@ const ProfitInsightsPage = () => {
                     rowClassName={(r: any) =>
                       String(r.version_id || '') === String(detail.selected_version_id || '') ? 'ant-table-row-selected' : ''
                     }
-                    scroll={{ x: 900 }}
+                    scroll={{ x: 1250 }}
                   />
                 </Card>
 

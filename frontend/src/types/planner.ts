@@ -1600,8 +1600,13 @@ export interface ProfitByModelItem {
   version_id: string
   version_kind: string
   version_status: string
+  version_label?: string | null
+  version_count?: number
   shipped_qty: string
   revenue_amount: string
+  cost_material_amount?: string
+  cost_process_amount?: string
+  cost_overhead_amount?: string
   cost_amount: string
   gross_profit: string
   gross_margin?: string | null
@@ -1609,13 +1614,137 @@ export interface ProfitByModelItem {
   net_revenue: string
   net_profit: string
   net_margin?: string | null
+  line_count?: number
+  costed_line_count?: number
+  missing_costing_line_count?: number
 }
 
 export interface ProfitByModelResponse {
   group_by: 'day' | 'month'
   start: string
   end: string
+  total_shipment_lines?: number
+  mapped_model_lines?: number
+  costed_lines?: number
+  lines_missing_costing?: number
   items: ProfitByModelItem[]
+  note?: string | null
+}
+
+export interface ModelInsightsSummaryItem {
+  channel?: string | null
+  model_id: string
+  model_code: string
+  model_name: string
+
+  shipped_qty: string
+  revenue_amount: string
+  cost_material_amount: string
+  cost_process_amount: string
+  cost_overhead_amount: string
+  cost_amount: string
+  gross_profit: string
+  gross_margin?: string | null
+  returned_qty?: string | null
+  refund_amount: string
+  net_revenue: string
+  net_profit: string
+  net_margin?: string | null
+
+  line_count?: number
+  costed_line_count?: number
+  missing_costing_line_count?: number
+
+  top_version_id?: string | null
+  top_version_kind?: string | null
+  top_version_status?: string | null
+  top_version_label?: string | null
+  version_count?: number
+}
+
+export interface ModelInsightsSummaryResponse {
+  start: string
+  end: string
+  channel?: string | null
+  total_shipment_lines: number
+  mapped_model_lines: number
+  costed_lines: number
+  lines_missing_costing: number
+  items: ModelInsightsSummaryItem[]
+  note?: string | null
+}
+
+export interface ModelInsightsVersionStat {
+  version_id: string
+  version_kind?: string | null
+  version_status?: string | null
+  version_label?: string | null
+  shipped_qty: string
+  revenue_amount: string
+  cost_material_amount: string
+  cost_process_amount: string
+  cost_overhead_amount: string
+  cost_amount: string
+  gross_profit: string
+  gross_margin?: string | null
+  line_count?: number
+  costed_line_count?: number
+  missing_costing_line_count?: number
+}
+
+export interface ModelInsightsDeductionLine {
+  material_code?: string | null
+  material_name?: string | null
+  unit_of_measure?: string | null
+  quantity?: string | null
+  sources?: number | null
+}
+
+export interface ModelBaseMaterialLine {
+  material_type?: string | null
+  material_ref_id?: string | null
+  material_code?: string | null
+  material_name?: string | null
+  unit_of_measure?: string | null
+  calculation_method?: string | null
+  base_quantity?: string | null
+  loss_rate?: string | null
+  unit_cost?: string | null
+  sequence_order?: number | null
+  notes?: string | null
+}
+
+export interface ModelBaseProcessLine {
+  process_id?: string | null
+  process_code?: string | null
+  process_name?: string | null
+  team_name?: string | null
+  pricing_method?: string | null
+  piece_rate?: string | null
+  rate_per_minute?: string | null
+  notes?: string | null
+}
+
+export interface ModelInsightsDetailResponse {
+  start: string
+  end: string
+  channel?: string | null
+  model_id: string
+  model_code: string
+  model_name: string
+  selected_version_id?: string | null
+  versions: ModelInsightsVersionStat[]
+
+  sample_shipment_line_id?: string | null
+  sample_completed_at?: string | null
+  sample_sku_code?: string | null
+  sample_spec_text?: string | null
+  sample_qty?: string | null
+
+  bom?: any | null
+  persisted_deductions: ModelInsightsDeductionLine[]
+  base_material_lines: ModelBaseMaterialLine[]
+  base_process_lines: ModelBaseProcessLine[]
   note?: string | null
 }
 

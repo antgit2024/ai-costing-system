@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from src.database import Base, configure_engine, get_db  # noqa: E402
 from src.main import app  # noqa: E402
 from src.planner.services import import_service  # noqa: E402
+from src.planner import models as _planner_models  # noqa: E402,F401  # ensure all tables are registered
 
 TEST_DATABASE_URL = "sqlite:///./planner_test.db"
 
@@ -21,6 +22,12 @@ TEST_DATABASE_URL = "sqlite:///./planner_test.db"
 @pytest.fixture(scope="session")
 def engine():
     engine = configure_engine(TEST_DATABASE_URL)
+    # Ensure planner models are imported *before* create_all, otherwise SQLite test DB
+    # may miss newly added tables (e.g. shipment_import_batches) and fail at runtime.
+    import src.planner.models  # noqa: F401
+
+    # Be defensive: if the sqlite file persists across runs, reset schema to the latest metadata.
+    Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     yield engine
     Base.metadata.drop_all(bind=engine)

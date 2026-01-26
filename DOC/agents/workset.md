@@ -2,7 +2,7 @@
 
 > 目的：把“上下文”从聊天迁到可引用的工作集；新 Agent 只需读这些，不要全仓扫描。
 
-> 最近校对（北京时间 GMT+8）：2025-12-27
+> 最近校对（北京时间 GMT+8）：2026-01-25
 
 ### 1) 前端：产品模型（迁移编辑器的核心工作区）
 
@@ -16,6 +16,9 @@
 - `frontend/src/pages/costing/SampleModelsPage.tsx`（打样模型入口：entryContext="sample"）
 - `frontend/src/pages/costing/StandardModelsPage.tsx`（标准模型入口：entryContext="standard" + initialVersionId）
 - `frontend/src/pages/costing/ShipmentMonitorPage.tsx`（发货批次/异常队列/BOM快照只读页：/costing/shipments）
+- `frontend/src/pages/costing/AfterSalesInsightsPage.tsx`（数据洞察：售后分析（退货率）页：/costing/insights/after-sales；仅按用户选择范围查询，不做全量重算）
+- `frontend/src/pages/costing/ProfitInsightsPage.tsx`（数据洞察：模型分析（利润）页：/costing/insights/models；货品/模型两Tab；仅按用户选择范围查询）
+- `frontend/src/pages/costing/ShopInsightsPage.tsx`（数据洞察：店铺数据（按渠道汇总）页：/costing/insights/shops；利润/退货率两Tab；支持覆盖率筛选）
 - `frontend/src/pages/costing/ProductListingPage.tsx`（产品上架（测试台）：交易规格解析/变体命中/最终BOM预演）
 - `frontend/src/pages/costing/SkuMasterWorkspacePage.tsx`（SKU 主档工作台：/costing/sku-master）
 - `frontend/src/pages/costing/BundleTemplatesPage.tsx`（套装模板：短语 presets/组件行编辑器工作台，本轮改造抽屉为左右两栏）
@@ -59,6 +62,10 @@
 - `backend/src/planner/services/line_variant_service.py`（行级变体：bundle 选择范围与 CRUD 细节）
 - `backend/src/planner/services/product_model_service.py`（推导标准版本 derive_standard_version：排查“打样版本推导后标准列表出现多个版本/误推导”的根因与最小修复）
 - `backend/tests/planner/test_clone_model_from_standard_version.py`（克隆新标准模型：从标准版本克隆新模型+新版本+复制清单/变体的最小验收用例）
+- `backend/tests/planner/conftest.py`（测试基座：SQLite 建表/Session fixture；新增表后需确保模型被 import 注册）
+- `backend/tests/planner/test_after_sales_import_mvp.py`（售后导入 + 退货率分析：最小验收单测）
+- `backend/tests/planner/test_profit_analytics_mvp.py`（利润分析：最小验收单测）
+- `backend/tests/planner/test_shop_analytics_mvp.py`（店铺数据：按渠道汇总利润/退货率 + 覆盖率：最小验收单测）
 
 ### 3) 文档：口径与验收
 
@@ -70,6 +77,8 @@
 - `DOC/costing/blueprints/structure_standards/pillow_structure_standard_v1.md`（结构标准口径：抱枕/靠垫 slots 去歧义 + 驱动量建议）
 - `DOC/costing/blueprints/structure_standards/tablecloth_structure_standard_v1.md`（结构标准口径：桌布/桌旗/桌垫同构 slots + 驱动量建议）
 - `DOC/index/extracted/variants_discussion_extracted_20251221T200250+0800.md`（变体讨论提炼件：禁止直读导出全文）
+- `DOC/index/extracted/shipment_xlsx_extracted_20260125T000000+0800.md`（发货单：强关联键（原始单号/商品链接ID/货品条码）提炼）
+- `DOC/index/extracted/after_sales_xlsx_extracted_20260125T000000+0800.md`（售后退货单：强关联键（网店订单号/商品链接Id/货品条码/申请时间）提炼）
 - `DOC/agents/task_log.md`（最新变更/决策记录）
 
 ### 6) 环境文件治理（安全/可恢复）
@@ -84,12 +93,14 @@
 
 - `DOC/基础表单/BOM动态生成引擎业务需求说明.md`（标准模型变体/动态 BOM 业务逻辑与场景说明）
 - `DOC/基础表单/SKU绑定与BOM生成业务逻辑说明文档.md`（SKU 绑定/规格解析/BOM 生成主链路业务说明）
+- `DOC/基础表单/BOM系统优化完整方案_最终版.md`（30%复杂产品：编码/模型套模型/自动编码 + 可运营流程；与“发货时再解析”主链互补）
 - `DOC/基础表单/发货单-理.xlsx`（发货单样例：对账字段/扣库清单落地参考）
 
 ### 3.2) 方案产出（本轮交付物）
 
 - `DOC/costing/blueprints/standard_model_variants_plan.md`（标准模型：变体/动态 BOM 功能方案）
  - `DOC/costing/blueprints/sku_binding_bom_shipment_plan.md`（SKU 绑定→BOM 快照→发货/扣库对账：ERP 方案与计划）
+- `DOC/costing/blueprints/profit_and_returns_analytics_plan_2025_2026_v0_1.md`（数据分析：利润/退货（2025 仅分析校准 Run / 2026 扣库落库）方案）
 - `DOC/costing/blueprints/erp_writeback_process_spec_mvp.md`（ERP 回传MVP：把可生产的工艺/规格回写到 ERP）
 - `DOC/costing/blueprints/jky_api_requirements_form_v1.md`（对外谈判用：吉客云/ERP 对接 API 需求表单 v1）
 - `DOC/costing/blueprints/jky_after_sales_returns_requirements_form_v1.md`（对外谈判用：售后/退货（冲销）对接需求表单 v1）

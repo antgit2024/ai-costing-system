@@ -8,6 +8,7 @@ from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from .. import models
+from . import bom_generation_service, product_model_service
 
 
 def _utc_date(dt: datetime) -> date:
@@ -294,6 +295,32 @@ def _extract_total_cost_from_trace(trace_json: Any) -> Tuple[Optional[Decimal], 
     return cost, "costed"
 
 
+def _extract_cost_breakdown_from_trace(trace_json: Any) -> Tuple[Optional[Decimal], Decimal, Decimal, Decimal, str]:
+    """
+    Extract (total, material, process, overhead, status) from a bom_snapshot-like trace JSON.
+    status in {"costed","missing_costing"}.
+    """
+    trace = (trace_json or {}) if isinstance(trace_json, dict) else {}
+    costing = (trace.get("costing") or {}) if isinstance(trace.get("costing"), dict) else {}
+
+    material = costing.get("material_cost_total")
+    process = costing.get("process_cost_total")
+    overhead = costing.get("overhead_cost")
+    total_cost = costing.get("total_cost")
+
+    m = _d(material)
+    p = _d(process)
+    o = _d(overhead)
+
+    if total_cost in (None, ""):
+        total_cost = m + p + o
+    total = _d(total_cost)
+
+    if total == 0 and (costing.get("total_cost") in (None, "", 0)) and (material in (None, "")) and (process in (None, "")) and (overhead in (None, "")):
+        return None, Decimal("0"), Decimal("0"), Decimal("0"), "missing_costing"
+    return total, m, p, o, "costed"
+
+
 def _period_key(dt: datetime, group_by: Literal["day", "month"]) -> str:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
@@ -446,7 +473,12 @@ def profit_by_sku(
                 )
             cost = _d(total_cost)
             if cost == 0 and total_cost in (None, "", 0):
-                missing_cost += 1
+                # If the lightweight result is missing cost (edge/legacy), try to fall back to snapshot trace if present.
+                snap_cost, status = _extract_total_cost_from_trace(snap_trace_json)
+                if status == "costed":
+                    cost = _d(snap_cost)
+                else:
+                    missing_cost += 1
             bucket["cost_amount"] += cost
         else:
             cost, status = _extract_total_cost_from_trace(snap_trace_json)
@@ -650,8 +682,13 @@ def profit_by_channel(
                 )
             cost = _d(total_cost)
             if cost == 0 and total_cost in (None, "", 0):
-                bucket["lines_missing_costing"] += 1
-                total_missing_costing += 1
+                # lightweight result missing cost -> fallback to snapshot trace if possible
+                snap_cost, status = _extract_total_cost_from_trace(snap_trace_json)
+                if status == "costed":
+                    cost = _d(snap_cost)
+                else:
+                    bucket["lines_missing_costing"] += 1
+                    total_missing_costing += 1
             bucket["cost_amount"] += cost
         else:
             cost, status = _extract_total_cost_from_trace(snap_trace_json)
@@ -712,15 +749,42 @@ def profit_by_model(
     model_code: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Profit grouped by model using shipment_costing_results.model_version_id -> product_model_versions -> product_models.
-    Only includes shipment lines that have costing results (i.e., already costed/deducted).
+    模型分析（按模型聚合）：
+    - 收入/数量基线：时间范围内全部发货行（completed_at）
+    - 模型归因：优先 shipment_costing_results.model_version_id，缺失时回退到最新 bom_snapshot.model_version_id
+    - 成本：优先 shipment_costing_results（三段成本齐全），回退到 bom_snapshot.trace.costing
+    - 版本：同一个模型可能涉及多个版本；返回“主版本”（按销售额最大的版本）+ version_count
     """
     if start.tzinfo is None:
         start = start.replace(tzinfo=timezone.utc)
     if end.tzinfo is None:
         end = end.replace(tzinfo=timezone.utc)
 
-    # Latest snapshot per shipment_line_id (legacy fallback)
+    # Revenue baseline: all shipments (even those without model attribution)
+    ship_q = db.query(models.ShipmentLine).filter(
+        models.ShipmentLine.completed_at.isnot(None),
+        models.ShipmentLine.completed_at >= start,
+        models.ShipmentLine.completed_at < end,
+        models.ShipmentLine.is_archived.is_(False),
+    )
+    if channel:
+        ship_q = ship_q.filter(models.ShipmentLine.channel == channel)
+    total_ship_lines = int(ship_q.count() or 0)
+
+    # Costing result per shipment_line_id (supports 2025 no-snapshot mode)
+    res_sq = (
+        db.query(
+            models.ShipmentCostingResult.shipment_line_id.label("shipment_line_id"),
+            models.ShipmentCostingResult.cost_total.label("cost_total"),
+            models.ShipmentCostingResult.cost_material_total.label("cost_material_total"),
+            models.ShipmentCostingResult.cost_process_total.label("cost_process_total"),
+            models.ShipmentCostingResult.cost_overhead_total.label("cost_overhead_total"),
+            models.ShipmentCostingResult.model_version_id.label("model_version_id"),
+        )
+        .subquery()
+    )
+
+    # Legacy fallback: latest bom_snapshot per shipment_line_id
     snap_sq = (
         db.query(
             models.BomSnapshot.id.label("bom_snapshot_id"),
@@ -735,52 +799,45 @@ def profit_by_model(
         .subquery()
     )
 
-    cost_q = (
+    mv_id_expr = func.coalesce(res_sq.c.model_version_id, snap_sq.c.model_version_id)
+
+    base_q = (
         db.query(
             models.ShipmentLine,
-            models.ShipmentCostingResult,
+            res_sq.c.shipment_line_id.label("res_ship_line_id"),
+            res_sq.c.cost_total,
+            res_sq.c.cost_material_total,
+            res_sq.c.cost_process_total,
+            res_sq.c.cost_overhead_total,
             snap_sq.c.bom_snapshot_id,
-            snap_sq.c.model_version_id,
             snap_sq.c.trace_json,
+            mv_id_expr.label("model_version_id"),
+            models.ProductModelVersion.version_kind,
+            models.ProductModelVersion.version_status,
+            models.ProductModelVersion.version_label,
+            models.ProductModel.id.label("model_id"),
+            models.ProductModel.model_code.label("model_code"),
+            models.ProductModel.model_name.label("model_name"),
         )
-        .outerjoin(models.ShipmentCostingResult, models.ShipmentLine.id == models.ShipmentCostingResult.shipment_line_id)
+        .outerjoin(res_sq, models.ShipmentLine.id == res_sq.c.shipment_line_id)
         .outerjoin(snap_sq, models.ShipmentLine.id == snap_sq.c.shipment_line_id)
+        .outerjoin(
+            models.ProductModelVersion,
+            and_(models.ProductModelVersion.id == mv_id_expr, models.ProductModelVersion.is_archived.is_(False)),
+        )
+        .outerjoin(models.ProductModel, and_(models.ProductModel.id == models.ProductModelVersion.model_id, models.ProductModel.is_archived.is_(False)))
         .filter(
             models.ShipmentLine.completed_at.isnot(None),
             models.ShipmentLine.completed_at >= start,
             models.ShipmentLine.completed_at < end,
             models.ShipmentLine.is_archived.is_(False),
-            or_(models.ShipmentCostingResult.shipment_line_id.isnot(None), snap_sq.c.bom_snapshot_id.isnot(None)),
         )
     )
     if channel:
-        cost_q = cost_q.filter(models.ShipmentLine.channel == channel)
-    cost_rows = cost_q.all()
-
-    # preload versions/models for model-level attribution
-    mv_ids: List[str] = []
-    for _line, res, _snap_id, snap_mv_id, _snap_trace in cost_rows:
-        mv = str(getattr(res, "model_version_id", None) or (snap_mv_id or "")).strip()
-        if mv:
-            mv_ids.append(mv)
-    mv_ids = list({*mv_ids})
-
-    vers: List[models.ProductModelVersion] = (
-        db.query(models.ProductModelVersion)
-        .filter(models.ProductModelVersion.id.in_(mv_ids), models.ProductModelVersion.is_archived.is_(False))
-        .all()
-        if mv_ids
-        else []
-    )
-    ver_by_id: Dict[str, models.ProductModelVersion] = {str(v.id): v for v in vers}
-    model_ids = [str(v.model_id) for v in vers if getattr(v, "model_id", None)]
-    model_ids = list({*model_ids})
-    models_rows: List[models.ProductModel] = (
-        db.query(models.ProductModel).filter(models.ProductModel.id.in_(model_ids), models.ProductModel.is_archived.is_(False)).all()
-        if model_ids
-        else []
-    )
-    model_by_id: Dict[str, models.ProductModel] = {str(m.id): m for m in models_rows}
+        base_q = base_q.filter(models.ShipmentLine.channel == channel)
+    if model_code:
+        base_q = base_q.filter(models.ProductModel.model_code == model_code)
+    rows = base_q.all()
 
     # Refund by shipment line (same as profit_by_sku)
     refund_q = db.query(
@@ -808,60 +865,144 @@ def profit_by_model(
     refund_q = refund_q.group_by(models.ShipmentLine.id)
     refund_by_line = {str(r.shipment_line_id): _d(r.refund_amount) for r in refund_q.all()}
 
-    agg: Dict[Tuple[str, str], Dict[str, Any]] = {}
-    for line, res, _snap_id, snap_mv_id, snap_trace_json in cost_rows:
+    mapped_lines = 0
+    costed_lines = 0
+    missing_costing_lines = 0
+
+    agg: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+    for (
+        line,
+        res_ship_line_id,
+        cost_total,
+        cost_material_total,
+        cost_process_total,
+        cost_overhead_total,
+        _bom_snapshot_id,
+        snap_trace_json,
+        mv_id,
+        ver_kind,
+        ver_status,
+        ver_label,
+        mdl_id,
+        mdl_code,
+        mdl_name,
+    ) in rows:
         if not line.completed_at:
             continue
-        mv_id = str(getattr(res, "model_version_id", None) or (snap_mv_id or "")).strip()
-        if not mv_id:
-            continue
-        ver = ver_by_id.get(mv_id)
-        if not ver:
-            continue
-        model = model_by_id.get(str(getattr(ver, "model_id", "")))
-        if not model:
-            continue
-        if model_code and getattr(model, "model_code", None) != model_code:
+        if not mdl_id or not mdl_code or not mdl_name:
             continue
 
         period = _period_key(line.completed_at, group_by)
-        key = (period, str(model.id))
+        store = str(line.channel or "").strip()
+        key = (period, store, str(mdl_id))
+
         bucket = agg.setdefault(
             key,
             {
                 "period": period,
-                "channel": line.channel,
-                "model_id": model.id,
-                "model_code": model.model_code,
-                "model_name": model.model_name,
-                "version_id": ver.id,
-                "version_kind": ver.version_kind,
-                "version_status": ver.version_status,
+                "channel": store or None,
+                "model_id": str(mdl_id),
+                "model_code": str(mdl_code),
+                "model_name": str(mdl_name),
+                # top version (filled at the end)
+                "version_id": "",
+                "version_kind": "",
+                "version_status": "",
+                "version_label": None,
+                "version_count": 0,
                 "shipped_qty": Decimal("0"),
                 "revenue_amount": Decimal("0"),
+                "cost_material_amount": Decimal("0"),
+                "cost_process_amount": Decimal("0"),
+                "cost_overhead_amount": Decimal("0"),
                 "cost_amount": Decimal("0"),
                 "refund_amount": Decimal("0"),
+                "line_count": 0,
+                "costed_line_count": 0,
+                "missing_costing_line_count": 0,
+                # internal
+                "_ver_rev": {},  # version_id -> revenue
+                "_ver_info": {},  # version_id -> (kind,status,label)
             },
         )
-        bucket["shipped_qty"] += _d(line.qty)
-        bucket["revenue_amount"] += _d(line.revenue_amount)
 
-        if res is not None:
-            total_cost = getattr(res, "cost_total", None)
-            if total_cost in (None, ""):
-                total_cost = (
-                    _d(getattr(res, "cost_material_total", None))
-                    + _d(getattr(res, "cost_process_total", None))
-                    + _d(getattr(res, "cost_overhead_total", None))
-                )
-            bucket["cost_amount"] += _d(total_cost)
-        else:
-            cost, _status = _extract_total_cost_from_trace(snap_trace_json)
-            bucket["cost_amount"] += _d(cost)
+        mapped_lines += 1
+        bucket["line_count"] += 1
+
+        qty = _d(line.qty)
+        revenue = _d(line.revenue_amount)
+        bucket["shipped_qty"] += qty
+        bucket["revenue_amount"] += revenue
         bucket["refund_amount"] += refund_by_line.get(str(line.id), Decimal("0"))
+
+        # Version tracking (for top-version selection)
+        mv_id_str = str(mv_id or "").strip()
+        if mv_id_str:
+            bucket["_ver_rev"][mv_id_str] = _d(bucket["_ver_rev"].get(mv_id_str, 0)) + revenue
+            bucket["_ver_info"][mv_id_str] = (str(ver_kind or ""), str(ver_status or ""), str(ver_label or "") or None)
+
+        # Cost breakdown
+        if res_ship_line_id is not None:
+            m = _d(cost_material_total)
+            p = _d(cost_process_total)
+            o = _d(cost_overhead_total)
+            total_src = cost_total
+            if total_src in (None, ""):
+                total_src = m + p + o
+            total = _d(total_src)
+            if total == 0 and (cost_total in (None, "", 0)) and (cost_material_total in (None, "")) and (cost_process_total in (None, "")) and (cost_overhead_total in (None, "")):
+                # lightweight result missing cost -> fallback to snapshot trace if possible
+                snap_total, sm, sp, so, s = _extract_cost_breakdown_from_trace(snap_trace_json)
+                if s == "costed":
+                    bucket["costed_line_count"] += 1
+                    costed_lines += 1
+                    bucket["cost_material_amount"] += _d(sm)
+                    bucket["cost_process_amount"] += _d(sp)
+                    bucket["cost_overhead_amount"] += _d(so)
+                    bucket["cost_amount"] += _d(snap_total)
+                else:
+                    bucket["missing_costing_line_count"] += 1
+                    missing_costing_lines += 1
+            else:
+                bucket["costed_line_count"] += 1
+                costed_lines += 1
+                bucket["cost_material_amount"] += m
+                bucket["cost_process_amount"] += p
+                bucket["cost_overhead_amount"] += o
+                bucket["cost_amount"] += total
+        else:
+            total, m, p, o, status = _extract_cost_breakdown_from_trace(snap_trace_json)
+            if status == "missing_costing":
+                bucket["missing_costing_line_count"] += 1
+                missing_costing_lines += 1
+            else:
+                bucket["costed_line_count"] += 1
+                costed_lines += 1
+                bucket["cost_material_amount"] += _d(m)
+                bucket["cost_process_amount"] += _d(p)
+                bucket["cost_overhead_amount"] += _d(o)
+                bucket["cost_amount"] += _d(total)
 
     items: List[Dict[str, Any]] = []
     for _, b in sorted(agg.items(), key=lambda kv: kv[0]):
+        # resolve top version (by revenue)
+        ver_rev = b.pop("_ver_rev", {}) or {}
+        ver_info = b.pop("_ver_info", {}) or {}
+        if ver_rev:
+            top_ver_id = max(ver_rev.items(), key=lambda kv: kv[1])[0]
+            kind, status, label = ver_info.get(top_ver_id, ("", "", None))
+            b["version_id"] = top_ver_id
+            b["version_kind"] = kind
+            b["version_status"] = status
+            b["version_label"] = label
+            b["version_count"] = len(ver_rev)
+        else:
+            b["version_id"] = ""
+            b["version_kind"] = ""
+            b["version_status"] = ""
+            b["version_label"] = None
+            b["version_count"] = 0
+
         revenue = b["revenue_amount"]
         cost = b["cost_amount"]
         refund = b["refund_amount"]
@@ -885,8 +1026,12 @@ def profit_by_model(
         "group_by": group_by,
         "start": start.isoformat(),
         "end": end.isoformat(),
+        "total_shipment_lines": total_ship_lines,
+        "mapped_model_lines": int(mapped_lines),
+        "costed_lines": int(costed_lines),
+        "lines_missing_costing": int(missing_costing_lines),
         "items": items,
-        "note": "Model profit uses shipment_costing_results only (costed SKUs). net_profit=(revenue-refund)-cost.",
+        "note": "模型分析：成本优先 shipment_costing_results（三段成本），回退 bom_snapshot.trace；版本为主版本（按销售额最大）。净利润=(销售额-退款)-成本。",
     }
 
 
@@ -1121,5 +1266,560 @@ def sales_lines(
         "lines_missing_costing": int(missing_costing),
         "items": items,
         "note": "明细口径：cost 优先来自计价结果（shipment_costing_results.cost_total），缺失时回退到最新 BOM 快照 trace.costing.total_cost。缺计价结果/快照的行成本显示为空。",
+    }
+
+
+def model_insights_summary(
+    db: Session,
+    *,
+    start: datetime,
+    end: datetime,
+    channel: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    模型分析（统计榜单）：
+    - 聚合维度：模型（可选按店铺过滤；若不传则为全店铺汇总）
+    - 指标：发货数量/销售额/三段成本/毛利/退款/净利润 + 覆盖率（按行数）
+    """
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    start = start.astimezone(timezone.utc)
+    end = end.astimezone(timezone.utc)
+
+    ship_q = db.query(models.ShipmentLine).filter(
+        models.ShipmentLine.completed_at.isnot(None),
+        models.ShipmentLine.completed_at >= start,
+        models.ShipmentLine.completed_at < end,
+        models.ShipmentLine.is_archived.is_(False),
+    )
+    if channel:
+        ship_q = ship_q.filter(models.ShipmentLine.channel == channel)
+    total_ship_lines = int(ship_q.count() or 0)
+
+    res_sq = (
+        db.query(
+            models.ShipmentCostingResult.shipment_line_id.label("shipment_line_id"),
+            models.ShipmentCostingResult.cost_total.label("cost_total"),
+            models.ShipmentCostingResult.cost_material_total.label("cost_material_total"),
+            models.ShipmentCostingResult.cost_process_total.label("cost_process_total"),
+            models.ShipmentCostingResult.cost_overhead_total.label("cost_overhead_total"),
+            models.ShipmentCostingResult.model_version_id.label("model_version_id"),
+        )
+        .subquery()
+    )
+
+    snap_sq = (
+        db.query(
+            models.BomSnapshot.shipment_line_id.label("shipment_line_id"),
+            models.BomSnapshot.model_version_id.label("model_version_id"),
+            models.BomSnapshot.trace_json.label("trace_json"),
+            models.BomSnapshot.created_at.label("created_at"),
+        )
+        .filter(models.BomSnapshot.shipment_line_id.isnot(None))
+        .order_by(models.BomSnapshot.shipment_line_id.asc(), models.BomSnapshot.created_at.desc())
+        .distinct(models.BomSnapshot.shipment_line_id)
+        .subquery()
+    )
+
+    mv_id_expr = func.coalesce(res_sq.c.model_version_id, snap_sq.c.model_version_id)
+    q = (
+        db.query(
+            models.ShipmentLine,
+            res_sq.c.shipment_line_id.label("res_ship_line_id"),
+            res_sq.c.cost_total,
+            res_sq.c.cost_material_total,
+            res_sq.c.cost_process_total,
+            res_sq.c.cost_overhead_total,
+            snap_sq.c.trace_json,
+            mv_id_expr.label("model_version_id"),
+            models.ProductModelVersion.version_kind,
+            models.ProductModelVersion.version_status,
+            models.ProductModelVersion.version_label,
+            models.ProductModel.id.label("model_id"),
+            models.ProductModel.model_code.label("model_code"),
+            models.ProductModel.model_name.label("model_name"),
+        )
+        .outerjoin(res_sq, models.ShipmentLine.id == res_sq.c.shipment_line_id)
+        .outerjoin(snap_sq, models.ShipmentLine.id == snap_sq.c.shipment_line_id)
+        .outerjoin(
+            models.ProductModelVersion,
+            and_(models.ProductModelVersion.id == mv_id_expr, models.ProductModelVersion.is_archived.is_(False)),
+        )
+        .outerjoin(models.ProductModel, and_(models.ProductModel.id == models.ProductModelVersion.model_id, models.ProductModel.is_archived.is_(False)))
+        .filter(
+            models.ShipmentLine.completed_at.isnot(None),
+            models.ShipmentLine.completed_at >= start,
+            models.ShipmentLine.completed_at < end,
+            models.ShipmentLine.is_archived.is_(False),
+        )
+    )
+    if channel:
+        q = q.filter(models.ShipmentLine.channel == channel)
+    rows = q.all()
+
+    refund_q = db.query(
+        models.ShipmentLine.id.label("shipment_line_id"),
+        func.coalesce(func.sum(models.AfterSalesLine.refund_amount), 0).label("refund_amount"),
+        func.coalesce(func.sum(models.AfterSalesLine.return_qty), 0).label("returned_qty"),
+    ).join(
+        models.AfterSalesLine,
+        and_(
+            models.AfterSalesLine.order_no.isnot(None),
+            models.AfterSalesLine.product_link_id.isnot(None),
+            models.AfterSalesLine.sku_code.isnot(None),
+            models.ShipmentLine.order_no == models.AfterSalesLine.order_no,
+            models.ShipmentLine.product_link_id == models.AfterSalesLine.product_link_id,
+            models.ShipmentLine.sku_code == models.AfterSalesLine.sku_code,
+        ),
+    ).filter(
+        models.ShipmentLine.completed_at.isnot(None),
+        models.ShipmentLine.completed_at >= start,
+        models.ShipmentLine.completed_at < end,
+        models.ShipmentLine.is_archived.is_(False),
+        models.AfterSalesLine.is_archived.is_(False),
+    )
+    if channel:
+        refund_q = refund_q.filter(models.ShipmentLine.channel == channel)
+    refund_q = refund_q.group_by(models.ShipmentLine.id)
+    refund_by_line = {
+        str(r.shipment_line_id): {"refund_amount": _d(r.refund_amount), "returned_qty": _d(r.returned_qty)}
+        for r in refund_q.all()
+    }
+
+    mapped_lines = 0
+    costed_lines = 0
+    missing_costing_lines = 0
+
+    agg: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for (
+        line,
+        res_ship_line_id,
+        cost_total,
+        cost_material_total,
+        cost_process_total,
+        cost_overhead_total,
+        snap_trace_json,
+        mv_id,
+        ver_kind,
+        ver_status,
+        ver_label,
+        mdl_id,
+        mdl_code,
+        mdl_name,
+    ) in rows:
+        if not line.completed_at:
+            continue
+        if not mdl_id or not mdl_code or not mdl_name:
+            continue
+
+        mapped_lines += 1
+        key = (str(line.channel or "").strip(), str(mdl_id))
+        bucket = agg.setdefault(
+            key,
+            {
+                "channel": str(line.channel or "").strip() or None,
+                "model_id": str(mdl_id),
+                "model_code": str(mdl_code),
+                "model_name": str(mdl_name),
+                "shipped_qty": Decimal("0"),
+                "revenue_amount": Decimal("0"),
+                "cost_material_amount": Decimal("0"),
+                "cost_process_amount": Decimal("0"),
+                "cost_overhead_amount": Decimal("0"),
+                "cost_amount": Decimal("0"),
+                "refund_amount": Decimal("0"),
+                "returned_qty": Decimal("0"),
+                "line_count": 0,
+                "costed_line_count": 0,
+                "missing_costing_line_count": 0,
+                "_ver_rev": {},
+                "_ver_info": {},
+            },
+        )
+
+        bucket["line_count"] += 1
+        qty = _d(line.qty)
+        revenue = _d(line.revenue_amount)
+        bucket["shipped_qty"] += qty
+        bucket["revenue_amount"] += revenue
+        ref = refund_by_line.get(str(line.id)) or {"refund_amount": Decimal("0"), "returned_qty": Decimal("0")}
+        bucket["refund_amount"] += _d(ref.get("refund_amount"))
+        bucket["returned_qty"] += _d(ref.get("returned_qty"))
+
+        mv_id_str = str(mv_id or "").strip()
+        if mv_id_str:
+            bucket["_ver_rev"][mv_id_str] = _d(bucket["_ver_rev"].get(mv_id_str, 0)) + revenue
+            bucket["_ver_info"][mv_id_str] = (str(ver_kind or ""), str(ver_status or ""), str(ver_label or "") or None)
+
+        if res_ship_line_id is not None:
+            m = _d(cost_material_total)
+            p = _d(cost_process_total)
+            o = _d(cost_overhead_total)
+            total_src = cost_total
+            if total_src in (None, ""):
+                total_src = m + p + o
+            total = _d(total_src)
+            if total == 0 and (cost_total in (None, "", 0)) and (cost_material_total in (None, "")) and (cost_process_total in (None, "")) and (cost_overhead_total in (None, "")):
+                snap_total, sm, sp, so, s = _extract_cost_breakdown_from_trace(snap_trace_json)
+                if s == "costed":
+                    bucket["costed_line_count"] += 1
+                    costed_lines += 1
+                    bucket["cost_material_amount"] += _d(sm)
+                    bucket["cost_process_amount"] += _d(sp)
+                    bucket["cost_overhead_amount"] += _d(so)
+                    bucket["cost_amount"] += _d(snap_total)
+                else:
+                    bucket["missing_costing_line_count"] += 1
+                    missing_costing_lines += 1
+            else:
+                bucket["costed_line_count"] += 1
+                costed_lines += 1
+                bucket["cost_material_amount"] += m
+                bucket["cost_process_amount"] += p
+                bucket["cost_overhead_amount"] += o
+                bucket["cost_amount"] += total
+        else:
+            total, m, p, o, status = _extract_cost_breakdown_from_trace(snap_trace_json)
+            if status == "missing_costing":
+                bucket["missing_costing_line_count"] += 1
+                missing_costing_lines += 1
+            else:
+                bucket["costed_line_count"] += 1
+                costed_lines += 1
+                bucket["cost_material_amount"] += _d(m)
+                bucket["cost_process_amount"] += _d(p)
+                bucket["cost_overhead_amount"] += _d(o)
+                bucket["cost_amount"] += _d(total)
+
+    items: List[Dict[str, Any]] = []
+    for _, b in agg.items():
+        ver_rev = b.pop("_ver_rev", {}) or {}
+        ver_info = b.pop("_ver_info", {}) or {}
+        if ver_rev:
+            top_ver_id = max(ver_rev.items(), key=lambda kv: kv[1])[0]
+            kind, status, label = ver_info.get(top_ver_id, ("", "", None))
+            b["top_version_id"] = top_ver_id
+            b["top_version_kind"] = kind or None
+            b["top_version_status"] = status or None
+            b["top_version_label"] = label
+            b["version_count"] = len(ver_rev)
+        else:
+            b["top_version_id"] = None
+            b["top_version_kind"] = None
+            b["top_version_status"] = None
+            b["top_version_label"] = None
+            b["version_count"] = 0
+
+        revenue = b["revenue_amount"]
+        cost = b["cost_amount"]
+        refund = b["refund_amount"]
+        gross_profit = revenue - cost
+        gross_margin = (gross_profit / revenue) if revenue > 0 else None
+        net_revenue = revenue - refund
+        net_profit = net_revenue - cost
+        net_margin = (net_profit / net_revenue) if net_revenue > 0 else None
+        items.append(
+            {
+                **b,
+                "gross_profit": gross_profit,
+                "gross_margin": gross_margin,
+                "net_revenue": net_revenue,
+                "net_profit": net_profit,
+                "net_margin": net_margin,
+            }
+        )
+
+    items.sort(key=lambda r: _d(r.get("revenue_amount")), reverse=True)
+    return {
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "channel": channel,
+        "total_shipment_lines": total_ship_lines,
+        "mapped_model_lines": int(mapped_lines),
+        "costed_lines": int(costed_lines),
+        "lines_missing_costing": int(missing_costing_lines),
+        "items": items,
+        "note": "模型统计榜单：按模型聚合；成本优先 shipment_costing_results（三段），回退 bom_snapshot.trace；覆盖率按行数。",
+    }
+
+
+def model_insights_detail(
+    db: Session,
+    *,
+    start: datetime,
+    end: datetime,
+    model_code: str,
+    channel: Optional[str] = None,
+    version_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    start = start.astimezone(timezone.utc)
+    end = end.astimezone(timezone.utc)
+
+    mdl = (
+        db.query(models.ProductModel)
+        .filter(models.ProductModel.model_code == model_code, models.ProductModel.is_archived.is_(False))
+        .first()
+    )
+    if not mdl:
+        raise ValueError("模型不存在或已归档")
+
+    res_sq = (
+        db.query(
+            models.ShipmentCostingResult.shipment_line_id.label("shipment_line_id"),
+            models.ShipmentCostingResult.cost_total.label("cost_total"),
+            models.ShipmentCostingResult.cost_material_total.label("cost_material_total"),
+            models.ShipmentCostingResult.cost_process_total.label("cost_process_total"),
+            models.ShipmentCostingResult.cost_overhead_total.label("cost_overhead_total"),
+            models.ShipmentCostingResult.model_version_id.label("model_version_id"),
+        )
+        .subquery()
+    )
+    snap_sq = (
+        db.query(
+            models.BomSnapshot.shipment_line_id.label("shipment_line_id"),
+            models.BomSnapshot.model_version_id.label("model_version_id"),
+            models.BomSnapshot.trace_json.label("trace_json"),
+            models.BomSnapshot.created_at.label("created_at"),
+        )
+        .filter(models.BomSnapshot.shipment_line_id.isnot(None))
+        .order_by(models.BomSnapshot.shipment_line_id.asc(), models.BomSnapshot.created_at.desc())
+        .distinct(models.BomSnapshot.shipment_line_id)
+        .subquery()
+    )
+
+    mv_id_expr = func.coalesce(res_sq.c.model_version_id, snap_sq.c.model_version_id)
+    base_q = (
+        db.query(
+            models.ShipmentLine,
+            res_sq.c.shipment_line_id.label("res_ship_line_id"),
+            res_sq.c.cost_total,
+            res_sq.c.cost_material_total,
+            res_sq.c.cost_process_total,
+            res_sq.c.cost_overhead_total,
+            snap_sq.c.trace_json,
+            mv_id_expr.label("model_version_id"),
+            models.ProductModelVersion.version_kind,
+            models.ProductModelVersion.version_status,
+            models.ProductModelVersion.version_label,
+        )
+        .outerjoin(res_sq, models.ShipmentLine.id == res_sq.c.shipment_line_id)
+        .outerjoin(snap_sq, models.ShipmentLine.id == snap_sq.c.shipment_line_id)
+        .join(
+            models.ProductModelVersion,
+            and_(
+                models.ProductModelVersion.id == mv_id_expr,
+                models.ProductModelVersion.is_archived.is_(False),
+                models.ProductModelVersion.model_id == mdl.id,
+            ),
+        )
+        .filter(
+            models.ShipmentLine.completed_at.isnot(None),
+            models.ShipmentLine.completed_at >= start,
+            models.ShipmentLine.completed_at < end,
+            models.ShipmentLine.is_archived.is_(False),
+        )
+    )
+    if channel:
+        base_q = base_q.filter(models.ShipmentLine.channel == channel)
+    rows = base_q.all()
+
+    ver_agg: Dict[str, Dict[str, Any]] = {}
+    for (
+        line,
+        res_ship_line_id,
+        cost_total,
+        cost_material_total,
+        cost_process_total,
+        cost_overhead_total,
+        snap_trace_json,
+        mv_id,
+        ver_kind,
+        ver_status,
+        ver_label,
+    ) in rows:
+        vid = str(mv_id or "").strip()
+        if not vid:
+            continue
+        b = ver_agg.setdefault(
+            vid,
+            {
+                "version_id": vid,
+                "version_kind": str(ver_kind or "") or None,
+                "version_status": str(ver_status or "") or None,
+                "version_label": str(ver_label or "") or None,
+                "shipped_qty": Decimal("0"),
+                "revenue_amount": Decimal("0"),
+                "cost_material_amount": Decimal("0"),
+                "cost_process_amount": Decimal("0"),
+                "cost_overhead_amount": Decimal("0"),
+                "cost_amount": Decimal("0"),
+                "line_count": 0,
+                "costed_line_count": 0,
+                "missing_costing_line_count": 0,
+            },
+        )
+        b["line_count"] += 1
+        b["shipped_qty"] += _d(line.qty)
+        revenue = _d(line.revenue_amount)
+        b["revenue_amount"] += revenue
+
+        if res_ship_line_id is not None:
+            m = _d(cost_material_total)
+            p = _d(cost_process_total)
+            o = _d(cost_overhead_total)
+            total_src = cost_total
+            if total_src in (None, ""):
+                total_src = m + p + o
+            total = _d(total_src)
+            if total == 0 and (cost_total in (None, "", 0)) and (cost_material_total in (None, "")) and (cost_process_total in (None, "")) and (cost_overhead_total in (None, "")):
+                snap_total, sm, sp, so, s = _extract_cost_breakdown_from_trace(snap_trace_json)
+                if s == "costed":
+                    b["costed_line_count"] += 1
+                    b["cost_material_amount"] += _d(sm)
+                    b["cost_process_amount"] += _d(sp)
+                    b["cost_overhead_amount"] += _d(so)
+                    b["cost_amount"] += _d(snap_total)
+                else:
+                    b["missing_costing_line_count"] += 1
+            else:
+                b["costed_line_count"] += 1
+                b["cost_material_amount"] += m
+                b["cost_process_amount"] += p
+                b["cost_overhead_amount"] += o
+                b["cost_amount"] += total
+        else:
+            total, m, p, o, status = _extract_cost_breakdown_from_trace(snap_trace_json)
+            if status == "missing_costing":
+                b["missing_costing_line_count"] += 1
+            else:
+                b["costed_line_count"] += 1
+                b["cost_material_amount"] += _d(m)
+                b["cost_process_amount"] += _d(p)
+                b["cost_overhead_amount"] += _d(o)
+                b["cost_amount"] += _d(total)
+
+    versions: List[Dict[str, Any]] = []
+    for b in ver_agg.values():
+        revenue = b["revenue_amount"]
+        cost = b["cost_amount"]
+        gross_profit = revenue - cost
+        gross_margin = (gross_profit / revenue) if revenue > 0 else None
+        versions.append({**b, "gross_profit": gross_profit, "gross_margin": gross_margin})
+    versions.sort(key=lambda r: _d(r.get("revenue_amount")), reverse=True)
+
+    selected_version_id = str(version_id or (versions[0]["version_id"] if versions else "")).strip() or None
+
+    sample_row = None
+    if selected_version_id:
+        sample_row = (
+            base_q.filter(mv_id_expr == selected_version_id)
+            .order_by(models.ShipmentLine.completed_at.desc(), models.ShipmentLine.created_at.desc())
+            .first()
+        )
+    sample_line = sample_row[0] if sample_row else None
+
+    bom: Optional[Dict[str, Any]] = None
+    note: Optional[str] = None
+    if sample_line and selected_version_id:
+        try:
+            qty = _d(sample_line.qty) if sample_line.qty not in (None, "") else Decimal("1")
+            bom = bom_generation_service.generate_bom(
+                db,
+                spec_text=str(sample_line.spec_text or ""),
+                model_version_id=str(selected_version_id),
+                sku_code=str(sample_line.sku_code or ""),
+                quantity=qty,
+                include_disabled_variants=False,
+            )
+            note = "右侧 BOM 为样本发货行“现场生成”（与测试台 bom/generate 同口径）。"
+        except Exception as e:  # noqa: BLE001
+            bom = {"final_material_lines": [], "trace": {"costing": {}, "inventory": {}}}
+            note = f"生成样本 BOM 失败：{e}"
+
+    persisted = []
+    if sample_line:
+        persisted_rows = (
+            db.query(models.ShipmentInventoryDeductionLine)
+            .filter(models.ShipmentInventoryDeductionLine.shipment_line_id == sample_line.id)
+            .order_by(models.ShipmentInventoryDeductionLine.material_code.asc())
+            .all()
+        )
+        for r in persisted_rows:
+            meta = getattr(r, "metadata_json", None) or {}
+            sources = meta.get("sources")
+            persisted.append(
+                {
+                    "material_code": getattr(r, "material_code", None),
+                    "material_name": getattr(r, "material_name", None),
+                    "unit_of_measure": getattr(r, "unit_of_measure", None),
+                    "quantity": getattr(r, "quantity", None),
+                    "sources": (len(sources) if isinstance(sources, list) else None),
+                }
+            )
+
+    base_material_lines = []
+    base_process_lines = []
+    if selected_version_id:
+        try:
+            mats = product_model_service.list_version_material_lines(db, str(selected_version_id))
+            for r in mats or []:
+                base_material_lines.append(
+                    {
+                        "material_type": getattr(r, "material_type", None),
+                        "material_ref_id": getattr(r, "material_ref_id", None),
+                        "material_code": getattr(r, "material_code", None),
+                        "material_name": getattr(r, "material_name", None),
+                        "unit_of_measure": getattr(r, "unit_of_measure", None),
+                        "calculation_method": getattr(r, "calculation_method", None),
+                        "base_quantity": getattr(r, "base_quantity", None),
+                        "loss_rate": getattr(r, "loss_rate", None),
+                        "unit_cost": getattr(r, "unit_cost", None),
+                        "sequence_order": getattr(r, "sequence_order", None),
+                        "notes": getattr(r, "notes", None),
+                    }
+                )
+            procs = product_model_service.list_version_process_lines(db, str(selected_version_id))
+            for r in procs or []:
+                p = getattr(r, "process", None)
+                base_process_lines.append(
+                    {
+                        "process_id": getattr(r, "process_id", None),
+                        "process_code": getattr(p, "process_code", None) if p is not None else None,
+                        "process_name": getattr(p, "process_name", None) if p is not None else None,
+                        "team_name": getattr(p, "team_name", None) if p is not None else None,
+                        "pricing_method": getattr(p, "pricing_method", None) if p is not None else None,
+                        "piece_rate": getattr(p, "piece_rate", None) if p is not None else None,
+                        "rate_per_minute": getattr(p, "rate_per_minute", None) if p is not None else None,
+                        "notes": getattr(r, "notes", None),
+                    }
+                )
+        except Exception:
+            pass
+
+    return {
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "channel": channel,
+        "model_id": str(mdl.id),
+        "model_code": str(mdl.model_code),
+        "model_name": str(mdl.model_name),
+        "selected_version_id": selected_version_id,
+        "versions": versions,
+        "sample_shipment_line_id": str(sample_line.id) if sample_line else None,
+        "sample_completed_at": sample_line.completed_at if sample_line else None,
+        "sample_sku_code": str(sample_line.sku_code) if sample_line and sample_line.sku_code else None,
+        "sample_spec_text": str(sample_line.spec_text) if sample_line and sample_line.spec_text else None,
+        "sample_qty": sample_line.qty if sample_line else None,
+        "bom": bom,
+        "persisted_deductions": persisted,
+        "base_material_lines": base_material_lines,
+        "base_process_lines": base_process_lines,
+        "note": note,
     }
 

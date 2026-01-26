@@ -45,6 +45,25 @@
   - 验收命令（必须，全部 0 退出码）：
     - Frontend：`npm -C frontend run build`（已通过）
 
+- **最近校对（北京时间 GMT+8）**：2026-01-26（模型分析页面：左侧榜单卡片化 + 退货数量 returned_qty 补齐 + SQLite 测试建表修复）
+  - 需求：左侧“模型榜单”做成卡片式列表（第一行：模型编码+名称大字；第二行：发货数量/销售金额/成本/毛利/毛利率/退货数量/退货金额小字），并把“物料/人工/制造费用”从左侧移到右侧“版本”表的成本列里展示。
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/ProfitInsightsPage.tsx`
+      - 左侧榜单改为卡片样式与两行指标结构；指标文案收口为“发货数量/销售金额/退货数量/退货金额”。
+      - 右侧“版本”表保留并展示成本拆分列：物料成本/人工成本/制造费用（与总成本并列）。
+  - 本轮产物（后端/测试）：
+    - `backend/src/planner/schemas.py` + `backend/src/planner/services/analytics_service.py`
+      - 模型榜单返回补齐 `returned_qty`（退货数量）。
+    - `backend/tests/planner/conftest.py`
+      - 修复 SQLite 测试缺表：在建表前强制 import planner models，并对持久化 sqlite 文件先 `drop_all` 再 `create_all`，避免 `no such table: shipment_import_batches`。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+  - 下一步：
+    - 若需要“左侧榜单多列网格（大屏 2 列）/ 支持排序切换（按销售额/毛利等）”，建议单开迭代，避免和数据口径混改。
+
 - **最近校对（北京时间 GMT+8）**：2026-01-26（发货单上传：413 失败提示收口 + 文件大小引导）
   - 背景：线上 `/costing/shipments` 上传发货单预览报 `Request failed with status code 413`（请求体过大），通常是网关/Nginx `client_max_body_size` 限制触发。
   - 本轮产物（前端）：

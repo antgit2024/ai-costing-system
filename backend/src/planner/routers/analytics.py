@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 from ..dependencies import get_db_session
 from ..schemas import (
     ProfitByChannelResponse,
+    ModelInsightsDetailResponse,
+    ModelInsightsSummaryResponse,
     ProfitByModelResponse,
     ProfitBySkuResponse,
     ReturnsRateByChannelResponse,
@@ -155,6 +157,58 @@ def profit_by_model(
         group_by=group_by,
         channel=channel,
         model_code=model_code,
+    )
+
+
+@router.get("/models/summary", response_model=ModelInsightsSummaryResponse)
+def models_summary(
+    start: str = Query(..., description="ISO datetime, e.g. 2025-01-01T00:00:00Z"),
+    end: str = Query(..., description="ISO datetime, e.g. 2026-01-01T00:00:00Z"),
+    channel: Optional[str] = None,
+    db: Session = Depends(get_db_session),
+):
+    def parse_dt(s: str) -> datetime:
+        v = (s or "").strip()
+        if v.endswith("Z"):
+            v = v[:-1] + "+00:00"
+        dt = datetime.fromisoformat(v)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+
+    return analytics_service.model_insights_summary(
+        db,
+        start=parse_dt(start),
+        end=parse_dt(end),
+        channel=channel,
+    )
+
+
+@router.get("/models/detail", response_model=ModelInsightsDetailResponse)
+def models_detail(
+    start: str = Query(..., description="ISO datetime, e.g. 2025-01-01T00:00:00Z"),
+    end: str = Query(..., description="ISO datetime, e.g. 2026-01-01T00:00:00Z"),
+    model_code: str = Query(..., description="model_code"),
+    channel: Optional[str] = None,
+    version_id: Optional[str] = None,
+    db: Session = Depends(get_db_session),
+):
+    def parse_dt(s: str) -> datetime:
+        v = (s or "").strip()
+        if v.endswith("Z"):
+            v = v[:-1] + "+00:00"
+        dt = datetime.fromisoformat(v)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+
+    return analytics_service.model_insights_detail(
+        db,
+        start=parse_dt(start),
+        end=parse_dt(end),
+        channel=channel,
+        model_code=model_code,
+        version_id=version_id,
     )
 
 

@@ -1,10 +1,11 @@
-import { Alert, Button, Card, Col, Descriptions, Input, InputNumber, Row, Select, Space, Table, Tabs, Tag, Typography, message } from 'antd'
+import { Alert, Button, Card, Col, Descriptions, Input, InputNumber, Modal, Row, Select, Space, Table, Tabs, Tag, Typography, message } from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 import dayjs from 'dayjs'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery } from '@tanstack/react-query'
 
 import {
+  bulkSaveSkuMasterSpecPreparse,
   executeSkuMasterSpecPreparse,
   fetchSkuMaster,
   parseSpec,
@@ -33,6 +34,13 @@ const dimGet = (dims: any, key: string): string => {
   const v = dims?.[key]
   if (v === null || v === undefined || v === '') return '-'
   return String(v)
+}
+
+const tokensPreview = (tokens: any): string => {
+  if (!Array.isArray(tokens) || tokens.length === 0) return '-'
+  const parts = tokens.slice(0, 3).map((t) => String(t ?? '').trim()).filter(Boolean)
+  const more = tokens.length > 3 ? '…' : ''
+  return parts.length ? `${parts.join(' / ')}${more}` : '-'
 }
 
 export default function SkuSpecMatchingPage() {
@@ -67,6 +75,24 @@ export default function SkuSpecMatchingPage() {
   const [previewSelectedKeys, setPreviewSelectedKeys] = useState<string[]>([])
   const [previewSaved, setPreviewSaved] = useState<boolean>(false)
   const [listTab, setListTab] = useState<'all' | 'parsed' | 'unparsed'>('all')
+
+  // 对齐 /costing/sku-master：“所有页勾选（跨页）”单一模式
+  const [manualExcludedIds, setManualExcludedIds] = useState<string[]>([]) // 取消勾选=加入排除
+  const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]) // 当前页“隐式全选”的可视回显
+
+  // 一键跑完：自循环执行 + 可停止 + 心跳状态
+  const [runAllRunning, setRunAllRunning] = useState(false)
+  const runAllStopRef = useRef(false)
+  const [runAllStatus, setRunAllStatus] = useState<{
+    round: number
+    last_scanned: number
+    last_saved: number
+    last_skipped: number
+    total_saved: number
+    has_more: boolean
+    last_update: string
+    note?: string
+  } | null>(null)
 
   useEffect(() => {
     try {
@@ -111,6 +137,33 @@ export default function SkuSpecMatchingPage() {
   const tableRows = isPreviewMode ? previewItems : items
   const tableTotal = isPreviewMode ? previewItems.length : total
 
+  // 所有页勾选模式：默认“隐式全选本页（跨页）”，取消勾选=加入排除
+  useEffect(() => {
+    if (isPreviewMode) return
+    if (listTab !== 'unparsed') return
+    const pageIds = (items ?? []).map((x) => String((x as any)?.id ?? '')).filter(Boolean)
+    if (!pageIds.length) return
+    const excluded = new Set(manualExcludedIds.map((x) => String(x)))
+    const nextSelected = pageIds.filter((id) => !excluded.has(id))
+    setSelectedRowKeys(nextSelected)
+  }, [isPreviewMode, listTab, items, manualExcludedIds])
+
+  const handleRowSelectionChange = (keys: any[]) => {
+    const nextSelected = (keys ?? []).map((x) => String(x))
+    if (isPreviewMode || listTab !== 'unparsed') {
+      setSelectedRowKeys(nextSelected)
+      return
+    }
+    const pageIds = (items ?? []).map((x) => String((x as any)?.id ?? '')).filter(Boolean)
+    const excluded = new Set(manualExcludedIds.map((x) => String(x)))
+    for (const id of pageIds) {
+      if (nextSelected.includes(id)) excluded.delete(id)
+      else excluded.add(id)
+    }
+    setManualExcludedIds(Array.from(excluded))
+    setSelectedRowKeys(nextSelected)
+  }
+
   const channelOptions = useMemo(() => {
     const set = new Set<string>()
     for (const it of items) {
@@ -142,7 +195,9 @@ export default function SkuSpecMatchingPage() {
   const effectiveSpecText = useMemo(() => {
     const s = (specTextDraft || '').trim()
     if (s) return s
-    const src = activeSku?.last_shipment_spec_text || activeSku?.spec_text || ''
+    // In preview mode, rows carry `spec_text_used` (computed by backend preview endpoint).
+    // Do NOT confuse it with real "last_shipment_spec_text" (shipment snapshot).
+    const src = (activeSku as any)?.spec_text_used || activeSku?.last_shipment_spec_text || activeSku?.spec_text || ''
     return String(src || '').trim()
   }, [activeSku, specTextDraft])
 
@@ -208,10 +263,13 @@ export default function SkuSpecMatchingPage() {
         include_terms: includeTerms || undefined,
         exclude_terms: excludeTerms || undefined,
         match_scope: matchScope,
-        preparse_state: listTab === 'parsed' ? 'parsed' : listTab === 'unparsed' ? 'unparsed' : undefined,
+        // 对齐“一键跑完”的语义：只对“未解析”做预览与落库（收敛且避免误操作）
+        preparse_state: 'unparsed',
       })
     },
     onSuccess: (res) => {
+      // 进入预览即切到“未解析”语义，避免预览/保存口径不一致
+      setListTab('unparsed')
       const rows = (res.items ?? []).map((x) => ({
         id: x.sku_id,
         erp_sku_barcode: x.erp_sku_barcode,
@@ -222,8 +280,9 @@ export default function SkuSpecMatchingPage() {
         bound_model_code: (x as any).bound_model_code ?? null,
         bound_model_name: (x as any).bound_model_name ?? null,
         bound_version_label: (x as any).bound_version_label ?? null,
-        // show used spec as shipment spec column
-        last_shipment_spec_text: x.spec_text_used,
+        // Preview-only: spec text actually used for parsing (shipment-first fallback to shop spec).
+        // DO NOT map it into `last_shipment_spec_text` (that field means real shipment snapshot in DB).
+        spec_text_used: x.spec_text_used,
         _preview_spec_hash: x.spec_hash,
         _preview_dims: {
           width_cm: x.width_cm ?? null,
@@ -250,36 +309,196 @@ export default function SkuSpecMatchingPage() {
     },
   })
 
-  const executePreviewSaveMutation = useMutation({
+  const executeCandidatesMutation = useMutation({
     mutationFn: async () => {
-      const ids = previewSelectedKeys
-      return executeSkuMasterSpecPreparse({ sku_ids: ids, skip_if_same_hash: true })
+      const ids = (previewSelectedKeys ?? []).map((x) => String(x)).filter(Boolean)
+      if (!ids.length) throw new Error('请先勾选候选')
+      // 单次可能较慢：提高超时，避免默认 20s 误判为“跑不动”
+      return executeSkuMasterSpecPreparse({ sku_ids: ids, skip_if_same_hash: true }, { timeoutMs: 120000 })
     },
-    onSuccess: (res) => {
+    onSuccess: (res: any) => {
       const errs = (res as any)?.errors ?? []
       if (Array.isArray(errs) && errs.length) {
         const first = errs[0] ?? {}
         message.error(`保存失败：${first?.error ?? '未知错误'}`)
         return
       }
-      message.success(`保存完成：扫描${res.scanned}，保存${res.saved}，跳过${res.skipped_same_hash}`)
-      // 保存后，保留预览列表作为“回执确认”，避免用户觉得记录消失
-      setPreviewSaved(true)
+
+      // 预览表格的数据源是 `previewItems`（来自 /preview），它不包含后端落库后的 preparse_* 字段。
+      // 为避免“保存成功但表格仍显示未解析”的错觉：在前端用预览结果回填一份 preparse_*，作为回执展示。
+      const selected = new Set((previewSelectedKeys ?? []).map((x) => String(x)).filter(Boolean))
+      const nowIso = new Date().toISOString()
       setPreviewItems((prev) =>
-        (prev ?? []).map((r) => ({
-          ...r,
-          preparse_spec_hash: r?._preview_spec_hash ?? r?.preparse_spec_hash ?? 'saved',
-          preparse_dimensions: r?._preview_dims ?? r?.preparse_dimensions ?? {},
-          preparse_saved_at: new Date().toISOString(),
-        })),
+        (prev ?? []).map((r: any) => {
+          const id = String(r?.id ?? '')
+          if (!id || !selected.has(id)) return r
+          return {
+            ...r,
+            preparse_spec_hash: r?._preview_spec_hash ?? r?.preparse_spec_hash ?? null,
+            preparse_dimensions: r?._preview_dims ?? r?.preparse_dimensions ?? null,
+            preparse_tokens: Array.isArray(r?.preparse_tokens) ? r.preparse_tokens : [],
+            preparse_saved_at: r?.preparse_saved_at ?? nowIso,
+          }
+        }),
       )
-      // 同步刷新后台列表数据（退出预览后会自动落到“已解析”Tab）
+
+      const scanned = Number(res?.scanned ?? 0)
+      const saved = Number(res?.saved ?? 0)
+      const skipped = Number(res?.skipped_same_hash ?? 0)
+      if (saved > 0) {
+        message.success(`保存完成：扫描${scanned}，新增保存${saved}，已存在跳过${skipped}`)
+      } else if (skipped > 0) {
+        message.success(`无新增写入：扫描${scanned}，已存在相同规格（跳过${skipped}）`)
+      } else {
+        message.success(`执行完成：扫描${scanned}（无可保存项）`)
+      }
+      setPreviewSaved(true)
       listQuery.refetch()
     },
     onError: (err: any) => {
       message.error(err?.response?.data?.detail ?? err?.message ?? '保存失败')
     },
   })
+
+  const handleRunAllLoop = () => {
+    if (runAllRunning) return
+    if (listTab !== 'unparsed') {
+      message.warning('请先切到“未解析”TAB 再执行（避免误操作）')
+      return
+    }
+
+    // 若在候选预览中：把“取消勾选”作为排除，并自动退出预览后再跑全量
+    const selected = new Set<string>((previewSelectedKeys ?? []).map((x) => String(x)))
+    const excludedFromPreview: string[] = []
+    if (isPreviewMode) {
+      for (const r of previewItems ?? []) {
+        const id = String((r as any)?.id ?? '')
+        if (!id) continue
+        if (!selected.has(id)) excludedFromPreview.push(id)
+      }
+    }
+    const excludedMerged = Array.from(new Set([...manualExcludedIds, ...excludedFromPreview].map((x) => String(x)).filter(Boolean)))
+
+    const excludedCount = new Set(manualExcludedIds.map((x) => String(x))).size
+    const filterSummary = [
+      `关键词：${search ? `“${search}”` : '（空）'}`,
+      `包含词：${includeTerms ? `“${includeTerms}”` : '（空）'}`,
+      `排除词：${excludeTerms ? `“${excludeTerms}”` : '（空）'}`,
+      `范围：${matchScope}`,
+      `渠道：${channel || '（全部）'}`,
+      `ERP匹配：${matchStatus || '（全部）'}`,
+      excludedCount ? `排除：${excludedCount} 条（取消勾选）` : null,
+    ]
+      .filter(Boolean)
+      .join('；')
+
+    const expected = '预解析'
+    let typed = ''
+    Modal.confirm({
+      title: '确认一键跑完（自循环执行）？',
+      content: (
+        <div>
+          <div style={{ marginBottom: 8, color: '#666' }}>{filterSummary}</div>
+          <div style={{ marginBottom: 8 }}>
+            为防误操作，请输入确认词：<b>{expected}</b>
+          </div>
+          <Input placeholder="请输入上面的确认词以确认" onChange={(e) => (typed = String(e.target.value || '').trim())} />
+          <div style={{ marginTop: 8, color: '#999' }}>
+            将按筛选条件跨页循环执行；本页取消勾选的条目会加入“排除列表”。若出现“无进展（保存=0且跳过=0）”将自动停止，避免死循环。
+          </div>
+        </div>
+      ),
+      okText: '开始执行',
+      cancelText: '取消',
+      onOk: () => {
+        if (String(typed || '').trim() !== expected) {
+          message.error('确认输入不一致，已取消执行')
+          return Promise.reject(new Error('confirm mismatch'))
+        }
+
+        // 开始跑之前：如果来自预览，把排除合并落回 state 并退出预览
+        if (excludedMerged.length) setManualExcludedIds(excludedMerged)
+        if (isPreviewMode) {
+          setIsPreviewMode(false)
+          setPreviewItems([])
+          setPreviewSelectedKeys([])
+          setPreviewSaved(false)
+        }
+
+        setRunAllRunning(true)
+        runAllStopRef.current = false
+        setRunAllStatus(null)
+
+        void (async () => {
+          const MESSAGE_KEY = 'spec-preparse-run-all'
+          let totalSaved = 0
+          try {
+            for (let round = 1; round <= 999; round += 1) {
+              if (runAllStopRef.current) break
+
+              const res = await bulkSaveSkuMasterSpecPreparse({
+                limit: bulkLimit,
+                search: search || undefined,
+                channel: channel || undefined,
+                match_status: matchStatus || undefined,
+                include_terms: includeTerms || undefined,
+                exclude_terms: excludeTerms || undefined,
+                match_scope: matchScope,
+                preparse_state: 'unparsed',
+                excluded_sku_ids: excludedMerged,
+                skip_if_same_hash: true,
+              }, { timeoutMs: 180000 })
+
+              const scanned = Number((res as any)?.scanned ?? 0)
+              const saved = Number((res as any)?.saved ?? 0)
+              const skipped = Number((res as any)?.skipped_same_hash ?? 0)
+              const hasMore = Boolean((res as any)?.has_more)
+              const errs = ((res as any)?.errors ?? []) as any[]
+              totalSaved += saved
+
+              const now = new Date()
+              const stamp = `${now.getHours().toString().padStart(2, '0')}:${now
+                .getMinutes()
+                .toString()
+                .padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`
+
+              setRunAllStatus({
+                round,
+                last_scanned: scanned,
+                last_saved: saved,
+                last_skipped: skipped,
+                total_saved: totalSaved,
+                has_more: hasMore,
+                last_update: stamp,
+                note: runAllStopRef.current ? '已请求停止' : hasMore ? '循环中…' : '已无更多',
+              })
+
+              message.loading({
+                content: `保存中… 第${round}轮：本轮扫描${scanned} / 保存${saved} / 跳过${skipped}；累计保存${totalSaved}${hasMore ? '（还有待处理）' : '（已无更多）'}`,
+                key: MESSAGE_KEY,
+                duration: 0,
+              })
+
+              if (Array.isArray(errs) && errs.length) {
+                const first = errs[0] ?? {}
+                message.error({ content: `保存失败（已中止）：${first?.error ?? '未知错误'}`, key: MESSAGE_KEY, duration: 5 })
+                break
+              }
+              if (!hasMore) break
+              if (saved <= 0 && skipped <= 0) {
+                message.warning({ content: '批量已停止（无进展）：本轮保存=0且跳过=0', key: MESSAGE_KEY, duration: 5 })
+                break
+              }
+            }
+          } finally {
+            setRunAllRunning(false)
+            listQuery.refetch()
+            message.success({ content: `批量结束：累计保存${totalSaved}`, key: 'spec-preparse-run-all', duration: 3 })
+          }
+        })()
+      },
+    })
+  }
 
   const columns: ColumnsType<any> = useMemo(
     () => [
@@ -324,20 +543,21 @@ export default function SkuSpecMatchingPage() {
         ),
       },
       {
-        title: '发货规格（优先用于解析）',
+        title: isPreviewMode ? '用于解析的规格（预览）' : '发货规格（优先用于解析）',
         dataIndex: 'last_shipment_spec_text',
         width: 360,
         render: (v, row) => {
-          const text = safeString(v) || '-'
+          const text = isPreviewMode ? safeString((row as any)?.spec_text_used) : safeString(v)
+          const shown = text || '-'
           const dims = (row as any)?._preview_dims
           if (!dims) {
-            return <div style={{ whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.2 }}>{text}</div>
+            return <div style={{ whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.2 }}>{shown}</div>
           }
           const w = dims?.width_cm ?? '-'
           const h = dims?.height_cm ?? '-'
           return (
             <div style={{ whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.2 }}>
-              <div>{text}</div>
+              <div>{shown}</div>
               <Tag color="purple" style={{ marginTop: 4 }}>
                 解析尺寸：宽{w}cm × 高{h}cm
               </Tag>
@@ -355,12 +575,31 @@ export default function SkuSpecMatchingPage() {
           if (!hash) return <Tag>未解析</Tag>
           const w = dimGet(dims, 'width_cm')
           const h = dimGet(dims, 'height_cm')
+          const hasDims = (row as any)?.preparse_has_dims
           return (
             <Space size={6} wrap>
               <Tag color="geekblue">已解析</Tag>
+              {hasDims === false ? <Tag color="orange">无尺寸/定制</Tag> : null}
               <Tag color="purple">
                 宽{w}×高{h}cm
               </Tag>
+            </Space>
+          )
+        },
+      },
+      {
+        title: '预解析TOKEN（已落库）',
+        dataIndex: 'preparse_tokens',
+        width: 220,
+        render: (_v, row) => {
+          const hash = (row as any)?.preparse_spec_hash
+          if (!hash) return <Tag>未解析</Tag>
+          const tokens = (row as any)?.preparse_tokens
+          const n = Array.isArray(tokens) ? tokens.length : 0
+          return (
+            <Space size={6} wrap>
+              <Tag color="geekblue">tokens:{n}</Tag>
+              <span style={{ color: '#666' }}>{tokensPreview(tokens)}</span>
             </Space>
           )
         },
@@ -370,7 +609,7 @@ export default function SkuSpecMatchingPage() {
       { title: 'ERP规格Hash', dataIndex: 'erp_spec_hash', width: 160, render: (v) => safeString(v) || '-' },
       { title: '更新时间', dataIndex: 'updated_at', width: 170, render: (v) => formatTime(v as any) },
     ],
-    [],
+    [isPreviewMode],
   )
 
   const handlePaginationChange = (pagination: TablePaginationConfig) => {
@@ -388,6 +627,15 @@ export default function SkuSpecMatchingPage() {
       <Text type="secondary">
         本页面仅展示<strong>已绑定模型</strong>的 SKU；解析优先使用“发货规格”，缺失时回退到“商品规格（网店）”。变体规则与词典先不启用，等你们跑完70%再上。
       </Text>
+      <div style={{ marginTop: 8 }}>
+        <Button
+          type="link"
+          style={{ padding: 0 }}
+          onClick={() => window.open('/costing/tmall-sku-generator/mvp', '_blank')}
+        >
+          去“天猫SKU规格生成器（MVP）”做运营前置预检/预演
+        </Button>
+      </div>
 
       <Row gutter={[16, 16]} style={{ marginTop: 12 }}>
         {/* 左侧 1/4：解析工作台 */}
@@ -400,6 +648,19 @@ export default function SkuSpecMatchingPage() {
             >
               <Space wrap>
                 <Tag color="purple">模式：自动识别</Tag>
+                <Tag color="green">所有页勾选模式（跨页）</Tag>
+                {manualExcludedIds.length ? <Tag color="orange">已排除 {manualExcludedIds.length}</Tag> : null}
+                {manualExcludedIds.length ? (
+                  <Button
+                    size="small"
+                    onClick={() => {
+                      setManualExcludedIds([])
+                      message.success('已清空排除列表（本页将重新默认全选）')
+                    }}
+                  >
+                    清空排除
+                  </Button>
+                ) : null}
                 <InputNumber
                   addonBefore="预览数"
                   min={1}
@@ -408,17 +669,29 @@ export default function SkuSpecMatchingPage() {
                   onChange={(v) => setBulkLimit(typeof v === 'number' ? v : 200)}
                 />
                 <Button type="primary" loading={previewMutation.isPending} onClick={() => previewMutation.mutate()}>
-                  预览解析
+                  候选预览（命中）
                 </Button>
                 <Button
                   type="primary"
-                  danger
-                  loading={executePreviewSaveMutation.isPending}
                   disabled={!isPreviewMode || previewSelectedKeys.length === 0}
-                  onClick={() => executePreviewSaveMutation.mutate()}
+                  loading={executeCandidatesMutation.isPending}
+                  onClick={() => executeCandidatesMutation.mutate()}
                 >
-                  保存预览解析
+                  执行保存（仅选中候选）
                 </Button>
+                <Button type="primary" danger loading={runAllRunning} onClick={handleRunAllLoop}>
+                  一键跑完（自循环执行）
+                </Button>
+                {runAllRunning ? (
+                  <Button
+                    onClick={() => {
+                      runAllStopRef.current = true
+                      message.info('已请求停止：将在本轮执行结束后停止')
+                    }}
+                  >
+                    停止自动执行
+                  </Button>
+                ) : null}
                 {isPreviewMode ? (
                   <Button
                     onClick={() => {
@@ -441,7 +714,18 @@ export default function SkuSpecMatchingPage() {
                   style={{ marginTop: 8 }}
                   type="info"
                   showIcon
-                  message={`当前为预览模式：右侧列表默认全选 ${previewItems.length} 条；可取消勾选后再“保存预览解析”。`}
+                  message={`当前为预览模式：这里只展示上限${bulkLimit}条“候选预览”（默认全选${previewItems.length}条）。你可以：1）点“执行保存（仅选中候选）”仅保存这${previewSelectedKeys.length}条；2）点“一键跑完（自循环执行）”跑完全部筛选结果（跨页全选），你在预览里取消勾选的条目会加入排除。`}
+                />
+              ) : null}
+              {!isPreviewMode && runAllStatus ? (
+                <Alert
+                  style={{ marginTop: 8 }}
+                  type={runAllRunning ? 'info' : 'success'}
+                  showIcon
+                  message={`心跳：第${runAllStatus.round}轮 / 本轮扫描${runAllStatus.last_scanned} / 保存${runAllStatus.last_saved} / 跳过${runAllStatus.last_skipped} / 累计保存${runAllStatus.total_saved} ${
+                    runAllStatus.has_more ? '（还有待处理）' : '（已无更多）'
+                  }`}
+                  description={`最后更新：${runAllStatus.last_update}${runAllStatus.note ? `；${runAllStatus.note}` : ''}`}
                 />
               ) : null}
               {isPreviewMode && previewSaved ? (
@@ -638,7 +922,12 @@ export default function SkuSpecMatchingPage() {
                       selectedRowKeys: previewSelectedKeys,
                       onChange: (keys) => setPreviewSelectedKeys((keys ?? []) as string[]),
                     }
-                  : undefined
+                  : listTab === 'unparsed'
+                    ? {
+                        selectedRowKeys,
+                        onChange: (keys) => handleRowSelectionChange((keys ?? []) as any[]),
+                      }
+                    : undefined
               }
               pagination={
                 isPreviewMode

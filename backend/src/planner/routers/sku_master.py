@@ -268,6 +268,8 @@ def bulk_save_spec_preparse(
             include_terms=payload.include_terms,
             exclude_terms=payload.exclude_terms,
             match_scope=payload.match_scope,
+            preparse_state=payload.preparse_state,
+            excluded_sku_ids=payload.excluded_sku_ids,
             skip_if_same_hash=payload.skip_if_same_hash,
             requested_by=payload.requested_by,
         )

@@ -2540,11 +2540,18 @@ class ProfitByModelItem(BaseModel):
     model_id: str
     model_code: str
     model_name: str
+    # NOTE: model-level aggregation may involve multiple versions.
+    # We expose a "top" version for quick reading, plus version_count.
     version_id: str
     version_kind: str
     version_status: str
+    version_label: Optional[str] = None
+    version_count: int = 1
     shipped_qty: Decimal
     revenue_amount: Decimal
+    cost_material_amount: Decimal = Decimal("0")
+    cost_process_amount: Decimal = Decimal("0")
+    cost_overhead_amount: Decimal = Decimal("0")
     cost_amount: Decimal
     gross_profit: Decimal
     gross_margin: Optional[Decimal] = None
@@ -2552,6 +2559,9 @@ class ProfitByModelItem(BaseModel):
     net_revenue: Decimal
     net_profit: Decimal
     net_margin: Optional[Decimal] = None
+    line_count: int = 0
+    costed_line_count: int = 0
+    missing_costing_line_count: int = 0
 
     class Config:
         json_encoders = {Decimal: _decimal_to_str}
@@ -2561,8 +2571,147 @@ class ProfitByModelResponse(BaseModel):
     group_by: Literal["day", "month"]
     start: str
     end: str
+    total_shipment_lines: int = 0
+    mapped_model_lines: int = 0
+    costed_lines: int = 0
+    lines_missing_costing: int = 0
     items: List[ProfitByModelItem] = Field(default_factory=list)
     note: Optional[str] = None
+
+
+class ModelInsightsSummaryItem(BaseModel):
+    channel: Optional[str] = None
+    model_id: str
+    model_code: str
+    model_name: str
+
+    shipped_qty: Decimal
+    revenue_amount: Decimal
+    cost_material_amount: Decimal = Decimal("0")
+    cost_process_amount: Decimal = Decimal("0")
+    cost_overhead_amount: Decimal = Decimal("0")
+    cost_amount: Decimal
+    gross_profit: Decimal
+    gross_margin: Optional[Decimal] = None
+    returned_qty: Decimal = Decimal("0")
+    refund_amount: Decimal
+    net_revenue: Decimal
+    net_profit: Decimal
+    net_margin: Optional[Decimal] = None
+
+    line_count: int = 0
+    costed_line_count: int = 0
+    missing_costing_line_count: int = 0
+
+    top_version_id: Optional[str] = None
+    top_version_kind: Optional[str] = None
+    top_version_status: Optional[str] = None
+    top_version_label: Optional[str] = None
+    version_count: int = 0
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ModelInsightsSummaryResponse(BaseModel):
+    start: str
+    end: str
+    channel: Optional[str] = None
+    total_shipment_lines: int = 0
+    mapped_model_lines: int = 0
+    costed_lines: int = 0
+    lines_missing_costing: int = 0
+    items: List[ModelInsightsSummaryItem] = Field(default_factory=list)
+    note: Optional[str] = None
+
+
+class ModelBaseMaterialLine(BaseModel):
+    material_type: Optional[str] = None
+    material_ref_id: Optional[str] = None
+    material_code: Optional[str] = None
+    material_name: Optional[str] = None
+    unit_of_measure: Optional[str] = None
+    calculation_method: Optional[str] = None
+    base_quantity: Optional[Decimal] = None
+    loss_rate: Optional[Decimal] = None
+    unit_cost: Optional[Decimal] = None
+    sequence_order: Optional[int] = None
+    notes: Optional[str] = None
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ModelBaseProcessLine(BaseModel):
+    process_id: Optional[str] = None
+    process_code: Optional[str] = None
+    process_name: Optional[str] = None
+    team_name: Optional[str] = None
+    pricing_method: Optional[str] = None
+    piece_rate: Optional[Decimal] = None
+    rate_per_minute: Optional[Decimal] = None
+    notes: Optional[str] = None
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ModelInsightsVersionStat(BaseModel):
+    version_id: str
+    version_kind: Optional[str] = None
+    version_status: Optional[str] = None
+    version_label: Optional[str] = None
+    shipped_qty: Decimal
+    revenue_amount: Decimal
+    cost_material_amount: Decimal = Decimal("0")
+    cost_process_amount: Decimal = Decimal("0")
+    cost_overhead_amount: Decimal = Decimal("0")
+    cost_amount: Decimal
+    gross_profit: Decimal
+    gross_margin: Optional[Decimal] = None
+    line_count: int = 0
+    costed_line_count: int = 0
+    missing_costing_line_count: int = 0
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ModelInsightsDeductionLine(BaseModel):
+    material_code: Optional[str] = None
+    material_name: Optional[str] = None
+    unit_of_measure: Optional[str] = None
+    quantity: Optional[Decimal] = None
+    sources: Optional[int] = None
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ModelInsightsDetailResponse(BaseModel):
+    start: str
+    end: str
+    channel: Optional[str] = None
+    model_id: str
+    model_code: str
+    model_name: str
+    selected_version_id: Optional[str] = None
+    versions: List[ModelInsightsVersionStat] = Field(default_factory=list)
+
+    sample_shipment_line_id: Optional[str] = None
+    sample_completed_at: Optional[datetime] = None
+    sample_sku_code: Optional[str] = None
+    sample_spec_text: Optional[str] = None
+    sample_qty: Optional[Decimal] = None
+
+    bom: Optional[Dict[str, Any]] = None  # same shape as bom/generate (final_material_lines + trace)
+    persisted_deductions: List[ModelInsightsDeductionLine] = Field(default_factory=list)
+    base_material_lines: List[ModelBaseMaterialLine] = Field(default_factory=list)
+    base_process_lines: List[ModelBaseProcessLine] = Field(default_factory=list)
+    note: Optional[str] = None
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str, datetime: lambda v: v.isoformat() if v else None}
 
 
 class ShipmentProfitLineItem(BaseModel):

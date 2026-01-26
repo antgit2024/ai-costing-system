@@ -1,6 +1,8 @@
 from fastapi import APIRouter
 
 from .routers import (
+    after_sales,
+    analytics,
     approvals,
     ai,
     assumptions,
@@ -33,6 +35,8 @@ from .routers import (
 router = APIRouter(prefix="/planner")
 
 router.include_router(health.router)
+router.include_router(after_sales.router)
+router.include_router(analytics.router)
 router.include_router(initiatives.router)
 router.include_router(packages.router)
 router.include_router(line_items.router)

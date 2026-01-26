@@ -39,6 +39,15 @@ const SalesInsightsPage = () => {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(50)
   const [shopOptions, setShopOptions] = useState<string[]>([])
+  const [lastQuery, setLastQuery] = useState<{
+    start: string
+    end: string
+    include_missing: boolean
+    channel?: string
+    sku_code?: string
+    order_no?: string
+    product_link_id?: string
+  } | null>(null)
 
   const columns = useMemo<ColumnsType<SalesLineItem>>(
     () => [
@@ -84,29 +93,20 @@ const SalesInsightsPage = () => {
     [],
   )
 
-  const onQuery = async (nextPage?: number, nextPageSize?: number) => {
-    setError(null)
-    const v = await form.validateFields()
-    const range = v.range as [dayjs.Dayjs, dayjs.Dayjs]
-    const start = range[0].startOf('day').toISOString()
-    const end = range[1].endOf('day').toISOString()
-
-    const p = nextPage ?? page
-    const ps = nextPageSize ?? pageSize
-
+  const runQuery = async (q: {
+    start: string
+    end: string
+    include_missing: boolean
+    channel?: string
+    sku_code?: string
+    order_no?: string
+    product_link_id?: string
+    page: number
+    page_size: number
+  }) => {
     setLoading(true)
     try {
-      const resp = await fetchSalesLines({
-        start,
-        end,
-        page: p,
-        page_size: ps,
-        include_missing: includeMissing,
-        channel: v.shop?.trim() || undefined,
-        sku_code: v.sku_code?.trim() || undefined,
-        order_no: v.order_no?.trim() || undefined,
-        product_link_id: v.product_link_id?.trim() || undefined,
-      })
+      const resp = await fetchSalesLines(q)
       setData(resp)
       setShopOptions((prev) => {
         const next = new Set(prev)
@@ -115,8 +115,8 @@ const SalesInsightsPage = () => {
         }
         return Array.from(next).sort()
       })
-      setPage(p)
-      setPageSize(ps)
+      setPage(q.page)
+      setPageSize(q.page_size)
     } catch (e: any) {
       setError(String(e?.response?.data?.detail ?? e?.message ?? e))
       setData(null)
@@ -125,12 +125,52 @@ const SalesInsightsPage = () => {
     }
   }
 
+  const onQuery = async () => {
+    setError(null)
+    const v = await form.validateFields()
+    const range = v.range as [dayjs.Dayjs, dayjs.Dayjs]
+    const base = {
+      start: range[0].startOf('day').toISOString(),
+      end: range[1].endOf('day').toISOString(),
+      include_missing: includeMissing,
+      channel: v.shop?.trim() || undefined,
+      sku_code: v.sku_code?.trim() || undefined,
+      order_no: v.order_no?.trim() || undefined,
+      product_link_id: v.product_link_id?.trim() || undefined,
+    }
+    setLastQuery(base)
+    await runQuery({ ...base, page: 1, page_size: pageSize })
+  }
+
+  const onPageChange = async (p: number, ps: number) => {
+    setError(null)
+    const base = lastQuery
+    if (base) {
+      await runQuery({ ...base, page: p, page_size: ps })
+      return
+    }
+    // fallback: if user paginates before first query, read current form state
+    const v = form.getFieldsValue(true) as any
+    const range = v.range as [dayjs.Dayjs, dayjs.Dayjs]
+    const fallback = {
+      start: range?.[0]?.startOf('day')?.toISOString?.() ?? dayjs().startOf('day').toISOString(),
+      end: range?.[1]?.endOf('day')?.toISOString?.() ?? dayjs().endOf('day').toISOString(),
+      include_missing: includeMissing,
+      channel: v.shop?.trim() || undefined,
+      sku_code: v.sku_code?.trim() || undefined,
+      order_no: v.order_no?.trim() || undefined,
+      product_link_id: v.product_link_id?.trim() || undefined,
+    }
+    setLastQuery(fallback)
+    await runQuery({ ...fallback, page: p, page_size: ps })
+  }
+
   const pagination: TablePaginationConfig = {
     current: page,
     pageSize,
     total: data?.total ?? 0,
     showSizeChanger: true,
-    onChange: (p, ps) => onQuery(p, ps),
+    onChange: (p, ps) => onPageChange(p, ps),
   }
 
   return (
@@ -193,7 +233,7 @@ const SalesInsightsPage = () => {
                   { label: '仅已计价', value: 'costed' },
                 ]}
               />
-              <Button type="primary" onClick={() => onQuery(1, pageSize)} loading={loading}>
+              <Button type="primary" onClick={() => onQuery()} loading={loading}>
                 查询
               </Button>
               <Button

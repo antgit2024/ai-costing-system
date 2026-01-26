@@ -57,8 +57,10 @@ if command -v rsync >/dev/null 2>&1; then
     rsync -av "${TMP_DIR}/assets/" "${TARGET_DIR}/assets/"
   fi
 
-  # 2) 其他静态文件（除 index.html 外可直接覆盖）
-  rsync -av --exclude "assets/**" --exclude "index.html" "${TMP_DIR}/" "${TARGET_DIR}/"
+  # 2) 其他静态文件（除根目录 index.html 外可直接覆盖）
+  # 注意：exclude 必须只排除根 index.html；否则会把 SPA 深链接兜底目录里的
+  # `costing/**/index.html` 也排除，导致线上访问 `/costing/.../` 仍 403。
+  rsync -av --exclude "assets/**" --exclude "/index.html" "${TMP_DIR}/" "${TARGET_DIR}/"
 else
   echo "[deploy] rsync 不存在，使用 cp fallback（不删除旧 assets）" >&2
   if [[ -d "${TMP_DIR}/assets" ]]; then

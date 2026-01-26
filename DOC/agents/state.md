@@ -28,6 +28,8 @@
       - 构建后自动把 `dist/index.html` 复制到 `dist/<route>/index.html`（例如 `dist/costing/insights/models/index.html`），提升“静态目录 index.html”场景的可用性。
     - `frontend/package.json`
       - `deploy:static` 增加：`node ./scripts/generate_spa_fallbacks.mjs`（发布前生成兜底文件）。
+    - `frontend/scripts/deploy_static.sh`
+      - 修复：`rsync --exclude "index.html"` 会误伤子目录的 `index.html`（导致 `/costing/` 仍 403）；改为只排除根目录：`--exclude "/index.html"`。
   - 验收命令（必须，全部 0 退出码）：
     - Frontend：`npm -C frontend run build`
     - Backend：`source backend/venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`

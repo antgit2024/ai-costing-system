@@ -167,6 +167,7 @@
 - **快速自检**：
   - 构建后：`test -f frontend/dist/costing/insights/models/index.html`
   - 发布后（目标机）：`test -f /var/www/html/ai-costing/dist/costing/insights/models/index.html`
+  - 若你确认生成了但线上仍 403：检查 `frontend/scripts/deploy_static.sh` 是否误排除了子目录 `index.html`（旧版本 `--exclude "index.html"` 会误伤；应为 `--exclude "/index.html"`）。
 
 ### 10) 后端 500：Postgres 要求加密连接（no encryption）
 

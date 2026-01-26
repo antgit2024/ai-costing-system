@@ -64,6 +64,21 @@
   - 下一步：
     - 若需要“左侧榜单多列网格（大屏 2 列）/ 支持排序切换（按销售额/毛利等）”，建议单开迭代，避免和数据口径混改。
 
+- **最近校对（北京时间 GMT+8）**：2026-01-26（模型分析页面：左侧榜单改为单行表格 + 主题色胶囊编码 + 移除主版本/店铺列）
+  - 需求变更：
+    - 左侧榜单从卡片恢复为“一行列表（表格）”，列：编码/模型名称/发货数量/销售金额/成本/毛利/毛利率/退货数量/退货金额。
+    - 列表中不再展示店铺（店铺筛选以上方下拉为准），并移除每条记录的“主版本：...”说明行。
+    - 模型编码使用 antd 主题色胶囊（`--ant-color-primary-*`）风格。
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/ProfitInsightsPage.tsx`
+      - 左侧榜单改用 `Table` 实现单行列表；点击行加载右侧明细；选中行高亮。
+      - 编码列渲染为主题色胶囊样式。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-26（发货单上传：413 失败提示收口 + 文件大小引导）
   - 背景：线上 `/costing/shipments` 上传发货单预览报 `Request failed with status code 413`（请求体过大），通常是网关/Nginx `client_max_body_size` 限制触发。
   - 本轮产物（前端）：

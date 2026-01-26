@@ -37,6 +37,41 @@
   - 上线提示（运维）：
     - 推荐修 Nginx：对 SPA 路由前缀启用 `try_files $uri $uri/ /index.html;`，但对 `/assets/*` 必须 `try_files $uri =404`（避免 MIME=text/html）。
 
+- **最近校对（北京时间 GMT+8）**：2026-01-26（“服务器慢”初步排查：workers/连接池/索引）
+  - 结论（先看这一句）：本机直连 `127.0.0.1:8800` 的洞察接口耗时在 0.15~0.35s 量级，若体感“整体慢/多人同时点就卡”，更像是 **并发排队（worker/DB连接池）或 DB 缺复合索引导致的慢查询**，而不是“数据量小就一定快”。
+  - 数据点（无需改代码拿到的）：
+    - 后端启动方式：`planner-costing.service` 使用 `uvicorn src.main:app --port 8800 --workers 2`（systemd user scope）；机器规格：8 核 / 30Gi。
+    - DB 方言：Postgres（`backend/src/database.py` 的 engine 初始化 + 运行时确认）。
+    - 本机采样（curl time_total，同一时间窗口：2025-12-26 ~ 2026-01-26）：
+      - `/api/planner/analytics/models/detail?...` 约 0.14s
+      - `/api/planner/analytics/models/summary?...` 约 0.27s
+      - `/api/planner/analytics/profit/model?...` 约 0.35s
+  - 代码侧观察（只读）：
+    - `backend/src/database.py` 的 `create_engine(...)` 未显式配置连接池参数（Postgres 默认 `pool_size=5`、`max_overflow=10`；并发下容易出现“DB 连接不足→请求排队”）。
+    - 洞察聚合 SQL 主要围绕 `shipment_lines / after_sales_lines / shipment_costing_results / bom_snapshots`，并频繁使用：
+      - 时间范围过滤：`ShipmentLine.completed_at between [start,end)`
+      - 强关联键 join：`(order_no, product_link_id, sku_code)`
+      - “每条发货行最新快照”子查询：对 `bom_snapshots` 做 “按 shipment_line_id 取最新 created_at”
+    - 现有 ORM 模型大多只有单列 index，缺少对上述访问模式的**复合索引**（例如 `shipment_lines.channel` 当前无 index）。
+  - 最短路径优化优先级（先配置→再索引→最后缓存）：
+    - 先改启动参数（立竿见影，风险低）：
+      - 把 `--workers 2` 调到 4（或按压测/CPU 调整）；多人同时查询时减少排队。
+      - 同步评估 DB 最大连接与连接池（见下一条），避免“worker 上去了，DB 连接反而不够”。
+    - 再加索引（解决慢查询根因，收益最大）：
+      - 推荐先做这 3 组（按洞察接口实际 SQL）：
+        - `shipment_lines`：`(completed_at)` + `channel`（至少给 `channel` 加 index；更优是 `(channel, completed_at)`）
+        - `shipment_lines` 与 `after_sales_lines`：各自增加 `(order_no, product_link_id, sku_code)` 复合索引（支撑强关联 join）
+        - `bom_snapshots`：`(shipment_line_id, created_at DESC)`（支撑“取最新快照”）
+      - 进阶（按实际慢查询再补）：`shipment_costing_results(model_version_id)`、`shipment_inventory_deduction_lines(shipment_line_id, material_code)` 等。
+    - 最后做缓存/降采样（避免重复重算）：
+      - `models/detail` 会“现场生成”样本 BOM（`bom_generation_service.generate_bom`）；若用户频繁切换版本/模型，可按 `(model_version_id, spec_hash)` 做短 TTL 缓存。
+  - 下一步（建议拿到 80% 定性所需的两类数据）：
+    - 接口层：补一层 request 耗时 / SQL 耗时日志（或接 APM），输出每个 `/analytics/*` 的 p95/p99。
+    - DB 层：确认慢查询与索引命中（`EXPLAIN (ANALYZE, BUFFERS)` / `pg_stat_statements` / `pg_stat_activity` 连接数与等待）。
+  - 自检命令（可直接复制执行）：
+    - 运行态：`systemctl --user status planner-costing.service`
+    - 本机接口采样：`curl -sS -o /dev/null -w 'time_total=%{time_total}\\n' 'http://127.0.0.1:8800/api/planner/analytics/models/summary?start=...&end=...'`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-26（模型分析页面：修复 TypeScript 未使用变量错误）
   - 背景：前端构建时报 `TS6133: 'r' is declared but its value is never read`（ProfitInsightsPage.tsx 第 162 行）。
   - 本轮产物（前端）：

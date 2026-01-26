@@ -150,5 +150,21 @@
 - 统一用：
   - `python -m pytest <test_file> -q`
 
+### 5) “服务器慢”初步排查（无需改代码）
+
+> 目标：先用最少数据点定位是 **worker 排队**、**DB 连接/慢查询**，还是 **网关/网络**。
+
+- 后端是否在跑 + 启动参数（workers/端口）：
+  - `systemctl --user status planner-costing.service`
+- 端口监听（确认 8800/80/443 等是否正常）：
+  - `ss -lntp`
+- 本机直连接口耗时（绕过网关/浏览器渲染，先看后端纯耗时）：
+  - `curl -sS -o /dev/null -w 'time_total=%{time_total}\n' 'http://127.0.0.1:8800/api/health'`
+  - `curl -sS -o /dev/null -w 'time_total=%{time_total}\n' 'http://127.0.0.1:8800/api/planner/analytics/models/summary?start=2025-12-26T16:00:00.000Z&end=2026-01-26T15:59:59.999Z'`
+- 网关链路/外网耗时（对比本机直连，判断网络/反代开销）：
+  - `curl -sS -o /dev/null -w 'time_total=%{time_total}\n' 'https://<host>/api/planner/analytics/models/summary?start=...&end=...'`
+- 最近请求日志（用于确认是否有大量 /analytics/* 并发触发）：
+  - `journalctl --user -u planner-costing.service --since "2 hours ago" | tail -n 200`
+
 
 

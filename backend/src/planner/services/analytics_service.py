@@ -862,6 +862,11 @@ def sales_lines(
     if product_link_id:
         base_q = base_q.filter(models.ShipmentLine.product_link_id == product_link_id)
 
+    # When user requests "only costed", pagination total must match the rows we will return.
+    # We define "costed" as having a BOM snapshot row (even if costing fields may be missing).
+    if not include_missing:
+        base_q = base_q.filter(snap_sq.c.bom_snapshot_id.isnot(None))
+
     total = base_q.count()
     rows = (
         base_q.order_by(models.ShipmentLine.completed_at.desc(), models.ShipmentLine.created_at.desc())

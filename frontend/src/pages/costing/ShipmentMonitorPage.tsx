@@ -201,6 +201,8 @@ const HandoffRowExpanded = (props: {
   erpSpecText?: string | null
   preparseSpecText?: string | null
   shipmentSpecText?: string | null
+  shipmentLineId?: string | null
+  snapshotId?: string | null
   boundModelCode?: string | null
   boundModelName?: string | null
   boundVersionLabel?: string | null
@@ -306,8 +308,23 @@ const HandoffRowExpanded = (props: {
       <Col xs={24} lg={12}>
         <Card size="small" title="后置（发货导入：交易规格解析 + 快照/异常）">
           <Descriptions bordered size="small" column={1}>
+            <Descriptions.Item label="数据来源">
+              <Space size={6} wrap>
+                {props.shipmentLineId ? <Tag color="blue">shipment_line_id 已关联</Tag> : <Tag>shipment_line_id 缺失</Tag>}
+                {props.snapshotId ? <Tag color="green">已落库快照</Tag> : <Tag>未落库快照</Tag>}
+                {props.snapshotId ? (
+                  <Text type="secondary">snapshot_id={String(props.snapshotId)}</Text>
+                ) : null}
+              </Space>
+            </Descriptions.Item>
             <Descriptions.Item label="交易规格（本批次）">
-              {shipmentText ? <Text code>{shipmentText}</Text> : <Text type="secondary">（无：可能未返回/未落库）</Text>}
+              {shipmentText ? (
+                <Text code>{shipmentText}</Text>
+              ) : (
+                <Text type="warning">
+                  （无：无法与“前置”对比。常见原因：旧快照缺 shipment_line_id，后端无法回填本批次交易规格；或该行原始数据缺规格应进入异常队列）
+                </Text>
+              )}
             </Descriptions.Item>
             <Descriptions.Item label="解析（按 spec/parse 现场计算）">
               <Space>
@@ -326,7 +343,7 @@ const HandoffRowExpanded = (props: {
           </Descriptions>
           <div style={{ marginTop: 10 }}>
             <Text type="secondary">
-              说明：左侧是“前置缓存/绑定”，右侧是“本次发货导入的交易规格”；两者不一致时，以发货交易规格为准，并可在“异常处理”中重试推进。
+              说明：左侧是“前置主档缓存/绑定（参考）”，右侧是“本批次交易规格（用于计价/扣库）”。系统以本批次交易规格为准：若为空会进入异常；若不为空则会按它解析并生成快照（可在“快照结果/快照详情”查看计价与扣库清单）。
             </Text>
           </div>
         </Card>
@@ -1341,6 +1358,8 @@ const ShipmentMonitorPage = () => {
                                   erpSpecText={null}
                                   preparseSpecText={null}
                                   shipmentSpecText={r?.spec_text ?? null}
+                                  shipmentLineId={r?.shipment_line_id ?? null}
+                                  snapshotId={r?.snapshot?.id ?? null}
                                   boundModelCode={null}
                                   boundModelName={null}
                                   boundVersionLabel={null}

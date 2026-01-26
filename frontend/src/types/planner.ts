@@ -1668,6 +1668,44 @@ export interface ProfitByChannelResponse {
   note?: string | null
 }
 
+export interface SalesLineItem {
+  shipment_line_id: string
+  batch_id?: string | null
+  row_index?: number | null
+  payment_at?: string | null
+  completed_at?: string | null
+  channel?: string | null
+  sku_no?: string | null
+  sku_name?: string | null
+  spec_text?: string | null
+  sku_code?: string | null
+  sale_unit_price?: string | null
+  qty?: string | null
+  revenue_amount?: string | null
+  cost_unit_price?: string | null
+  cost_amount?: string | null
+  order_no?: string | null
+  product_link_id?: string | null
+  logistics_company?: string | null
+  logistics_no?: string | null
+  mark?: string | null
+  bom_snapshot_id?: string | null
+  status: 'costed' | 'missing_snapshot' | 'missing_costing' | 'unknown'
+  note?: string | null
+}
+
+export interface SalesLinesResponse {
+  start: string
+  end: string
+  total: number
+  page: number
+  page_size: number
+  lines_with_bom_snapshots: number
+  lines_missing_costing: number
+  items: SalesLineItem[]
+  note?: string | null
+}
+
 export interface AfterSalesImportBatch {
   id: string
   file_name?: string | null

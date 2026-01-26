@@ -1,0 +1,208 @@
+import { Alert, Button, Card, DatePicker, Form, Input, Segmented, Space, Table, Typography } from 'antd'
+import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
+import dayjs from 'dayjs'
+import { useMemo, useState } from 'react'
+
+import { fetchSalesLines } from '@/services/planner'
+import type { SalesLineItem, SalesLinesResponse } from '@/types/planner'
+
+const formatMoney = (raw?: string | null) => {
+  if (raw == null || raw === '') return '-'
+  const n = Number(raw)
+  if (!Number.isFinite(n)) return String(raw)
+  return n.toFixed(2)
+}
+
+const formatQty = (raw?: string | null) => {
+  if (raw == null || raw === '') return '-'
+  const n = Number(raw)
+  if (!Number.isFinite(n)) return String(raw)
+  return n.toFixed(2).replace(/\.00$/, '')
+}
+
+const SalesInsightsPage = () => {
+  const [form] = Form.useForm()
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [data, setData] = useState<SalesLinesResponse | null>(null)
+  const [includeMissing, setIncludeMissing] = useState(true)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(50)
+
+  const columns = useMemo<ColumnsType<SalesLineItem>>(
+    () => [
+      { title: '付款时间', dataIndex: 'payment_at', width: 170, ellipsis: true, render: (v) => String(v ?? '-') },
+      { title: '发货时间', dataIndex: 'completed_at', width: 170, ellipsis: true, render: (v) => String(v ?? '-') },
+      { title: '销售渠道', dataIndex: 'channel', width: 140, ellipsis: true, render: (v) => String(v ?? '-') },
+      { title: '货品编号', dataIndex: 'sku_no', width: 140, ellipsis: true, render: (v) => String(v ?? '-') },
+      { title: '货品名称', dataIndex: 'sku_name', width: 200, ellipsis: true, render: (v) => String(v ?? '-') },
+      { title: '交易规格', dataIndex: 'spec_text', width: 260, ellipsis: true, render: (v) => String(v ?? '-') },
+      { title: '货品条码', dataIndex: 'sku_code', width: 160, ellipsis: true, render: (v) => String(v ?? '-') },
+      { title: '销售单价', dataIndex: 'sale_unit_price', width: 110, render: (v) => formatMoney(v) },
+      { title: '数量', dataIndex: 'qty', width: 90, render: (v) => formatQty(v) },
+      { title: '销售金额', dataIndex: 'revenue_amount', width: 110, render: (v) => formatMoney(v) },
+      { title: '成本单价', dataIndex: 'cost_unit_price', width: 110, render: (v) => formatMoney(v) },
+      { title: '成本金额', dataIndex: 'cost_amount', width: 110, render: (v) => formatMoney(v) },
+      { title: '原始单号', dataIndex: 'order_no', width: 160, ellipsis: true, render: (v) => String(v ?? '-') },
+      { title: '商品链接ID', dataIndex: 'product_link_id', width: 180, ellipsis: true, render: (v) => String(v ?? '-') },
+      { title: '物流公司', dataIndex: 'logistics_company', width: 140, ellipsis: true, render: (v) => String(v ?? '-') },
+      { title: '物流单号', dataIndex: 'logistics_no', width: 180, ellipsis: true, render: (v) => String(v ?? '-') },
+      { title: '标记', dataIndex: 'mark', width: 120, ellipsis: true, render: (v) => String(v ?? '-') },
+      { title: '备注', dataIndex: 'note', width: 220, ellipsis: true, render: (v) => String(v ?? '-') },
+    ],
+    [],
+  )
+
+  const onQuery = async (nextPage?: number, nextPageSize?: number) => {
+    setError(null)
+    const v = await form.validateFields()
+    const range = v.range as [dayjs.Dayjs, dayjs.Dayjs]
+    const start = range[0].startOf('day').toISOString()
+    const end = range[1].endOf('day').toISOString()
+
+    const p = nextPage ?? page
+    const ps = nextPageSize ?? pageSize
+
+    setLoading(true)
+    try {
+      const resp = await fetchSalesLines({
+        start,
+        end,
+        page: p,
+        page_size: ps,
+        include_missing: includeMissing,
+        channel: v.channel?.trim() || undefined,
+        sku_code: v.sku_code?.trim() || undefined,
+        shipment_no: v.shipment_no?.trim() || undefined,
+        order_no: v.order_no?.trim() || undefined,
+        product_link_id: v.product_link_id?.trim() || undefined,
+      })
+      setData(resp)
+      setPage(p)
+      setPageSize(ps)
+    } catch (e: any) {
+      setError(String(e?.response?.data?.detail ?? e?.message ?? e))
+      setData(null)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const pagination: TablePaginationConfig = {
+    current: page,
+    pageSize,
+    total: data?.total ?? 0,
+    showSizeChanger: true,
+    onChange: (p, ps) => onQuery(p, ps),
+  }
+
+  return (
+    <div style={{ padding: 16 }}>
+      <Typography.Title level={3} style={{ margin: '0 0 12px' }}>
+        数据洞察 / 销售分析（明细）
+      </Typography.Title>
+
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 12 }}
+        message="说明（明细口径）"
+        description={
+          <div>
+            <div>本页展示“发货明细行”并回填你们关心的成本字段：成本金额=快照 trace.costing.total_cost；成本单价=成本金额/数量。</div>
+            <div>缺快照的行会显示成本为“-”（可通过绑定/异常处理逐步补齐覆盖率）。</div>
+          </div>
+        }
+      />
+
+      <Card size="small" style={{ marginBottom: 12 }}>
+        <Form
+          form={form}
+          layout="inline"
+          initialValues={{
+            range: [dayjs().subtract(30, 'day'), dayjs()],
+            channel: undefined,
+          }}
+        >
+          <Form.Item label="时间范围" name="range" rules={[{ required: true, message: '请选择时间范围' }]}>
+            <DatePicker.RangePicker allowClear={false} />
+          </Form.Item>
+          <Form.Item label="渠道" name="channel">
+            <Input placeholder="可选：店铺/渠道" style={{ width: 180 }} allowClear />
+          </Form.Item>
+          <Form.Item label="货品条码" name="sku_code">
+            <Input placeholder="可选：barcode" style={{ width: 180 }} allowClear />
+          </Form.Item>
+          <Form.Item label="发货单号" name="shipment_no">
+            <Input placeholder="可选：S2025..." style={{ width: 180 }} allowClear />
+          </Form.Item>
+          <Form.Item label="原始单号" name="order_no">
+            <Input placeholder="可选：order_no" style={{ width: 180 }} allowClear />
+          </Form.Item>
+          <Form.Item label="商品链接ID" name="product_link_id">
+            <Input placeholder="可选：product_link_id" style={{ width: 200 }} allowClear />
+          </Form.Item>
+          <Form.Item>
+            <Space>
+              <Segmented
+                value={includeMissing ? 'all' : 'costed'}
+                onChange={(v) => setIncludeMissing(v === 'all')}
+                options={[
+                  { label: '含未计价', value: 'all' },
+                  { label: '仅已计价', value: 'costed' },
+                ]}
+              />
+              <Button type="primary" onClick={() => onQuery(1, pageSize)} loading={loading}>
+                查询
+              </Button>
+              <Button
+                onClick={() => {
+                  form.resetFields()
+                  setData(null)
+                  setError(null)
+                  setPage(1)
+                }}
+              >
+                重置
+              </Button>
+            </Space>
+          </Form.Item>
+        </Form>
+      </Card>
+
+      {error ? <Alert type="error" showIcon message="查询失败" description={error} style={{ marginBottom: 12 }} /> : null}
+
+      {data ? (
+        <Alert
+          type={data.lines_with_bom_snapshots > 0 ? 'success' : 'warning'}
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="成本覆盖率（本次范围内）"
+          description={
+            <div>
+              <div>
+                有 BOM 快照行：{data.lines_with_bom_snapshots}；缺成本字段行：{data.lines_missing_costing}
+              </div>
+              <div style={{ color: '#888' }}>{data.note || ''}</div>
+            </div>
+          }
+        />
+      ) : null}
+
+      <Card size="small">
+        <Table
+          rowKey="shipment_line_id"
+          size="small"
+          loading={loading}
+          columns={columns}
+          dataSource={data?.items ?? []}
+          pagination={pagination}
+          scroll={{ x: 2200 }}
+        />
+      </Card>
+    </div>
+  )
+}
+
+export default SalesInsightsPage
+

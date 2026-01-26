@@ -24,6 +24,10 @@ const BundleTemplatesPage = lazy(() => import('./pages/costing/BundleTemplatesPa
 const ProductionScanPage = lazy(() => import('./pages/costing/ProductionScanPage'))
 const TmallSkuTemplateGeneratorPage = lazy(() => import('./pages/costing/TmallSkuTemplateGeneratorPage'))
 const SpecModulesPage = lazy(() => import('./pages/costing/SpecModulesPage'))
+const AfterSalesInsightsPage = lazy(() => import('./pages/costing/AfterSalesInsightsPage'))
+const ProfitInsightsPage = lazy(() => import('./pages/costing/ProfitInsightsPage'))
+const ShopInsightsPage = lazy(() => import('./pages/costing/ShopInsightsPage'))
+const SalesInsightsPage = lazy(() => import('./pages/costing/SalesInsightsPage'))
 
 const App = () => {
   return (
@@ -59,6 +63,10 @@ const App = () => {
           <Route path="/costing/sku-master" element={<SkuMasterWorkspacePage />} />
           <Route path="/costing/production-scan" element={<ProductionScanPage />} />
           <Route path="/costing/spec-matching" element={<SkuSpecMatchingPage />} />
+          <Route path="/costing/insights/after-sales" element={<AfterSalesInsightsPage />} />
+          <Route path="/costing/insights/models" element={<ProfitInsightsPage />} />
+          <Route path="/costing/insights/shops" element={<ShopInsightsPage />} />
+          <Route path="/costing/insights/sales" element={<SalesInsightsPage />} />
           <Route path="*" element={<Navigate to="/planner" replace />} />
         </Routes>
       </Suspense>

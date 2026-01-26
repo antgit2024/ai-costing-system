@@ -108,6 +108,7 @@ import type {
   ProfitBySkuResponse,
   ProfitByChannelResponse,
   ProfitByModelResponse,
+  SalesLinesResponse,
   ShipmentProfitLinesResponse,
   AfterSalesImportBatch,
   ProductModelVersionPatchPayload,
@@ -1783,6 +1784,24 @@ export const fetchProfitByChannel = async (params: {
   channel?: string
 }): Promise<ProfitByChannelResponse> => {
   const response = await plannerClient.get('/analytics/profit/channel', {
+    params: sanitizeParams(params as Record<string, unknown>),
+  })
+  return response.data
+}
+
+export const fetchSalesLines = async (params: {
+  start: string
+  end: string
+  page?: number
+  page_size?: number
+  channel?: string
+  sku_code?: string
+  shipment_no?: string
+  order_no?: string
+  product_link_id?: string
+  include_missing?: boolean
+}): Promise<SalesLinesResponse> => {
+  const response = await plannerClient.get('/analytics/sales/lines', {
     params: sanitizeParams(params as Record<string, unknown>),
   })
   return response.data

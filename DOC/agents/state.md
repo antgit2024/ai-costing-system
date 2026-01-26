@@ -45,6 +45,10 @@
         - 后端新增：`GET /api/planner/shipments/profit-lines?batch_id=...` 返回批次级明细（shipment_line + 最新 bom_snapshot），成本取 `bom_snapshots.trace.costing.total_cost`，利润=金额-成本，显式标记缺快照/缺成本字段。
         - 前端落点：`/costing/shipments` → “快照结果”Tab 新增二级视图“利润表（本批次）”，默认仅已计价（有快照），可切换包含未计价（缺快照）。
         - 说明：这是“标准已发货利润表单”的第一版落点（围绕批次）。若要做“按日期范围/店铺”的标准报表，可在后续迭代扩展为洞察页（复用 analytics 的时间口径）。
+      - 数据洞察：销售分析（明细，全量发货行 + 成本回填）
+        - 新增页面：`/costing/insights/sales`（数据洞察→销售分析）
+        - 后端新增：`GET /api/planner/analytics/sales/lines?start=...&end=...&include_missing=...` 返回发货明细行并回填成本（缺快照显示 `-`）。
+        - 字段：支持展示付款时间/完成时间/渠道/条码/交易规格/数量/金额/成本单价/成本金额/原始单号/商品链接ID/物流信息（若原始发货表存在则从 raw_row 回填，否则显示 `-`）。
     - `frontend/src/services/planner.ts`
       - 发货预览/执行/导入使用更长超时（5 分钟），避免大文件导入在前端 20s 超时误报失败。
       - `execute/import` 超时进一步放宽（默认 30 分钟）；即便浏览器超时/断开，也可通过批次列表按 `file_hash` 自动定位确认是否已落库。

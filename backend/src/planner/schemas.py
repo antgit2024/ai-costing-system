@@ -2658,6 +2658,51 @@ class ProfitByChannelResponse(BaseModel):
     note: Optional[str] = None
 
 
+class SalesLineItem(BaseModel):
+    shipment_line_id: str
+    batch_id: Optional[str] = None
+    row_index: Optional[int] = None
+    payment_at: Optional[str] = None
+    completed_at: Optional[datetime] = None
+    channel: Optional[str] = None
+    sku_no: Optional[str] = None  # 货品编号（若原始表有）
+    sku_name: Optional[str] = None  # 货品名称（若原始表有）
+    spec_text: Optional[str] = None
+    sku_code: Optional[str] = None  # 货品条码
+    sale_unit_price: Optional[Decimal] = None
+    qty: Optional[Decimal] = None
+    revenue_amount: Optional[Decimal] = None
+    cost_unit_price: Optional[Decimal] = None
+    cost_amount: Optional[Decimal] = None
+    order_no: Optional[str] = None
+    product_link_id: Optional[str] = None
+    logistics_company: Optional[str] = None
+    logistics_no: Optional[str] = None
+    mark: Optional[str] = None
+
+    bom_snapshot_id: Optional[str] = None
+    status: str = "unknown"  # costed | missing_snapshot | missing_costing
+    note: Optional[str] = None
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class SalesLinesResponse(BaseModel):
+    start: str
+    end: str
+    total: int = 0
+    page: int = 1
+    page_size: int = 50
+    lines_with_bom_snapshots: int = 0
+    lines_missing_costing: int = 0
+    items: List[SalesLineItem] = Field(default_factory=list)
+    note: Optional[str] = None
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
 class SkuMasterRead(BaseModel):
     id: str
     erp_sku_barcode: str

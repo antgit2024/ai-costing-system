@@ -32,13 +32,6 @@ const subItemLabel = (text: string, to: string) => (
   </Link>
 )
 
-const disabledSubItemLabel = (text: string) => (
-  <span className="sidebar-sub-link sidebar-sub-link--disabled">
-    <span className="sidebar-sub-dot" />
-    <span className="sidebar-sub-text">{text}</span>
-  </span>
-)
-
 const menuItems: MenuProps['items'] = [
   {
     key: '/costing/base',
@@ -89,9 +82,10 @@ const menuItems: MenuProps['items'] = [
     icon: <BarChartOutlined />,
     label: '数据洞察',
     children: [
-      { key: '/costing/insights/after-sales', label: disabledSubItemLabel('售后分析'), disabled: true },
-      { key: '/costing/insights/models', label: disabledSubItemLabel('模型分析'), disabled: true },
-      { key: '/costing/insights/shops', label: disabledSubItemLabel('店铺数据'), disabled: true },
+      { key: '/costing/insights/after-sales', label: subItemLabel('售后分析', '/costing/insights/after-sales') },
+      { key: '/costing/insights/sales', label: subItemLabel('销售分析', '/costing/insights/sales') },
+      { key: '/costing/insights/models', label: subItemLabel('模型分析', '/costing/insights/models') },
+      { key: '/costing/insights/shops', label: subItemLabel('店铺数据', '/costing/insights/shops') },
     ],
   },
   {
@@ -214,6 +208,18 @@ const AppLayout = ({ children }: AppLayoutProps) => {
       }
       if (location.pathname.startsWith('/costing/spec-matching')) {
         return ['/costing/spec-matching']
+      }
+      if (location.pathname.startsWith('/costing/insights/after-sales')) {
+        return ['/costing/insights/after-sales']
+      }
+      if (location.pathname.startsWith('/costing/insights/sales')) {
+        return ['/costing/insights/sales']
+      }
+      if (location.pathname.startsWith('/costing/insights/models')) {
+        return ['/costing/insights/models']
+      }
+      if (location.pathname.startsWith('/costing/insights/shops')) {
+        return ['/costing/insights/shops']
       }
       if (location.pathname.startsWith('/costing/tmall-sku-generator')) {
         return ['/costing/tmall-sku-generator']

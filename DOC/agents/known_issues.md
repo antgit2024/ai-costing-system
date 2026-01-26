@@ -150,6 +150,24 @@
     - `/assets/*`：`Cache-Control: public, max-age=31536000, immutable`
     - `/assets/*`：不要回退到 `index.html`，应 `try_files $uri =404`
 
+### 19) BrowserRouter 深链接 404（直接打开 `/costing/...` 显示 Not Found）
+
+- **现象**：
+  - 直接访问例如 `https://work.znma.com/costing/insights/models` 返回 `Not Found`（但从首页点菜单进入通常正常）。
+- **根因**：
+  - 前端使用 `BrowserRouter`（history 模式）。当你直接打开一个“深路径”，服务器需要把该路径回退到同一个 `index.html`，否则会按“静态文件不存在”返回 404。
+- **根治（推荐，Nginx 配置）**：
+  - 对 SPA 路由前缀开启 history fallback（示例）：
+    - `try_files $uri $uri/ /index.html;`
+  - 注意：对 `/assets/*` **不要**回退到 `index.html`（否则会触发 §9 的 MIME=text/html chunk 加载失败）。
+- **代码侧兜底（已落地，减少对 Nginx 的依赖）**：
+  - `npm -C frontend run deploy:static` 在 `vite build` 后会执行 `frontend/scripts/generate_spa_fallbacks.mjs`：
+    - 自动把 `dist/index.html` 复制到 `dist/<route>/index.html`（例如 `dist/costing/insights/models/index.html`）
+    - 这样即便 Nginx 只支持“目录 index.html”，也能更容易命中并加载 SPA
+- **快速自检**：
+  - 构建后：`test -f frontend/dist/costing/insights/models/index.html`
+  - 发布后（目标机）：`test -f /var/www/html/ai-costing/dist/costing/insights/models/index.html`
+
 ### 10) 后端 500：Postgres 要求加密连接（no encryption）
 
 - **现象**：

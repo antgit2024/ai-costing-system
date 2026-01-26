@@ -27,6 +27,7 @@
   - `cd /home/admin/ai-costing-system/frontend && npm run build`
 - 原子发布到 nginx 静态目录（按机器实际路径调整 `PLANNER_STATIC_DIR`）：
   - `cd /home/admin/ai-costing-system/frontend && PLANNER_STATIC_DIR=/var/www/html/ai-costing/dist ./scripts/deploy_static.sh`
+  - 若线上“直接打开深路径”仍 404（例如 `/costing/insights/models`）：优先按 `DOC/agents/known_issues.md` §19 修 Nginx 的 `try_files $uri $uri/ /index.html;`；同时可用 `npm run deploy:static`（会生成 `dist/<route>/index.html` 兜底文件）。
 
 ### 1.1) 环境变量文件（强约束：真实 .env 不进 Git）
 

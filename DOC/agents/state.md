@@ -20,6 +20,21 @@
 
 > 注：若需要对外一句话解释本项目——“以 SKU 绑定已发布标准版本为入口，在发货导入时解析交易规格并生成可追溯的 BOM 快照，用异常队列兜底，支撑扣库与成本核算对账”。
 
+- **最近校对（北京时间 GMT+8）**：2026-01-26（线上深链接 404：BrowserRouter /costing/* Not Found 兜底）
+  - 现象：直接访问 `https://<host>/costing/insights/models` 返回 `Not Found`（history 深链接无法回退到 SPA 入口）。
+  - 根因：前端使用 `BrowserRouter`（history 模式），需要服务端对 `/costing/*` 做 `try_files ... /index.html` 回退。
+  - 本轮产物（前端）：
+    - `frontend/scripts/generate_spa_fallbacks.mjs`
+      - 构建后自动把 `dist/index.html` 复制到 `dist/<route>/index.html`（例如 `dist/costing/insights/models/index.html`），提升“静态目录 index.html”场景的可用性。
+    - `frontend/package.json`
+      - `deploy:static` 增加：`node ./scripts/generate_spa_fallbacks.mjs`（发布前生成兜底文件）。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+  - 上线提示（运维）：
+    - 推荐修 Nginx：对 SPA 路由前缀启用 `try_files $uri $uri/ /index.html;`，但对 `/assets/*` 必须 `try_files $uri =404`（避免 MIME=text/html）。
+
 - **最近校对（北京时间 GMT+8）**：2026-01-26（模型分析页面：修复 TypeScript 未使用变量错误）
   - 背景：前端构建时报 `TS6133: 'r' is declared but its value is never read`（ProfitInsightsPage.tsx 第 162 行）。
   - 本轮产物（前端）：

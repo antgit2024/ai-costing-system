@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "build:report": "tsc -b && ANALYZE=true vite build",
-    "deploy:static": "npm run build && ./scripts/deploy_static.sh",
+    "deploy:static": "npm run build && node ./scripts/generate_spa_fallbacks.mjs && ./scripts/deploy_static.sh",
     "lint": "eslint .",
     "test": "vitest",
     "preview": "vite preview"

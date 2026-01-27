@@ -31,7 +31,7 @@ import {
   fetchShipmentBomSnapshots,
   fetchShipmentExceptions,
   fetchShipmentImportBatches,
-  fetchShipmentProfitLines,
+  fetchShipmentLines,
   generateBom,
   parseSpec,
   fetchSkuMasterByBarcode,
@@ -44,7 +44,7 @@ import type {
   BomSnapshot,
   ShipmentException,
   ShipmentImportBatch,
-  ShipmentProfitLinesResponse,
+  ShipmentLineListResponse,
   SkuMasterScanResponse,
 } from '@/types/planner'
 
@@ -368,6 +368,9 @@ const ShipmentMonitorPage = () => {
   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<'batches' | 'handoff' | 'exceptions' | 'snapshots'>('batches')
 
+  const [uploadDrawerOpen, setUploadDrawerOpen] = useState(false)
+  const [batchesDrawerOpen, setBatchesDrawerOpen] = useState(false)
+
   const [uploading, setUploading] = useState(false)
   const [uploadFile, setUploadFile] = useState<File | null>(null)
   const [uploadExportDate, setUploadExportDate] = useState<string | undefined>(
@@ -387,11 +390,25 @@ const ShipmentMonitorPage = () => {
   const [exceptionLimit, setExceptionLimit] = useState(200)
   const [retryingExceptions, setRetryingExceptions] = useState(false)
 
+  // Daily shipments ledger (ERP-like)
+  const [ledgerForm] = Form.useForm()
+  const [ledgerTab, setLedgerTab] = useState<'all' | 'processed' | 'pending'>('all')
+  const [ledgerPage, setLedgerPage] = useState(1)
+  const [ledgerPageSize, setLedgerPageSize] = useState(50)
+  const [ledgerRange, setLedgerRange] = useState<[any, any]>(() => [
+    dayjs().subtract(6, 'day').startOf('day'),
+    dayjs().add(1, 'day').startOf('day'),
+  ])
+  const [ledgerFilters, setLedgerFilters] = useState<{
+    channel?: string
+    sku_code?: string
+    shipment_no?: string
+    order_no?: string
+    product_link_id?: string
+  }>({})
+
   const [snapshotForm] = Form.useForm()
   const [snapshotsUseCurrentBatch, setSnapshotsUseCurrentBatch] = useState(true)
-  const [snapshotsView, setSnapshotsView] = useState<'snapshots' | 'profit'>('snapshots')
-  const [profitIncludeMissing, setProfitIncludeMissing] = useState(false)
-  const [profitLimit, setProfitLimit] = useState(500)
   const [snapshotQuery, setSnapshotQuery] = useState<{
     batch_id?: string
     sku_code?: string
@@ -419,6 +436,13 @@ const ShipmentMonitorPage = () => {
   const batches = batchesQuery.data?.items ?? []
   const totalBatches = batchesQuery.data?.total ?? 0
 
+  // ERP-like default: pick latest batch automatically
+  useEffect(() => {
+    if (selectedBatchId) return
+    const firstId = (batches?.[0] as any)?.id
+    if (firstId) setSelectedBatchId(String(firstId))
+  }, [batches, selectedBatchId])
+
   const selectedBatchQuery = useQuery({
     queryKey: ['shipments', 'import-batch', selectedBatchId],
     queryFn: () => fetchShipmentImportBatch(String(selectedBatchId)),
@@ -439,7 +463,7 @@ const ShipmentMonitorPage = () => {
               : false,
         limit: exceptionLimit,
       }),
-    enabled: activeTab === 'exceptions',
+    enabled: batchesDrawerOpen && activeTab === 'exceptions',
   })
 
   const retryExceptionsMutation = useMutation({
@@ -478,18 +502,21 @@ const ShipmentMonitorPage = () => {
         ...snapshotQuery,
         ...(snapshotsUseCurrentBatch && selectedBatchId ? { batch_id: selectedBatchId } : {}),
       }),
-    enabled: activeTab === 'snapshots',
+    enabled: batchesDrawerOpen && activeTab === 'snapshots',
   })
 
-  const profitLinesQuery = useQuery({
-    queryKey: ['shipments', 'profit-lines', selectedBatchId, profitIncludeMissing, profitLimit],
+  const shipmentLinesQuery = useQuery({
+    queryKey: ['shipments', 'lines', ledgerTab, ledgerPage, ledgerPageSize, ledgerRange, ledgerFilters],
     queryFn: () =>
-      fetchShipmentProfitLines({
-        batch_id: String(selectedBatchId),
-        include_missing: profitIncludeMissing,
-        limit: profitLimit,
+      fetchShipmentLines({
+        page: ledgerPage,
+        page_size: ledgerPageSize,
+        start: ledgerRange?.[0]?.toISOString?.() ?? undefined,
+        end: ledgerRange?.[1]?.toISOString?.() ?? undefined,
+        status: ledgerTab === 'all' ? undefined : (ledgerTab as any),
+        ...ledgerFilters,
       }),
-    enabled: activeTab === 'snapshots' && snapshotsView === 'profit' && !!selectedBatchId,
+    placeholderData: keepPreviousData,
   })
 
   const handoffExceptionsQuery = useQuery({
@@ -505,7 +532,11 @@ const ShipmentMonitorPage = () => {
               : false,
         limit: Math.max(Math.min(handoffLimit, 1000), 1),
       }),
-    enabled: activeTab === 'handoff' && !!selectedBatchId && (handoffMode === 'exceptions' || handoffMode === 'both'),
+    enabled:
+      batchesDrawerOpen &&
+      activeTab === 'handoff' &&
+      !!selectedBatchId &&
+      (handoffMode === 'exceptions' || handoffMode === 'both'),
   })
 
   const handoffSnapshotsQuery = useQuery({
@@ -515,7 +546,11 @@ const ShipmentMonitorPage = () => {
         batch_id: selectedBatchId || undefined,
         limit: Math.max(Math.min(handoffLimit, 1000), 1),
       }),
-    enabled: activeTab === 'handoff' && !!selectedBatchId && (handoffMode === 'snapshots' || handoffMode === 'both'),
+    enabled:
+      batchesDrawerOpen &&
+      activeTab === 'handoff' &&
+      !!selectedBatchId &&
+      (handoffMode === 'snapshots' || handoffMode === 'both'),
   })
 
   type HandoffRow = {
@@ -1104,7 +1139,7 @@ const ShipmentMonitorPage = () => {
                 大文件执行可能需要较长时间。前端等待超时并不一定代表后端失败。
               </div>
               <div style={{ marginBottom: 8 }}>
-                建议：先点右上角“刷新”查看“批次列表（上传文件）”；若出现新批次，选择后即可查看异常与快照。若未出现，稍等 30–60 秒再刷新。
+                建议：先点右上角“导入记录/排查”→“刷新批次”；若出现新批次，选中后即可查看异常与快照。若未出现，稍等 30–60 秒再刷新。
               </div>
               <div>
                 原始错误：<Text type="secondary">{err?.message ?? 'timeout'}</Text>
@@ -1125,10 +1160,10 @@ const ShipmentMonitorPage = () => {
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
         <div>
           <Title level={3} style={{ marginBottom: 4 }}>
-            批次列表 / 交接对账 / 异常处理 / 快照结果
+            发货订单
           </Title>
           <Text type="secondary">
-            入口用于对账与排查：先选批次，再看异常与快照；也可在快照 Tab 按 SKU/单号/SpecHash 查询。
+            主页面默认展示最新批次的发货记录；上传与导入记录放在抽屉里，交互更接近 ERP。
           </Text>
         </div>
         <Space>
@@ -1138,14 +1173,16 @@ const ShipmentMonitorPage = () => {
               <span style={{ marginLeft: 8, color: '#666' }}>（{String(selectedBatch.file_name)}）</span>
             ) : null}
           </Tag>
+          <Button type="primary" onClick={() => setUploadDrawerOpen(true)}>
+            上传/导入发货单（xlsx）
+          </Button>
           <Button
             onClick={() => {
+              setBatchesDrawerOpen(true)
               batchesQuery.refetch()
-              if (activeTab === 'exceptions') exceptionsQuery.refetch()
-              if (activeTab === 'snapshots') snapshotsQuery.refetch()
             }}
           >
-            刷新
+            导入记录/排查
           </Button>
         </Space>
       </div>
@@ -1163,8 +1200,22 @@ const ShipmentMonitorPage = () => {
             </Descriptions>
             <div style={{ marginTop: 10 }}>
               <Space>
-                <Button onClick={() => setActiveTab('exceptions')}>去异常处理</Button>
-                <Button onClick={() => setActiveTab('snapshots')}>去快照结果</Button>
+                <Button
+                  onClick={() => {
+                    setBatchesDrawerOpen(true)
+                    setActiveTab('exceptions')
+                  }}
+                >
+                  去异常处理
+                </Button>
+                <Button
+                  onClick={() => {
+                    setBatchesDrawerOpen(true)
+                    setActiveTab('snapshots')
+                  }}
+                >
+                  去快照结果
+                </Button>
               </Space>
             </div>
           </Card>
@@ -1172,7 +1223,181 @@ const ShipmentMonitorPage = () => {
       ) : null}
 
       <div style={{ marginTop: 16 }}>
-        <Card title="上传发货单（预览→执行）" size="small">
+        <Card
+          title="发货记录（每日台账）"
+          size="small"
+        >
+          <Tabs
+            activeKey={ledgerTab}
+            onChange={(k) => {
+              setLedgerTab(k as any)
+              setLedgerPage(1)
+            }}
+            tabBarExtraContent={
+              <Space wrap>
+                <DatePicker.RangePicker
+                  value={ledgerRange as any}
+                  onChange={(v) => {
+                    if (v && v[0] && v[1]) setLedgerRange(v as any)
+                    setLedgerPage(1)
+                  }}
+                  allowClear={false}
+                  format="YYYY-MM-DD"
+                />
+                <Form
+                  form={ledgerForm}
+                  layout="inline"
+                  onFinish={(values) => {
+                    const next = {
+                      channel: values.channel ? String(values.channel).trim() : undefined,
+                      sku_code: values.sku_code ? String(values.sku_code).trim() : undefined,
+                      shipment_no: values.shipment_no ? String(values.shipment_no).trim() : undefined,
+                      order_no: values.order_no ? String(values.order_no).trim() : undefined,
+                      product_link_id: values.product_link_id ? String(values.product_link_id).trim() : undefined,
+                    }
+                    setLedgerFilters(next)
+                    setLedgerPage(1)
+                  }}
+                >
+                  <Form.Item name="sku_code">
+                    <Input style={{ width: 140 }} placeholder="SKU" allowClear />
+                  </Form.Item>
+                  <Form.Item name="shipment_no">
+                    <Input style={{ width: 150 }} placeholder="发货单号" allowClear />
+                  </Form.Item>
+                  <Form.Item name="order_no">
+                    <Input style={{ width: 150 }} placeholder="订单号" allowClear />
+                  </Form.Item>
+                  <Form.Item name="product_link_id">
+                    <Input style={{ width: 150 }} placeholder="链接ID" allowClear />
+                  </Form.Item>
+                  <Form.Item name="channel">
+                    <Input style={{ width: 120 }} placeholder="渠道" allowClear />
+                  </Form.Item>
+                  <Button type="primary" onClick={() => ledgerForm.submit()} loading={shipmentLinesQuery.isFetching}>
+                    查询
+                  </Button>
+                </Form>
+              </Space>
+            }
+            items={[
+              { key: 'all', label: '全部发货' },
+              { key: 'processed', label: '已处理（已计价/已落快照）' },
+              { key: 'pending', label: '待处理（未计价/异常）' },
+            ]}
+          />
+
+          <div style={{ marginBottom: 10 }}>
+            <Text type="secondary">
+              说明：2025 模式不落 BOM 快照但会落“计价结果/扣库”；2026 模式会落 BOM 快照。列表的“已处理”口径统一为：有快照或有计价结果。
+            </Text>
+          </div>
+
+          <Table
+            rowKey="id"
+            size="small"
+            loading={shipmentLinesQuery.isFetching}
+            dataSource={(shipmentLinesQuery.data as ShipmentLineListResponse | undefined)?.items ?? []}
+            pagination={{
+              current: ledgerPage,
+              pageSize: ledgerPageSize,
+              total: (shipmentLinesQuery.data as ShipmentLineListResponse | undefined)?.total ?? 0,
+              showSizeChanger: true,
+            }}
+            onChange={(pagination) => {
+              const p = pagination as any
+              setLedgerPage(Number(p?.current) || 1)
+              setLedgerPageSize(Number(p?.pageSize) || 50)
+            }}
+            columns={[
+              {
+                title: '发货日期',
+                dataIndex: 'completed_at',
+                width: 110,
+                render: (v) => {
+                  const d = dayjs(safeString(v))
+                  return d.isValid() ? d.format('YYYY-MM-DD') : (safeString(v) || '-')
+                },
+              },
+              { title: '发货单号', dataIndex: 'shipment_no', width: 160, ellipsis: true },
+              { title: '订单号', dataIndex: 'order_no', width: 160, ellipsis: true },
+              {
+                title: '链接ID',
+                dataIndex: 'product_link_id',
+                width: 140,
+                render: (v) => {
+                  const id = safeString(v).trim()
+                  if (!id) return '-'
+                  const href = `https://detail.tmall.com/item.htm?id=${encodeURIComponent(id)}`
+                  return (
+                    <a href={href} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
+                      {id}
+                    </a>
+                  )
+                },
+              },
+              { title: '渠道', dataIndex: 'channel', width: 140, ellipsis: true },
+              { title: 'SKU', dataIndex: 'sku_code', width: 160, ellipsis: true },
+              {
+                title: '规格',
+                dataIndex: 'spec_text',
+                ellipsis: true,
+                render: (v) => {
+                  const s = safeString(v)
+                  if (!s) return '-'
+                  return (
+                    <Text ellipsis={{ tooltip: s }} style={{ maxWidth: 520, display: 'inline-block' }}>
+                      {s}
+                    </Text>
+                  )
+                },
+              },
+              { title: '数量', dataIndex: 'qty', width: 90, render: (v) => safeString(v) || '-' },
+              { title: '金额', dataIndex: 'revenue_amount', width: 110, render: (v) => safeString(v) || '-' },
+              {
+                title: '处理状态',
+                key: 'status',
+                width: 180,
+                render: (_v, r: any) => {
+                  const status = safeString(r?.status)
+                  const src = safeString(r?.processed_source)
+                  const mode = safeString(r?.mode)
+                  const reason = safeString(r?.unresolved_reason)
+                  const msg = safeString(r?.unresolved_message)
+                  if (status === 'processed') {
+                    const text = src === 'bom_snapshot' || mode === '2026' ? '已落快照' : '已计价'
+                    const badge = mode ? `（${mode}）` : ''
+                    return (
+                      <Tag color="green">
+                        {text}
+                        {badge}
+                      </Tag>
+                    )
+                  }
+                  if (reason) {
+                    return (
+                      <Tag color="red">
+                        待处理（{reason}）
+                        {msg ? `：${msg}` : ''}
+                      </Tag>
+                    )
+                  }
+                  return <Tag color="orange">待处理</Tag>
+                },
+              },
+              { title: '批次', dataIndex: 'batch_id', width: 220, ellipsis: true },
+            ]}
+          />
+        </Card>
+      </div>
+
+      <Drawer
+        title="上传发货单（预览→执行）"
+        open={uploadDrawerOpen}
+        onClose={() => setUploadDrawerOpen(false)}
+        width={880}
+      >
+        <Card size="small">
           <Row gutter={[16, 16]} align="middle">
             <Col xs={24} lg={10}>
               <Upload
@@ -1235,11 +1460,7 @@ const ShipmentMonitorPage = () => {
                 >
                   执行
                 </Button>
-                <Button
-                  onClick={() => setPrecheckDrawerOpen(true)}
-                  disabled={!previewData}
-                  block
-                >
+                <Button onClick={() => setPrecheckDrawerOpen(true)} disabled={!previewData} block>
                   执行前抽查（预览样本）
                 </Button>
               </Space>
@@ -1268,9 +1489,22 @@ const ShipmentMonitorPage = () => {
             </Text>
           </div>
         </Card>
-      </div>
+      </Drawer>
 
-      <div style={{ marginTop: 16 }}>
+      <Drawer
+        title="导入记录/排查"
+        open={batchesDrawerOpen}
+        onClose={() => setBatchesDrawerOpen(false)}
+        width={1100}
+      >
+        <div style={{ marginBottom: 12 }}>
+          <Space wrap>
+            <Button onClick={() => batchesQuery.refetch()} loading={batchesQuery.isFetching}>
+              刷新批次
+            </Button>
+            <Text type="secondary">提示：点击批次行可切换“当前批次”。</Text>
+          </Space>
+        </div>
         <Tabs
           activeKey={activeTab}
           onChange={(k) => setActiveTab(k as any)}
@@ -1613,14 +1847,6 @@ const ShipmentMonitorPage = () => {
                       extra={
                         <Space>
                           <Segmented
-                            value={snapshotsView}
-                            onChange={(v) => setSnapshotsView(v as any)}
-                            options={[
-                              { label: '快照列表', value: 'snapshots' },
-                              { label: '利润表（本批次）', value: 'profit' },
-                            ]}
-                          />
-                          <Segmented
                             value={snapshotsUseCurrentBatch ? 'current' : 'all'}
                             onChange={(v) => setSnapshotsUseCurrentBatch(v === 'current')}
                             options={[
@@ -1631,26 +1857,17 @@ const ShipmentMonitorPage = () => {
                           <Button
                             type="primary"
                             onClick={() => {
-                              if (snapshotsView === 'profit') {
-                                profitLinesQuery.refetch()
-                              } else {
-                                snapshotForm.submit()
-                              }
+                              snapshotForm.submit()
                             }}
                           >
                             查询
                           </Button>
                           <Button
                             onClick={() => {
-                              if (snapshotsView === 'profit') {
-                                setProfitIncludeMissing(false)
-                                setProfitLimit(500)
-                              } else {
-                                snapshotForm.resetFields()
-                                setSnapshotQuery({ limit: 200 })
-                                if (snapshotsUseCurrentBatch) {
-                                  snapshotForm.setFieldsValue({ batch_id: selectedBatchId ?? undefined })
-                                }
+                              snapshotForm.resetFields()
+                              setSnapshotQuery({ limit: 200 })
+                              if (snapshotsUseCurrentBatch) {
+                                snapshotForm.setFieldsValue({ batch_id: selectedBatchId ?? undefined })
                               }
                             }}
                           >
@@ -1659,157 +1876,63 @@ const ShipmentMonitorPage = () => {
                         </Space>
                       }
                     >
-                      {snapshotsView === 'profit' ? (
-                        <>
-                          {!selectedBatchId ? (
-                            <Alert
-                              type="info"
-                              showIcon
-                              message="请先选择一个批次"
-                              description="利润表（本批次）仅围绕“当前批次”展示。"
+                      <>
+                        <Form
+                          form={snapshotForm}
+                          layout="inline"
+                          initialValues={{
+                            batch_id: selectedBatchId ?? undefined,
+                            sku_code: undefined,
+                            shipment_no: undefined,
+                            spec_hash: undefined,
+                            limit: 200,
+                          }}
+                          onFinish={(values) => {
+                            const next = {
+                              batch_id:
+                                snapshotsUseCurrentBatch
+                                  ? (selectedBatchId ?? undefined)
+                                  : ((values.batch_id ?? selectedBatchId ?? undefined) as string | undefined),
+                              sku_code: values.sku_code ? String(values.sku_code).trim() : undefined,
+                              shipment_no: values.shipment_no ? String(values.shipment_no).trim() : undefined,
+                              spec_hash: values.spec_hash ? String(values.spec_hash).trim() : undefined,
+                              limit: values.limit ? Number(values.limit) : 200,
+                            }
+                            setSnapshotQuery(next)
+                          }}
+                        >
+                          <Form.Item name="batch_id" label="batch_id">
+                            <Input
+                              style={{ width: 260 }}
+                              placeholder={snapshotsUseCurrentBatch ? '当前批次（自动）' : '可空=全局'}
+                              disabled={snapshotsUseCurrentBatch}
                             />
-                          ) : (
-                            <>
-                              <div style={{ marginBottom: 12 }}>
-                                <Space wrap>
-                                  <Segmented
-                                    value={profitIncludeMissing ? 'all' : 'costed'}
-                                    onChange={(v) => setProfitIncludeMissing(v === 'all')}
-                                    options={[
-                                      { label: '仅已计价（有快照）', value: 'costed' },
-                                      { label: '含未计价（缺快照）', value: 'all' },
-                                    ]}
-                                  />
-                                  <Input
-                                    style={{ width: 120 }}
-                                    value={String(profitLimit)}
-                                    onChange={(e) => setProfitLimit(Number(e.target.value) || 500)}
-                                    placeholder="limit"
-                                  />
-                                  <Text type="secondary">
-                                    口径：revenue=发货行金额；cost=快照 trace.costing.total_cost；profit=revenue-cost
-                                  </Text>
-                                </Space>
-                              </div>
-                              <Table
-                                rowKey="shipment_line_id"
-                                size="small"
-                                loading={profitLinesQuery.isFetching}
-                                dataSource={(profitLinesQuery.data as ShipmentProfitLinesResponse | undefined)?.items ?? []}
-                                pagination={{ pageSize: 50 }}
-                                columns={[
-                                  { title: '行号', dataIndex: 'row_index', width: 80 },
-                                  { title: '发货单号', dataIndex: 'shipment_no', width: 160, ellipsis: true },
-                                  { title: '渠道', dataIndex: 'channel', width: 140, ellipsis: true },
-                                  { title: 'SKU', dataIndex: 'sku_code', width: 160, ellipsis: true },
-                                  {
-                                    title: '金额',
-                                    dataIndex: 'revenue_amount',
-                                    width: 110,
-                                    render: (v) => safeString(v) || '-',
-                                  },
-                                  {
-                                    title: '成本',
-                                    dataIndex: 'cost_amount',
-                                    width: 110,
-                                    render: (v) => safeString(v) || '-',
-                                  },
-                                  {
-                                    title: '利润',
-                                    dataIndex: 'gross_profit',
-                                    width: 110,
-                                    render: (v) => safeString(v) || '-',
-                                  },
-                                  {
-                                    title: '毛利率',
-                                    dataIndex: 'gross_margin',
-                                    width: 110,
-                                    render: (v) => (safeString(v) ? `${(Number(v) * 100).toFixed(2)}%` : '-'),
-                                  },
-                                  {
-                                    title: '状态',
-                                    dataIndex: 'status',
-                                    width: 160,
-                                    render: (v) => {
-                                      const s = safeString(v)
-                                      if (s === 'costed') return <Tag color="green">已计价</Tag>
-                                      if (s === 'missing_costing') return <Tag color="orange">缺成本字段</Tag>
-                                      if (s === 'missing_snapshot') return <Tag>缺快照（未计价）</Tag>
-                                      return <Tag>未知</Tag>
-                                    },
-                                  },
-                                  {
-                                    title: '备注',
-                                    dataIndex: 'note',
-                                    ellipsis: true,
-                                    render: (v) => safeString(v) || '-',
-                                  },
-                                ]}
-                              />
-                            </>
-                          )}
-                        </>
-                      ) : (
-                        <>
-                          <Form
-                            form={snapshotForm}
-                            layout="inline"
-                            initialValues={{
-                              batch_id: selectedBatchId ?? undefined,
-                              sku_code: undefined,
-                              shipment_no: undefined,
-                              spec_hash: undefined,
-                              limit: 200,
-                            }}
-                            onFinish={(values) => {
-                              const next = {
-                                batch_id:
-                                  snapshotsUseCurrentBatch
-                                    ? (selectedBatchId ?? undefined)
-                                    : ((values.batch_id ?? selectedBatchId ?? undefined) as string | undefined),
-                                sku_code: values.sku_code ? String(values.sku_code).trim() : undefined,
-                                shipment_no: values.shipment_no
-                                  ? String(values.shipment_no).trim()
-                                  : undefined,
-                                spec_hash: values.spec_hash ? String(values.spec_hash).trim() : undefined,
-                                limit: values.limit ? Number(values.limit) : 200,
-                              }
-                              setSnapshotQuery(next)
-                            }}
-                          >
-                            <Form.Item name="batch_id" label="batch_id">
-                              <Input
-                                style={{ width: 260 }}
-                                placeholder={snapshotsUseCurrentBatch ? '当前批次（自动）' : '可空=全局'}
-                                disabled={snapshotsUseCurrentBatch}
-                              />
-                            </Form.Item>
-                            <Form.Item name="sku_code" label="SKU">
-                              <Input style={{ width: 160 }} placeholder="SKU-001" />
-                            </Form.Item>
-                            <Form.Item name="shipment_no" label="发货单号">
-                              <Input style={{ width: 160 }} placeholder="S2025..." />
-                            </Form.Item>
-                            <Form.Item name="spec_hash" label="spec_hash">
-                              <Input style={{ width: 220 }} placeholder="sha1..." />
-                            </Form.Item>
-                            <Form.Item name="limit" label="limit">
-                              <Input style={{ width: 100 }} />
-                            </Form.Item>
-                          </Form>
+                          </Form.Item>
+                          <Form.Item name="sku_code" label="SKU">
+                            <Input style={{ width: 160 }} placeholder="SKU-001" />
+                          </Form.Item>
+                          <Form.Item name="shipment_no" label="发货单号">
+                            <Input style={{ width: 160 }} placeholder="S2025..." />
+                          </Form.Item>
+                          <Form.Item name="spec_hash" label="spec_hash">
+                            <Input style={{ width: 220 }} placeholder="sha1..." />
+                          </Form.Item>
+                          <Form.Item name="limit" label="limit">
+                            <Input style={{ width: 100 }} />
+                          </Form.Item>
+                        </Form>
 
-                          <div style={{ marginTop: 12 }}>
-                            <Table
-                              rowKey="id"
-                              size="small"
-                              loading={snapshotsQuery.isFetching}
-                              columns={snapshotColumns}
-                              dataSource={snapshotsQuery.data ?? []}
-                              pagination={false}
-                            />
-                          </div>
-                        </>
-                      )}
+                        <div style={{ marginTop: 12 }}>
+                          <Table
+                            rowKey="id"
+                            size="small"
+                            loading={snapshotsQuery.isFetching}
+                            columns={snapshotColumns}
+                            dataSource={snapshotsQuery.data ?? []}
+                            pagination={false}
+                          />
+                        </div>
+                      </>
                     </Card>
                   </Col>
                 </Row>
@@ -1817,7 +1940,7 @@ const ShipmentMonitorPage = () => {
             },
           ]}
         />
-      </div>
+      </Drawer>
 
       <Drawer
         title="执行前抽查（预览样本）"

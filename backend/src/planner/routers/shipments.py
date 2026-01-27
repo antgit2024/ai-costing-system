@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy.orm import Session
 
 from ..dependencies import get_db_session
@@ -8,6 +10,7 @@ from ..schemas import (
     BomSnapshotRead,
     BomSnapshotRecomputeRequest,
     PaginatedShipmentImportBatchResponse,
+    PaginatedShipmentLineResponse,
   ShipmentImportPreviewResponse,
   ShipmentImportExecuteRequest,
     ShipmentExceptionRead,
@@ -176,3 +179,43 @@ def profit_lines_by_batch(
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+@router.get("/lines", response_model=PaginatedShipmentLineResponse)
+def list_shipment_lines(
+    page: int = 1,
+    page_size: int = 50,
+    start: str | None = Query(None, description="ISO datetime, e.g. 2026-01-01T00:00:00Z"),
+    end: str | None = Query(None, description="ISO datetime, e.g. 2026-02-01T00:00:00Z"),
+    status: str | None = Query(None, description="processed | pending"),
+    channel: str | None = None,
+    sku_code: str | None = None,
+    shipment_no: str | None = None,
+    order_no: str | None = None,
+    product_link_id: str | None = None,
+    db: Session = Depends(get_db_session),
+):
+    def parse_dt(s: str) -> datetime:
+        v = (s or "").strip()
+        if v.endswith("Z"):
+            v = v[:-1] + "+00:00"
+        dt = datetime.fromisoformat(v)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+
+    try:
+        payload = shipment_import_service.list_shipment_lines(
+            db,
+            page=page,
+            page_size=page_size,
+            start=parse_dt(start) if start else None,
+            end=parse_dt(end) if end else None,
+            channel=channel,
+            sku_code=sku_code,
+            shipment_no=shipment_no,
+            order_no=order_no,
+            product_link_id=product_link_id,
+            status=status,
+        )
+        return payload
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))

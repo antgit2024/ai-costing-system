@@ -2279,6 +2279,39 @@ class PaginatedShipmentImportBatchResponse(BaseModel):
     items: List[ShipmentImportBatchRead]
 
 
+class ShipmentLineListItem(BaseModel):
+    id: str
+    batch_id: str
+    row_index: Optional[int] = None
+    shipment_no: Optional[str] = None
+    order_no: Optional[str] = None
+    product_link_id: Optional[str] = None
+    completed_at: Optional[datetime] = None
+    channel: Optional[str] = None
+    sku_code: Optional[str] = None
+    spec_text: Optional[str] = None
+    spec_hash: Optional[str] = None
+    qty: Optional[Decimal] = None
+    revenue_amount: Optional[Decimal] = None
+
+    # processing status (2025/2026 unified)
+    status: Literal["processed", "pending"]
+    processed_source: Optional[Literal["bom_snapshot", "costing_result"]] = None
+    mode: Optional[Literal["2025", "2026"]] = None
+    unresolved_reason: Optional[str] = None
+    unresolved_message: Optional[str] = None
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class PaginatedShipmentLineResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: List[ShipmentLineListItem]
+
+
 class ShipmentImportPreviewIssue(BaseModel):
     row_index: Optional[int] = None
     shipment_no: Optional[str] = None
@@ -2442,6 +2475,10 @@ class AfterSalesLineRead(BaseModel):
     applied_at: Optional[datetime] = None
     channel: Optional[str] = None
     reason: Optional[str] = None
+    # Best-effort binding info (computed via sku_code -> active version mapping)
+    bound_model_code: Optional[str] = None
+    bound_model_name: Optional[str] = None
+    bound_version_label: Optional[str] = None
     order_no: Optional[str] = None
     product_link_id: Optional[str] = None
     product_code: Optional[str] = None
@@ -2463,6 +2500,32 @@ class AfterSalesLineRead(BaseModel):
         orm_mode = True
         allow_population_by_field_name = True
         json_encoders = {Decimal: _decimal_to_str}
+
+
+class PaginatedAfterSalesLineResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: List[AfterSalesLineRead]
+
+
+class AfterSalesReasonOptionItem(BaseModel):
+    reason: str
+    count: int
+
+
+class AfterSalesReasonOptionsResponse(BaseModel):
+    items: List[AfterSalesReasonOptionItem] = Field(default_factory=list)
+
+
+class AfterSalesModelOptionItem(BaseModel):
+    model_code: str
+    model_name: Optional[str] = None
+    count: int
+
+
+class AfterSalesModelOptionsResponse(BaseModel):
+    items: List[AfterSalesModelOptionItem] = Field(default_factory=list)
 
 
 class AfterSalesExceptionRead(BaseModel):
@@ -2502,6 +2565,103 @@ class ReturnsRateBySkuResponse(BaseModel):
     end: str
     items: List[ReturnsRateBySkuItem] = Field(default_factory=list)
     unmatched_returns_missing_order_no: int = 0
+
+
+class AfterSalesDashboardKpis(BaseModel):
+    shipped_qty: Decimal = Decimal("0")
+    shipped_amount: Decimal = Decimal("0")
+    returned_qty: Decimal = Decimal("0")
+    refund_amount: Decimal = Decimal("0")
+    return_rate: Optional[Decimal] = None
+    refund_rate: Optional[Decimal] = None
+    model_mapped_shipped_qty: Decimal = Decimal("0")
+    model_mapped_rate: Optional[Decimal] = None
+    # attribution quality
+    # 1) within selected shipment window (for lag distribution readiness)
+    matched_return_lines: int = 0
+    matched_return_lines_with_applied_at: int = 0
+    # 2) within selected applied window (data quality: "unattributed share")
+    after_sales_lines_total: int = 0
+    after_sales_lines_matched_any_shipment: int = 0
+    after_sales_lines_unmatched: int = 0
+    after_sales_lines_unmatched_rate: Optional[Decimal] = None
+    after_sales_lines_missing_order_no: int = 0
+    after_sales_lines_missing_product_link_id: int = 0
+    after_sales_lines_missing_sku_code: int = 0
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class AfterSalesDashboardSeriesItem(BaseModel):
+    period: str
+    shipped_qty: Decimal
+    shipped_amount: Decimal
+    returned_qty: Decimal
+    refund_amount: Decimal
+    return_rate: Optional[Decimal] = None
+    refund_rate: Optional[Decimal] = None
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class AfterSalesDashboardTopReasonItem(BaseModel):
+    reason: str
+    returned_qty: Decimal
+    refund_amount: Decimal
+    share_returned_qty: Optional[Decimal] = None
+    share_refund_amount: Optional[Decimal] = None
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class AfterSalesDashboardTopModelItem(BaseModel):
+    model_code: str
+    model_name: Optional[str] = None
+    shipped_qty: Decimal
+    returned_qty: Decimal
+    return_rate: Optional[Decimal] = None
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class AfterSalesDashboardTopSkuItem(BaseModel):
+    sku_code: str
+    spec_text: Optional[str] = None
+    shipped_qty: Decimal
+    returned_qty: Decimal
+    return_rate: Optional[Decimal] = None
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class AfterSalesDashboardTopLinkItem(BaseModel):
+    product_link_id: str
+    spec_text: Optional[str] = None
+    shipped_qty: Decimal
+    returned_qty: Decimal
+    return_rate: Optional[Decimal] = None
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class AfterSalesDashboardResponse(BaseModel):
+    group_by: Literal["week", "month"]
+    start: str
+    end: str
+    kpis: AfterSalesDashboardKpis
+    series: List[AfterSalesDashboardSeriesItem] = Field(default_factory=list)
+    top_reasons: List[AfterSalesDashboardTopReasonItem] = Field(default_factory=list)
+    top_models: List[AfterSalesDashboardTopModelItem] = Field(default_factory=list)
+    top_skus: List[AfterSalesDashboardTopSkuItem] = Field(default_factory=list)
+    top_links: List[AfterSalesDashboardTopLinkItem] = Field(default_factory=list)
+    # lag distribution (matched returns vs shipment completed_at)
+    lag_buckets: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class ProfitBySkuItem(BaseModel):
@@ -2922,6 +3082,86 @@ class SalesLinesResponse(BaseModel):
 
     class Config:
         json_encoders = {Decimal: _decimal_to_str}
+
+
+class SalesProfitDashboardKpis(BaseModel):
+    # totals (all shipment lines in range)
+    shipped_qty: Decimal = Decimal("0")
+    revenue_amount: Decimal = Decimal("0")
+    shipment_lines_total: int = 0
+    # cost coverage (only lines with known costing)
+    costed_revenue_amount: Decimal = Decimal("0")
+    costed_lines: int = 0
+    lines_missing_costing: int = 0
+    costed_revenue_rate: Optional[Decimal] = None
+    # profitability (computed only on costed lines)
+    cost_amount: Decimal = Decimal("0")
+    gross_profit: Decimal = Decimal("0")
+    gross_margin: Optional[Decimal] = None
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class SalesProfitDashboardSeriesItem(BaseModel):
+    period: str
+    shipped_qty: Decimal
+    revenue_amount: Decimal
+    costed_revenue_amount: Decimal
+    cost_amount: Decimal
+    gross_profit: Decimal
+    gross_margin: Optional[Decimal] = None
+    shipment_lines_total: int = 0
+    costed_lines: int = 0
+    lines_missing_costing: int = 0
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class SalesProfitDashboardTopSkuItem(BaseModel):
+    sku_code: str
+    spec_text: Optional[str] = None
+    shipped_qty: Decimal
+    revenue_amount: Decimal
+    cost_amount: Decimal
+    gross_profit: Decimal
+    gross_margin: Optional[Decimal] = None
+    shipment_lines_total: int = 0
+    costed_lines: int = 0
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class SalesProfitDashboardTopModelItem(BaseModel):
+    model_code: str
+    model_name: Optional[str] = None
+    shipped_qty: Decimal
+    revenue_amount: Decimal
+    cost_amount: Decimal
+    gross_profit: Decimal
+    gross_margin: Optional[Decimal] = None
+    shipment_lines_total: int = 0
+    costed_lines: int = 0
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class SalesProfitDashboardResponse(BaseModel):
+    group_by: Literal["week", "month"]
+    start: str
+    end: str
+    channel: Optional[str] = None
+    top_n: int = 12
+    kpis: SalesProfitDashboardKpis
+    series: List[SalesProfitDashboardSeriesItem] = Field(default_factory=list)
+    top_skus_profit: List[SalesProfitDashboardTopSkuItem] = Field(default_factory=list)
+    top_skus_loss: List[SalesProfitDashboardTopSkuItem] = Field(default_factory=list)
+    top_models_profit: List[SalesProfitDashboardTopModelItem] = Field(default_factory=list)
+    top_models_loss: List[SalesProfitDashboardTopModelItem] = Field(default_factory=list)
+    note: Optional[str] = None
 
 
 class SkuMasterRead(BaseModel):

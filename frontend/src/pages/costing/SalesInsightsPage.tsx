@@ -1,10 +1,13 @@
-import { Alert, Button, Card, DatePicker, Form, Input, Segmented, Select, Space, Table, Typography } from 'antd'
+import { Alert, Button, Card, Col, DatePicker, Form, Input, Progress, Row, Segmented, Select, Space, Statistic, Table, Tabs, Typography, message } from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 import dayjs from 'dayjs'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 
-import { fetchSalesLines } from '@/services/planner'
-import type { SalesLineItem, SalesLinesResponse } from '@/types/planner'
+import { fetchSalesLines, fetchSalesProfitDashboard } from '@/services/planner'
+import type { SalesLineItem, SalesLinesResponse, SalesProfitDashboardResponse, SalesProfitDashboardTopModelItem, SalesProfitDashboardTopSkuItem } from '@/types/planner'
+
+const STORAGE_KEY = 'insights.sales.lastQuery.v1'
 
 const formatMoney = (raw?: string | null) => {
   if (raw == null || raw === '') return '-'
@@ -32,12 +35,14 @@ const formatDateToDay = (raw?: string | null) => {
 
 const SalesInsightsPage = () => {
   const [form] = Form.useForm()
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'detail'>('dashboard')
+  const [dashboardGroupBy, setDashboardGroupBy] = useState<'week' | 'month'>('week')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [data, setData] = useState<SalesLinesResponse | null>(null)
   const [includeMissing, setIncludeMissing] = useState(true)
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(50)
+  const [pageSize, setPageSize] = useState(20)
   const [shopOptions, setShopOptions] = useState<string[]>([])
   const [lastQuery, setLastQuery] = useState<{
     start: string
@@ -48,6 +53,30 @@ const SalesInsightsPage = () => {
     order_no?: string
     product_link_id?: string
   } | null>(null)
+
+  const didInitRef = useRef(false)
+
+  const watchedRange = Form.useWatch('range', form) as [dayjs.Dayjs, dayjs.Dayjs] | undefined
+  const watchedShop = Form.useWatch('shop', form) as string | undefined
+  const rangeStartIso = watchedRange?.[0]?.startOf('day')?.toISOString?.()
+  const rangeEndIso = watchedRange?.[1]?.endOf('day')?.toISOString?.()
+
+  const dashboardQuery = useQuery({
+    queryKey: ['sales', 'profit-dashboard', rangeStartIso, rangeEndIso, watchedShop, dashboardGroupBy],
+    queryFn: () =>
+      fetchSalesProfitDashboard(
+        {
+          start: String(rangeStartIso),
+          end: String(rangeEndIso),
+          group_by: dashboardGroupBy,
+          channel: watchedShop?.trim() || undefined,
+          top_n: 12,
+        },
+        { timeoutMs: 60000 },
+      ),
+    enabled: activeTab === 'dashboard' && !!rangeStartIso && !!rangeEndIso,
+    placeholderData: keepPreviousData,
+  })
 
   const columns = useMemo<ColumnsType<SalesLineItem>>(
     () => [
@@ -140,8 +169,86 @@ const SalesInsightsPage = () => {
       product_link_id: v.product_link_id?.trim() || undefined,
     }
     setLastQuery(base)
-    await runQuery({ ...base, page: 1, page_size: pageSize })
+    try {
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(
+          STORAGE_KEY,
+          JSON.stringify({
+            ...base,
+            page_size: pageSize,
+          }),
+        )
+      }
+    } catch {
+      // ignore storage errors (private mode / quota)
+    }
+    if (activeTab === 'detail') {
+      await runQuery({ ...base, page: 1, page_size: pageSize })
+    } else {
+      dashboardQuery.refetch().then((res) => {
+        const status = (res as any)?.error?.response?.status
+        if (status === 404) message.warning('后端尚未部署销售利润看板接口（/api/planner/analytics/sales/profit-dashboard）。')
+      })
+    }
   }
+
+  const applyQuickRange = async (days: number) => {
+    const range: [dayjs.Dayjs, dayjs.Dayjs] = [dayjs().subtract(days, 'day'), dayjs()]
+    form.setFieldsValue({ range })
+    await onQuery()
+  }
+
+  useEffect(() => {
+    if (didInitRef.current) return
+    didInitRef.current = true
+
+    const applyAndQuery = async () => {
+      try {
+        const raw = typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_KEY) : null
+        if (!raw) {
+          // default: show last 30 days on dashboard
+          form.setFieldsValue({ range: [dayjs().subtract(30, 'day'), dayjs()] })
+          return
+        }
+        const saved = JSON.parse(raw || '{}') as any
+        const start = String(saved?.start ?? '').trim()
+        const end = String(saved?.end ?? '').trim()
+        const nextPageSize = Number(saved?.page_size)
+        const nextIncludeMissing = saved?.include_missing !== false
+
+        if (Number.isFinite(nextPageSize) && nextPageSize > 0) setPageSize(nextPageSize)
+        setIncludeMissing(nextIncludeMissing)
+
+        const range: [dayjs.Dayjs, dayjs.Dayjs] = [
+          dayjs(start || dayjs().subtract(30, 'day').startOf('day').toISOString()),
+          dayjs(end || dayjs().endOf('day').toISOString()),
+        ]
+        form.setFieldsValue({
+          range,
+          shop: saved?.channel ?? undefined,
+          sku_code: saved?.sku_code ?? undefined,
+          order_no: saved?.order_no ?? undefined,
+          product_link_id: saved?.product_link_id ?? undefined,
+        })
+
+        const base = {
+          start: range[0].startOf('day').toISOString(),
+          end: range[1].endOf('day').toISOString(),
+          include_missing: nextIncludeMissing,
+          channel: String(saved?.channel ?? '').trim() || undefined,
+          sku_code: String(saved?.sku_code ?? '').trim() || undefined,
+          order_no: String(saved?.order_no ?? '').trim() || undefined,
+          product_link_id: String(saved?.product_link_id ?? '').trim() || undefined,
+        }
+        setLastQuery(base)
+      } catch {
+        form.setFieldsValue({ range: [dayjs().subtract(30, 'day'), dayjs()] })
+      }
+    }
+
+    applyAndQuery()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const onPageChange = async (p: number, ps: number) => {
     setError(null)
@@ -177,18 +284,20 @@ const SalesInsightsPage = () => {
   return (
     <div style={{ padding: 16 }}>
       <Typography.Title level={3} style={{ margin: '0 0 12px' }}>
-        数据洞察 / 销售分析（明细）
+        数据洞察 / 销售分析
       </Typography.Title>
 
       <Alert
         type="info"
         showIcon
         style={{ marginBottom: 12 }}
-        message="说明（明细口径）"
+        message="说明（利润看板）"
         description={
           <div>
-            <div>本页展示“发货明细行”并回填成本字段：成本金额=计价结果 cost_total（2026 由 BOM 快照生成；2025 可不落快照但落结果）；成本单价=成本金额/数量。</div>
-            <div>缺计价结果的行会显示成本为“-”（可通过绑定/异常处理逐步补齐覆盖率）。</div>
+            <div>
+              本页默认展示“利润看板”，帮运营快速识别<strong>赚钱</strong>与<strong>亏钱</strong>的货品/模型（避免“卖一个亏一个”）。
+            </div>
+            <div>为避免缺成本导致利润虚高：毛利/毛利率仅在“已计价行”上计算，并单独展示成本覆盖率。</div>
           </div>
         }
       />
@@ -204,6 +313,22 @@ const SalesInsightsPage = () => {
         >
           <Form.Item label="时间范围" name="range" rules={[{ required: true, message: '请选择时间范围' }]}>
             <DatePicker.RangePicker allowClear={false} />
+          </Form.Item>
+          <Form.Item label="快捷">
+            <Space size={6}>
+              <Button size="small" onClick={() => applyQuickRange(7)}>
+                近7天
+              </Button>
+              <Button size="small" onClick={() => applyQuickRange(30)}>
+                近30天
+              </Button>
+              <Button size="small" onClick={() => applyQuickRange(90)}>
+                近90天
+              </Button>
+              <Button size="small" onClick={() => applyQuickRange(365)}>
+                近1年
+              </Button>
+            </Space>
           </Form.Item>
           <Form.Item label="店铺" name="shop">
             <Select
@@ -234,8 +359,8 @@ const SalesInsightsPage = () => {
                   { label: '仅已计价', value: 'costed' },
                 ]}
               />
-              <Button type="primary" onClick={() => onQuery()} loading={loading}>
-                查询
+              <Button type="primary" onClick={() => onQuery()} loading={loading || dashboardQuery.isFetching}>
+                {activeTab === 'detail' ? '查询明细' : '刷新看板'}
               </Button>
               <Button
                 onClick={() => {
@@ -254,32 +379,299 @@ const SalesInsightsPage = () => {
 
       {error ? <Alert type="error" showIcon message="查询失败" description={error} style={{ marginBottom: 12 }} /> : null}
 
-      {data ? (
+      {data && (data.items ?? []).length === 0 ? (
         <Alert
-          type={data.lines_with_bom_snapshots > 0 ? 'success' : 'warning'}
+          type="info"
           showIcon
           style={{ marginBottom: 12 }}
-          message="成本覆盖率（本次范围内）"
+          message="当前范围暂无数据"
           description={
-            <div>
-              <div>
-                有 BOM 快照行：{data.lines_with_bom_snapshots}；缺成本字段行：{data.lines_missing_costing}
-              </div>
-              <div style={{ color: '#888' }}>{data.note || ''}</div>
-            </div>
+            <Space wrap>
+              <span>建议点“近90天/近1年”确认数据范围，或检查是否已导入发货单。</span>
+              <Button size="small" onClick={() => applyQuickRange(90)}>
+                近90天
+              </Button>
+              <Button size="small" onClick={() => applyQuickRange(365)}>
+                近1年
+              </Button>
+            </Space>
           }
         />
       ) : null}
 
       <Card size="small">
-        <Table
-          rowKey="shipment_line_id"
-          size="small"
-          loading={loading}
-          columns={columns}
-          dataSource={data?.items ?? []}
-          pagination={pagination}
-          scroll={{ x: 2100 }}
+        <Tabs
+          activeKey={activeTab}
+          onChange={(k) => {
+            const next = k as 'dashboard' | 'detail'
+            setActiveTab(next)
+            if (next === 'detail' && !data && !loading) onQuery()
+          }}
+          items={[
+            {
+              key: 'dashboard',
+              label: '利润看板（赚钱/亏钱）',
+              children: (
+                <>
+                  <div style={{ marginBottom: 12 }}>
+                    <Space wrap>
+                      <Select
+                        value={dashboardGroupBy}
+                        style={{ width: 120 }}
+                        onChange={(v) => setDashboardGroupBy(v)}
+                        options={[
+                          { value: 'week', label: '按周（默认）' },
+                          { value: 'month', label: '按月' },
+                        ]}
+                      />
+                      <Typography.Text type="secondary">时间口径：按发货完成时间（成本口径一致）</Typography.Text>
+                    </Space>
+                  </div>
+
+                  {dashboardQuery.isError ? (
+                    <Alert
+                      type={(dashboardQuery.error as any)?.response?.status === 404 ? 'warning' : 'error'}
+                      showIcon
+                      style={{ marginBottom: 12 }}
+                      message="看板加载失败"
+                      description={String((dashboardQuery.error as any)?.message ?? 'unknown error')}
+                    />
+                  ) : null}
+
+                  <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
+                    <Col xs={24} lg={6}>
+                      <Card size="small">
+                        <Statistic
+                          title="销售额（全部）"
+                          value={formatMoney((dashboardQuery.data as SalesProfitDashboardResponse | undefined)?.kpis?.revenue_amount)}
+                        />
+                      </Card>
+                    </Col>
+                    <Col xs={24} lg={6}>
+                      <Card size="small">
+                        <Statistic
+                          title="已计价销售额"
+                          value={formatMoney((dashboardQuery.data as SalesProfitDashboardResponse | undefined)?.kpis?.costed_revenue_amount)}
+                        />
+                      </Card>
+                    </Col>
+                    <Col xs={24} lg={6}>
+                      <Card size="small">
+                        <Statistic
+                          title="毛利额（已计价）"
+                          value={formatMoney((dashboardQuery.data as SalesProfitDashboardResponse | undefined)?.kpis?.gross_profit)}
+                          valueStyle={{
+                            color: Number((dashboardQuery.data as any)?.kpis?.gross_profit ?? 0) < 0 ? 'var(--ant-color-error)' : undefined,
+                          }}
+                        />
+                      </Card>
+                    </Col>
+                    <Col xs={24} lg={6}>
+                      <Card size="small">
+                        <Space direction="vertical" style={{ width: '100%' }}>
+                          <Typography.Text type="secondary">成本覆盖率（按销售额）</Typography.Text>
+                          <Progress
+                            percent={Number((Number((dashboardQuery.data as any)?.kpis?.costed_revenue_rate ?? 0) * 100).toFixed(1))}
+                            strokeColor="var(--ant-color-primary, #1677ff)"
+                            format={(p) => `${p ?? 0}%`}
+                          />
+                          <Typography.Text type="secondary">
+                            缺成本行：{Number((dashboardQuery.data as any)?.kpis?.lines_missing_costing ?? 0)} /{' '}
+                            {Number((dashboardQuery.data as any)?.kpis?.shipment_lines_total ?? 0)}
+                          </Typography.Text>
+                        </Space>
+                      </Card>
+                    </Col>
+                  </Row>
+
+                  <Row gutter={[12, 12]}>
+                    <Col xs={24} lg={12}>
+                      <Card size="small" title="Top 赚钱货品（毛利额最高，已计价）">
+                        <Table
+                          rowKey={(r: any) => String(r.sku_code)}
+                          size="small"
+                          loading={dashboardQuery.isFetching}
+                          dataSource={(dashboardQuery.data as SalesProfitDashboardResponse | undefined)?.top_skus_profit ?? []}
+                          pagination={false}
+                          columns={[
+                            { title: 'SKU', dataIndex: 'sku_code', width: 140, ellipsis: true },
+                            { title: '规格（最常见）', dataIndex: 'spec_text', ellipsis: true },
+                            { title: '销售额', dataIndex: 'revenue_amount', width: 110, render: (v: any) => formatMoney(v) },
+                            { title: '成本', dataIndex: 'cost_amount', width: 110, render: (v: any) => formatMoney(v) },
+                            {
+                              title: '毛利',
+                              dataIndex: 'gross_profit',
+                              width: 110,
+                              render: (v: any) => (
+                                <Typography.Text type={Number(v ?? 0) < 0 ? 'danger' : undefined}>{formatMoney(v)}</Typography.Text>
+                              ),
+                            },
+                            {
+                              title: '毛利率',
+                              dataIndex: 'gross_margin',
+                              width: 110,
+                              render: (v: any) => (v == null ? '-' : `${(Number(v) * 100).toFixed(2)}%`),
+                            },
+                          ]}
+                          onRow={(r: SalesProfitDashboardTopSkuItem) => ({
+                            onClick: async () => {
+                              form.setFieldsValue({ sku_code: r.sku_code })
+                              setActiveTab('detail')
+                              await onQuery()
+                            },
+                          })}
+                        />
+                      </Card>
+                    </Col>
+                    <Col xs={24} lg={12}>
+                      <Card size="small" title="Top 亏损货品（毛利额最低，已计价）">
+                        <Table
+                          rowKey={(r: any) => String(r.sku_code)}
+                          size="small"
+                          loading={dashboardQuery.isFetching}
+                          dataSource={(dashboardQuery.data as SalesProfitDashboardResponse | undefined)?.top_skus_loss ?? []}
+                          pagination={false}
+                          columns={[
+                            { title: 'SKU', dataIndex: 'sku_code', width: 140, ellipsis: true },
+                            { title: '规格（最常见）', dataIndex: 'spec_text', ellipsis: true },
+                            { title: '销售额', dataIndex: 'revenue_amount', width: 110, render: (v: any) => formatMoney(v) },
+                            { title: '成本', dataIndex: 'cost_amount', width: 110, render: (v: any) => formatMoney(v) },
+                            {
+                              title: '毛利',
+                              dataIndex: 'gross_profit',
+                              width: 110,
+                              render: (v: any) => (
+                                <Typography.Text type={Number(v ?? 0) < 0 ? 'danger' : undefined}>{formatMoney(v)}</Typography.Text>
+                              ),
+                            },
+                            {
+                              title: '毛利率',
+                              dataIndex: 'gross_margin',
+                              width: 110,
+                              render: (v: any) => (v == null ? '-' : `${(Number(v) * 100).toFixed(2)}%`),
+                            },
+                          ]}
+                          onRow={(r: SalesProfitDashboardTopSkuItem) => ({
+                            onClick: async () => {
+                              form.setFieldsValue({ sku_code: r.sku_code })
+                              setActiveTab('detail')
+                              await onQuery()
+                            },
+                          })}
+                        />
+                      </Card>
+                    </Col>
+                  </Row>
+
+                  <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
+                    <Col xs={24} lg={12}>
+                      <Card size="small" title="Top 赚钱模型（毛利额最高，已计价）">
+                        <Table
+                          rowKey={(r: any) => String(r.model_code)}
+                          size="small"
+                          loading={dashboardQuery.isFetching}
+                          dataSource={(dashboardQuery.data as SalesProfitDashboardResponse | undefined)?.top_models_profit ?? []}
+                          pagination={false}
+                          columns={[
+                            {
+                              title: '模型',
+                              key: 'model',
+                              ellipsis: true,
+                              render: (_: any, r: SalesProfitDashboardTopModelItem) =>
+                                `${r.model_code}${r.model_name ? ` ${r.model_name}` : ''}`,
+                            },
+                            { title: '销售额', dataIndex: 'revenue_amount', width: 110, render: (v: any) => formatMoney(v) },
+                            {
+                              title: '毛利',
+                              dataIndex: 'gross_profit',
+                              width: 110,
+                              render: (v: any) => (
+                                <Typography.Text type={Number(v ?? 0) < 0 ? 'danger' : undefined}>{formatMoney(v)}</Typography.Text>
+                              ),
+                            },
+                            {
+                              title: '毛利率',
+                              dataIndex: 'gross_margin',
+                              width: 110,
+                              render: (v: any) => (v == null ? '-' : `${(Number(v) * 100).toFixed(2)}%`),
+                            },
+                          ]}
+                        />
+                      </Card>
+                    </Col>
+                    <Col xs={24} lg={12}>
+                      <Card size="small" title="Top 亏损模型（毛利额最低，已计价）">
+                        <Table
+                          rowKey={(r: any) => String(r.model_code)}
+                          size="small"
+                          loading={dashboardQuery.isFetching}
+                          dataSource={(dashboardQuery.data as SalesProfitDashboardResponse | undefined)?.top_models_loss ?? []}
+                          pagination={false}
+                          columns={[
+                            {
+                              title: '模型',
+                              key: 'model',
+                              ellipsis: true,
+                              render: (_: any, r: SalesProfitDashboardTopModelItem) =>
+                                `${r.model_code}${r.model_name ? ` ${r.model_name}` : ''}`,
+                            },
+                            { title: '销售额', dataIndex: 'revenue_amount', width: 110, render: (v: any) => formatMoney(v) },
+                            {
+                              title: '毛利',
+                              dataIndex: 'gross_profit',
+                              width: 110,
+                              render: (v: any) => (
+                                <Typography.Text type={Number(v ?? 0) < 0 ? 'danger' : undefined}>{formatMoney(v)}</Typography.Text>
+                              ),
+                            },
+                            {
+                              title: '毛利率',
+                              dataIndex: 'gross_margin',
+                              width: 110,
+                              render: (v: any) => (v == null ? '-' : `${(Number(v) * 100).toFixed(2)}%`),
+                            },
+                          ]}
+                        />
+                      </Card>
+                    </Col>
+                  </Row>
+                </>
+              ),
+            },
+            {
+              key: 'detail',
+              label: '销售明细',
+              children: (
+                <>
+                  {data ? (
+                    <Alert
+                      type={data.lines_with_bom_snapshots > 0 ? 'success' : 'warning'}
+                      showIcon
+                      style={{ marginBottom: 12 }}
+                      message="成本覆盖率（明细范围内）"
+                      description={
+                        <div>
+                          <div>
+                            有 BOM/计价行：{data.lines_with_bom_snapshots}；缺成本字段行：{data.lines_missing_costing}
+                          </div>
+                          <div style={{ color: '#888' }}>{data.note || ''}</div>
+                        </div>
+                      }
+                    />
+                  ) : null}
+                  <Table
+                    rowKey="shipment_line_id"
+                    size="small"
+                    loading={loading}
+                    columns={columns}
+                    dataSource={data?.items ?? []}
+                    pagination={pagination}
+                    scroll={{ x: 2100 }}
+                  />
+                </>
+              ),
+            },
+          ]}
         />
       </Card>
     </div>

@@ -113,8 +113,14 @@ import type {
   ModelUsageMaterialSummaryResponse,
   ModelUsageProcessSummaryResponse,
   SalesLinesResponse,
+  SalesProfitDashboardResponse,
   ShipmentProfitLinesResponse,
+  ShipmentLineListResponse,
   AfterSalesImportBatch,
+  AfterSalesModelOptionsResponse,
+  AfterSalesReasonOptionsResponse,
+  AfterSalesDashboardResponse,
+  PaginatedAfterSalesLinesResponse,
   ProductModelVersionPatchPayload,
   SkuMaster,
   SkuMasterScanResponse,
@@ -1631,6 +1637,24 @@ export const fetchShipmentImportBatch = async (batchId: string): Promise<Shipmen
   return resp.data
 }
 
+export const fetchShipmentLines = async (
+  params: {
+    page?: number
+    page_size?: number
+    start?: string
+    end?: string
+    status?: 'processed' | 'pending'
+    channel?: string
+    sku_code?: string
+    shipment_no?: string
+    order_no?: string
+    product_link_id?: string
+  } = {},
+): Promise<ShipmentLineListResponse> => {
+  const response = await plannerClient.get('/shipments/lines', { params: sanitizeParams(params as any) })
+  return response.data
+}
+
 export const importShipmentsXlsx = async (params: {
   file: File
   export_date?: string
@@ -1868,6 +1892,24 @@ export const fetchSalesLines = async (params: {
   return response.data
 }
 
+export const fetchSalesProfitDashboard = async (
+  params: {
+    start: string
+    end: string
+    group_by?: 'week' | 'month'
+    channel?: string
+    top_n?: number
+  },
+  opts: PlannerRequestOptions = {},
+): Promise<SalesProfitDashboardResponse> => {
+  const response = await plannerClient.get('/analytics/sales/profit-dashboard', {
+    params: sanitizeParams(params as Record<string, unknown>),
+    timeout: opts.timeoutMs ?? ANALYTICS_QUERY_TIMEOUT_MS,
+    signal: opts.signal,
+  })
+  return response.data
+}
+
 export const importSkuMasterXlsx = async (params: {
   file: File
   requested_by?: string
@@ -1903,6 +1945,71 @@ export const fetchAfterSalesImportBatches = async (
   opts: PlannerRequestOptions = {},
 ): Promise<PaginatedResponse<AfterSalesImportBatch>> => {
   const response = await plannerClient.get('/after-sales/import-batches', {
+    params: sanitizeParams(params as Record<string, unknown>),
+    timeout: opts.timeoutMs ?? ANALYTICS_QUERY_TIMEOUT_MS,
+    signal: opts.signal,
+  })
+  return response.data
+}
+
+export const fetchAfterSalesLines = async (
+  params: {
+    start?: string
+    end?: string
+    channel?: string
+    sku_code?: string
+    product_link_id?: string
+    reason?: string
+    model_code?: string
+    page?: number
+    page_size?: number
+  } = {},
+  opts: PlannerRequestOptions = {},
+): Promise<PaginatedAfterSalesLinesResponse> => {
+  const response = await plannerClient.get('/after-sales/lines/search', {
+    params: sanitizeParams(params as Record<string, unknown>),
+    timeout: opts.timeoutMs ?? ANALYTICS_QUERY_TIMEOUT_MS,
+    signal: opts.signal,
+  })
+  return response.data
+}
+
+export const fetchAfterSalesDashboard = async (
+  params: {
+    start: string
+    end: string
+    group_by?: 'week' | 'month'
+    channel?: string
+    top_n?: number
+    view?: 'factory' | 'ops'
+  },
+  opts: PlannerRequestOptions = {},
+): Promise<AfterSalesDashboardResponse> => {
+  const response = await plannerClient.get('/analytics/after-sales/dashboard', {
+    params: sanitizeParams(params as Record<string, unknown>),
+    timeout: opts.timeoutMs ?? ANALYTICS_QUERY_TIMEOUT_MS,
+    signal: opts.signal,
+  })
+  return response.data
+}
+
+export const fetchAfterSalesReasonOptions = async (
+  params: { start?: string; end?: string; channel?: string; sku_code?: string; model_code?: string; limit?: number } = {},
+  opts: PlannerRequestOptions = {},
+): Promise<AfterSalesReasonOptionsResponse> => {
+  const response = await plannerClient.get('/after-sales/reason-options', {
+    params: sanitizeParams(params as Record<string, unknown>),
+    timeout: opts.timeoutMs ?? ANALYTICS_QUERY_TIMEOUT_MS,
+    signal: opts.signal,
+  })
+  return response.data
+}
+
+export const fetchAfterSalesModelOptions = async (
+  params: { start?: string; end?: string; channel?: string; sku_code?: string; reason?: string; limit?: number } = {},
+  opts: PlannerRequestOptions = {},
+): Promise<AfterSalesModelOptionsResponse> => {
+  const response = await plannerClient.get('/after-sales/model-options', {
     params: sanitizeParams(params as Record<string, unknown>),
     timeout: opts.timeoutMs ?? ANALYTICS_QUERY_TIMEOUT_MS,
     signal: opts.signal,

@@ -1,7 +1,7 @@
 import { Alert, Button, Card, DatePicker, Descriptions, Divider, Form, Row, Col, Select, Space, Table, Tabs, Tag, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { fetchModelInsightsDetail, fetchModelInsightsSummary } from '@/services/planner'
 import type {
@@ -9,6 +9,8 @@ import type {
   ModelInsightsSummaryItem,
   ModelInsightsSummaryResponse,
 } from '@/types/planner'
+
+const STORAGE_KEY = 'insights.models.lastQuery.v1'
 
 const hashString = (s: string) => {
   let h = 0
@@ -53,6 +55,7 @@ const ProfitInsightsPage = () => {
   const [detail, setDetail] = useState<ModelInsightsDetailResponse | null>(null)
   const [selectedModelCode, setSelectedModelCode] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const didInitRef = useRef(false)
 
   const shopOptions = useMemo(() => {
     const s = new Set<string>()
@@ -83,12 +86,60 @@ const ProfitInsightsPage = () => {
       // reset selection when query changes
       setSelectedModelCode(null)
       setDetail(null)
+      try {
+        if (typeof window !== 'undefined') {
+          window.localStorage.setItem(
+            STORAGE_KEY,
+            JSON.stringify({
+              start,
+              end,
+              channel: v.channel?.trim() || undefined,
+            }),
+          )
+        }
+      } catch {
+        // ignore storage errors
+      }
     } catch (e: any) {
       setError(String(e?.response?.data?.detail ?? e?.message ?? e))
     } finally {
       setLoadingSummary(false)
     }
   }
+
+  const applyQuickRange = async (days: number) => {
+    const range: [dayjs.Dayjs, dayjs.Dayjs] = [dayjs().subtract(days, 'day'), dayjs()]
+    form.setFieldsValue({ range })
+    await onQuerySummary()
+  }
+
+  useEffect(() => {
+    if (didInitRef.current) return
+    didInitRef.current = true
+
+    try {
+      const raw = typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_KEY) : null
+      if (raw) {
+        const saved = JSON.parse(raw || '{}') as any
+        const start = String(saved?.start ?? '').trim()
+        const end = String(saved?.end ?? '').trim()
+        const range: [dayjs.Dayjs, dayjs.Dayjs] = [
+          dayjs(start || dayjs().subtract(30, 'day').startOf('day').toISOString()),
+          dayjs(end || dayjs().endOf('day').toISOString()),
+        ]
+        form.setFieldsValue({
+          range,
+          channel: saved?.channel ?? undefined,
+        })
+      }
+    } catch {
+      // ignore
+    }
+
+    // auto preview: show recent real data by default
+    onQuerySummary()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const loadDetail = async (modelCode: string, versionId?: string) => {
     const v = await form.validateFields()
@@ -455,6 +506,23 @@ const ProfitInsightsPage = () => {
                   </Form.Item>
                 </Col>
                 <Col span={24}>
+                  <Space wrap>
+                    <Typography.Text type="secondary">快捷：</Typography.Text>
+                    <Button size="small" onClick={() => applyQuickRange(7)}>
+                      近7天
+                    </Button>
+                    <Button size="small" onClick={() => applyQuickRange(30)}>
+                      近30天
+                    </Button>
+                    <Button size="small" onClick={() => applyQuickRange(90)}>
+                      近90天
+                    </Button>
+                    <Button size="small" onClick={() => applyQuickRange(365)}>
+                      近1年
+                    </Button>
+                  </Space>
+                </Col>
+                <Col span={24}>
                   <Space>
                     <Button type="primary" onClick={onQuerySummary} loading={loadingSummary}>
                       查询
@@ -476,6 +544,26 @@ const ProfitInsightsPage = () => {
             </Form>
 
             <Divider style={{ margin: '12px 0' }} />
+
+            {summary && (summary.items ?? []).length === 0 ? (
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginBottom: 12 }}
+                message="当前范围暂无数据"
+                description={
+                  <Space wrap>
+                    <span>建议点“近90天/近1年”确认数据范围；若仍为空，通常是发货数据未导入或完成时间不在该范围内。</span>
+                    <Button size="small" onClick={() => applyQuickRange(90)}>
+                      近90天
+                    </Button>
+                    <Button size="small" onClick={() => applyQuickRange(365)}>
+                      近1年
+                    </Button>
+                  </Space>
+                }
+              />
+            ) : null}
 
             {summary ? (
               <Typography.Text

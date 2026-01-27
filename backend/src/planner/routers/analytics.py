@@ -8,16 +8,18 @@ from sqlalchemy.orm import Session
 
 from ..dependencies import get_db_session
 from ..schemas import (
-    ProfitByChannelResponse,
+    AfterSalesDashboardResponse,
     ModelInsightsDetailResponse,
     ModelInsightsSummaryResponse,
-  ModelUsageMaterialSummaryResponse,
-  ModelUsageProcessSummaryResponse,
+    ModelUsageMaterialSummaryResponse,
+    ModelUsageProcessSummaryResponse,
+    ProfitByChannelResponse,
     ProfitByModelResponse,
     ProfitBySkuResponse,
     ReturnsRateByChannelResponse,
     ReturnsRateBySkuResponse,
-  SalesLinesResponse,
+    SalesLinesResponse,
+    SalesProfitDashboardResponse,
 )
 from ..services import analytics_service
 
@@ -77,6 +79,36 @@ def returns_rate_by_channel(
         end=parse_dt(end),
         group_by=group_by,
         channel=channel,
+    )
+
+
+@router.get("/after-sales/dashboard", response_model=AfterSalesDashboardResponse)
+def after_sales_dashboard(
+    start: str = Query(..., description="ISO datetime, e.g. 2025-01-01T00:00:00Z"),
+    end: str = Query(..., description="ISO datetime, e.g. 2026-01-01T00:00:00Z"),
+    group_by: Literal["week", "month"] = Query("week"),
+    channel: Optional[str] = None,
+    top_n: int = 12,
+    view: Literal["factory", "ops"] = Query("factory", description="factory=发货归因口径; ops=申请口径全量"),
+    db: Session = Depends(get_db_session),
+):
+    def parse_dt(s: str) -> datetime:
+        v = (s or "").strip()
+        if v.endswith("Z"):
+            v = v[:-1] + "+00:00"
+        dt = datetime.fromisoformat(v)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+
+    return analytics_service.after_sales_dashboard(
+        db,
+        start=parse_dt(start),
+        end=parse_dt(end),
+        group_by=group_by,
+        channel=channel,
+        top_n=top_n,
+        view=view,
     )
 
 
@@ -305,5 +337,33 @@ def sales_lines(
         order_no=order_no,
         product_link_id=product_link_id,
         include_missing=include_missing,
+    )
+
+
+@router.get("/sales/profit-dashboard", response_model=SalesProfitDashboardResponse)
+def sales_profit_dashboard(
+    start: str = Query(..., description="ISO datetime, e.g. 2025-01-01T00:00:00Z"),
+    end: str = Query(..., description="ISO datetime, e.g. 2026-01-01T00:00:00Z"),
+    group_by: Literal["week", "month"] = Query("week"),
+    channel: Optional[str] = None,
+    top_n: int = 12,
+    db: Session = Depends(get_db_session),
+):
+    def parse_dt(s: str) -> datetime:
+        v = (s or "").strip()
+        if v.endswith("Z"):
+            v = v[:-1] + "+00:00"
+        dt = datetime.fromisoformat(v)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+
+    return analytics_service.sales_profit_dashboard(
+        db,
+        start=parse_dt(start),
+        end=parse_dt(end),
+        group_by=group_by,
+        channel=channel,
+        top_n=top_n,
     )
 

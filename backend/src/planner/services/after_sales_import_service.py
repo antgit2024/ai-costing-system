@@ -9,6 +9,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from openpyxl import load_workbook
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -501,6 +502,211 @@ def list_lines(db: Session, *, batch_id: Optional[str], limit: int) -> List[mode
     if batch_id:
         q = q.filter(models.AfterSalesLine.batch_id == batch_id)
     return q.order_by(models.AfterSalesLine.created_at.desc()).limit(limit).all()
+
+
+def search_lines(
+    db: Session,
+    *,
+    start: Optional[datetime],
+    end: Optional[datetime],
+    channel: Optional[str],
+    sku_code: Optional[str],
+    reason: Optional[str],
+    model_code: Optional[str],
+    product_link_id: Optional[str],
+    page: int,
+    page_size: int,
+) -> Tuple[int, List[Dict[str, Any]]]:
+    """
+    List after-sales lines (detail view) with best-effort model binding info.
+    Filters are applied on AfterSalesLine.applied_at (申请日期).
+    """
+    mapping_on = and_(
+        models.SkuModelVersionMapping.is_archived.is_(False),
+        models.SkuModelVersionMapping.is_active.is_(True),
+        models.SkuModelVersionMapping.sku_code == models.AfterSalesLine.sku_code,
+    )
+    q = (
+        db.query(models.AfterSalesLine)
+        .outerjoin(models.SkuModelVersionMapping, mapping_on)
+        .outerjoin(
+            models.ProductModelVersion,
+            models.ProductModelVersion.id == models.SkuModelVersionMapping.model_version_id,
+        )
+        .outerjoin(models.ProductModel, models.ProductModel.id == models.ProductModelVersion.model_id)
+        .filter(models.AfterSalesLine.is_archived.is_(False))
+    )
+
+    if start is not None:
+        q = q.filter(models.AfterSalesLine.applied_at.isnot(None), models.AfterSalesLine.applied_at >= start)
+    if end is not None:
+        q = q.filter(models.AfterSalesLine.applied_at.isnot(None), models.AfterSalesLine.applied_at < end)
+    if channel:
+        q = q.filter(models.AfterSalesLine.channel == channel)
+    if sku_code:
+        q = q.filter(models.AfterSalesLine.sku_code == sku_code)
+    if reason:
+        q = q.filter(models.AfterSalesLine.reason == reason)
+    if product_link_id:
+        q = q.filter(models.AfterSalesLine.product_link_id == product_link_id)
+    if model_code:
+        q = q.filter(models.ProductModel.model_code == model_code)
+
+    total = int(q.with_entities(func.count(func.distinct(models.AfterSalesLine.id))).scalar() or 0)
+
+    rows = (
+        q.with_entities(
+            models.AfterSalesLine,
+            models.ProductModel.model_code.label("bound_model_code"),
+            models.ProductModel.model_name.label("bound_model_name"),
+            models.ProductModelVersion.version_label.label("bound_version_label"),
+        )
+        .order_by(models.AfterSalesLine.applied_at.desc().nullslast(), models.AfterSalesLine.created_at.desc())
+        .offset((max(page, 1) - 1) * max(page_size, 1))
+        .limit(max(page_size, 1))
+        .all()
+    )
+
+    items: List[Dict[str, Any]] = []
+    for line, bmc, bmn, bvl in rows:
+        items.append(
+            {
+                "id": line.id,
+                "batch_id": line.batch_id,
+                "row_index": line.row_index,
+                "after_sales_no": line.after_sales_no,
+                "occurred_at": line.occurred_at,
+                "applied_at": line.applied_at,
+                "channel": line.channel,
+                "reason": line.reason,
+                "bound_model_code": bmc,
+                "bound_model_name": bmn,
+                "bound_version_label": bvl,
+                "order_no": line.order_no,
+                "product_link_id": line.product_link_id,
+                "product_code": line.product_code,
+                "product_name": line.product_name,
+                "spec_text": line.spec_text,
+                "unit": line.unit,
+                "sale_unit_price": line.sale_unit_price,
+                "return_qty": line.return_qty,
+                "actual_return_qty": line.actual_return_qty,
+                "refund_amount": line.refund_amount,
+                "allocated_refund_amount": line.allocated_refund_amount,
+                "sku_code": line.sku_code,
+                "normalize_warnings_json": line.normalize_warnings_json,
+                "metadata_json": line.metadata_json,
+                "created_at": line.created_at,
+                "updated_at": line.updated_at,
+            }
+        )
+
+    return total, items
+
+
+def reason_options(
+    db: Session,
+    *,
+    start: Optional[datetime],
+    end: Optional[datetime],
+    channel: Optional[str],
+    sku_code: Optional[str],
+    model_code: Optional[str],
+    limit: int = 200,
+) -> List[Dict[str, Any]]:
+    mapping_on = and_(
+        models.SkuModelVersionMapping.is_archived.is_(False),
+        models.SkuModelVersionMapping.is_active.is_(True),
+        models.SkuModelVersionMapping.sku_code == models.AfterSalesLine.sku_code,
+    )
+    q = (
+        db.query(models.AfterSalesLine.reason, func.count(models.AfterSalesLine.id).label("count"))
+        .outerjoin(models.SkuModelVersionMapping, mapping_on)
+        .outerjoin(
+            models.ProductModelVersion,
+            models.ProductModelVersion.id == models.SkuModelVersionMapping.model_version_id,
+        )
+        .outerjoin(models.ProductModel, models.ProductModel.id == models.ProductModelVersion.model_id)
+        .filter(models.AfterSalesLine.is_archived.is_(False))
+        .filter(models.AfterSalesLine.reason.isnot(None), func.length(func.trim(models.AfterSalesLine.reason)) > 0)
+    )
+    if start is not None:
+        q = q.filter(models.AfterSalesLine.applied_at.isnot(None), models.AfterSalesLine.applied_at >= start)
+    if end is not None:
+        q = q.filter(models.AfterSalesLine.applied_at.isnot(None), models.AfterSalesLine.applied_at < end)
+    if channel:
+        q = q.filter(models.AfterSalesLine.channel == channel)
+    if sku_code:
+        q = q.filter(models.AfterSalesLine.sku_code == sku_code)
+    if model_code:
+        q = q.filter(models.ProductModel.model_code == model_code)
+
+    rows = (
+        q.group_by(models.AfterSalesLine.reason)
+        .order_by(func.count(models.AfterSalesLine.id).desc())
+        .limit(max(1, min(int(limit or 200), 500)))
+        .all()
+    )
+    return [{"reason": str(r.reason), "count": int(r.count or 0)} for r in rows if r.reason]
+
+
+def model_options(
+    db: Session,
+    *,
+    start: Optional[datetime],
+    end: Optional[datetime],
+    channel: Optional[str],
+    sku_code: Optional[str],
+    reason: Optional[str],
+    limit: int = 200,
+) -> List[Dict[str, Any]]:
+    mapping_on = and_(
+        models.SkuModelVersionMapping.is_archived.is_(False),
+        models.SkuModelVersionMapping.is_active.is_(True),
+        models.SkuModelVersionMapping.sku_code == models.AfterSalesLine.sku_code,
+    )
+    q = (
+        db.query(
+            models.ProductModel.model_code,
+            models.ProductModel.model_name,
+            func.count(models.AfterSalesLine.id).label("count"),
+        )
+        .outerjoin(models.SkuModelVersionMapping, mapping_on)
+        .outerjoin(
+            models.ProductModelVersion,
+            models.ProductModelVersion.id == models.SkuModelVersionMapping.model_version_id,
+        )
+        .outerjoin(models.ProductModel, models.ProductModel.id == models.ProductModelVersion.model_id)
+        .filter(models.AfterSalesLine.is_archived.is_(False))
+        .filter(models.ProductModel.model_code.isnot(None), func.length(func.trim(models.ProductModel.model_code)) > 0)
+    )
+    if start is not None:
+        q = q.filter(models.AfterSalesLine.applied_at.isnot(None), models.AfterSalesLine.applied_at >= start)
+    if end is not None:
+        q = q.filter(models.AfterSalesLine.applied_at.isnot(None), models.AfterSalesLine.applied_at < end)
+    if channel:
+        q = q.filter(models.AfterSalesLine.channel == channel)
+    if sku_code:
+        q = q.filter(models.AfterSalesLine.sku_code == sku_code)
+    if reason:
+        q = q.filter(models.AfterSalesLine.reason == reason)
+
+    rows = (
+        q.group_by(models.ProductModel.model_code, models.ProductModel.model_name)
+        .order_by(func.count(models.AfterSalesLine.id).desc())
+        .limit(max(1, min(int(limit or 200), 500)))
+        .all()
+    )
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        out.append(
+            {
+                "model_code": str(r.model_code),
+                "model_name": r.model_name,
+                "count": int(r.count or 0),
+            }
+        )
+    return out
 
 
 def list_exceptions(

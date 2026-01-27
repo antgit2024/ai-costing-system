@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
@@ -17,6 +17,32 @@ def _utc_date(dt: datetime) -> date:
     return dt.astimezone(timezone.utc).date()
 
 
+def _fmt_period_label(period_dt: Any, group_by: Literal["week", "month"]) -> str:
+    """
+    Format period label for dashboard:
+    - week: YYYY-MM-DD~YYYY-MM-DD (Mon~Sun)
+    - month: YYYY-MM
+    """
+    dt = period_dt
+    if isinstance(dt, str):
+        # try best-effort parse: "2026-01-05 00:00:00"
+        try:
+            dt = datetime.fromisoformat(dt.replace("Z", "+00:00"))
+        except Exception:  # noqa: BLE001
+            return dt
+    if isinstance(dt, date) and not isinstance(dt, datetime):
+        start_date = dt
+    elif isinstance(dt, datetime):
+        start_date = _utc_date(dt)
+    else:
+        return str(period_dt)
+
+    if group_by == "month":
+        return start_date.strftime("%Y-%m")
+    end_date = start_date + timedelta(days=6)
+    return f"{start_date.strftime('%Y-%m-%d')}~{end_date.strftime('%Y-%m-%d')}"
+
+
 def _group_time_expr(db: Session, column, group_by: Literal["day", "month"]):
     dialect = getattr(getattr(db.get_bind(), "dialect", None), "name", "")
     if dialect == "postgresql":
@@ -27,6 +53,1205 @@ def _group_time_expr(db: Session, column, group_by: Literal["day", "month"]):
     if group_by == "month":
         return func.strftime("%Y-%m-01", column)
     return func.date(column)
+
+
+def _group_time_expr_dash(db: Session, column, group_by: Literal["week", "month"]):
+    dialect = getattr(getattr(db.get_bind(), "dialect", None), "name", "")
+    if dialect == "postgresql":
+        if group_by == "month":
+            return func.date_trunc("month", column)
+        # week: date_trunc('week') => week start (Mon) in postgres
+        return func.date_trunc("week", column)
+    # sqlite / mysql fallback (best-effort)
+    if group_by == "month":
+        return func.strftime("%Y-%m-01", column)
+    # week start (Mon) best-effort: date(column, 'weekday 1', '-7 days')
+    return func.date(column, "weekday 1", "-7 days")
+
+
+def after_sales_dashboard(
+    db: Session,
+    *,
+    start: datetime,
+    end: datetime,
+    group_by: Literal["week", "month"] = "week",
+    channel: Optional[str] = None,
+    top_n: int = 12,
+    view: Literal["factory", "ops"] = "factory",
+) -> Dict[str, Any]:
+    """
+    After-sales dashboard:
+    - Denominator: shipments within [start, end) by completed_at.
+    - Numerator: matched after-sales lines attributed to shipment period via strong keys:
+      order_no + product_link_id + sku_code.
+    - Amount/qty: prefer ERP-stable fields:
+      returned_qty := coalesce(actual_return_qty, return_qty)
+      refund_amount := coalesce(allocated_refund_amount, refund_amount)
+    """
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+
+    # -------------------------------
+    # 运营看板（申请口径，全量，不做归因）
+    # - 发货：shipment_lines.completed_at ∈ [start, end)
+    # - 退货：after_sales_lines.applied_at/occurred_at ∈ [start, end)（不要求能匹配到发货行）
+    # -------------------------------
+    if view == "ops":
+        ship_period_expr = _group_time_expr_dash(db, models.ShipmentLine.completed_at, group_by).label("period")
+        applied_time_expr = func.coalesce(models.AfterSalesLine.applied_at, models.AfterSalesLine.occurred_at)
+        ret_period_expr = _group_time_expr_dash(db, applied_time_expr, group_by).label("period")
+
+        shipped_qty_sum = func.coalesce(func.sum(models.ShipmentLine.qty), 0).label("shipped_qty")
+        shipped_amount_sum = func.coalesce(func.sum(models.ShipmentLine.revenue_amount), 0).label("shipped_amount")
+        returned_qty_sum = func.coalesce(
+            func.sum(func.coalesce(models.AfterSalesLine.actual_return_qty, models.AfterSalesLine.return_qty)),
+            0,
+        ).label("returned_qty")
+        refund_amount_sum = func.coalesce(
+            func.sum(func.coalesce(models.AfterSalesLine.allocated_refund_amount, models.AfterSalesLine.refund_amount)),
+            0,
+        ).label("refund_amount")
+
+        ship_total_q = db.query(shipped_qty_sum, shipped_amount_sum).filter(
+            models.ShipmentLine.completed_at.isnot(None),
+            models.ShipmentLine.completed_at >= start,
+            models.ShipmentLine.completed_at < end,
+            models.ShipmentLine.is_archived.is_(False),
+        )
+        if channel:
+            ship_total_q = ship_total_q.filter(models.ShipmentLine.channel == channel)
+        ship_total = ship_total_q.one()
+
+        ret_total_q = db.query(returned_qty_sum, refund_amount_sum).filter(
+            models.AfterSalesLine.is_archived.is_(False),
+            applied_time_expr.isnot(None),
+            applied_time_expr >= start,
+            applied_time_expr < end,
+        )
+        if channel:
+            ret_total_q = ret_total_q.filter(models.AfterSalesLine.channel == channel)
+        ret_total = ret_total_q.one()
+
+        shipped_qty_total = Decimal(str(ship_total.shipped_qty or 0))
+        shipped_amount_total = Decimal(str(ship_total.shipped_amount or 0))
+        returned_qty_total = Decimal(str(ret_total.returned_qty or 0))
+        refund_amount_total = Decimal(str(ret_total.refund_amount or 0))
+        return_rate_total = (returned_qty_total / shipped_qty_total) if shipped_qty_total > 0 else None
+        refund_rate_total = (refund_amount_total / shipped_amount_total) if shipped_amount_total > 0 else None
+
+        # series: merge shipments(completed_at) and after-sales(applied_at/occurred_at) into same week/month buckets
+        ship_series_rows = (
+            db.query(ship_period_expr, shipped_qty_sum, shipped_amount_sum)
+            .filter(
+                models.ShipmentLine.completed_at.isnot(None),
+                models.ShipmentLine.completed_at >= start,
+                models.ShipmentLine.completed_at < end,
+                models.ShipmentLine.is_archived.is_(False),
+            )
+            .group_by(ship_period_expr)
+            .order_by(ship_period_expr)
+        )
+        if channel:
+            ship_series_rows = ship_series_rows.filter(models.ShipmentLine.channel == channel)
+        ship_series_rows = ship_series_rows.all()
+
+        ret_series_rows = (
+            db.query(ret_period_expr, returned_qty_sum, refund_amount_sum)
+            .filter(
+                models.AfterSalesLine.is_archived.is_(False),
+                applied_time_expr.isnot(None),
+                applied_time_expr >= start,
+                applied_time_expr < end,
+            )
+            .group_by(ret_period_expr)
+            .order_by(ret_period_expr)
+        )
+        if channel:
+            ret_series_rows = ret_series_rows.filter(models.AfterSalesLine.channel == channel)
+        ret_series_rows = ret_series_rows.all()
+
+        series_by_label: Dict[str, Dict[str, Any]] = {}
+        for r in ship_series_rows:
+            label = _fmt_period_label(r.period, group_by)
+            series_by_label[label] = {
+                "period": label,
+                "shipped_qty": Decimal(str(r.shipped_qty or 0)),
+                "shipped_amount": Decimal(str(r.shipped_amount or 0)),
+                "returned_qty": Decimal("0"),
+                "refund_amount": Decimal("0"),
+                "return_rate": None,
+                "refund_rate": None,
+            }
+        for r in ret_series_rows:
+            label = _fmt_period_label(r.period, group_by)
+            cur = series_by_label.get(label) or {
+                "period": label,
+                "shipped_qty": Decimal("0"),
+                "shipped_amount": Decimal("0"),
+                "returned_qty": Decimal("0"),
+                "refund_amount": Decimal("0"),
+                "return_rate": None,
+                "refund_rate": None,
+            }
+            cur["returned_qty"] = Decimal(str(r.returned_qty or 0))
+            cur["refund_amount"] = Decimal(str(r.refund_amount or 0))
+            series_by_label[label] = cur
+
+        series: List[Dict[str, Any]] = []
+        for label in sorted(series_by_label.keys()):
+            cur = series_by_label[label]
+            sq = Decimal(str(cur["shipped_qty"] or 0))
+            sa = Decimal(str(cur["shipped_amount"] or 0))
+            rq = Decimal(str(cur["returned_qty"] or 0))
+            ra = Decimal(str(cur["refund_amount"] or 0))
+            cur["return_rate"] = (rq / sq) if sq > 0 else None
+            cur["refund_rate"] = (ra / sa) if sa > 0 else None
+            series.append(cur)
+
+        # top reasons (applied window, no attribution)
+        reasons_q = db.query(
+            models.AfterSalesLine.reason.label("reason"),
+            returned_qty_sum,
+            refund_amount_sum,
+        ).filter(
+            models.AfterSalesLine.is_archived.is_(False),
+            applied_time_expr.isnot(None),
+            applied_time_expr >= start,
+            applied_time_expr < end,
+        )
+        if channel:
+            reasons_q = reasons_q.filter(models.AfterSalesLine.channel == channel)
+        reasons_q = reasons_q.group_by(models.AfterSalesLine.reason).order_by(returned_qty_sum.desc()).limit(top_n)
+        reason_rows = reasons_q.all()
+        top_reasons: List[Dict[str, Any]] = []
+        total_rq = returned_qty_total
+        total_ra = refund_amount_total
+        for r in reason_rows:
+            qty = Decimal(str(r.returned_qty or 0))
+            amt = Decimal(str(r.refund_amount or 0))
+            top_reasons.append(
+                {
+                    "reason": str(r.reason or "-"),
+                    "returned_qty": qty,
+                    "refund_amount": amt,
+                    "share_returned_qty": (qty / total_rq) if total_rq > 0 else None,
+                    "share_refund_amount": (amt / total_ra) if total_ra > 0 else None,
+                }
+            )
+
+        # helper: build top list from shipped/returned maps
+        def _merge_top_by_key(keys: List[str], shipped_map: Dict[str, Decimal], returned_map: Dict[str, Decimal]) -> List[Dict[str, Any]]:
+            items: List[Dict[str, Any]] = []
+            for k in keys:
+                sq = shipped_map.get(k, Decimal("0"))
+                rq = returned_map.get(k, Decimal("0"))
+                items.append(
+                    {
+                        "key": k,
+                        "shipped_qty": sq,
+                        "returned_qty": rq,
+                        "return_rate": (rq / sq) if sq > 0 else None,
+                    }
+                )
+            items.sort(key=lambda x: (x["returned_qty"], x["shipped_qty"]), reverse=True)
+            return items[:top_n]
+
+        # top skus (shipments completed_at window vs after-sales applied window)
+        ship_sku_rows = (
+            db.query(models.ShipmentLine.sku_code.label("sku_code"), shipped_qty_sum)
+            .filter(
+                models.ShipmentLine.completed_at.isnot(None),
+                models.ShipmentLine.completed_at >= start,
+                models.ShipmentLine.completed_at < end,
+                models.ShipmentLine.is_archived.is_(False),
+                models.ShipmentLine.sku_code.isnot(None),
+            )
+            .group_by(models.ShipmentLine.sku_code)
+        )
+        if channel:
+            ship_sku_rows = ship_sku_rows.filter(models.ShipmentLine.channel == channel)
+        ship_sku_rows = ship_sku_rows.all()
+        shipped_by_sku: Dict[str, Decimal] = {str(r.sku_code): Decimal(str(r.shipped_qty or 0)) for r in ship_sku_rows}
+
+        ret_sku_rows = (
+            db.query(models.AfterSalesLine.sku_code.label("sku_code"), returned_qty_sum)
+            .filter(
+                models.AfterSalesLine.is_archived.is_(False),
+                applied_time_expr.isnot(None),
+                applied_time_expr >= start,
+                applied_time_expr < end,
+                models.AfterSalesLine.sku_code.isnot(None),
+            )
+            .group_by(models.AfterSalesLine.sku_code)
+        )
+        if channel:
+            ret_sku_rows = ret_sku_rows.filter(models.AfterSalesLine.channel == channel)
+        ret_sku_rows = ret_sku_rows.all()
+        returned_by_sku: Dict[str, Decimal] = {str(r.sku_code): Decimal(str(r.returned_qty or 0)) for r in ret_sku_rows}
+
+        sku_keys = list(set(list(shipped_by_sku.keys()) + list(returned_by_sku.keys())))
+        merged_skus = _merge_top_by_key(sku_keys, shipped_by_sku, returned_by_sku)
+
+        # most common spec_text for top skus (from after_sales within applied window)
+        sku_spec_map: Dict[str, Optional[str]] = {}
+        for item in merged_skus:
+            sku = str(item["key"])
+            spec_row = (
+                db.query(models.AfterSalesLine.spec_text, func.count(models.AfterSalesLine.id).label("c"))
+                .filter(
+                    models.AfterSalesLine.is_archived.is_(False),
+                    applied_time_expr.isnot(None),
+                    applied_time_expr >= start,
+                    applied_time_expr < end,
+                    models.AfterSalesLine.sku_code == sku,
+                    models.AfterSalesLine.spec_text.isnot(None),
+                )
+                .group_by(models.AfterSalesLine.spec_text)
+                .order_by(func.count(models.AfterSalesLine.id).desc())
+                .limit(1)
+                .one_or_none()
+            )
+            sku_spec_map[sku] = (str(spec_row.spec_text) if spec_row and spec_row.spec_text else None)
+
+        top_skus: List[Dict[str, Any]] = []
+        for it in merged_skus:
+            sku = str(it["key"])
+            top_skus.append(
+                {
+                    "sku_code": sku,
+                    "spec_text": sku_spec_map.get(sku),
+                    "shipped_qty": it["shipped_qty"],
+                    "returned_qty": it["returned_qty"],
+                    "return_rate": it["return_rate"],
+                }
+            )
+
+        # top links
+        ship_link_rows = (
+            db.query(models.ShipmentLine.product_link_id.label("product_link_id"), shipped_qty_sum)
+            .filter(
+                models.ShipmentLine.completed_at.isnot(None),
+                models.ShipmentLine.completed_at >= start,
+                models.ShipmentLine.completed_at < end,
+                models.ShipmentLine.is_archived.is_(False),
+                models.ShipmentLine.product_link_id.isnot(None),
+            )
+            .group_by(models.ShipmentLine.product_link_id)
+        )
+        if channel:
+            ship_link_rows = ship_link_rows.filter(models.ShipmentLine.channel == channel)
+        ship_link_rows = ship_link_rows.all()
+        shipped_by_link: Dict[str, Decimal] = {str(r.product_link_id): Decimal(str(r.shipped_qty or 0)) for r in ship_link_rows}
+
+        ret_link_rows = (
+            db.query(models.AfterSalesLine.product_link_id.label("product_link_id"), returned_qty_sum)
+            .filter(
+                models.AfterSalesLine.is_archived.is_(False),
+                applied_time_expr.isnot(None),
+                applied_time_expr >= start,
+                applied_time_expr < end,
+                models.AfterSalesLine.product_link_id.isnot(None),
+            )
+            .group_by(models.AfterSalesLine.product_link_id)
+        )
+        if channel:
+            ret_link_rows = ret_link_rows.filter(models.AfterSalesLine.channel == channel)
+        ret_link_rows = ret_link_rows.all()
+        returned_by_link: Dict[str, Decimal] = {str(r.product_link_id): Decimal(str(r.returned_qty or 0)) for r in ret_link_rows}
+
+        link_keys = list(set(list(shipped_by_link.keys()) + list(returned_by_link.keys())))
+        merged_links = _merge_top_by_key(link_keys, shipped_by_link, returned_by_link)
+
+        link_spec_map: Dict[str, Optional[str]] = {}
+        for item in merged_links:
+            lid = str(item["key"])
+            spec_row = (
+                db.query(models.AfterSalesLine.spec_text, func.count(models.AfterSalesLine.id).label("c"))
+                .filter(
+                    models.AfterSalesLine.is_archived.is_(False),
+                    applied_time_expr.isnot(None),
+                    applied_time_expr >= start,
+                    applied_time_expr < end,
+                    models.AfterSalesLine.product_link_id == lid,
+                    models.AfterSalesLine.spec_text.isnot(None),
+                )
+                .group_by(models.AfterSalesLine.spec_text)
+                .order_by(func.count(models.AfterSalesLine.id).desc())
+                .limit(1)
+                .one_or_none()
+            )
+            link_spec_map[lid] = (str(spec_row.spec_text) if spec_row and spec_row.spec_text else None)
+
+        top_links: List[Dict[str, Any]] = []
+        for it in merged_links:
+            lid = str(it["key"])
+            top_links.append(
+                {
+                    "product_link_id": lid,
+                    "spec_text": link_spec_map.get(lid),
+                    "shipped_qty": it["shipped_qty"],
+                    "returned_qty": it["returned_qty"],
+                    "return_rate": it["return_rate"],
+                }
+            )
+
+        # top models (shipments by model vs returns by model) - use sku->model mapping for both sides
+        mapping_q_ship = (
+            db.query(
+                models.ProductModel.model_code.label("model_code"),
+                models.ProductModel.model_name.label("model_name"),
+                shipped_qty_sum,
+            )
+            .select_from(models.ShipmentLine)
+            .join(
+                models.SkuModelVersionMapping,
+                and_(
+                    models.SkuModelVersionMapping.is_archived.is_(False),
+                    models.SkuModelVersionMapping.is_active.is_(True),
+                    models.SkuModelVersionMapping.sku_code == models.ShipmentLine.sku_code,
+                ),
+            )
+            .join(
+                models.ProductModelVersion,
+                and_(
+                    models.ProductModelVersion.is_archived.is_(False),
+                    models.ProductModelVersion.id == models.SkuModelVersionMapping.model_version_id,
+                ),
+            )
+            .join(
+                models.ProductModel,
+                and_(
+                    models.ProductModel.is_archived.is_(False),
+                    models.ProductModel.id == models.ProductModelVersion.model_id,
+                ),
+            )
+            .filter(
+                models.ShipmentLine.completed_at.isnot(None),
+                models.ShipmentLine.completed_at >= start,
+                models.ShipmentLine.completed_at < end,
+                models.ShipmentLine.is_archived.is_(False),
+            )
+            .group_by(models.ProductModel.model_code, models.ProductModel.model_name)
+        )
+        if channel:
+            mapping_q_ship = mapping_q_ship.filter(models.ShipmentLine.channel == channel)
+        ship_model_rows = mapping_q_ship.all()
+        shipped_by_model: Dict[str, Decimal] = {str(r.model_code): Decimal(str(r.shipped_qty or 0)) for r in ship_model_rows}
+        model_name_map: Dict[str, Optional[str]] = {str(r.model_code): (str(r.model_name) if r.model_name else None) for r in ship_model_rows}
+
+        mapping_q_ret = (
+            db.query(
+                models.ProductModel.model_code.label("model_code"),
+                returned_qty_sum,
+            )
+            .select_from(models.AfterSalesLine)
+            .join(
+                models.SkuModelVersionMapping,
+                and_(
+                    models.SkuModelVersionMapping.is_archived.is_(False),
+                    models.SkuModelVersionMapping.is_active.is_(True),
+                    models.SkuModelVersionMapping.sku_code == models.AfterSalesLine.sku_code,
+                ),
+            )
+            .join(
+                models.ProductModelVersion,
+                and_(
+                    models.ProductModelVersion.is_archived.is_(False),
+                    models.ProductModelVersion.id == models.SkuModelVersionMapping.model_version_id,
+                ),
+            )
+            .join(
+                models.ProductModel,
+                and_(
+                    models.ProductModel.is_archived.is_(False),
+                    models.ProductModel.id == models.ProductModelVersion.model_id,
+                ),
+            )
+            .filter(
+                models.AfterSalesLine.is_archived.is_(False),
+                applied_time_expr.isnot(None),
+                applied_time_expr >= start,
+                applied_time_expr < end,
+                models.AfterSalesLine.sku_code.isnot(None),
+            )
+            .group_by(models.ProductModel.model_code)
+        )
+        if channel:
+            mapping_q_ret = mapping_q_ret.filter(models.AfterSalesLine.channel == channel)
+        ret_model_rows = mapping_q_ret.all()
+        returned_by_model: Dict[str, Decimal] = {str(r.model_code): Decimal(str(r.returned_qty or 0)) for r in ret_model_rows}
+
+        model_keys = list(set(list(shipped_by_model.keys()) + list(returned_by_model.keys())))
+        merged_models = _merge_top_by_key(model_keys, shipped_by_model, returned_by_model)
+        top_models: List[Dict[str, Any]] = []
+        for it in merged_models:
+            mc = str(it["key"])
+            top_models.append(
+                {
+                    "model_code": mc,
+                    "model_name": model_name_map.get(mc),
+                    "shipped_qty": it["shipped_qty"],
+                    "returned_qty": it["returned_qty"],
+                    "return_rate": it["return_rate"],
+                }
+            )
+
+        # applied window total (for ops KPI display only; UI may choose to ignore)
+        after_sales_lines_total = int(
+            db.query(func.count(models.AfterSalesLine.id))
+            .filter(
+                models.AfterSalesLine.is_archived.is_(False),
+                applied_time_expr.isnot(None),
+                applied_time_expr >= start,
+                applied_time_expr < end,
+            )
+            .filter(*( [models.AfterSalesLine.channel == channel] if channel else [] ))
+            .scalar()
+            or 0
+        )
+
+        return {
+            "group_by": group_by,
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "kpis": {
+                "shipped_qty": shipped_qty_total,
+                "shipped_amount": shipped_amount_total,
+                "returned_qty": returned_qty_total,
+                "refund_amount": refund_amount_total,
+                "return_rate": return_rate_total,
+                "refund_rate": refund_rate_total,
+                "model_mapped_shipped_qty": Decimal("0"),
+                "model_mapped_rate": None,
+                "matched_return_lines": 0,
+                "matched_return_lines_with_applied_at": 0,
+                "after_sales_lines_total": after_sales_lines_total,
+                "after_sales_lines_matched_any_shipment": 0,
+                "after_sales_lines_unmatched": 0,
+                "after_sales_lines_unmatched_rate": None,
+                "after_sales_lines_missing_order_no": 0,
+                "after_sales_lines_missing_product_link_id": 0,
+                "after_sales_lines_missing_sku_code": 0,
+            },
+            "series": series,
+            "top_reasons": top_reasons,
+            "top_models": top_models,
+            "top_skus": top_skus,
+            "top_links": top_links,
+            "lag_buckets": [],
+        }
+
+    period_expr = _group_time_expr_dash(db, models.ShipmentLine.completed_at, group_by).label("period")
+
+    shipped_qty_sum = func.coalesce(func.sum(models.ShipmentLine.qty), 0).label("shipped_qty")
+    shipped_amount_sum = func.coalesce(func.sum(models.ShipmentLine.revenue_amount), 0).label("shipped_amount")
+
+    returned_qty_expr = func.coalesce(
+        func.sum(func.coalesce(models.AfterSalesLine.actual_return_qty, models.AfterSalesLine.return_qty)),
+        0,
+    ).label("returned_qty")
+    refund_amount_expr = func.coalesce(
+        func.sum(func.coalesce(models.AfterSalesLine.allocated_refund_amount, models.AfterSalesLine.refund_amount)),
+        0,
+    ).label("refund_amount")
+
+    # ----- KPI totals -----
+    ship_total_q = db.query(
+        shipped_qty_sum,
+        shipped_amount_sum,
+    ).filter(
+        models.ShipmentLine.completed_at.isnot(None),
+        models.ShipmentLine.completed_at >= start,
+        models.ShipmentLine.completed_at < end,
+        models.ShipmentLine.is_archived.is_(False),
+    )
+    if channel:
+        ship_total_q = ship_total_q.filter(models.ShipmentLine.channel == channel)
+    ship_total = ship_total_q.one()
+
+    ret_total_q = db.query(
+        returned_qty_expr,
+        refund_amount_expr,
+    ).select_from(
+        models.ShipmentLine
+    ).join(
+        models.AfterSalesLine,
+        and_(
+            models.AfterSalesLine.order_no.isnot(None),
+            models.AfterSalesLine.product_link_id.isnot(None),
+            models.AfterSalesLine.sku_code.isnot(None),
+            models.ShipmentLine.order_no == models.AfterSalesLine.order_no,
+            models.ShipmentLine.product_link_id == models.AfterSalesLine.product_link_id,
+            models.ShipmentLine.sku_code == models.AfterSalesLine.sku_code,
+        ),
+    ).filter(
+        models.ShipmentLine.completed_at.isnot(None),
+        models.ShipmentLine.completed_at >= start,
+        models.ShipmentLine.completed_at < end,
+        models.ShipmentLine.is_archived.is_(False),
+        models.AfterSalesLine.is_archived.is_(False),
+    )
+    if channel:
+        ret_total_q = ret_total_q.filter(models.ShipmentLine.channel == channel)
+    ret_total = ret_total_q.one()
+
+    shipped_qty_total = Decimal(str(ship_total.shipped_qty or 0))
+    shipped_amount_total = Decimal(str(ship_total.shipped_amount or 0))
+    returned_qty_total = Decimal(str(ret_total.returned_qty or 0))
+    refund_amount_total = Decimal(str(ret_total.refund_amount or 0))
+    return_rate_total = (returned_qty_total / shipped_qty_total) if shipped_qty_total > 0 else None
+    refund_rate_total = (refund_amount_total / shipped_amount_total) if shipped_amount_total > 0 else None
+
+    # matched return lines count within shipment window (and with applied_at for lag)
+    matched_lines_q = (
+        db.query(func.count(func.distinct(models.AfterSalesLine.id)))
+        .select_from(models.ShipmentLine)
+        .join(
+            models.AfterSalesLine,
+            and_(
+                models.AfterSalesLine.order_no.isnot(None),
+                models.AfterSalesLine.product_link_id.isnot(None),
+                models.AfterSalesLine.sku_code.isnot(None),
+                models.ShipmentLine.order_no == models.AfterSalesLine.order_no,
+                models.ShipmentLine.product_link_id == models.AfterSalesLine.product_link_id,
+                models.ShipmentLine.sku_code == models.AfterSalesLine.sku_code,
+            ),
+        )
+        .filter(
+            models.ShipmentLine.completed_at.isnot(None),
+            models.ShipmentLine.completed_at >= start,
+            models.ShipmentLine.completed_at < end,
+            models.ShipmentLine.is_archived.is_(False),
+            models.AfterSalesLine.is_archived.is_(False),
+        )
+    )
+    if channel:
+        matched_lines_q = matched_lines_q.filter(models.ShipmentLine.channel == channel)
+    matched_return_lines = int(matched_lines_q.scalar() or 0)
+
+    matched_lines_with_applied_q = (
+        db.query(func.count(func.distinct(models.AfterSalesLine.id)))
+        .select_from(models.ShipmentLine)
+        .join(
+            models.AfterSalesLine,
+            and_(
+                models.AfterSalesLine.order_no.isnot(None),
+                models.AfterSalesLine.product_link_id.isnot(None),
+                models.AfterSalesLine.sku_code.isnot(None),
+                models.ShipmentLine.order_no == models.AfterSalesLine.order_no,
+                models.ShipmentLine.product_link_id == models.AfterSalesLine.product_link_id,
+                models.ShipmentLine.sku_code == models.AfterSalesLine.sku_code,
+            ),
+        )
+        .filter(
+            models.ShipmentLine.completed_at.isnot(None),
+            models.ShipmentLine.completed_at >= start,
+            models.ShipmentLine.completed_at < end,
+            models.ShipmentLine.is_archived.is_(False),
+            models.AfterSalesLine.is_archived.is_(False),
+            models.AfterSalesLine.applied_at.isnot(None),
+        )
+    )
+    if channel:
+        matched_lines_with_applied_q = matched_lines_with_applied_q.filter(models.ShipmentLine.channel == channel)
+    matched_return_lines_with_applied_at = int(matched_lines_with_applied_q.scalar() or 0)
+
+    # data quality ("unattributed share") within applied window
+    # use applied_at first, fallback to occurred_at
+    applied_time_expr = func.coalesce(models.AfterSalesLine.applied_at, models.AfterSalesLine.occurred_at)
+    after_sales_total_q = (
+        db.query(func.count(models.AfterSalesLine.id))
+        .filter(
+            models.AfterSalesLine.is_archived.is_(False),
+            applied_time_expr.isnot(None),
+            applied_time_expr >= start,
+            applied_time_expr < end,
+        )
+    )
+    if channel:
+        after_sales_total_q = after_sales_total_q.filter(models.AfterSalesLine.channel == channel)
+    after_sales_lines_total = int(after_sales_total_q.scalar() or 0)
+
+    after_sales_matched_any_q = (
+        db.query(func.count(func.distinct(models.AfterSalesLine.id)))
+        .select_from(models.AfterSalesLine)
+        .join(
+            models.ShipmentLine,
+            and_(
+                models.AfterSalesLine.order_no.isnot(None),
+                models.AfterSalesLine.product_link_id.isnot(None),
+                models.AfterSalesLine.sku_code.isnot(None),
+                models.ShipmentLine.order_no == models.AfterSalesLine.order_no,
+                models.ShipmentLine.product_link_id == models.AfterSalesLine.product_link_id,
+                models.ShipmentLine.sku_code == models.AfterSalesLine.sku_code,
+                models.ShipmentLine.is_archived.is_(False),
+            ),
+        )
+        .filter(
+            models.AfterSalesLine.is_archived.is_(False),
+            applied_time_expr.isnot(None),
+            applied_time_expr >= start,
+            applied_time_expr < end,
+        )
+    )
+    if channel:
+        after_sales_matched_any_q = after_sales_matched_any_q.filter(models.AfterSalesLine.channel == channel)
+    after_sales_lines_matched_any_shipment = int(after_sales_matched_any_q.scalar() or 0)
+
+    after_sales_lines_unmatched = max(after_sales_lines_total - after_sales_lines_matched_any_shipment, 0)
+    after_sales_lines_unmatched_rate = (
+        Decimal(str(after_sales_lines_unmatched)) / Decimal(str(after_sales_lines_total))
+        if after_sales_lines_total > 0
+        else None
+    )
+
+    def _missing_count(cond):
+        q = (
+            db.query(func.count(models.AfterSalesLine.id))
+            .filter(
+                models.AfterSalesLine.is_archived.is_(False),
+                applied_time_expr.isnot(None),
+                applied_time_expr >= start,
+                applied_time_expr < end,
+                cond,
+            )
+        )
+        if channel:
+            q = q.filter(models.AfterSalesLine.channel == channel)
+        return int(q.scalar() or 0)
+
+    after_sales_lines_missing_order_no = _missing_count(models.AfterSalesLine.order_no.is_(None))
+    after_sales_lines_missing_product_link_id = _missing_count(models.AfterSalesLine.product_link_id.is_(None))
+    after_sales_lines_missing_sku_code = _missing_count(models.AfterSalesLine.sku_code.is_(None))
+
+    # model-mapped shipped qty (coverage for model analysis)
+    mapping_on = and_(
+        models.SkuModelVersionMapping.is_archived.is_(False),
+        models.SkuModelVersionMapping.is_active.is_(True),
+        models.SkuModelVersionMapping.sku_code == models.ShipmentLine.sku_code,
+    )
+    ship_model_cover_q = db.query(
+        func.coalesce(func.sum(models.ShipmentLine.qty), 0).label("mapped_shipped_qty"),
+    ).join(
+        models.SkuModelVersionMapping,
+        mapping_on,
+    ).filter(
+        models.ShipmentLine.completed_at.isnot(None),
+        models.ShipmentLine.completed_at >= start,
+        models.ShipmentLine.completed_at < end,
+        models.ShipmentLine.is_archived.is_(False),
+    )
+    if channel:
+        ship_model_cover_q = ship_model_cover_q.filter(models.ShipmentLine.channel == channel)
+    mapped_shipped_qty = Decimal(str(ship_model_cover_q.scalar() or 0))
+    model_mapped_rate = (mapped_shipped_qty / shipped_qty_total) if shipped_qty_total > 0 else None
+
+    # ----- series (period totals) -----
+    ship_series_q = db.query(
+        period_expr,
+        shipped_qty_sum,
+        shipped_amount_sum,
+    ).filter(
+        models.ShipmentLine.completed_at.isnot(None),
+        models.ShipmentLine.completed_at >= start,
+        models.ShipmentLine.completed_at < end,
+        models.ShipmentLine.is_archived.is_(False),
+    )
+    if channel:
+        ship_series_q = ship_series_q.filter(models.ShipmentLine.channel == channel)
+    ship_series_q = ship_series_q.group_by(period_expr)
+    ship_rows = ship_series_q.all()
+
+    ret_series_q = db.query(
+        period_expr,
+        returned_qty_expr,
+        refund_amount_expr,
+    ).select_from(
+        models.ShipmentLine
+    ).join(
+        models.AfterSalesLine,
+        and_(
+            models.AfterSalesLine.order_no.isnot(None),
+            models.AfterSalesLine.product_link_id.isnot(None),
+            models.AfterSalesLine.sku_code.isnot(None),
+            models.ShipmentLine.order_no == models.AfterSalesLine.order_no,
+            models.ShipmentLine.product_link_id == models.AfterSalesLine.product_link_id,
+            models.ShipmentLine.sku_code == models.AfterSalesLine.sku_code,
+        ),
+    ).filter(
+        models.ShipmentLine.completed_at.isnot(None),
+        models.ShipmentLine.completed_at >= start,
+        models.ShipmentLine.completed_at < end,
+        models.ShipmentLine.is_archived.is_(False),
+        models.AfterSalesLine.is_archived.is_(False),
+    )
+    if channel:
+        ret_series_q = ret_series_q.filter(models.ShipmentLine.channel == channel)
+    ret_series_q = ret_series_q.group_by(period_expr)
+    ret_rows = ret_series_q.all()
+
+    ret_map: Dict[str, Dict[str, Decimal]] = {}
+    for r in ret_rows:
+        ret_map[str(r.period)] = {
+            "returned_qty": Decimal(str(r.returned_qty or 0)),
+            "refund_amount": Decimal(str(r.refund_amount or 0)),
+        }
+
+    series: List[Dict[str, Any]] = []
+    for r in ship_rows:
+        p_label = _fmt_period_label(r.period, group_by)
+        p_key = str(r.period)
+        shipped_qty = Decimal(str(r.shipped_qty or 0))
+        shipped_amount = Decimal(str(r.shipped_amount or 0))
+        ret = ret_map.get(p_key) or {"returned_qty": Decimal("0"), "refund_amount": Decimal("0")}
+        returned_qty = ret["returned_qty"]
+        refund_amount = ret["refund_amount"]
+        series.append(
+            {
+                "period": p_label,
+                "shipped_qty": shipped_qty,
+                "shipped_amount": shipped_amount,
+                "returned_qty": returned_qty,
+                "refund_amount": refund_amount,
+                "return_rate": (returned_qty / shipped_qty) if shipped_qty > 0 else None,
+                "refund_rate": (refund_amount / shipped_amount) if shipped_amount > 0 else None,
+            }
+        )
+
+    # ----- top reasons -----
+    top_n = max(1, min(int(top_n or 12), 50))
+    reasons_q = db.query(
+        models.AfterSalesLine.reason.label("reason"),
+        returned_qty_expr,
+        refund_amount_expr,
+    ).select_from(
+        models.ShipmentLine
+    ).join(
+        models.AfterSalesLine,
+        and_(
+            models.AfterSalesLine.order_no.isnot(None),
+            models.AfterSalesLine.product_link_id.isnot(None),
+            models.AfterSalesLine.sku_code.isnot(None),
+            models.ShipmentLine.order_no == models.AfterSalesLine.order_no,
+            models.ShipmentLine.product_link_id == models.AfterSalesLine.product_link_id,
+            models.ShipmentLine.sku_code == models.AfterSalesLine.sku_code,
+        ),
+    ).filter(
+        models.ShipmentLine.completed_at.isnot(None),
+        models.ShipmentLine.completed_at >= start,
+        models.ShipmentLine.completed_at < end,
+        models.ShipmentLine.is_archived.is_(False),
+        models.AfterSalesLine.is_archived.is_(False),
+        models.AfterSalesLine.reason.isnot(None),
+        func.length(func.trim(models.AfterSalesLine.reason)) > 0,
+    )
+    if channel:
+        reasons_q = reasons_q.filter(models.ShipmentLine.channel == channel)
+    reasons_q = reasons_q.group_by(models.AfterSalesLine.reason).order_by(returned_qty_expr.desc()).limit(top_n)
+    reason_rows = reasons_q.all()
+    top_reasons: List[Dict[str, Any]] = []
+    for r in reason_rows:
+        qty = Decimal(str(r.returned_qty or 0))
+        amt = Decimal(str(r.refund_amount or 0))
+        top_reasons.append(
+            {
+                "reason": str(r.reason),
+                "returned_qty": qty,
+                "refund_amount": amt,
+                "share_returned_qty": (qty / returned_qty_total) if returned_qty_total > 0 else None,
+                "share_refund_amount": (amt / refund_amount_total) if refund_amount_total > 0 else None,
+            }
+        )
+
+    # ----- top skus -----
+    ship_sku_q = db.query(
+        models.ShipmentLine.sku_code.label("sku_code"),
+        shipped_qty_sum,
+    ).filter(
+        models.ShipmentLine.completed_at.isnot(None),
+        models.ShipmentLine.completed_at >= start,
+        models.ShipmentLine.completed_at < end,
+        models.ShipmentLine.is_archived.is_(False),
+        models.ShipmentLine.sku_code.isnot(None),
+    )
+    if channel:
+        ship_sku_q = ship_sku_q.filter(models.ShipmentLine.channel == channel)
+    ship_sku_q = ship_sku_q.group_by(models.ShipmentLine.sku_code)
+    ship_sku_rows = ship_sku_q.all()
+    ship_sku_map: Dict[str, Decimal] = {str(r.sku_code): Decimal(str(r.shipped_qty or 0)) for r in ship_sku_rows}
+
+    ret_sku_q = db.query(
+        models.ShipmentLine.sku_code.label("sku_code"),
+        returned_qty_expr,
+    ).select_from(
+        models.ShipmentLine
+    ).join(
+        models.AfterSalesLine,
+        and_(
+            models.AfterSalesLine.order_no.isnot(None),
+            models.AfterSalesLine.product_link_id.isnot(None),
+            models.AfterSalesLine.sku_code.isnot(None),
+            models.ShipmentLine.order_no == models.AfterSalesLine.order_no,
+            models.ShipmentLine.product_link_id == models.AfterSalesLine.product_link_id,
+            models.ShipmentLine.sku_code == models.AfterSalesLine.sku_code,
+        ),
+    ).filter(
+        models.ShipmentLine.completed_at.isnot(None),
+        models.ShipmentLine.completed_at >= start,
+        models.ShipmentLine.completed_at < end,
+        models.ShipmentLine.is_archived.is_(False),
+        models.AfterSalesLine.is_archived.is_(False),
+        models.ShipmentLine.sku_code.isnot(None),
+    )
+    if channel:
+        ret_sku_q = ret_sku_q.filter(models.ShipmentLine.channel == channel)
+    ret_sku_q = ret_sku_q.group_by(models.ShipmentLine.sku_code).order_by(returned_qty_expr.desc()).limit(top_n)
+    sku_rows = ret_sku_q.all()
+    top_skus: List[Dict[str, Any]] = []
+    for r in sku_rows:
+        sku = str(r.sku_code or "")
+        shipped_qty = ship_sku_map.get(sku) or Decimal("0")
+        returned_qty = Decimal(str(r.returned_qty or 0))
+        top_skus.append(
+            {
+                "sku_code": sku,
+                "shipped_qty": shipped_qty,
+                "returned_qty": returned_qty,
+                "return_rate": (returned_qty / shipped_qty) if shipped_qty > 0 else None,
+            }
+        )
+
+    # ----- top links -----
+    ship_link_q = db.query(
+        models.ShipmentLine.product_link_id.label("product_link_id"),
+        shipped_qty_sum,
+    ).filter(
+        models.ShipmentLine.completed_at.isnot(None),
+        models.ShipmentLine.completed_at >= start,
+        models.ShipmentLine.completed_at < end,
+        models.ShipmentLine.is_archived.is_(False),
+        models.ShipmentLine.product_link_id.isnot(None),
+    )
+    if channel:
+        ship_link_q = ship_link_q.filter(models.ShipmentLine.channel == channel)
+    ship_link_q = ship_link_q.group_by(models.ShipmentLine.product_link_id)
+    ship_link_rows = ship_link_q.all()
+    ship_link_map: Dict[str, Decimal] = {str(r.product_link_id): Decimal(str(r.shipped_qty or 0)) for r in ship_link_rows}
+
+    ret_link_q = db.query(
+        models.ShipmentLine.product_link_id.label("product_link_id"),
+        returned_qty_expr,
+    ).select_from(
+        models.ShipmentLine
+    ).join(
+        models.AfterSalesLine,
+        and_(
+            models.AfterSalesLine.order_no.isnot(None),
+            models.AfterSalesLine.product_link_id.isnot(None),
+            models.AfterSalesLine.sku_code.isnot(None),
+            models.ShipmentLine.order_no == models.AfterSalesLine.order_no,
+            models.ShipmentLine.product_link_id == models.AfterSalesLine.product_link_id,
+            models.ShipmentLine.sku_code == models.AfterSalesLine.sku_code,
+        ),
+    ).filter(
+        models.ShipmentLine.completed_at.isnot(None),
+        models.ShipmentLine.completed_at >= start,
+        models.ShipmentLine.completed_at < end,
+        models.ShipmentLine.is_archived.is_(False),
+        models.AfterSalesLine.is_archived.is_(False),
+        models.ShipmentLine.product_link_id.isnot(None),
+    )
+    if channel:
+        ret_link_q = ret_link_q.filter(models.ShipmentLine.channel == channel)
+    ret_link_q = ret_link_q.group_by(models.ShipmentLine.product_link_id).order_by(returned_qty_expr.desc()).limit(top_n)
+    link_rows = ret_link_q.all()
+    top_links: List[Dict[str, Any]] = []
+    for r in link_rows:
+        link = str(r.product_link_id or "")
+        shipped_qty = ship_link_map.get(link) or Decimal("0")
+        returned_qty = Decimal(str(r.returned_qty or 0))
+        top_links.append(
+            {
+                "product_link_id": link,
+                "shipped_qty": shipped_qty,
+                "returned_qty": returned_qty,
+                "return_rate": (returned_qty / shipped_qty) if shipped_qty > 0 else None,
+            }
+        )
+
+    # ----- attach most common spec_text for top skus/links (best-effort, small N) -----
+    join_on = and_(
+        models.AfterSalesLine.order_no.isnot(None),
+        models.AfterSalesLine.product_link_id.isnot(None),
+        models.AfterSalesLine.sku_code.isnot(None),
+        models.ShipmentLine.order_no == models.AfterSalesLine.order_no,
+        models.ShipmentLine.product_link_id == models.AfterSalesLine.product_link_id,
+        models.ShipmentLine.sku_code == models.AfterSalesLine.sku_code,
+    )
+
+    sku_codes = [it.get("sku_code") for it in top_skus if it.get("sku_code")]
+    if sku_codes:
+        spec_rows = (
+            db.query(
+                models.ShipmentLine.sku_code.label("sku_code"),
+                models.AfterSalesLine.spec_text.label("spec_text"),
+                func.count(models.AfterSalesLine.id).label("cnt"),
+            )
+            .select_from(models.ShipmentLine)
+            .join(models.AfterSalesLine, join_on)
+            .filter(
+                models.ShipmentLine.completed_at.isnot(None),
+                models.ShipmentLine.completed_at >= start,
+                models.ShipmentLine.completed_at < end,
+                models.ShipmentLine.is_archived.is_(False),
+                models.AfterSalesLine.is_archived.is_(False),
+                models.ShipmentLine.sku_code.in_(sku_codes),
+                models.AfterSalesLine.spec_text.isnot(None),
+                func.length(func.trim(models.AfterSalesLine.spec_text)) > 0,
+            )
+            .group_by(models.ShipmentLine.sku_code, models.AfterSalesLine.spec_text)
+            .order_by(models.ShipmentLine.sku_code, func.count(models.AfterSalesLine.id).desc())
+            .all()
+        )
+        best_spec_by_sku: Dict[str, str] = {}
+        for r in spec_rows:
+            code = str(r.sku_code or "")
+            if code and code not in best_spec_by_sku:
+                best_spec_by_sku[code] = str(r.spec_text or "")
+        for it in top_skus:
+            code = str(it.get("sku_code") or "")
+            if code and best_spec_by_sku.get(code):
+                it["spec_text"] = best_spec_by_sku[code]
+
+    link_ids = [it.get("product_link_id") for it in top_links if it.get("product_link_id")]
+    if link_ids:
+        link_spec_rows = (
+            db.query(
+                models.ShipmentLine.product_link_id.label("product_link_id"),
+                models.AfterSalesLine.spec_text.label("spec_text"),
+                func.count(models.AfterSalesLine.id).label("cnt"),
+            )
+            .select_from(models.ShipmentLine)
+            .join(models.AfterSalesLine, join_on)
+            .filter(
+                models.ShipmentLine.completed_at.isnot(None),
+                models.ShipmentLine.completed_at >= start,
+                models.ShipmentLine.completed_at < end,
+                models.ShipmentLine.is_archived.is_(False),
+                models.AfterSalesLine.is_archived.is_(False),
+                models.ShipmentLine.product_link_id.in_(link_ids),
+                models.AfterSalesLine.spec_text.isnot(None),
+                func.length(func.trim(models.AfterSalesLine.spec_text)) > 0,
+            )
+            .group_by(models.ShipmentLine.product_link_id, models.AfterSalesLine.spec_text)
+            .order_by(models.ShipmentLine.product_link_id, func.count(models.AfterSalesLine.id).desc())
+            .all()
+        )
+        best_spec_by_link: Dict[str, str] = {}
+        for r in link_spec_rows:
+            link = str(r.product_link_id or "")
+            if link and link not in best_spec_by_link:
+                best_spec_by_link[link] = str(r.spec_text or "")
+        for it in top_links:
+            link = str(it.get("product_link_id") or "")
+            if link and best_spec_by_link.get(link):
+                it["spec_text"] = best_spec_by_link[link]
+
+    # ----- top models -----
+    ship_model_q = db.query(
+        models.ProductModel.model_code.label("model_code"),
+        models.ProductModel.model_name.label("model_name"),
+        func.coalesce(func.sum(models.ShipmentLine.qty), 0).label("shipped_qty"),
+    ).join(
+        models.SkuModelVersionMapping,
+        mapping_on,
+    ).join(
+        models.ProductModelVersion,
+        models.ProductModelVersion.id == models.SkuModelVersionMapping.model_version_id,
+    ).join(
+        models.ProductModel,
+        models.ProductModel.id == models.ProductModelVersion.model_id,
+    ).filter(
+        models.ShipmentLine.completed_at.isnot(None),
+        models.ShipmentLine.completed_at >= start,
+        models.ShipmentLine.completed_at < end,
+        models.ShipmentLine.is_archived.is_(False),
+    )
+    if channel:
+        ship_model_q = ship_model_q.filter(models.ShipmentLine.channel == channel)
+    ship_model_rows = ship_model_q.group_by(models.ProductModel.model_code, models.ProductModel.model_name).all()
+    ship_model_map: Dict[str, Decimal] = {str(r.model_code): Decimal(str(r.shipped_qty or 0)) for r in ship_model_rows}
+    ship_model_name: Dict[str, str] = {str(r.model_code): str(r.model_name or "") for r in ship_model_rows}
+
+    ret_model_q = db.query(
+        models.ProductModel.model_code.label("model_code"),
+        models.ProductModel.model_name.label("model_name"),
+        returned_qty_expr,
+    ).select_from(
+        models.ShipmentLine
+    ).join(
+        models.AfterSalesLine,
+        and_(
+            models.AfterSalesLine.order_no.isnot(None),
+            models.AfterSalesLine.product_link_id.isnot(None),
+            models.AfterSalesLine.sku_code.isnot(None),
+            models.ShipmentLine.order_no == models.AfterSalesLine.order_no,
+            models.ShipmentLine.product_link_id == models.AfterSalesLine.product_link_id,
+            models.ShipmentLine.sku_code == models.AfterSalesLine.sku_code,
+        ),
+    ).join(
+        models.SkuModelVersionMapping,
+        mapping_on,
+    ).join(
+        models.ProductModelVersion,
+        models.ProductModelVersion.id == models.SkuModelVersionMapping.model_version_id,
+    ).join(
+        models.ProductModel,
+        models.ProductModel.id == models.ProductModelVersion.model_id,
+    ).filter(
+        models.ShipmentLine.completed_at.isnot(None),
+        models.ShipmentLine.completed_at >= start,
+        models.ShipmentLine.completed_at < end,
+        models.ShipmentLine.is_archived.is_(False),
+        models.AfterSalesLine.is_archived.is_(False),
+    )
+    if channel:
+        ret_model_q = ret_model_q.filter(models.ShipmentLine.channel == channel)
+    ret_model_q = ret_model_q.group_by(models.ProductModel.model_code, models.ProductModel.model_name).order_by(returned_qty_expr.desc()).limit(top_n)
+    model_rows = ret_model_q.all()
+    top_models: List[Dict[str, Any]] = []
+    for r in model_rows:
+        code = str(r.model_code or "")
+        shipped_qty = ship_model_map.get(code) or Decimal("0")
+        returned_qty = Decimal(str(r.returned_qty or 0))
+        top_models.append(
+            {
+                "model_code": code,
+                "model_name": ship_model_name.get(code) or str(r.model_name or ""),
+                "shipped_qty": shipped_qty,
+                "returned_qty": returned_qty,
+                "return_rate": (returned_qty / shipped_qty) if shipped_qty > 0 else None,
+            }
+        )
+
+    # ----- lag buckets (matched returns, by applied_at - completed_at) -----
+    dialect = getattr(getattr(db.get_bind(), "dialect", None), "name", "")
+    if dialect == "postgresql":
+        lag_days_expr = func.floor(
+            func.extract(
+                "epoch",
+                func.coalesce(models.AfterSalesLine.applied_at, models.AfterSalesLine.occurred_at) - models.ShipmentLine.completed_at,
+            )
+            / 86400.0
+        )
+    else:
+        # sqlite best-effort
+        lag_days_expr = func.floor(
+            (func.julianday(func.coalesce(models.AfterSalesLine.applied_at, models.AfterSalesLine.occurred_at)) - func.julianday(models.ShipmentLine.completed_at))
+        )
+
+    lag_qty_expr = func.coalesce(
+        func.sum(func.coalesce(models.AfterSalesLine.actual_return_qty, models.AfterSalesLine.return_qty)),
+        0,
+    ).label("returned_qty")
+
+    lag_base = (
+        db.query(lag_days_expr.label("lag_days"), lag_qty_expr)
+        .select_from(models.ShipmentLine)
+        .join(
+            models.AfterSalesLine,
+            and_(
+                models.AfterSalesLine.order_no.isnot(None),
+                models.AfterSalesLine.product_link_id.isnot(None),
+                models.AfterSalesLine.sku_code.isnot(None),
+                models.ShipmentLine.order_no == models.AfterSalesLine.order_no,
+                models.ShipmentLine.product_link_id == models.AfterSalesLine.product_link_id,
+                models.ShipmentLine.sku_code == models.AfterSalesLine.sku_code,
+            ),
+        )
+        .filter(
+            models.ShipmentLine.completed_at.isnot(None),
+            models.ShipmentLine.completed_at >= start,
+            models.ShipmentLine.completed_at < end,
+            models.ShipmentLine.is_archived.is_(False),
+            models.AfterSalesLine.is_archived.is_(False),
+            func.coalesce(models.AfterSalesLine.applied_at, models.AfterSalesLine.occurred_at).isnot(None),
+        )
+    )
+    if channel:
+        lag_base = lag_base.filter(models.ShipmentLine.channel == channel)
+
+    lag_rows = lag_base.group_by(lag_days_expr).all()
+    buckets = {
+        "0-7天": Decimal("0"),
+        "8-14天": Decimal("0"),
+        "15-30天": Decimal("0"),
+        "30天+": Decimal("0"),
+        "未知/负值": Decimal("0"),
+    }
+    for r in lag_rows:
+        try:
+            lag_days = int(r.lag_days) if r.lag_days is not None else None
+        except Exception:  # noqa: BLE001
+            lag_days = None
+        qty = Decimal(str(r.returned_qty or 0))
+        if lag_days is None:
+            buckets["未知/负值"] += qty
+        elif lag_days < 0:
+            buckets["未知/负值"] += qty
+        elif lag_days <= 7:
+            buckets["0-7天"] += qty
+        elif lag_days <= 14:
+            buckets["8-14天"] += qty
+        elif lag_days <= 30:
+            buckets["15-30天"] += qty
+        else:
+            buckets["30天+"] += qty
+
+    lag_total = sum(buckets.values(), Decimal("0"))
+    lag_buckets: List[Dict[str, Any]] = []
+    for name in ["0-7天", "8-14天", "15-30天", "30天+", "未知/负值"]:
+        v = buckets[name]
+        lag_buckets.append(
+            {
+                "bucket": name,
+                "returned_qty": v,
+                "share": (v / lag_total) if lag_total > 0 else None,
+            }
+        )
+
+    return {
+        "group_by": group_by,
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "kpis": {
+            "shipped_qty": shipped_qty_total,
+            "shipped_amount": shipped_amount_total,
+            "returned_qty": returned_qty_total,
+            "refund_amount": refund_amount_total,
+            "return_rate": return_rate_total,
+            "refund_rate": refund_rate_total,
+            "model_mapped_shipped_qty": mapped_shipped_qty,
+            "model_mapped_rate": model_mapped_rate,
+            "matched_return_lines": matched_return_lines,
+            "matched_return_lines_with_applied_at": matched_return_lines_with_applied_at,
+            "after_sales_lines_total": after_sales_lines_total,
+            "after_sales_lines_matched_any_shipment": after_sales_lines_matched_any_shipment,
+            "after_sales_lines_unmatched": after_sales_lines_unmatched,
+            "after_sales_lines_unmatched_rate": after_sales_lines_unmatched_rate,
+            "after_sales_lines_missing_order_no": after_sales_lines_missing_order_no,
+            "after_sales_lines_missing_product_link_id": after_sales_lines_missing_product_link_id,
+            "after_sales_lines_missing_sku_code": after_sales_lines_missing_sku_code,
+        },
+        "series": series,
+        "top_reasons": top_reasons,
+        "top_models": top_models,
+        "top_skus": top_skus,
+        "top_links": top_links,
+        "lag_buckets": lag_buckets,
+    }
 
 
 def returns_rate_by_sku(
@@ -1266,6 +2491,306 @@ def sales_lines(
         "lines_missing_costing": int(missing_costing),
         "items": items,
         "note": "明细口径：cost 优先来自计价结果（shipment_costing_results.cost_total），缺失时回退到最新 BOM 快照 trace.costing.total_cost。缺计价结果/快照的行成本显示为空。",
+    }
+
+
+def sales_profit_dashboard(
+    db: Session,
+    *,
+    start: datetime,
+    end: datetime,
+    group_by: Literal["week", "month"] = "week",
+    channel: Optional[str] = None,
+    top_n: int = 12,
+) -> Dict[str, Any]:
+    """
+    销售利润看板（给运营判断“哪些赚钱/哪些亏钱”）：
+    - 时间口径：发货完成时间 completed_at（与成本结果一致）
+    - 利润口径：仅对“有成本”的行计算利润，避免缺成本导致利润虚高
+      gross_profit = sum(revenue - cost) over costed lines
+    - 给出成本覆盖率（按销售额/按行数）
+    """
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    start = start.astimezone(timezone.utc)
+    end = end.astimezone(timezone.utc)
+
+    def _period_label(dt: datetime) -> str:
+        if group_by == "month":
+            d = _utc_date(dt)
+            return d.strftime("%Y-%m")
+        d = _utc_date(dt)
+        start_date = d - timedelta(days=d.weekday())  # Monday
+        end_date = start_date + timedelta(days=6)
+        return f"{start_date.strftime('%Y-%m-%d')}~{end_date.strftime('%Y-%m-%d')}"
+
+    ship_q = db.query(models.ShipmentLine).filter(
+        models.ShipmentLine.completed_at.isnot(None),
+        models.ShipmentLine.completed_at >= start,
+        models.ShipmentLine.completed_at < end,
+        models.ShipmentLine.is_archived.is_(False),
+    )
+    if channel:
+        ship_q = ship_q.filter(models.ShipmentLine.channel == channel)
+    ship_rows = ship_q.all()
+
+    # latest bom_snapshot per shipment_line_id (legacy fallback)
+    snap_sq = (
+        db.query(
+            models.BomSnapshot.id.label("bom_snapshot_id"),
+            models.BomSnapshot.shipment_line_id.label("shipment_line_id"),
+            models.BomSnapshot.trace_json.label("trace_json"),
+            models.BomSnapshot.created_at.label("created_at"),
+        )
+        .filter(models.BomSnapshot.shipment_line_id.isnot(None))
+        .order_by(models.BomSnapshot.shipment_line_id.asc(), models.BomSnapshot.created_at.desc())
+        .distinct(models.BomSnapshot.shipment_line_id)
+        .subquery()
+    )
+
+    cost_q = (
+        db.query(
+            models.ShipmentLine.id.label("shipment_line_id"),
+            models.ShipmentCostingResult.cost_total.label("cost_total"),
+            snap_sq.c.trace_json.label("trace_json"),
+        )
+        .select_from(models.ShipmentLine)
+        .outerjoin(models.ShipmentCostingResult, models.ShipmentLine.id == models.ShipmentCostingResult.shipment_line_id)
+        .outerjoin(snap_sq, models.ShipmentLine.id == snap_sq.c.shipment_line_id)
+        .filter(
+            models.ShipmentLine.completed_at.isnot(None),
+            models.ShipmentLine.completed_at >= start,
+            models.ShipmentLine.completed_at < end,
+            models.ShipmentLine.is_archived.is_(False),
+            or_(models.ShipmentCostingResult.shipment_line_id.isnot(None), snap_sq.c.bom_snapshot_id.isnot(None)),
+        )
+    )
+    if channel:
+        cost_q = cost_q.filter(models.ShipmentLine.channel == channel)
+    cost_rows = cost_q.all()
+
+    cost_by_line: Dict[str, Decimal] = {}
+    for r in cost_rows:
+        if r.cost_total not in (None, ""):
+            c = _d(r.cost_total)
+            if c > 0:
+                cost_by_line[str(r.shipment_line_id)] = c
+                continue
+        c2, status = _extract_total_cost_from_trace(r.trace_json)
+        if status == "costed" and c2 is not None and c2 > 0:
+            cost_by_line[str(r.shipment_line_id)] = c2
+
+    # model mapping by sku_code (active mapping)
+    sku_to_model: Dict[str, Tuple[str, Optional[str]]] = {}
+    if ship_rows:
+        sku_codes = [str(s.sku_code) for s in ship_rows if s.sku_code]
+        uniq = list(dict.fromkeys(sku_codes))
+        chunk_size = 800
+        for i in range(0, len(uniq), chunk_size):
+            chunk = uniq[i : i + chunk_size]
+            rows = (
+                db.query(
+                    models.SkuModelVersionMapping.sku_code,
+                    models.ProductModel.model_code,
+                    models.ProductModel.model_name,
+                )
+                .select_from(models.SkuModelVersionMapping)
+                .join(
+                    models.ProductModelVersion,
+                    and_(
+                        models.ProductModelVersion.is_archived.is_(False),
+                        models.ProductModelVersion.id == models.SkuModelVersionMapping.model_version_id,
+                    ),
+                )
+                .join(
+                    models.ProductModel,
+                    and_(models.ProductModel.is_archived.is_(False), models.ProductModel.id == models.ProductModelVersion.model_id),
+                )
+                .filter(
+                    models.SkuModelVersionMapping.is_archived.is_(False),
+                    models.SkuModelVersionMapping.is_active.is_(True),
+                    models.SkuModelVersionMapping.sku_code.in_(chunk),
+                )
+                .all()
+            )
+            for sku_code, model_code, model_name in rows:
+                if sku_code and model_code:
+                    sku_to_model[str(sku_code)] = (str(model_code), str(model_name) if model_name else None)
+
+    kpi: Dict[str, Any] = {
+        "shipped_qty": Decimal("0"),
+        "revenue_amount": Decimal("0"),
+        "shipment_lines_total": 0,
+        "costed_revenue_amount": Decimal("0"),
+        "costed_lines": 0,
+        "lines_missing_costing": 0,
+        "costed_revenue_rate": None,
+        "cost_amount": Decimal("0"),
+        "gross_profit": Decimal("0"),
+        "gross_margin": None,
+    }
+
+    series: Dict[str, Dict[str, Any]] = {}
+    sku_agg: Dict[str, Dict[str, Any]] = {}
+    model_agg: Dict[str, Dict[str, Any]] = {}
+    sku_spec_count: Dict[Tuple[str, str], int] = {}
+
+    for line in ship_rows:
+        if not line.completed_at:
+            continue
+        lid = str(line.id)
+        period = _period_label(line.completed_at)
+        sku = str(line.sku_code or "").strip()
+        spec = str(line.spec_text or "").strip()
+        qty = _d(line.qty)
+        rev = _d(line.revenue_amount)
+
+        kpi["shipment_lines_total"] += 1
+        kpi["shipped_qty"] += qty
+        kpi["revenue_amount"] += rev
+
+        b = series.setdefault(
+            period,
+            {
+                "period": period,
+                "shipped_qty": Decimal("0"),
+                "revenue_amount": Decimal("0"),
+                "costed_revenue_amount": Decimal("0"),
+                "cost_amount": Decimal("0"),
+                "gross_profit": Decimal("0"),
+                "gross_margin": None,
+                "shipment_lines_total": 0,
+                "costed_lines": 0,
+                "lines_missing_costing": 0,
+            },
+        )
+        b["shipment_lines_total"] += 1
+        b["shipped_qty"] += qty
+        b["revenue_amount"] += rev
+
+        cost = cost_by_line.get(lid)
+        if cost is None:
+            kpi["lines_missing_costing"] += 1
+            b["lines_missing_costing"] += 1
+        else:
+            kpi["costed_lines"] += 1
+            kpi["costed_revenue_amount"] += rev
+            kpi["cost_amount"] += cost
+            kpi["gross_profit"] += (rev - cost)
+
+            b["costed_lines"] += 1
+            b["costed_revenue_amount"] += rev
+            b["cost_amount"] += cost
+            b["gross_profit"] += (rev - cost)
+
+        if sku:
+            sb = sku_agg.setdefault(
+                sku,
+                {
+                    "sku_code": sku,
+                    "spec_text": None,
+                    "shipped_qty": Decimal("0"),
+                    "revenue_amount": Decimal("0"),
+                    "cost_amount": Decimal("0"),
+                    "gross_profit": Decimal("0"),
+                    "gross_margin": None,
+                    "shipment_lines_total": 0,
+                    "costed_lines": 0,
+                },
+            )
+            sb["shipment_lines_total"] += 1
+            sb["shipped_qty"] += qty
+            sb["revenue_amount"] += rev
+            if cost is not None:
+                sb["costed_lines"] += 1
+                sb["cost_amount"] += cost
+                sb["gross_profit"] += (rev - cost)
+            if spec:
+                sku_spec_count[(sku, spec)] = sku_spec_count.get((sku, spec), 0) + 1
+
+            m = sku_to_model.get(sku)
+            if m:
+                mc, mn = m
+                mb = model_agg.setdefault(
+                    mc,
+                    {
+                        "model_code": mc,
+                        "model_name": mn,
+                        "shipped_qty": Decimal("0"),
+                        "revenue_amount": Decimal("0"),
+                        "cost_amount": Decimal("0"),
+                        "gross_profit": Decimal("0"),
+                        "gross_margin": None,
+                        "shipment_lines_total": 0,
+                        "costed_lines": 0,
+                    },
+                )
+                mb["shipment_lines_total"] += 1
+                mb["shipped_qty"] += qty
+                mb["revenue_amount"] += rev
+                if cost is not None:
+                    mb["costed_lines"] += 1
+                    mb["cost_amount"] += cost
+                    mb["gross_profit"] += (rev - cost)
+
+    # fill spec_text for sku (most common)
+    best_spec: Dict[str, Tuple[int, str]] = {}
+    for (sku, spec), c in sku_spec_count.items():
+        prev = best_spec.get(sku)
+        if prev is None or c > prev[0]:
+            best_spec[sku] = (c, spec)
+    for sku, sb in sku_agg.items():
+        sb["spec_text"] = best_spec.get(sku, (0, None))[1]
+
+    # finalize KPI margins (profit computed only on costed revenue)
+    kpi_costed_rev = _d(kpi["costed_revenue_amount"])
+    kpi_rev = _d(kpi["revenue_amount"])
+    if kpi_rev > 0:
+        kpi["costed_revenue_rate"] = (kpi_costed_rev / kpi_rev)
+    if kpi_costed_rev > 0:
+        kpi["gross_margin"] = (_d(kpi["gross_profit"]) / kpi_costed_rev)
+
+    # finalize series margins
+    series_items: List[Dict[str, Any]] = []
+    for p in sorted(series.keys()):
+        b = series[p]
+        costed_rev = _d(b["costed_revenue_amount"])
+        if costed_rev > 0:
+            b["gross_margin"] = (_d(b["gross_profit"]) / costed_rev)
+        series_items.append(b)
+
+    def _finalize_bucket(x: Dict[str, Any]) -> Dict[str, Any]:
+        rev = _d(x["revenue_amount"])
+        gp = _d(x["gross_profit"])
+        x["gross_margin"] = (gp / rev) if rev > 0 else None
+        return x
+
+    # rankings: only entries with at least 1 costed line (avoid fake profit)
+    sku_items_all = [_finalize_bucket(v) for v in sku_agg.values() if int(v.get("costed_lines") or 0) > 0]
+    sku_items_all.sort(key=lambda x: (_d(x["gross_profit"]), _d(x["revenue_amount"])), reverse=True)
+    top_skus_profit = sku_items_all[:top_n]
+    top_skus_loss = sorted(sku_items_all, key=lambda x: (_d(x["gross_profit"]), _d(x["revenue_amount"])))[:top_n]
+
+    model_items_all = [_finalize_bucket(v) for v in model_agg.values() if int(v.get("costed_lines") or 0) > 0]
+    model_items_all.sort(key=lambda x: (_d(x["gross_profit"]), _d(x["revenue_amount"])), reverse=True)
+    top_models_profit = model_items_all[:top_n]
+    top_models_loss = sorted(model_items_all, key=lambda x: (_d(x["gross_profit"]), _d(x["revenue_amount"])))[:top_n]
+
+    return {
+        "group_by": group_by,
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "channel": channel,
+        "top_n": int(top_n),
+        "kpis": kpi,
+        "series": series_items,
+        "top_skus_profit": top_skus_profit,
+        "top_skus_loss": top_skus_loss,
+        "top_models_profit": top_models_profit,
+        "top_models_loss": top_models_loss,
+        "note": "利润仅在“已计价行”上计算；请关注成本覆盖率 costed_revenue_rate，避免因缺成本误判。",
     }
 
 

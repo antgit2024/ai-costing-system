@@ -10,6 +10,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from openpyxl import load_workbook
 from openpyxl.utils.datetime import from_excel
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import joinedload
 
@@ -1098,6 +1099,149 @@ def list_profit_lines_by_batch(
         "items": items,
         "note": "利润表口径：revenue=发货行金额；cost=快照 trace.costing.total_cost（导入时生成）；profit=revenue-cost。",
     }
+
+
+def list_shipment_lines(
+    db: Session,
+    *,
+    page: int = 1,
+    page_size: int = 50,
+    start: Optional[datetime] = None,
+    end: Optional[datetime] = None,
+    channel: Optional[str] = None,
+    sku_code: Optional[str] = None,
+    shipment_no: Optional[str] = None,
+    order_no: Optional[str] = None,
+    product_link_id: Optional[str] = None,
+    status: Optional[str] = None,  # processed | pending | None
+) -> Dict[str, Any]:
+    """
+    Shipment daily ledger (line-level) across batches.
+
+    Status definition (2025/2026 unified):
+    - processed: has either bom_snapshot (2026) OR shipment_costing_result (2025 or unified).
+    - pending: not processed (often due to missing binding/spec parse/bom generation), can be diagnosed via unresolved exception.
+    """
+    p = max(int(page or 1), 1)
+    ps = max(min(int(page_size or 50), 200), 1)
+    st = (status or "").strip().lower() or None
+    if st not in (None, "processed", "pending"):
+        raise ValueError("status 仅支持 processed / pending / 空")
+
+    # Correlated EXISTS predicates (fast with indexes on shipment_line_id).
+    has_bom = (
+        db.query(models.BomSnapshot.id)
+        .filter(models.BomSnapshot.shipment_line_id == models.ShipmentLine.id)
+        .exists()
+    )
+    has_costing = (
+        db.query(models.ShipmentCostingResult.id)
+        .filter(models.ShipmentCostingResult.shipment_line_id == models.ShipmentLine.id)
+        .exists()
+    )
+    processed_pred = or_(has_bom, has_costing)
+
+    unresolved_reason_sq = (
+        db.query(models.ShipmentExceptionQueue.reason)
+        .filter(
+            models.ShipmentExceptionQueue.shipment_line_id == models.ShipmentLine.id,
+            models.ShipmentExceptionQueue.resolved_at.is_(None),
+        )
+        .order_by(models.ShipmentExceptionQueue.created_at.desc())
+        .limit(1)
+        .correlate(models.ShipmentLine)
+        .scalar_subquery()
+    )
+    unresolved_message_sq = (
+        db.query(models.ShipmentExceptionQueue.message)
+        .filter(
+            models.ShipmentExceptionQueue.shipment_line_id == models.ShipmentLine.id,
+            models.ShipmentExceptionQueue.resolved_at.is_(None),
+        )
+        .order_by(models.ShipmentExceptionQueue.created_at.desc())
+        .limit(1)
+        .correlate(models.ShipmentLine)
+        .scalar_subquery()
+    )
+    cost_mode_sq = (
+        db.query(models.ShipmentCostingResult.mode)
+        .filter(models.ShipmentCostingResult.shipment_line_id == models.ShipmentLine.id)
+        .limit(1)
+        .correlate(models.ShipmentLine)
+        .scalar_subquery()
+    )
+
+    q = db.query(
+        models.ShipmentLine,
+        has_bom.label("has_bom_snapshot"),
+        has_costing.label("has_costing_result"),
+        unresolved_reason_sq.label("unresolved_reason"),
+        unresolved_message_sq.label("unresolved_message"),
+        cost_mode_sq.label("cost_mode"),
+    ).filter(
+        models.ShipmentLine.is_archived.is_(False),
+        models.ShipmentLine.is_active.is_(True),
+        models.ShipmentLine.completed_at.isnot(None),
+    )
+
+    if start is not None:
+        q = q.filter(models.ShipmentLine.completed_at >= start)
+    if end is not None:
+        q = q.filter(models.ShipmentLine.completed_at < end)
+    if channel:
+        q = q.filter(models.ShipmentLine.channel == channel)
+    if sku_code:
+        q = q.filter(models.ShipmentLine.sku_code == sku_code)
+    if shipment_no:
+        q = q.filter(models.ShipmentLine.shipment_no == shipment_no)
+    if order_no:
+        q = q.filter(models.ShipmentLine.order_no == order_no)
+    if product_link_id:
+        q = q.filter(models.ShipmentLine.product_link_id == product_link_id)
+
+    if st == "processed":
+        q = q.filter(processed_pred)
+    elif st == "pending":
+        q = q.filter(~processed_pred)
+
+    total = q.with_entities(func.count(models.ShipmentLine.id)).scalar() or 0
+
+    rows = (
+        q.order_by(models.ShipmentLine.completed_at.desc().nullslast(), models.ShipmentLine.created_at.desc())
+        .offset((p - 1) * ps)
+        .limit(ps)
+        .all()
+    )
+
+    items: List[Dict[str, Any]] = []
+    for line, has_bom_snapshot, has_costing_result, unresolved_reason, unresolved_message, cost_mode in rows:
+        processed = bool(has_bom_snapshot or has_costing_result)
+        processed_source = "bom_snapshot" if has_bom_snapshot else ("costing_result" if has_costing_result else None)
+        mode = "2026" if has_bom_snapshot else (str(cost_mode) if cost_mode else None)
+        items.append(
+            {
+                "id": str(getattr(line, "id", "")),
+                "batch_id": str(getattr(line, "batch_id", "")),
+                "row_index": getattr(line, "row_index", None),
+                "shipment_no": getattr(line, "shipment_no", None),
+                "order_no": getattr(line, "order_no", None),
+                "product_link_id": getattr(line, "product_link_id", None),
+                "completed_at": getattr(line, "completed_at", None),
+                "channel": getattr(line, "channel", None),
+                "sku_code": getattr(line, "sku_code", None),
+                "spec_text": getattr(line, "spec_text", None),
+                "spec_hash": getattr(line, "spec_hash", None),
+                "qty": getattr(line, "qty", None),
+                "revenue_amount": getattr(line, "revenue_amount", None),
+                "status": "processed" if processed else "pending",
+                "processed_source": processed_source,
+                "mode": mode,
+                "unresolved_reason": unresolved_reason,
+                "unresolved_message": unresolved_message,
+            }
+        )
+
+    return {"total": int(total), "page": p, "page_size": ps, "items": items}
 
 
 def recompute_bom_snapshot(db: Session, *, snapshot_id: str, operator_id: Optional[str]) -> models.BomSnapshot:

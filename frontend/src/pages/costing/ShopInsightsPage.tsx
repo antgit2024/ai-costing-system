@@ -1,7 +1,7 @@
 import { Alert, Button, Card, Checkbox, DatePicker, Form, Input, Select, Space, Table, Tabs, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { fetchProfitByChannel, fetchReturnsRateByChannel } from '@/services/planner'
 import type {
@@ -12,6 +12,8 @@ import type {
 } from '@/types/planner'
 
 type GroupBy = 'day' | 'month'
+
+const STORAGE_KEY = 'insights.shops.lastQuery.v1'
 
 const formatPercent = (raw?: string | null) => {
   if (!raw) return '-'
@@ -48,6 +50,7 @@ const ShopInsightsPage = () => {
   const [dataProfit, setDataProfit] = useState<ProfitByChannelResponse | null>(null)
   const [dataReturns, setDataReturns] = useState<ReturnsRateByChannelResponse | null>(null)
   const [onlyFullCoverage, setOnlyFullCoverage] = useState(false)
+  const didInitRef = useRef(false)
 
   const profitColumns = useMemo<ColumnsType<ProfitByChannelItem>>(
     () => [
@@ -91,6 +94,23 @@ const ShopInsightsPage = () => {
 
     setLoading(true)
     try {
+      try {
+        if (typeof window !== 'undefined') {
+          window.localStorage.setItem(
+            STORAGE_KEY,
+            JSON.stringify({
+              active_tab: activeTab,
+              start,
+              end,
+              group_by: groupBy,
+              channel: v.channel?.trim() || undefined,
+              only_full_coverage: onlyFullCoverage,
+            }),
+          )
+        }
+      } catch {
+        // ignore storage errors
+      }
       if (activeTab === 'profit') {
         const resp = await fetchProfitByChannel({
           start,
@@ -115,6 +135,49 @@ const ShopInsightsPage = () => {
     } finally {
       setLoading(false)
     }
+  }
+
+  useEffect(() => {
+    if (didInitRef.current) return
+    didInitRef.current = true
+
+    try {
+      const raw = typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_KEY) : null
+      if (raw) {
+        const saved = JSON.parse(raw || '{}') as any
+        const start = String(saved?.start ?? '').trim()
+        const end = String(saved?.end ?? '').trim()
+        const groupBy = (String(saved?.group_by ?? 'month').trim() as GroupBy) || 'month'
+        const range: [dayjs.Dayjs, dayjs.Dayjs] = [
+          dayjs(start || dayjs().subtract(30, 'day').startOf('day').toISOString()),
+          dayjs(end || dayjs().endOf('day').toISOString()),
+        ]
+        form.setFieldsValue({
+          group_by: groupBy,
+          range,
+          channel: saved?.channel ?? undefined,
+        })
+        setActiveTab(saved?.active_tab === 'returns' ? 'returns' : 'profit')
+        setOnlyFullCoverage(Boolean(saved?.only_full_coverage))
+      } else {
+        form.setFieldsValue({
+          group_by: 'month',
+          range: [dayjs().subtract(30, 'day'), dayjs()],
+        })
+      }
+    } catch {
+      // ignore
+    }
+
+    // 首屏自动查询一次，避免“进来空白”
+    onQuery()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const applyQuickRange = async (days: number) => {
+    const range: [dayjs.Dayjs, dayjs.Dayjs] = [dayjs().subtract(days, 'day'), dayjs()]
+    form.setFieldsValue({ range })
+    await onQuery()
   }
 
   const filteredProfitItems = useMemo(() => {
@@ -155,6 +218,22 @@ const ShopInsightsPage = () => {
           <Form.Item label="时间范围" name="range" rules={[{ required: true, message: '请选择时间范围' }]}>
             <DatePicker.RangePicker allowClear={false} />
           </Form.Item>
+          <Form.Item label="快捷">
+            <Space size={6}>
+              <Button size="small" onClick={() => applyQuickRange(7)}>
+                近7天
+              </Button>
+              <Button size="small" onClick={() => applyQuickRange(30)}>
+                近30天
+              </Button>
+              <Button size="small" onClick={() => applyQuickRange(90)}>
+                近90天
+              </Button>
+              <Button size="small" onClick={() => applyQuickRange(365)}>
+                近1年
+              </Button>
+            </Space>
+          </Form.Item>
           <Form.Item label="粒度" name="group_by">
             <Select style={{ width: 100 }} options={[{ value: 'month', label: '按月' }, { value: 'day', label: '按日' }]} />
           </Form.Item>
@@ -193,6 +272,25 @@ const ShopInsightsPage = () => {
               label: '渠道利润',
               children: (
                 <>
+                  {dataProfit && (dataProfit.items ?? []).length === 0 ? (
+                    <Alert
+                      type="info"
+                      showIcon
+                      style={{ marginBottom: 12 }}
+                      message="当前范围暂无数据"
+                      description={
+                        <Space wrap>
+                          <span>建议先点右上“近90天/近1年”查看是否有数据。</span>
+                          <Button size="small" onClick={() => applyQuickRange(90)}>
+                            近90天
+                          </Button>
+                          <Button size="small" onClick={() => applyQuickRange(365)}>
+                            近1年
+                          </Button>
+                        </Space>
+                      }
+                    />
+                  ) : null}
                   {dataProfit ? (
                     <Alert
                       type={dataProfit.total_shipment_lines === dataProfit.lines_with_bom_snapshots ? 'success' : 'warning'}
@@ -230,6 +328,25 @@ const ShopInsightsPage = () => {
               label: '渠道退货率',
               children: (
                 <>
+                  {dataReturns && (dataReturns.items ?? []).length === 0 ? (
+                    <Alert
+                      type="info"
+                      showIcon
+                      style={{ marginBottom: 12 }}
+                      message="当前范围暂无数据"
+                      description={
+                        <Space wrap>
+                          <span>建议先点右上“近90天/近1年”查看是否有数据。</span>
+                          <Button size="small" onClick={() => applyQuickRange(90)}>
+                            近90天
+                          </Button>
+                          <Button size="small" onClick={() => applyQuickRange(365)}>
+                            近1年
+                          </Button>
+                        </Space>
+                      }
+                    />
+                  ) : null}
                   {dataReturns?.unmatched_returns_missing_order_no ? (
                     <Alert
                       type="warning"

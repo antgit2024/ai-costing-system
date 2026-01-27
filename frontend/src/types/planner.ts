@@ -1447,6 +1447,33 @@ export interface ShipmentImportBatch {
 
 export interface ShipmentImportBatchListResponse extends PaginatedResponse<ShipmentImportBatch> {}
 
+export type ShipmentLineStatus = 'processed' | 'pending'
+export type ShipmentLineProcessedSource = 'bom_snapshot' | 'costing_result'
+export type ShipmentLineMode = '2025' | '2026'
+
+export interface ShipmentLineListItem {
+  id: string
+  batch_id: string
+  row_index?: number | null
+  shipment_no?: string | null
+  order_no?: string | null
+  product_link_id?: string | null
+  completed_at?: string | null
+  channel?: string | null
+  sku_code?: string | null
+  spec_text?: string | null
+  spec_hash?: string | null
+  qty?: string | null
+  revenue_amount?: string | null
+  status: ShipmentLineStatus
+  processed_source?: ShipmentLineProcessedSource | null
+  mode?: ShipmentLineMode | null
+  unresolved_reason?: string | null
+  unresolved_message?: string | null
+}
+
+export interface ShipmentLineListResponse extends PaginatedResponse<ShipmentLineListItem> {}
+
 export interface ShipmentException {
   id: string
   batch_id: string
@@ -1893,6 +1920,71 @@ export interface SalesLinesResponse {
   note?: string | null
 }
 
+export interface SalesProfitDashboardKpis {
+  shipped_qty: string
+  revenue_amount: string
+  shipment_lines_total: number
+  costed_revenue_amount: string
+  costed_lines: number
+  lines_missing_costing: number
+  costed_revenue_rate?: string | null
+  cost_amount: string
+  gross_profit: string
+  gross_margin?: string | null
+}
+
+export interface SalesProfitDashboardSeriesItem {
+  period: string
+  shipped_qty: string
+  revenue_amount: string
+  costed_revenue_amount: string
+  cost_amount: string
+  gross_profit: string
+  gross_margin?: string | null
+  shipment_lines_total: number
+  costed_lines: number
+  lines_missing_costing: number
+}
+
+export interface SalesProfitDashboardTopSkuItem {
+  sku_code: string
+  spec_text?: string | null
+  shipped_qty: string
+  revenue_amount: string
+  cost_amount: string
+  gross_profit: string
+  gross_margin?: string | null
+  shipment_lines_total: number
+  costed_lines: number
+}
+
+export interface SalesProfitDashboardTopModelItem {
+  model_code: string
+  model_name?: string | null
+  shipped_qty: string
+  revenue_amount: string
+  cost_amount: string
+  gross_profit: string
+  gross_margin?: string | null
+  shipment_lines_total: number
+  costed_lines: number
+}
+
+export interface SalesProfitDashboardResponse {
+  group_by: 'week' | 'month'
+  start: string
+  end: string
+  channel?: string | null
+  top_n: number
+  kpis: SalesProfitDashboardKpis
+  series: SalesProfitDashboardSeriesItem[]
+  top_skus_profit: SalesProfitDashboardTopSkuItem[]
+  top_skus_loss: SalesProfitDashboardTopSkuItem[]
+  top_models_profit: SalesProfitDashboardTopModelItem[]
+  top_models_loss: SalesProfitDashboardTopModelItem[]
+  note?: string | null
+}
+
 export interface AfterSalesImportBatch {
   id: string
   file_name?: string | null
@@ -1908,6 +2000,143 @@ export interface AfterSalesImportBatch {
   result_json: Record<string, unknown>
   created_at: string
   updated_at: string
+}
+
+export interface AfterSalesLineItem {
+  id: string
+  batch_id: string
+  row_index: number
+  after_sales_no?: string | null
+  occurred_at?: string | null
+  applied_at?: string | null
+  channel?: string | null
+  reason?: string | null
+  bound_model_code?: string | null
+  bound_model_name?: string | null
+  bound_version_label?: string | null
+  order_no?: string | null
+  product_link_id?: string | null
+  product_code?: string | null
+  product_name?: string | null
+  spec_text?: string | null
+  unit?: string | null
+  sale_unit_price?: string | null
+  return_qty?: string | null
+  actual_return_qty?: string | null
+  refund_amount?: string | null
+  allocated_refund_amount?: string | null
+  sku_code?: string | null
+  normalize_warnings_json?: Array<Record<string, unknown>>
+  metadata_json?: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export interface PaginatedAfterSalesLinesResponse {
+  total: number
+  page: number
+  page_size: number
+  items: AfterSalesLineItem[]
+}
+
+export interface AfterSalesDashboardKpis {
+  shipped_qty: string
+  shipped_amount: string
+  returned_qty: string
+  refund_amount: string
+  return_rate?: string | null
+  refund_rate?: string | null
+  model_mapped_shipped_qty: string
+  model_mapped_rate?: string | null
+  matched_return_lines: number
+  matched_return_lines_with_applied_at: number
+  after_sales_lines_total: number
+  after_sales_lines_matched_any_shipment: number
+  after_sales_lines_unmatched: number
+  after_sales_lines_unmatched_rate?: string | null
+  after_sales_lines_missing_order_no: number
+  after_sales_lines_missing_product_link_id: number
+  after_sales_lines_missing_sku_code: number
+}
+
+export interface AfterSalesDashboardLagBucketItem {
+  bucket: string
+  returned_qty: string
+  share?: string | null
+}
+
+export interface AfterSalesDashboardSeriesItem {
+  period: string
+  shipped_qty: string
+  shipped_amount: string
+  returned_qty: string
+  refund_amount: string
+  return_rate?: string | null
+  refund_rate?: string | null
+}
+
+export interface AfterSalesDashboardTopReasonItem {
+  reason: string
+  returned_qty: string
+  refund_amount: string
+  share_returned_qty?: string | null
+  share_refund_amount?: string | null
+}
+
+export interface AfterSalesDashboardTopModelItem {
+  model_code: string
+  model_name?: string | null
+  shipped_qty: string
+  returned_qty: string
+  return_rate?: string | null
+}
+
+export interface AfterSalesDashboardTopSkuItem {
+  sku_code: string
+  spec_text?: string | null
+  shipped_qty: string
+  returned_qty: string
+  return_rate?: string | null
+}
+
+export interface AfterSalesDashboardTopLinkItem {
+  product_link_id: string
+  spec_text?: string | null
+  shipped_qty: string
+  returned_qty: string
+  return_rate?: string | null
+}
+
+export interface AfterSalesDashboardResponse {
+  group_by: 'week' | 'month'
+  start: string
+  end: string
+  kpis: AfterSalesDashboardKpis
+  series: AfterSalesDashboardSeriesItem[]
+  top_reasons: AfterSalesDashboardTopReasonItem[]
+  top_models: AfterSalesDashboardTopModelItem[]
+  top_skus: AfterSalesDashboardTopSkuItem[]
+  top_links: AfterSalesDashboardTopLinkItem[]
+  lag_buckets: AfterSalesDashboardLagBucketItem[]
+}
+
+export interface AfterSalesReasonOptionItem {
+  reason: string
+  count: number
+}
+
+export interface AfterSalesReasonOptionsResponse {
+  items: AfterSalesReasonOptionItem[]
+}
+
+export interface AfterSalesModelOptionItem {
+  model_code: string
+  model_name?: string | null
+  count: number
+}
+
+export interface AfterSalesModelOptionsResponse {
+  items: AfterSalesModelOptionItem[]
 }
 
 export interface SkuMaster {

@@ -128,6 +128,7 @@ const SkuMasterWorkspacePage = () => {
   const [uploading, setUploading] = useState(false)
   const [uploadFile, setUploadFile] = useState<File | null>(null)
   const [requestedBy, setRequestedBy] = useState<string>('') // 操作人/审核人（可选）
+  const [importDrawerOpen, setImportDrawerOpen] = useState(false)
 
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [activeId, setActiveId] = useState<string | null>(null)
@@ -1168,33 +1169,14 @@ const SkuMasterWorkspacePage = () => {
               </Space>
             </Card>
 
-            <Card size="small" title="导入（可选）">
+            <Card size="small" title="导入/同步（入口）">
               <Space direction="vertical" style={{ width: '100%' }}>
-            <Space wrap>
-              <Upload
-                accept=".xlsx"
-                beforeUpload={(file) => {
-                  setUploadFile(file as File)
-                  return false
-                }}
-                fileList={uploadFile ? ([{ uid: '1', name: uploadFile.name }] as any) : []}
-                    onRemove={() => setUploadFile(null)}
-                maxCount={1}
-              >
-                    <Button>选择xlsx</Button>
-              </Upload>
-              <Input
-                    style={{ width: 180 }}
-                    placeholder="requested_by"
-                value={requestedBy}
-                onChange={(e) => setRequestedBy(e.target.value)}
-              />
-                </Space>
-                <Button type="primary" block loading={uploading} onClick={handleImport}>
-                  导入SKU主档
-              </Button>
-            </Space>
-          </Card>
+                <Text type="secondary">SKU 主档文件导入建议放到抽屉里，主页面更干净。</Text>
+                <Button block onClick={() => setImportDrawerOpen(true)}>
+                  上传/导入SKU主档（xlsx）
+                </Button>
+              </Space>
+            </Card>
           </Space>
         </Col>
 
@@ -1493,6 +1475,45 @@ const SkuMasterWorkspacePage = () => {
         ) : (
           <Alert type="info" showIcon message="未选择记录" />
         )}
+      </Drawer>
+
+      <Drawer
+        title="上传/导入 SKU 主档（xlsx）"
+        open={importDrawerOpen}
+        width={760}
+        onClose={() => setImportDrawerOpen(false)}
+      >
+        <Space direction="vertical" style={{ width: '100%' }} size={12}>
+          <Alert
+            type="info"
+            showIcon
+            message="提示"
+            description="后续这些主档数据可能会走 API 同步；在此之前可先用 xlsx 做一次性/补量导入。"
+          />
+          <Space wrap>
+            <Upload
+              accept=".xlsx"
+              beforeUpload={(file) => {
+                setUploadFile(file as File)
+                return false
+              }}
+              fileList={uploadFile ? ([{ uid: '1', name: uploadFile.name }] as any) : []}
+              onRemove={() => setUploadFile(null)}
+              maxCount={1}
+            >
+              <Button disabled={uploading}>选择xlsx</Button>
+            </Upload>
+            <Input
+              style={{ width: 220 }}
+              placeholder="requested_by（可空）"
+              value={requestedBy}
+              onChange={(e) => setRequestedBy(e.target.value)}
+            />
+            <Button type="primary" loading={uploading} onClick={handleImport}>
+              导入
+            </Button>
+          </Space>
+        </Space>
       </Drawer>
     </div>
   )

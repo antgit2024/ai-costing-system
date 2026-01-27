@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from openpyxl import load_workbook
 from openpyxl.utils.datetime import from_excel
 from sqlalchemy import func
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, joinedload
 
 from .. import models
@@ -123,6 +123,47 @@ PARSER_VERSION = "v1"
 
 def _sha1_text(text: str) -> str:
     return hashlib.sha1((text or "").encode("utf-8")).hexdigest()  # noqa: S324 - idempotency/cache key
+
+
+def _ensure_spec_parse_snapshot(
+    db: Session,
+    *,
+    spec_hash: str,
+    spec_text: str,
+    parsed: Dict[str, Any],
+) -> None:
+    """
+    Best-effort, idempotent insert for SpecParseSnapshot(spec_hash UNIQUE).
+    Avoid 500s caused by concurrent inserts of the same spec_hash.
+    """
+    if not spec_hash or not spec_text:
+        return
+    dimensions0 = {
+        "width_cm": parsed.get("width_cm"),
+        "height_cm": parsed.get("height_cm"),
+        "diameter_cm": parsed.get("diameter_cm"),
+        "area_m2": parsed.get("area_m2"),
+        "perimeter_m": parsed.get("perimeter_m"),
+    }
+    snap = models.SpecParseSnapshot(
+        spec_hash=spec_hash,
+        spec_text=spec_text,
+        tokens_json=list(parsed.get("tokens") or []),
+        dimensions_json=_json_safe(dimensions0),
+        parser_version=PARSER_VERSION,
+        parse_json=_json_safe(parsed),
+    )
+    # Use a nested transaction so a UNIQUE conflict won't poison the outer transaction.
+    try:
+        with db.begin_nested():
+            db.add(snap)
+            db.flush()
+    except IntegrityError:
+        # Someone else inserted the same spec_hash concurrently. Ignore.
+        try:
+            db.rollback()
+        except Exception:
+            pass
 
 
 def _extract_model_code_hint(spec_text: Optional[str]) -> Optional[str]:
@@ -906,26 +947,8 @@ def save_spec_preparse(
 
     # Upsert SpecParseSnapshot (for cross-reference & audit)
     spec_hash = _sha1_text(text)
-    existing = db.query(models.SpecParseSnapshot).filter(models.SpecParseSnapshot.spec_hash == spec_hash).first()
-    if not existing:
-        parsed0 = spec_parser_service.parse_spec(text)
-        dimensions0 = {
-            "width_cm": parsed0.get("width_cm"),
-            "height_cm": parsed0.get("height_cm"),
-            "diameter_cm": parsed0.get("diameter_cm"),
-            "area_m2": parsed0.get("area_m2"),
-            "perimeter_m": parsed0.get("perimeter_m"),
-        }
-        snap = models.SpecParseSnapshot(
-            spec_hash=spec_hash,
-            spec_text=text,
-            tokens_json=list(parsed0.get("tokens") or []),
-            dimensions_json=_json_safe(dimensions0),
-            parser_version=PARSER_VERSION,
-            parse_json=_json_safe(parsed0),
-        )
-        db.add(snap)
-        db.flush()
+    parsed0 = spec_parser_service.parse_spec(text)
+    _ensure_spec_parse_snapshot(db, spec_hash=spec_hash, spec_text=text, parsed=parsed0)
 
     # Save cache to sku_master.metadata_json, allowing manual overrides
     parsed = spec_parser_service.parse_spec(text)
@@ -1185,33 +1208,13 @@ def bulk_save_spec_preparse(
         }
 
     parsed_cache: Dict[str, Dict[str, Any]] = {}  # spec_hash -> parsed dict
-    snaps_to_add: List[models.SpecParseSnapshot] = []
     for _r, spec_text, spec_hash in work:
         parsed = parsed_cache.get(spec_hash)
         if parsed is None:
             parsed = spec_parser_service.parse_spec(spec_text)
             parsed_cache[spec_hash] = parsed
         if spec_hash not in existing_hashes:
-            dimensions0 = {
-                "width_cm": parsed.get("width_cm"),
-                "height_cm": parsed.get("height_cm"),
-                "diameter_cm": parsed.get("diameter_cm"),
-                "area_m2": parsed.get("area_m2"),
-                "perimeter_m": parsed.get("perimeter_m"),
-            }
-            snaps_to_add.append(
-                models.SpecParseSnapshot(
-                    spec_hash=spec_hash,
-                    spec_text=spec_text,
-                    tokens_json=list(parsed.get("tokens") or []),
-                    dimensions_json=_json_safe(dimensions0),
-                    parser_version=PARSER_VERSION,
-                    parse_json=_json_safe(parsed),
-                )
-            )
-    if snaps_to_add:
-        db.add_all(snaps_to_add)
-        db.flush()
+            _ensure_spec_parse_snapshot(db, spec_hash=spec_hash, spec_text=spec_text, parsed=parsed)
 
     now_iso = _utcnow().isoformat()
     for r, spec_text, spec_hash in work:
@@ -1384,33 +1387,13 @@ def execute_spec_preparse(
         }
 
     parsed_cache: Dict[str, Dict[str, Any]] = {}
-    snaps_to_add: List[models.SpecParseSnapshot] = []
     for _r, spec_text, spec_hash in work:
         parsed = parsed_cache.get(spec_hash)
         if parsed is None:
             parsed = spec_parser_service.parse_spec(spec_text)
             parsed_cache[spec_hash] = parsed
         if spec_hash not in existing_hashes:
-            dimensions0 = {
-                "width_cm": parsed.get("width_cm"),
-                "height_cm": parsed.get("height_cm"),
-                "diameter_cm": parsed.get("diameter_cm"),
-                "area_m2": parsed.get("area_m2"),
-                "perimeter_m": parsed.get("perimeter_m"),
-            }
-            snaps_to_add.append(
-                models.SpecParseSnapshot(
-                    spec_hash=spec_hash,
-                    spec_text=spec_text,
-                    tokens_json=list(parsed.get("tokens") or []),
-                    dimensions_json=_json_safe(dimensions0),
-                    parser_version=PARSER_VERSION,
-                    parse_json=_json_safe(parsed),
-                )
-            )
-    if snaps_to_add:
-        db.add_all(snaps_to_add)
-        db.flush()
+            _ensure_spec_parse_snapshot(db, spec_hash=spec_hash, spec_text=spec_text, parsed=parsed)
 
     now_iso = _utcnow().isoformat()
     for r, spec_text, spec_hash in work:

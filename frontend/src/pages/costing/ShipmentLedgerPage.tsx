@@ -78,6 +78,7 @@ const ShipmentLedgerPage = () => {
     },
     { title: '渠道', dataIndex: 'channel', width: 140, ellipsis: true },
     { title: 'SKU', dataIndex: 'sku_code', width: 160, ellipsis: true },
+    { title: '商家编码', dataIndex: 'shop_spec_code', width: 160, ellipsis: true },
     {
       title: '交易规格',
       dataIndex: 'spec_text',

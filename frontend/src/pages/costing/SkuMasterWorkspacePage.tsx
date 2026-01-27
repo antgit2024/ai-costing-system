@@ -315,13 +315,14 @@ const SkuMasterWorkspacePage = () => {
     const erpMatched = rows.filter((x) => isFilled(x.match_status)).length
     const linked = rows.filter((x) => isFilled(x.active_model_version_id as any)).length
     const complete = rows.filter((x) => {
-      // MVP: “字段齐全” = 条码 + 渠道 + 名称 + 编码 + 规格 + 平台商品Id + 平台规格Id
+      // MVP: “字段齐全” = 条码 + 渠道 + 名称 + 编码 + 规格 + 商家编码 + 平台商品Id + 平台规格Id
       return (
         isFilled(x.erp_sku_barcode) &&
         isFilled(x.channel) &&
         isFilled(x.product_name) &&
         isFilled(x.product_code) &&
         isFilled(x.spec_text) &&
+        isFilled(x.shop_spec_code) &&
         isFilled(x.platform_product_id) &&
         isFilled(x.platform_sku_id)
       )
@@ -358,6 +359,13 @@ const SkuMasterWorkspacePage = () => {
       width: 110,
       ellipsis: true,
       render: (v) => safeString(v) || '-',
+    },
+    {
+      title: '商家编码',
+      dataIndex: 'shop_spec_code',
+      width: 160,
+      ellipsis: true,
+      render: (v, record) => safeString(v ?? (record.metadata_json as any)?.shop_spec_code) || '-',
     },
     {
       title: '商品规格（网店）',
@@ -1344,6 +1352,9 @@ const SkuMasterWorkspacePage = () => {
                 </Descriptions.Item>
                 <Descriptions.Item label="平台规格Id（网店）">
                   {detailQuery.data.platform_sku_id ?? '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="规格编码（网店）/商家编码">
+                  {(detailQuery.data as any).shop_spec_code ?? (detailQuery.data.metadata_json as any)?.shop_spec_code ?? '-'}
                 </Descriptions.Item>
                 <Descriptions.Item label="ERP匹配状态（网店↔ERP）">
                   {detailQuery.data.match_status ?? '-'}

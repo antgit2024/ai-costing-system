@@ -264,6 +264,31 @@
   - 验收命令（必须，全部 0 退出码）：
     - Frontend：`npm -C frontend run build`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-27（商家编码贯通：SKU 主档 + 发货台账展示，支撑 2026 前置规则）
+  - 背景：`/costing/tmall-sku-generator/mvp` 已把“商家编码（绑定锚点：模型码/套装码）+ 交易规格（解析尺寸/TOKEN）”前置跑通；2026 上架到天猫后商家编码会写入渠道侧，因此必须在系统里“显式可见 + 可追溯”。
+  - 本轮产物（后端）：
+    - `backend/src/planner/services/shipment_import_service.py`
+      - 导入归一化新增：从 `规格编码（网店）/商家编码` 解析 `shop_spec_code`，并写入 `shipment_lines.metadata_json.shop_spec_code`
+      - `list_shipment_lines` 返回新增 `shop_spec_code`/`platform_sku_id`（历史行 best-effort 从 `raw_row_json/metadata_json` 回溯）
+    - `backend/src/planner/services/sku_master_service.py`
+      - `SkuMasterRead` 动态字段新增 `shop_spec_code`（来源：`metadata_json.shop_spec_code`；并把发货回写时的 `shop_spec_code/platform_sku_id` 记录到 `shipment_backfill`）
+    - `backend/src/planner/schemas.py`
+      - `SkuMasterRead.shop_spec_code`、`ShipmentLineListItem.shop_spec_code/platform_sku_id` 补齐到 API 契约
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/SkuMasterWorkspacePage.tsx`
+      - 列表新增“商家编码”列；详情抽屉补充“规格编码（网店）/商家编码”
+    - `frontend/src/pages/costing/ShipmentLedgerPage.tsx`
+      - 台账列表新增“商家编码”列（用于对齐 2026 渠道侧字段）
+    - `frontend/src/types/planner.ts`
+      - `SkuMaster.shop_spec_code`、`ShipmentLineListItem.shop_spec_code/platform_sku_id` 类型补齐
+  - 下一步：
+    - 若要做“强一致 + 可索引查询/筛选”，建议把 `shop_spec_code/platform_sku_id` 从 JSON 下沉为 `shipment_lines` 显式列并做索引（需要 migration）；当前为零迁移快速贯通版本。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-22（天猫SKU生成器：尺寸胶囊常显 + Z 规格同列不变色 + 检验补齐商家编码）
   - 本轮范围：对齐业务口径：检验用于校验“商品规格（网店）+ 商家编码”是否能命中系统编码/公式；尺寸展示与检验解绑；Z- 规格字样显示在“TOKEN/公式”列但不做红绿高亮。
   - 本轮产物：

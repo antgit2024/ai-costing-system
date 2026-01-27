@@ -237,6 +237,10 @@ def _normalize_rows_from_xlsx(file_bytes: bytes) -> Tuple[List[Dict[str, Any]], 
             spec_text = _guess_spec_text(row_list)
         qty = _to_decimal(_get_field(row_list, headers, "qty"))
         revenue_amount = _to_decimal(_get_field(row_list, headers, "revenue_amount"))
+        # 2026 新规则：渠道侧会携带“商家编码/网店规格编码”，用于前置绑定模型码/套装码等锚点
+        shop_spec_code = _norm_str(_get_field(row_list, headers, "shop_spec_code"))
+        # 维度：平台规格Id（网店）
+        platform_sku_id = _norm_str(_get_field(row_list, headers, "platform_sku_id"))
 
         raw_row: Dict[str, Any] = {}
         for name, idx in headers.items():
@@ -252,6 +256,8 @@ def _normalize_rows_from_xlsx(file_bytes: bytes) -> Tuple[List[Dict[str, Any]], 
                 "completed_at": completed_at,
                 "channel": channel,
                 "sku_code": sku_code,
+                "shop_spec_code": shop_spec_code,
+                "platform_sku_id": platform_sku_id,
                 "spec_text": spec_text,
                 "qty": qty,
                 "revenue_amount": revenue_amount,
@@ -614,7 +620,14 @@ def import_shipment_xlsx(
             is_active=True,
             raw_row_json=payload.get("raw_row") or {},
             normalize_warnings_json=[],
-            metadata_json={},
+            metadata_json={
+                k: v
+                for k, v in {
+                    "shop_spec_code": payload.get("shop_spec_code"),
+                    "platform_sku_id": payload.get("platform_sku_id"),
+                }.items()
+                if v not in (None, "")
+            },
         )
         db.add(line)
         db.flush()
@@ -627,10 +640,14 @@ def import_shipment_xlsx(
             channel=payload.get("channel"),
             metadata={
                 "source": "shipment_autobackfill",
+                # keep keys aligned with sku_master_service._update_shipment_seen expectations
+                "batch_id": batch.id,
                 "shipment_import_batch_id": batch.id,
                 "shipment_line_id": line.id,
                 "shipment_no": shipment_no,
                 "spec_hash": _sha1_text(spec_text) if spec_text else None,
+                "shop_spec_code": payload.get("shop_spec_code"),
+                "platform_sku_id": payload.get("platform_sku_id"),
             },
         )
 
@@ -1218,6 +1235,25 @@ def list_shipment_lines(
         processed = bool(has_bom_snapshot or has_costing_result)
         processed_source = "bom_snapshot" if has_bom_snapshot else ("costing_result" if has_costing_result else None)
         mode = "2026" if has_bom_snapshot else (str(cost_mode) if cost_mode else None)
+        meta = dict(getattr(line, "metadata_json", None) or {})
+        raw_row = dict(getattr(line, "raw_row_json", None) or {})
+        # Best-effort fallback for historical rows (before we started persisting these fields).
+        shop_spec_code = (
+            meta.get("shop_spec_code")
+            # raw_row_json keys are normalized by _norm_header (often stripping trailing "(网店)" notes)
+            or raw_row.get("规格编码")
+            or raw_row.get("规格编码(网店)")
+            or raw_row.get("商家编码")
+            or raw_row.get("shop_spec_code")
+            or raw_row.get("merchant_sku")
+        )
+        platform_sku_id = (
+            meta.get("platform_sku_id")
+            or raw_row.get("平台规格Id")
+            or raw_row.get("平台规格Id(网店)")
+            or raw_row.get("platform_sku_id")
+            or raw_row.get("platformSkuId")
+        )
         items.append(
             {
                 "id": str(getattr(line, "id", "")),
@@ -1229,6 +1265,8 @@ def list_shipment_lines(
                 "completed_at": getattr(line, "completed_at", None),
                 "channel": getattr(line, "channel", None),
                 "sku_code": getattr(line, "sku_code", None),
+                "shop_spec_code": (str(shop_spec_code).strip() if shop_spec_code not in (None, "") else None),
+                "platform_sku_id": (str(platform_sku_id).strip() if platform_sku_id not in (None, "") else None),
                 "spec_text": getattr(line, "spec_text", None),
                 "spec_hash": getattr(line, "spec_hash", None),
                 "qty": getattr(line, "qty", None),

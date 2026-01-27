@@ -146,6 +146,7 @@
   - **执行导入**：`POST /api/planner/shipments/import/execute`（使用预览缓存文件执行，写发货行、轻量扣库/计价结果；2026 模式额外写 BOM 快照）
   - **异常列表/重试**：`GET /api/planner/shipments/exceptions`、`POST /api/planner/shipments/exceptions/retry`
   - **快照查询/回填**：`GET /api/planner/shipments/bom-snapshots`、`POST /api/planner/shipments/bom-snapshots/{snapshot_id}/recompute`
+  - **商家编码（2026 新规则锚点）**：发货导入会尽量从 Excel 列 `规格编码（网店）/商家编码` 解析为 `shop_spec_code`，并在台账页展示（用于“前置绑定模型码/套装码”等）。
 
 #### 7.2 后端“解析交易规格 + 落库”真实发生位置（不是在前端）
 

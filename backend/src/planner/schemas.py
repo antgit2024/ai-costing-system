@@ -2289,6 +2289,10 @@ class ShipmentLineListItem(BaseModel):
     completed_at: Optional[datetime] = None
     channel: Optional[str] = None
     sku_code: Optional[str] = None
+    # 商家编码 / 网店规格编码（若渠道/导出表提供）
+    shop_spec_code: Optional[str] = None
+    # 平台规格Id（网店）（若导出表提供）
+    platform_sku_id: Optional[str] = None
     spec_text: Optional[str] = None
     spec_hash: Optional[str] = None
     qty: Optional[Decimal] = None
@@ -3169,6 +3173,8 @@ class SkuMasterRead(BaseModel):
     erp_sku_barcode: str
     platform_product_id: Optional[str] = None
     platform_sku_id: Optional[str] = None
+    # 商家编码 / 网店规格编码：2026 新规则的“预置锚点”（模型码/套装码等）
+    shop_spec_code: Optional[str] = None
     channel: Optional[str] = None
     product_name: Optional[str] = None
     product_code: Optional[str] = None

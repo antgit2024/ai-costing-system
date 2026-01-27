@@ -894,6 +894,10 @@ def _update_shipment_seen(
                     "batch_id": metadata.get("batch_id"),
                     "shipment_no": metadata.get("shipment_no"),
                     "spec_hash": metadata.get("spec_hash"),
+                    # 2026 新规则：用于“前置绑定锚点/套装短码”
+                    "shop_spec_code": metadata.get("shop_spec_code"),
+                    # 维度：平台规格Id（网店）
+                    "platform_sku_id": metadata.get("platform_sku_id"),
                 }
             )
     row.metadata_json = meta
@@ -905,6 +909,9 @@ def _attach_parsed_fields(rows: List[models.SkuMaster]) -> None:
     """
     for r in rows:
         meta = dict(getattr(r, "metadata_json", None) or {})
+        # 商家编码 / 网店规格编码（用于 2026 新规则：渠道侧携带的预置编码，包含模型码/套装码等锚点）
+        # 目前来源：ERP SKU 主档导入时写入 metadata_json.shop_spec_code（同时也会写 shop_sku_mappings.shop_spec_code）
+        r.shop_spec_code = meta.get("shop_spec_code")
         r.erp_spec_hash = meta.get("erp_spec_hash")
         r.erp_parser_version = meta.get("erp_parser_version")
         r.erp_dimensions = meta.get("erp_dimensions") or {}

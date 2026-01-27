@@ -21,16 +21,32 @@ TEST_DATABASE_URL = "sqlite:///./planner_test.db"
 
 @pytest.fixture(scope="session")
 def engine():
+    # Ensure a clean sqlite file for each test session.
+    # In some environments, SQLAlchemy's drop_all(checkfirst=True) can still raise
+    # "no such table" during teardown if the file is partially initialized.
+    db_path = Path("./planner_test.db")
+    try:
+        if db_path.exists():
+            db_path.unlink()
+    except Exception:
+        # best-effort cleanup; tests will still attempt create_all
+        pass
+
     engine = configure_engine(TEST_DATABASE_URL)
     # Ensure planner models are imported *before* create_all, otherwise SQLite test DB
     # may miss newly added tables (e.g. shipment_import_batches) and fail at runtime.
     import src.planner.models  # noqa: F401
 
-    # Be defensive: if the sqlite file persists across runs, reset schema to the latest metadata.
-    Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     yield engine
-    Base.metadata.drop_all(bind=engine)
+    try:
+        engine.dispose()
+    finally:
+        try:
+            if db_path.exists():
+                db_path.unlink()
+        except Exception:
+            pass
 
 
 @pytest.fixture()

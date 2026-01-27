@@ -1461,6 +1461,8 @@ export interface ShipmentLineListItem {
   completed_at?: string | null
   channel?: string | null
   sku_code?: string | null
+  shop_spec_code?: string | null
+  platform_sku_id?: string | null
   spec_text?: string | null
   spec_hash?: string | null
   qty?: string | null
@@ -2144,6 +2146,7 @@ export interface SkuMaster {
   erp_sku_barcode: string
   platform_product_id?: string | null
   platform_sku_id?: string | null
+  shop_spec_code?: string | null
   channel?: string | null
   product_name?: string | null
   product_code?: string | null

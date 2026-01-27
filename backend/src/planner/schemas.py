@@ -3035,8 +3035,14 @@ class SkuMasterSpecPreparseBulkRequest(BaseModel):
     include_terms: Optional[str] = None
     exclude_terms: Optional[str] = None
     match_scope: Optional[str] = None
+    # optional: only process SKUs bound to a specific model/version
+    bound_model_id: Optional[str] = None
+    bound_model_code: Optional[str] = None
+    bound_version_id: Optional[str] = None
     # optional state filter: parsed/unparsed
     preparse_state: Optional[str] = None
+    # cursor for stable scanning (recommended for huge datasets)
+    cursor_id: Optional[str] = None
     # cross-page exclude list (implicit select-all UX)
     excluded_sku_ids: List[str] = Field(default_factory=list)
     # behavior
@@ -3052,6 +3058,9 @@ class SkuMasterSpecPreparseBulkResponse(BaseModel):
     # loop/run-all hints
     batch_candidates: int = 0
     has_more: bool = False
+    # cursor-based run-all support
+    next_cursor_id: Optional[str] = None
+    mode: Optional[str] = None
 
 
 class SkuMasterSpecPreparsePreviewItem(BaseModel):
@@ -3085,6 +3094,9 @@ class SkuMasterSpecPreparsePreviewRequest(BaseModel):
     include_terms: Optional[str] = None
     exclude_terms: Optional[str] = None
     match_scope: Optional[str] = None
+    bound_model_id: Optional[str] = None
+    bound_model_code: Optional[str] = None
+    bound_version_id: Optional[str] = None
     preparse_state: Optional[str] = None
 
 
@@ -3132,6 +3144,8 @@ class SkuMasterBindByModelRequest(BaseModel):
     model_id: str
     sku_master_ids: List[str] = Field(default_factory=list)
     requested_by: Optional[str] = None
+    # if true, rebind even when SKU already has an active binding
+    allow_rebind: bool = False
 
 
 class SkuMasterBindByModelResponse(BaseModel):
@@ -3151,6 +3165,10 @@ class SkuMasterBindByModelBulkRequest(BaseModel):
     model_id: str
     requested_by: Optional[str] = None
     limit: int = Field(200, ge=1, le=2000)
+    # default behavior is to bind unbound only (same as before).
+    # for spec-matching rebind use case: set bound_state="bound" and allow_rebind=true.
+    bound_state: Literal["unbound", "bound", "all"] = "unbound"
+    allow_rebind: bool = False
 
     # Filters (same semantics as list endpoint)
     search: Optional[str] = None
@@ -3161,6 +3179,10 @@ class SkuMasterBindByModelBulkRequest(BaseModel):
     include_terms: Optional[str] = None
     exclude_terms: Optional[str] = None
     match_scope: Optional[str] = None
+    # Optional: further restrict by current active binding (safe for "rebind version" use case)
+    bound_model_id: Optional[str] = None
+    bound_model_code: Optional[str] = None
+    bound_version_id: Optional[str] = None
 
     # Exclusions: user can uncheck a few rows; we skip them.
     excluded_sku_master_ids: List[str] = Field(default_factory=list)

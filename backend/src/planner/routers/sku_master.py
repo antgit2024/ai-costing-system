@@ -36,6 +36,9 @@ def list_sku_master(
     channel: str | None = None,
     match_status: str | None = None,
     bound_state: str | None = None,
+    bound_model_id: str | None = None,
+    bound_model_code: str | None = None,
+    bound_version_id: str | None = None,
     spec_mismatch: bool | None = None,
     preparse_state: str | None = None,
     include_terms: str | None = None,
@@ -51,6 +54,9 @@ def list_sku_master(
         channel=channel,
         match_status=match_status,
         bound_state=bound_state,
+        bound_model_id=bound_model_id,
+        bound_model_code=bound_model_code,
+        bound_version_id=bound_version_id,
         spec_mismatch=spec_mismatch,
         preparse_state=preparse_state,
         include_terms=include_terms,
@@ -80,6 +86,7 @@ def bind_by_model(payload: schemas.SkuMasterBindByModelRequest, db: Session = De
             model_id=payload.model_id,
             sku_master_ids=payload.sku_master_ids,
             requested_by=payload.requested_by,
+            allow_rebind=payload.allow_rebind,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -97,6 +104,8 @@ def bind_by_model_bulk(payload: schemas.SkuMasterBindByModelBulkRequest, db: Ses
             model_id=payload.model_id,
             requested_by=payload.requested_by,
             limit=payload.limit,
+            bound_state=payload.bound_state,
+            allow_rebind=payload.allow_rebind,
             search=payload.search,
             channel=payload.channel,
             match_status=payload.match_status,
@@ -105,6 +114,9 @@ def bind_by_model_bulk(payload: schemas.SkuMasterBindByModelBulkRequest, db: Ses
             include_terms=payload.include_terms,
             exclude_terms=payload.exclude_terms,
             match_scope=payload.match_scope,
+            bound_model_id=payload.bound_model_id,
+            bound_model_code=payload.bound_model_code,
+            bound_version_id=payload.bound_version_id,
             excluded_sku_master_ids=payload.excluded_sku_master_ids,
         )
     except ValueError as exc:
@@ -268,7 +280,11 @@ def bulk_save_spec_preparse(
             include_terms=payload.include_terms,
             exclude_terms=payload.exclude_terms,
             match_scope=payload.match_scope,
+            bound_model_id=payload.bound_model_id,
+            bound_model_code=payload.bound_model_code,
+            bound_version_id=payload.bound_version_id,
             preparse_state=payload.preparse_state,
+            cursor_id=payload.cursor_id,
             excluded_sku_ids=payload.excluded_sku_ids,
             skip_if_same_hash=payload.skip_if_same_hash,
             requested_by=payload.requested_by,
@@ -291,6 +307,9 @@ def preview_spec_preparse(
         include_terms=payload.include_terms,
         exclude_terms=payload.exclude_terms,
         match_scope=payload.match_scope,
+        bound_model_id=payload.bound_model_id,
+        bound_model_code=payload.bound_model_code,
+        bound_version_id=payload.bound_version_id,
         preparse_state=payload.preparse_state,
     )
 

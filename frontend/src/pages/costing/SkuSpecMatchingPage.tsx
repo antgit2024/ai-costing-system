@@ -1,4 +1,4 @@
-import { Alert, Button, Card, Col, Descriptions, Input, InputNumber, Modal, Row, Select, Space, Table, Tabs, Tag, Typography, message } from 'antd'
+import { Alert, Button, Card, Checkbox, Col, Descriptions, Input, InputNumber, Modal, Row, Select, Space, Table, Tabs, Tag, Typography, message } from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -7,6 +7,7 @@ import { keepPreviousData, useMutation, useQuery } from '@tanstack/react-query'
 import {
   bulkSaveSkuMasterSpecPreparse,
   executeSkuMasterSpecPreparse,
+  fetchPublishedStandardModels,
   fetchSkuMaster,
   parseSpec,
   previewSkuMasterSpecPreparse,
@@ -62,6 +63,9 @@ export default function SkuSpecMatchingPage() {
   const [matchScope, setMatchScope] = useState<'spec' | 'name'>('spec')
   const [channel, setChannel] = useState<string | undefined>(undefined)
   const [matchStatus, setMatchStatus] = useState<string | undefined>(undefined)
+  const [modelSearch, setModelSearch] = useState<string>('')
+  const [boundModelId, setBoundModelId] = useState<string | undefined>(undefined)
+  const [onlyPublishedVersion, setOnlyPublishedVersion] = useState<boolean>(false)
 
   const [activeSku, setActiveSku] = useState<SkuMaster | null>(null)
   const [specTextDraft, setSpecTextDraft] = useState<string>('')
@@ -102,6 +106,40 @@ export default function SkuSpecMatchingPage() {
     }
   }, [pageSize])
 
+  const publishedModelsQuery = useQuery({
+    queryKey: ['sku-spec-matching', 'published-standard-models', modelSearch],
+    queryFn: () => fetchPublishedStandardModels({ search: modelSearch || undefined, limit: 50 }),
+    placeholderData: keepPreviousData,
+  })
+
+  const publishedModelById = useMemo(() => {
+    const items = (publishedModelsQuery.data as any)?.items ?? []
+    const m = new Map<string, any>()
+    for (const it of items) {
+      const id = String(it?.model_id ?? '').trim()
+      if (!id) continue
+      m.set(id, it)
+    }
+    return m
+  }, [publishedModelsQuery.data])
+
+  const boundVersionId = useMemo(() => {
+    if (!onlyPublishedVersion || !boundModelId) return undefined
+    const hit = publishedModelById.get(String(boundModelId))
+    const vid = String(hit?.published_version_id ?? '').trim()
+    return vid || undefined
+  }, [onlyPublishedVersion, boundModelId, publishedModelById])
+
+  const modelOptions = useMemo(() => {
+    const items = (publishedModelsQuery.data as any)?.items ?? []
+    return (items as any[])
+      .map((m: any) => ({
+        label: `${String(m?.model_code ?? '').trim()} ${String(m?.model_name ?? '').trim()}`.trim(),
+        value: String(m?.model_id ?? '').trim(),
+      }))
+      .filter((x: any) => x.value)
+  }, [publishedModelsQuery.data])
+
   const listQuery = useQuery({
     queryKey: [
       'sku-spec-matching',
@@ -115,6 +153,8 @@ export default function SkuSpecMatchingPage() {
       includeTerms,
       excludeTerms,
       matchScope,
+      boundModelId,
+      boundVersionId,
     ],
     queryFn: () =>
       fetchSkuMaster({
@@ -127,6 +167,8 @@ export default function SkuSpecMatchingPage() {
         exclude_terms: excludeTerms || undefined,
         match_scope: matchScope,
         bound_state: 'bound', // 规格模块：只看已绑定模型的商品
+        bound_model_id: boundModelId,
+        bound_version_id: boundVersionId,
         preparse_state: listTab === 'parsed' ? 'parsed' : listTab === 'unparsed' ? 'unparsed' : undefined,
       }),
     placeholderData: keepPreviousData,
@@ -263,6 +305,8 @@ export default function SkuSpecMatchingPage() {
         include_terms: includeTerms || undefined,
         exclude_terms: excludeTerms || undefined,
         match_scope: matchScope,
+        bound_model_id: boundModelId,
+        bound_version_id: boundVersionId,
         // 对齐“一键跑完”的语义：只对“未解析”做预览与落库（收敛且避免误操作）
         preparse_state: 'unparsed',
       })
@@ -380,6 +424,13 @@ export default function SkuSpecMatchingPage() {
     const excludedMerged = Array.from(new Set([...manualExcludedIds, ...excludedFromPreview].map((x) => String(x)).filter(Boolean)))
 
     const excludedCount = new Set(manualExcludedIds.map((x) => String(x))).size
+    const modelLabel = boundModelId
+      ? String(
+          (publishedModelById.get(String(boundModelId))?.model_code ?? '').toString() +
+            ' ' +
+            (publishedModelById.get(String(boundModelId))?.model_name ?? '').toString(),
+        ).trim()
+      : ''
     const filterSummary = [
       `关键词：${search ? `“${search}”` : '（空）'}`,
       `包含词：${includeTerms ? `“${includeTerms}”` : '（空）'}`,
@@ -387,6 +438,7 @@ export default function SkuSpecMatchingPage() {
       `范围：${matchScope}`,
       `渠道：${channel || '（全部）'}`,
       `ERP匹配：${matchStatus || '（全部）'}`,
+      boundModelId ? `模型：${modelLabel || boundModelId}${onlyPublishedVersion ? '（仅当前发布标准版本）' : ''}` : null,
       excludedCount ? `排除：${excludedCount} 条（取消勾选）` : null,
     ]
       .filter(Boolean)
@@ -432,6 +484,7 @@ export default function SkuSpecMatchingPage() {
         void (async () => {
           const MESSAGE_KEY = 'spec-preparse-run-all'
           let totalSaved = 0
+          let cursorId: string | undefined = undefined
           try {
             for (let round = 1; round <= 999; round += 1) {
               if (runAllStopRef.current) break
@@ -444,7 +497,10 @@ export default function SkuSpecMatchingPage() {
                 include_terms: includeTerms || undefined,
                 exclude_terms: excludeTerms || undefined,
                 match_scope: matchScope,
+                bound_model_id: boundModelId,
+                bound_version_id: boundVersionId,
                 preparse_state: 'unparsed',
+                cursor_id: cursorId,
                 excluded_sku_ids: excludedMerged,
                 skip_if_same_hash: true,
               }, { timeoutMs: 180000 })
@@ -453,8 +509,10 @@ export default function SkuSpecMatchingPage() {
               const saved = Number((res as any)?.saved ?? 0)
               const skipped = Number((res as any)?.skipped_same_hash ?? 0)
               const hasMore = Boolean((res as any)?.has_more)
+              const nextCursor = String((res as any)?.next_cursor_id ?? '').trim()
               const errs = ((res as any)?.errors ?? []) as any[]
               totalSaved += saved
+              if (nextCursor) cursorId = nextCursor
 
               const now = new Date()
               const stamp = `${now.getHours().toString().padStart(2, '0')}:${now
@@ -507,7 +565,26 @@ export default function SkuSpecMatchingPage() {
         dataIndex: 'erp_sku_barcode',
         width: 170,
         fixed: 'left',
-        render: (v) => <Text style={{ fontFamily: 'monospace' }}>{safeString(v) || '-'}</Text>,
+        render: (v) => {
+          const barcode = safeString(v).trim()
+          return (
+            <Space size={6}>
+              <Text style={{ fontFamily: 'monospace' }}>{barcode || '-'}</Text>
+              {barcode ? (
+                <Button
+                  size="small"
+                  type="link"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    window.open(`/costing/sku-master?tab=bound&search=${encodeURIComponent(barcode)}`, '_blank')
+                  }}
+                >
+                  去重绑
+                </Button>
+              ) : null}
+            </Space>
+          )
+        },
       },
       { title: '销售渠道', dataIndex: 'channel', width: 120, render: (v) => safeString(v) || '-' },
       {
@@ -843,6 +920,32 @@ export default function SkuSpecMatchingPage() {
                     setPage(1)
                   }}
                 />
+                <Select
+                  showSearch
+                  allowClear
+                  style={{ width: 240 }}
+                  placeholder="按模型过滤（已发布标准）"
+                  options={modelOptions}
+                  value={boundModelId}
+                  onChange={(v) => {
+                    setBoundModelId(v)
+                    setOnlyPublishedVersion(false)
+                    setPage(1)
+                  }}
+                  onSearch={(v) => setModelSearch(v)}
+                  filterOption={false}
+                  loading={publishedModelsQuery.isFetching}
+                />
+                <Checkbox
+                  checked={onlyPublishedVersion}
+                  disabled={!boundModelId}
+                  onChange={(e) => {
+                    setOnlyPublishedVersion(e.target.checked)
+                    setPage(1)
+                  }}
+                >
+                  仅当前发布标准版本
+                </Checkbox>
                 <Input
                   style={{ width: 220 }}
                   placeholder="包含关键词（AND，多词空格分隔）"

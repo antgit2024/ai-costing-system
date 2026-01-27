@@ -103,6 +103,7 @@ const jsonPretty = (obj: unknown) => {
 
 const SkuMasterWorkspacePage = () => {
   const queryClient = useQueryClient()
+  const initFromUrlDoneRef = useRef(false)
 
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(() => {
@@ -164,6 +165,26 @@ const SkuMasterWorkspacePage = () => {
     last_update: string
     note?: string
   } | null>(null)
+
+  // Allow deep-linking from other pages (e.g. spec-matching "去重绑") by pre-filling filters.
+  useEffect(() => {
+    if (initFromUrlDoneRef.current) return
+    initFromUrlDoneRef.current = true
+    try {
+      const p = new URLSearchParams(window.location.search)
+      const q = String(p.get('search') ?? '').trim()
+      const tab = String(p.get('tab') ?? '').trim()
+      if (q) {
+        setSearch(q)
+        setPage(1)
+      }
+      if (tab === 'all' || tab === 'unbound' || tab === 'bound') {
+        setListTab(tab as any)
+      }
+    } catch {
+      // ignore
+    }
+  }, [])
 
   useEffect(() => {
     try {

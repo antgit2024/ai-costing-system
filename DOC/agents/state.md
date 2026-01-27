@@ -235,6 +235,28 @@
   - 验收命令（必须，全部 0 退出码）：
     - Frontend：`npm -C frontend run build`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-27（规格匹配：一键跑完崩溃修复 + 支持按模型/版本过滤 + 去重绑入口）
+  - 背景：
+    - `/costing/spec-matching` 的“一键跑完”调用 `POST /api/planner/sku-master/spec-preparse/bulk`，此前后端路由层会传 `cursor_id`，但 service 未接该参数，导致运行时报错（页面表现为“点了就卡/又崩了”）。
+    - 对几十万级别数据，“循环取第一页/按更新时间排序”容易产生重复扫描；需要 cursor 扫描避免无效重复。
+  - 本轮产物（后端）：
+    - `backend/src/planner/services/sku_master_service.py`
+      - 修复：`bulk_save_spec_preparse(...)` 补齐 `cursor_id` 参数，不再因参数不匹配崩溃。
+      - 增强：当传入 `cursor_id` 时启用 `id > cursor_id` 的稳定扫描模式（limit+1 判断 `has_more`，返回 `next_cursor_id`/`mode`），避免大数据量下重复/回扫。
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/SkuSpecMatchingPage.tsx`
+      - 新增筛选：按“模型（已发布标准）”过滤；可选“仅当前发布标准版本”进一步收敛。
+      - “一键跑完”改为带 `cursor_id` 循环（若后端返回 `next_cursor_id`），减少重复扫描造成的体感卡顿。
+      - 列表增加“去重绑”入口：跳转到 `/costing/sku-master?tab=bound&search=<条码>` 便于换版本/纠正绑定。
+    - `frontend/src/pages/costing/SkuMasterWorkspacePage.tsx`
+      - 支持从 URL 读取 `?search=` 与 `?tab=` 作为跳转落点（配合“去重绑”）。
+    - `frontend/src/services/planner.ts`
+      - 补齐参数透传：`bound_model_id/bound_model_code/bound_version_id/cursor_id`（用于列表/预览/批量接口）。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-23（标准模型：清单编辑/标签色统一为 antd 主题色）
   - 本轮范围：在“标准模型管理 → 清单编辑”中，将彩色文字/标签/提示色从硬编码色值统一替换为 antd 主题色变量（success/error/warning/text-secondary/fill-tertiary/link/primary），使暗色主题下不刺眼、风格一致。
   - 产物（前端）：

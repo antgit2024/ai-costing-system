@@ -490,14 +490,21 @@ def list_sku_master(
     channel: Optional[str],
     match_status: Optional[str],
     bound_state: Optional[str] = None,
+    bound_model_id: Optional[str] = None,
+    bound_model_code: Optional[str] = None,
+    bound_version_id: Optional[str] = None,
     spec_mismatch: Optional[bool] = None,
     preparse_state: Optional[str] = None,
     include_terms: Optional[str] = None,
     exclude_terms: Optional[str] = None,
     match_scope: Optional[str] = None,
+    excluded_sku_master_ids: Optional[List[str]] = None,
     page: int,
     page_size: int,
     page_size_cap: int = 200,
+    compute_total: bool = True,
+    include_bindings: bool = True,
+    include_parsed_fields: bool = True,
 ) -> Tuple[int, List[models.SkuMaster]]:
     page = max(int(page or 1), 1)
     cap = int(page_size_cap or 200)
@@ -505,6 +512,10 @@ def list_sku_master(
         cap = 200
     page_size = max(min(int(page_size or 20), cap), 1)
     q = db.query(models.SkuMaster).filter(models.SkuMaster.is_archived.is_(False))
+
+    # If filtering by bound model/version, default to "bound" unless caller explicitly requests otherwise.
+    if (bound_model_id or bound_model_code or bound_version_id) and bound_state not in ("bound", "unbound"):
+        bound_state = "bound"
     if search:
         s = f"%{search.strip()}%"
         q = q.filter(
@@ -516,23 +527,53 @@ def list_sku_master(
         q = q.filter(models.SkuMaster.channel == channel)
     if match_status:
         q = q.filter(models.SkuMaster.match_status == match_status)
+
+    excluded_list = list(set([str(x) for x in (excluded_sku_master_ids or []) if str(x).strip()]))
+    if excluded_list:
+        q = q.filter(~models.SkuMaster.id.in_(excluded_list))
     # server-side filters for tabs (avoid empty pages caused by client-side filtering)
     if spec_mismatch is True:
         q = q.filter(models.SkuMaster.metadata_json["spec_mismatch"].as_boolean() == True)  # noqa: E712
-    if bound_state in ("bound", "unbound"):
-        # Use EXISTS subquery to avoid N+1 and support pagination correctly.
-        subq = (
-            db.query(models.SkuModelVersionMapping.id)
-            .filter(
-                models.SkuModelVersionMapping.sku_code == models.SkuMaster.erp_sku_barcode,
-                models.SkuModelVersionMapping.is_active.is_(True),
-                models.SkuModelVersionMapping.is_archived.is_(False),
+    # Bound-state filter and bound model/version filters (correlated EXISTS).
+    # IMPORTANT: keep the common case (bound_state only) lightweight (no joins),
+    # because these endpoints may run at very large scale (hundreds of thousands of rows).
+    if bound_state in ("bound", "unbound") or (bound_model_id or bound_model_code or bound_version_id):
+        if bound_model_id or bound_model_code or bound_version_id:
+            subq = (
+                db.query(models.SkuModelVersionMapping.id)
+                .join(
+                    models.ProductModelVersion,
+                    models.ProductModelVersion.id == models.SkuModelVersionMapping.model_version_id,
+                )
+                .join(models.ProductModel, models.ProductModel.id == models.ProductModelVersion.model_id)
+                .filter(
+                    models.SkuModelVersionMapping.sku_code == models.SkuMaster.erp_sku_barcode,
+                    models.SkuModelVersionMapping.is_active.is_(True),
+                    models.SkuModelVersionMapping.is_archived.is_(False),
+                    models.ProductModelVersion.is_archived.is_(False),
+                    models.ProductModel.is_archived.is_(False),
+                )
             )
-        )
-        if bound_state == "bound":
-            q = q.filter(subq.exists())
+            if bound_version_id:
+                subq = subq.filter(models.SkuModelVersionMapping.model_version_id == str(bound_version_id).strip())
+            if bound_model_id:
+                subq = subq.filter(models.ProductModelVersion.model_id == str(bound_model_id).strip())
+            if bound_model_code:
+                subq = subq.filter(models.ProductModel.model_code == str(bound_model_code).strip())
         else:
+            subq = (
+                db.query(models.SkuModelVersionMapping.id)
+                .filter(
+                    models.SkuModelVersionMapping.sku_code == models.SkuMaster.erp_sku_barcode,
+                    models.SkuModelVersionMapping.is_active.is_(True),
+                    models.SkuModelVersionMapping.is_archived.is_(False),
+                )
+            )
+
+        if bound_state == "unbound":
             q = q.filter(~subq.exists())
+        else:
+            q = q.filter(subq.exists())
 
     # preparse state filter (server-side; avoid empty pages)
     if preparse_state:
@@ -586,7 +627,7 @@ def list_sku_master(
         q = q.filter(_field_expr_for_scope(t))
     for t in exclude_list:
         q = q.filter(~_field_expr_for_scope(t))
-    total = q.count()
+    total = int(q.count() or 0) if compute_total else -1
     # Default ordering: ERP source timestamp desc (NULLs last), then updated_at desc.
     # NOTE: avoid NULLS LAST because sqlite doesn't support it; use (is NULL) ordering for portability.
     items = (
@@ -599,8 +640,10 @@ def list_sku_master(
         .limit(page_size)
         .all()
     )
-    _attach_active_version_bindings(db, items)
-    _attach_parsed_fields(items)
+    if include_bindings:
+        _attach_active_version_bindings(db, items)
+    if include_parsed_fields:
+        _attach_parsed_fields(items)
     return total, items
 
 
@@ -940,7 +983,11 @@ def bulk_save_spec_preparse(
     include_terms: Optional[str],
     exclude_terms: Optional[str],
     match_scope: Optional[str],
+    bound_model_id: Optional[str] = None,
+    bound_model_code: Optional[str] = None,
+    bound_version_id: Optional[str] = None,
     preparse_state: Optional[str] = None,
+    cursor_id: Optional[str] = None,
     excluded_sku_ids: Optional[List[str]] = None,
     skip_if_same_hash: bool = True,
     requested_by: Optional[str] = None,
@@ -951,32 +998,167 @@ def bulk_save_spec_preparse(
     """
     limit = max(min(int(limit or 200), 5000), 1)
 
-    total, rows = list_sku_master(
-        db,
-        search=search,
-        channel=channel,
-        match_status=match_status,
-        bound_state="bound",
-        spec_mismatch=None,
-        preparse_state=preparse_state,
-        include_terms=include_terms,
-        exclude_terms=exclude_terms,
-        match_scope=match_scope,
-        page=1,
-        page_size=limit,
-        page_size_cap=5000,
-    )
-    _ = total  # kept for future extension
+    def _parse_terms(raw: Optional[str]) -> List[str]:
+        if not raw:
+            return []
+        s = str(raw)
+        for ch in ("，", ";", "；", "\n", "\t"):
+            s = s.replace(ch, " ")
+        parts = [p.strip() for p in s.split(" ") if p.strip()]
+        out: List[str] = []
+        seen: set[str] = set()
+        for p in parts:
+            if p in seen:
+                continue
+            seen.add(p)
+            out.append(p)
+        return out
 
-    excluded = set(str(x) for x in (excluded_sku_ids or []) if str(x))
-    if excluded:
-        rows = [r for r in rows if str(getattr(r, "id", "")) not in excluded]
+    def _query_for_bulk_preparse():
+        """
+        Build a Query for bulk preparse, mirroring `list_sku_master` semantics,
+        but allowing a cursor-friendly order (used for huge datasets).
+        """
+        q = db.query(models.SkuMaster).filter(models.SkuMaster.is_archived.is_(False))
+
+        if search:
+            s_like = f"%{search.strip()}%"
+            q = q.filter(
+                (models.SkuMaster.erp_sku_barcode.ilike(s_like))
+                | (models.SkuMaster.product_name.ilike(s_like))
+                | (models.SkuMaster.product_code.ilike(s_like))
+            )
+        if channel:
+            q = q.filter(models.SkuMaster.channel == channel)
+        if match_status:
+            q = q.filter(models.SkuMaster.match_status == match_status)
+
+        excluded_list = list(set([str(x) for x in (excluded_sku_ids or []) if str(x).strip()]))
+        if excluded_list:
+            q = q.filter(~models.SkuMaster.id.in_(excluded_list))
+
+        # Bound-state + optional bound model/version filters (correlated EXISTS).
+        # This endpoint is for bound SKUs only.
+        if bound_model_id or bound_model_code or bound_version_id:
+            subq = (
+                db.query(models.SkuModelVersionMapping.id)
+                .join(
+                    models.ProductModelVersion,
+                    models.ProductModelVersion.id == models.SkuModelVersionMapping.model_version_id,
+                )
+                .join(models.ProductModel, models.ProductModel.id == models.ProductModelVersion.model_id)
+                .filter(
+                    models.SkuModelVersionMapping.sku_code == models.SkuMaster.erp_sku_barcode,
+                    models.SkuModelVersionMapping.is_active.is_(True),
+                    models.SkuModelVersionMapping.is_archived.is_(False),
+                    models.ProductModelVersion.is_archived.is_(False),
+                    models.ProductModel.is_archived.is_(False),
+                )
+            )
+            if bound_version_id:
+                subq = subq.filter(models.SkuModelVersionMapping.model_version_id == str(bound_version_id).strip())
+            if bound_model_id:
+                subq = subq.filter(models.ProductModelVersion.model_id == str(bound_model_id).strip())
+            if bound_model_code:
+                subq = subq.filter(models.ProductModel.model_code == str(bound_model_code).strip())
+        else:
+            subq = (
+                db.query(models.SkuModelVersionMapping.id)
+                .filter(
+                    models.SkuModelVersionMapping.sku_code == models.SkuMaster.erp_sku_barcode,
+                    models.SkuModelVersionMapping.is_active.is_(True),
+                    models.SkuModelVersionMapping.is_archived.is_(False),
+                )
+            )
+        q = q.filter(subq.exists())
+
+        # preparse state filter (server-side)
+        if preparse_state:
+            state = str(preparse_state).strip().lower()
+            ph = models.SkuMaster.metadata_json["preparse_spec_hash"].as_string()
+            if state in ("parsed", "done", "yes", "1", "true"):
+                q = q.filter(func.coalesce(ph, "") != "")
+            elif state in ("unparsed", "none", "no", "0", "false"):
+                q = q.filter(func.coalesce(ph, "") == "")
+
+        include_list = _parse_terms(include_terms)
+        exclude_list = _parse_terms(exclude_terms)
+        scope = (match_scope or "auto").strip()
+        if scope not in ("auto", "spec", "name", "spec_or_name"):
+            scope = "auto"
+
+        name_channels = ["小红书", "京东"]
+
+        def _field_expr_for_scope(term: str):
+            pattern = f"%{term}%"
+            spec_hit = models.SkuMaster.spec_text.ilike(pattern)
+            name_hit = models.SkuMaster.product_name.ilike(pattern)
+            if scope == "spec":
+                return spec_hit
+            if scope == "name":
+                return name_hit
+            if scope == "spec_or_name":
+                return spec_hit | name_hit
+            # auto
+            return (models.SkuMaster.channel.in_(name_channels) & name_hit) | (
+                ~models.SkuMaster.channel.in_(name_channels) & spec_hit
+            )
+
+        for t in include_list:
+            q = q.filter(_field_expr_for_scope(t))
+        for t in exclude_list:
+            q = q.filter(~_field_expr_for_scope(t))
+
+        return q
+
+    next_cursor_id: Optional[str] = None
+    mode: str = "top"
+
+    if cursor_id:
+        # Cursor-friendly scan for huge datasets:
+        # - stable order by primary key
+        # - no COUNT()
+        q = _query_for_bulk_preparse().filter(models.SkuMaster.id > str(cursor_id).strip())
+        rows0 = q.order_by(models.SkuMaster.id.asc()).limit(limit + 1).all()
+        has_more = len(rows0) > limit
+        rows = rows0[:limit]
+        next_cursor_id = rows[-1].id if rows else None
+        mode = "cursor_id"
+    else:
+        # Default mode: reuse `list_sku_master` ordering for UX (latest first),
+        # while still avoiding expensive COUNT().
+        _total_unused, rows0 = list_sku_master(
+            db,
+            search=search,
+            channel=channel,
+            match_status=match_status,
+            bound_state="bound",
+            bound_model_id=bound_model_id,
+            bound_model_code=bound_model_code,
+            bound_version_id=bound_version_id,
+            spec_mismatch=None,
+            preparse_state=preparse_state,
+            include_terms=include_terms,
+            exclude_terms=exclude_terms,
+            match_scope=match_scope,
+            excluded_sku_master_ids=excluded_sku_ids,
+            page=1,
+            page_size=limit + 1,
+            page_size_cap=5000,
+            compute_total=False,
+            include_bindings=False,
+            include_parsed_fields=False,
+        )
+        has_more = len(rows0) > limit
+        rows = rows0[:limit]
 
     scanned = 0
     saved = 0
     skipped_same_hash = 0
     errors: List[Dict[str, Any]] = []
 
+    # First pass: decide which rows need work, compute hash once
+    work: List[Tuple[models.SkuMaster, str, str]] = []  # (row, spec_text, spec_hash)
     for r in rows:
         scanned += 1
         try:
@@ -988,34 +1170,54 @@ def bulk_save_spec_preparse(
             if skip_if_same_hash and meta.get("preparse_spec_hash") == spec_hash and meta.get("preparse_parser_version") == PARSER_VERSION:
                 skipped_same_hash += 1
                 continue
+            work.append((r, spec_text, spec_hash))
+        except Exception as exc:  # noqa: BLE001
+            errors.append({"sku_id": getattr(r, "id", None), "sku_code": getattr(r, "erp_sku_barcode", None), "error": str(exc)})
 
-            # Upsert SpecParseSnapshot
-            existing = (
-                db.query(models.SpecParseSnapshot)
-                .filter(models.SpecParseSnapshot.spec_hash == spec_hash)
-                .first()
-            )
-            if not existing:
-                parsed0 = spec_parser_service.parse_spec(spec_text)
-                dimensions0 = {
-                    "width_cm": parsed0.get("width_cm"),
-                    "height_cm": parsed0.get("height_cm"),
-                    "diameter_cm": parsed0.get("diameter_cm"),
-                    "area_m2": parsed0.get("area_m2"),
-                    "perimeter_m": parsed0.get("perimeter_m"),
-                }
-                snap = models.SpecParseSnapshot(
+    hashes = sorted({h for _r, _t, h in work})
+    existing_hashes: set[str] = set()
+    if hashes:
+        existing_hashes = {
+            str(x[0])
+            for x in db.query(models.SpecParseSnapshot.spec_hash)
+            .filter(models.SpecParseSnapshot.spec_hash.in_(hashes))
+            .all()
+        }
+
+    parsed_cache: Dict[str, Dict[str, Any]] = {}  # spec_hash -> parsed dict
+    snaps_to_add: List[models.SpecParseSnapshot] = []
+    for _r, spec_text, spec_hash in work:
+        parsed = parsed_cache.get(spec_hash)
+        if parsed is None:
+            parsed = spec_parser_service.parse_spec(spec_text)
+            parsed_cache[spec_hash] = parsed
+        if spec_hash not in existing_hashes:
+            dimensions0 = {
+                "width_cm": parsed.get("width_cm"),
+                "height_cm": parsed.get("height_cm"),
+                "diameter_cm": parsed.get("diameter_cm"),
+                "area_m2": parsed.get("area_m2"),
+                "perimeter_m": parsed.get("perimeter_m"),
+            }
+            snaps_to_add.append(
+                models.SpecParseSnapshot(
                     spec_hash=spec_hash,
                     spec_text=spec_text,
-                    tokens_json=list(parsed0.get("tokens") or []),
+                    tokens_json=list(parsed.get("tokens") or []),
                     dimensions_json=_json_safe(dimensions0),
                     parser_version=PARSER_VERSION,
-                    parse_json=_json_safe(parsed0),
+                    parse_json=_json_safe(parsed),
                 )
-                db.add(snap)
-                db.flush()
+            )
+    if snaps_to_add:
+        db.add_all(snaps_to_add)
+        db.flush()
 
-            parsed = spec_parser_service.parse_spec(spec_text)
+    now_iso = _utcnow().isoformat()
+    for r, spec_text, spec_hash in work:
+        try:
+            meta = dict(r.metadata_json or {})
+            parsed = parsed_cache.get(spec_hash) or spec_parser_service.parse_spec(spec_text)
             dims = {
                 "width_cm": parsed.get("width_cm"),
                 "height_cm": parsed.get("height_cm"),
@@ -1023,7 +1225,7 @@ def bulk_save_spec_preparse(
                 "area_m2": parsed.get("area_m2"),
                 "perimeter_m": parsed.get("perimeter_m"),
             }
-            has_dims = any(dims.get(k) not in (None, "") for k in ("width_cm", "height_cm", "diameter_cm"))
+            has_dims2 = any(dims.get(k) not in (None, "") for k in ("width_cm", "height_cm", "diameter_cm"))
             meta.update(
                 {
                     "preparse_spec_text": spec_text,
@@ -1031,8 +1233,8 @@ def bulk_save_spec_preparse(
                     "preparse_parser_version": PARSER_VERSION,
                     "preparse_dimensions": _json_safe(dims),
                     "preparse_tokens": list(parsed.get("tokens") or []),
-                    "preparse_has_dims": bool(has_dims),
-                    "preparse_saved_at": _utcnow().isoformat(),
+                    "preparse_has_dims": bool(has_dims2),
+                    "preparse_saved_at": now_iso,
                     "preparse_saved_by": (requested_by or meta.get("requested_by") or None),
                 }
             )
@@ -1043,35 +1245,7 @@ def bulk_save_spec_preparse(
 
     db.commit()
 
-    # For run-all loops: best-effort "has_more" check by reusing the same filters,
-    # but only for the preparse_state='unparsed' case (others are not meaningful for looping).
-    has_more = False
-    try:
-        if preparse_state and str(preparse_state).strip().lower() in ("unparsed", "none", "no", "0", "false"):
-            # Ask list_sku_master for 1 row after this commit to check if any remaining candidates exist.
-            _total2, rows2 = list_sku_master(
-                db,
-                search=search,
-                channel=channel,
-                match_status=match_status,
-                bound_state="bound",
-                spec_mismatch=None,
-                preparse_state=preparse_state,
-                include_terms=include_terms,
-                exclude_terms=exclude_terms,
-                match_scope=match_scope,
-                page=1,
-                page_size=1,
-                page_size_cap=5000,
-            )
-            if excluded and rows2 and str(getattr(rows2[0], "id", "")) in excluded:
-                # If the first remaining row is excluded, conservatively report "has_more"
-                # because there may still be non-excluded rows later. The frontend will stop on "no progress".
-                has_more = True
-            else:
-                has_more = bool(rows2)
-    except Exception:
-        has_more = False
+    # has_more computed by limit+1 query above (no extra DB round-trip)
 
     return {
         "scanned": scanned,
@@ -1080,6 +1254,8 @@ def bulk_save_spec_preparse(
         "errors": errors,
         "batch_candidates": scanned,
         "has_more": has_more,
+        "next_cursor_id": next_cursor_id,
+        "mode": mode,
     }
 
 
@@ -1093,18 +1269,24 @@ def preview_spec_preparse(
     include_terms: Optional[str],
     exclude_terms: Optional[str],
     match_scope: Optional[str],
+    bound_model_id: Optional[str] = None,
+    bound_model_code: Optional[str] = None,
+    bound_version_id: Optional[str] = None,
     preparse_state: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Preview parsed dimensions for bound SKUs, without persisting.
     """
     limit = max(min(int(limit or 200), 5000), 1)
-    _, rows = list_sku_master(
+    _, rows0 = list_sku_master(
         db,
         search=search,
         channel=channel,
         match_status=match_status,
         bound_state="bound",
+        bound_model_id=bound_model_id,
+        bound_model_code=bound_model_code,
+        bound_version_id=bound_version_id,
         spec_mismatch=None,
         preparse_state=preparse_state,
         include_terms=include_terms,
@@ -1113,7 +1295,9 @@ def preview_spec_preparse(
         page=1,
         page_size=limit,
         page_size_cap=5000,
+        compute_total=False,
     )
+    rows = rows0[:limit]
     items: List[Dict[str, Any]] = []
     skipped_empty_spec = 0
     errors: List[Dict[str, Any]] = []
@@ -1172,6 +1356,8 @@ def execute_spec_preparse(
     saved = 0
     skipped_same_hash = 0
     errors: List[Dict[str, Any]] = []
+
+    work: List[Tuple[models.SkuMaster, str, str]] = []
     for r in rows:
         scanned += 1
         try:
@@ -1183,32 +1369,54 @@ def execute_spec_preparse(
             if skip_if_same_hash and meta.get("preparse_spec_hash") == spec_hash and meta.get("preparse_parser_version") == PARSER_VERSION:
                 skipped_same_hash += 1
                 continue
-            # upsert snapshot
-            existing = (
-                db.query(models.SpecParseSnapshot)
-                .filter(models.SpecParseSnapshot.spec_hash == spec_hash)
-                .first()
-            )
-            if not existing:
-                parsed0 = spec_parser_service.parse_spec(spec_text)
-                dimensions0 = {
-                    "width_cm": parsed0.get("width_cm"),
-                    "height_cm": parsed0.get("height_cm"),
-                    "diameter_cm": parsed0.get("diameter_cm"),
-                    "area_m2": parsed0.get("area_m2"),
-                    "perimeter_m": parsed0.get("perimeter_m"),
-                }
-                snap = models.SpecParseSnapshot(
+            work.append((r, spec_text, spec_hash))
+        except Exception as exc:  # noqa: BLE001
+            errors.append({"sku_id": getattr(r, "id", None), "sku_code": getattr(r, "erp_sku_barcode", None), "error": str(exc)})
+
+    hashes = sorted({h for _r, _t, h in work})
+    existing_hashes: set[str] = set()
+    if hashes:
+        existing_hashes = {
+            str(x[0])
+            for x in db.query(models.SpecParseSnapshot.spec_hash)
+            .filter(models.SpecParseSnapshot.spec_hash.in_(hashes))
+            .all()
+        }
+
+    parsed_cache: Dict[str, Dict[str, Any]] = {}
+    snaps_to_add: List[models.SpecParseSnapshot] = []
+    for _r, spec_text, spec_hash in work:
+        parsed = parsed_cache.get(spec_hash)
+        if parsed is None:
+            parsed = spec_parser_service.parse_spec(spec_text)
+            parsed_cache[spec_hash] = parsed
+        if spec_hash not in existing_hashes:
+            dimensions0 = {
+                "width_cm": parsed.get("width_cm"),
+                "height_cm": parsed.get("height_cm"),
+                "diameter_cm": parsed.get("diameter_cm"),
+                "area_m2": parsed.get("area_m2"),
+                "perimeter_m": parsed.get("perimeter_m"),
+            }
+            snaps_to_add.append(
+                models.SpecParseSnapshot(
                     spec_hash=spec_hash,
                     spec_text=spec_text,
-                    tokens_json=list(parsed0.get("tokens") or []),
+                    tokens_json=list(parsed.get("tokens") or []),
                     dimensions_json=_json_safe(dimensions0),
                     parser_version=PARSER_VERSION,
-                    parse_json=_json_safe(parsed0),
+                    parse_json=_json_safe(parsed),
                 )
-                db.add(snap)
-                db.flush()
-            parsed = spec_parser_service.parse_spec(spec_text)
+            )
+    if snaps_to_add:
+        db.add_all(snaps_to_add)
+        db.flush()
+
+    now_iso = _utcnow().isoformat()
+    for r, spec_text, spec_hash in work:
+        try:
+            meta = dict(r.metadata_json or {})
+            parsed = parsed_cache.get(spec_hash) or spec_parser_service.parse_spec(spec_text)
             dims = {
                 "width_cm": parsed.get("width_cm"),
                 "height_cm": parsed.get("height_cm"),
@@ -1216,7 +1424,7 @@ def execute_spec_preparse(
                 "area_m2": parsed.get("area_m2"),
                 "perimeter_m": parsed.get("perimeter_m"),
             }
-            has_dims = any(dims.get(k) not in (None, "") for k in ("width_cm", "height_cm", "diameter_cm"))
+            has_dims2 = any(dims.get(k) not in (None, "") for k in ("width_cm", "height_cm", "diameter_cm"))
             meta.update(
                 {
                     "preparse_spec_text": spec_text,
@@ -1224,8 +1432,8 @@ def execute_spec_preparse(
                     "preparse_parser_version": PARSER_VERSION,
                     "preparse_dimensions": _json_safe(dims),
                     "preparse_tokens": list(parsed.get("tokens") or []),
-                    "preparse_has_dims": bool(has_dims),
-                    "preparse_saved_at": _utcnow().isoformat(),
+                    "preparse_has_dims": bool(has_dims2),
+                    "preparse_saved_at": now_iso,
                     "preparse_saved_by": (requested_by or meta.get("requested_by") or None),
                 }
             )
@@ -1233,6 +1441,7 @@ def execute_spec_preparse(
             saved += 1
         except Exception as exc:  # noqa: BLE001
             errors.append({"sku_id": getattr(r, "id", None), "sku_code": getattr(r, "erp_sku_barcode", None), "error": str(exc)})
+
     db.commit()
     return {"scanned": scanned, "saved": saved, "skipped_same_hash": skipped_same_hash, "errors": errors}
 
@@ -1309,6 +1518,7 @@ def bind_sku_master_by_model(
     model_id: str,
     sku_master_ids: List[str],
     requested_by: Optional[str],
+    allow_rebind: bool = False,
 ) -> Dict[str, Any]:
     version = _get_published_standard_version_for_model_id(db, model_id)
     total_selected = len(sku_master_ids or [])
@@ -1342,7 +1552,12 @@ def bind_sku_master_by_model(
         if not sku:
             skipped_missing_barcode += 1
             continue
-        if product_model_service.get_active_sku_binding(db, sku):
+        active = product_model_service.get_active_sku_binding(db, sku)
+        if active and not allow_rebind:
+            skipped_already_bound += 1
+            continue
+        if active and str(getattr(active, "model_version_id", "") or "") == str(version.id) and allow_rebind:
+            # already aligned to the target published version
             skipped_already_bound += 1
             continue
         try:
@@ -1354,7 +1569,7 @@ def bind_sku_master_by_model(
                 metadata={
                     "requested_by": requested_by,
                     "sku_master_id": row.id,
-                    "binding_method": "manual_by_model",
+                    "binding_method": "manual_by_model_rebind" if allow_rebind else "manual_by_model",
                     "skip_prefix_check": True,
                 },
             )
@@ -1377,6 +1592,8 @@ def bind_sku_master_by_model_bulk(
     model_id: str,
     requested_by: Optional[str],
     limit: int = 200,
+    bound_state: str = "unbound",
+    allow_rebind: bool = False,
     search: Optional[str] = None,
     channel: Optional[str] = None,
     match_status: Optional[str] = None,
@@ -1385,6 +1602,9 @@ def bind_sku_master_by_model_bulk(
     include_terms: Optional[str] = None,
     exclude_terms: Optional[str] = None,
     match_scope: Optional[str] = None,
+    bound_model_id: Optional[str] = None,
+    bound_model_code: Optional[str] = None,
+    bound_version_id: Optional[str] = None,
     excluded_sku_master_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
@@ -1411,16 +1631,48 @@ def bind_sku_master_by_model_bulk(
     if match_status:
         q = q.filter(models.SkuMaster.match_status == match_status)
 
-    # enforce unbound only (server-side) via EXISTS subquery
-    subq = (
-        db.query(models.SkuModelVersionMapping.id)
-        .filter(
-            models.SkuModelVersionMapping.sku_code == models.SkuMaster.erp_sku_barcode,
-            models.SkuModelVersionMapping.is_active.is_(True),
-            models.SkuModelVersionMapping.is_archived.is_(False),
+    # enforce bound/unbound state (server-side) via correlated EXISTS subquery
+    if bound_model_id or bound_model_code or bound_version_id:
+        subq = (
+            db.query(models.SkuModelVersionMapping.id)
+            .join(
+                models.ProductModelVersion,
+                models.ProductModelVersion.id == models.SkuModelVersionMapping.model_version_id,
+            )
+            .join(models.ProductModel, models.ProductModel.id == models.ProductModelVersion.model_id)
+            .filter(
+                models.SkuModelVersionMapping.sku_code == models.SkuMaster.erp_sku_barcode,
+                models.SkuModelVersionMapping.is_active.is_(True),
+                models.SkuModelVersionMapping.is_archived.is_(False),
+                models.ProductModelVersion.is_archived.is_(False),
+                models.ProductModel.is_archived.is_(False),
+            )
         )
-    )
-    q = q.filter(~subq.exists())
+        if bound_version_id:
+            subq = subq.filter(models.SkuModelVersionMapping.model_version_id == str(bound_version_id).strip())
+        if bound_model_id:
+            subq = subq.filter(models.ProductModelVersion.model_id == str(bound_model_id).strip())
+        if bound_model_code:
+            subq = subq.filter(models.ProductModel.model_code == str(bound_model_code).strip())
+    else:
+        subq = (
+            db.query(models.SkuModelVersionMapping.id)
+            .filter(
+                models.SkuModelVersionMapping.sku_code == models.SkuMaster.erp_sku_barcode,
+                models.SkuModelVersionMapping.is_active.is_(True),
+                models.SkuModelVersionMapping.is_archived.is_(False),
+            )
+        )
+    state = str(bound_state or "unbound").strip().lower()
+    if state not in ("unbound", "bound", "all"):
+        state = "unbound"
+    if state == "unbound":
+        q = q.filter(~subq.exists())
+    elif state == "bound":
+        q = q.filter(subq.exists())
+    else:
+        # all: no filter
+        pass
 
     if spec_mismatch is True:
         q = q.filter(models.SkuMaster.metadata_json["spec_mismatch"].as_boolean() == True)  # noqa: E712
@@ -1498,7 +1750,11 @@ def bind_sku_master_by_model_bulk(
         if not sku:
             skipped_missing_barcode += 1
             continue
-        if product_model_service.get_active_sku_binding(db, sku):
+        active = product_model_service.get_active_sku_binding(db, sku)
+        if active and not allow_rebind:
+            skipped_already_bound += 1
+            continue
+        if active and str(getattr(active, "model_version_id", "") or "") == str(version.id) and allow_rebind:
             skipped_already_bound += 1
             continue
         try:
@@ -1510,7 +1766,7 @@ def bind_sku_master_by_model_bulk(
                 metadata={
                     "requested_by": requested_by,
                     "sku_master_id": row.id,
-                    "binding_method": "manual_by_model_bulk",
+                    "binding_method": "manual_by_model_bulk_rebind" if allow_rebind else "manual_by_model_bulk",
                     "skip_prefix_check": True,
                 },
             )

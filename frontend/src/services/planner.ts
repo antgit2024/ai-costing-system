@@ -1898,6 +1898,9 @@ export const fetchSkuMaster = async (
     channel?: string
     match_status?: string
     bound_state?: 'bound' | 'unbound'
+    bound_model_id?: string
+    bound_model_code?: string
+    bound_version_id?: string
     preparse_state?: 'parsed' | 'unparsed'
     spec_mismatch?: boolean
     include_terms?: string
@@ -2031,7 +2034,11 @@ export const bulkSaveSkuMasterSpecPreparse = async (payload: {
   include_terms?: string
   exclude_terms?: string
   match_scope?: string
+  bound_model_id?: string
+  bound_model_code?: string
+  bound_version_id?: string
   preparse_state?: 'parsed' | 'unparsed'
+  cursor_id?: string
   excluded_sku_ids?: string[]
   skip_if_same_hash?: boolean
   requested_by?: string
@@ -2042,6 +2049,8 @@ export const bulkSaveSkuMasterSpecPreparse = async (payload: {
   errors: Array<Record<string, unknown>>
   batch_candidates?: number
   has_more?: boolean
+  next_cursor_id?: string | null
+  mode?: string | null
 }> => {
   const response = await plannerClient.post('/sku-master/spec-preparse/bulk', payload, {
     timeout: opts.timeoutMs,
@@ -2058,6 +2067,9 @@ export const previewSkuMasterSpecPreparse = async (payload: {
   include_terms?: string
   exclude_terms?: string
   match_scope?: string
+  bound_model_id?: string
+  bound_model_code?: string
+  bound_version_id?: string
   preparse_state?: 'parsed' | 'unparsed'
 } = {}): Promise<{
   scanned: number

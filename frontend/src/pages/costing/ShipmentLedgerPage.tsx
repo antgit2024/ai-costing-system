@@ -1,4 +1,4 @@
-import { Button, Card, DatePicker, Form, Input, Space, Table, Tabs, Typography } from 'antd'
+import { Alert, Button, Card, DatePicker, Form, Input, Space, Table, Tabs, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { useState } from 'react'
@@ -15,12 +15,6 @@ const safeString = (v: unknown): string => {
   return String(v)
 }
 
-const formatTime = (v?: string | null) => {
-  if (!v) return '-'
-  const d = dayjs(v)
-  return d.isValid() ? d.format('YYYY-MM-DD HH:mm:ss') : String(v)
-}
-
 const ShipmentLedgerPage = () => {
   const navigate = useNavigate()
   const [ledgerForm] = Form.useForm()
@@ -29,7 +23,8 @@ const ShipmentLedgerPage = () => {
   const [ledgerPage, setLedgerPage] = useState(1)
   const [ledgerPageSize, setLedgerPageSize] = useState(50)
   const [ledgerRange, setLedgerRange] = useState<[any, any]>(() => [
-    dayjs().subtract(6, 'day').startOf('day'),
+    // 默认给足范围，避免“有数据但首屏看不到”造成误判（尤其是历史导入/回补数据）
+    dayjs().subtract(89, 'day').startOf('day'),
     dayjs().add(1, 'day').startOf('day'),
   ])
   const [ledgerFilters, setLedgerFilters] = useState<{
@@ -128,6 +123,7 @@ const ShipmentLedgerPage = () => {
   ]
 
   const data = shipmentLinesQuery.data as ShipmentLineListResponse | undefined
+  const isEmpty = !shipmentLinesQuery.isFetching && (data?.total ?? 0) === 0
 
   return (
     <div>
@@ -145,6 +141,15 @@ const ShipmentLedgerPage = () => {
 
       <div style={{ marginTop: 16 }}>
         <Card title="发货记录（每日台账）" size="small">
+          {shipmentLinesQuery.isError ? (
+            <Alert
+              type="error"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message="台账加载失败"
+              description={String((shipmentLinesQuery.error as any)?.response?.data?.detail ?? (shipmentLinesQuery.error as any)?.message ?? 'unknown')}
+            />
+          ) : null}
           <Tabs
             activeKey={ledgerTab}
             onChange={(k) => {
@@ -211,6 +216,16 @@ const ShipmentLedgerPage = () => {
             </Text>
           </div>
 
+          {isEmpty ? (
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message="当前筛选范围内无记录"
+              description="已默认查询最近 90 天。若你确认库里有数据，请扩大日期范围（左上角）或清空筛选条件后再查。"
+            />
+          ) : null}
+
           <Table
             rowKey="id"
             size="small"
@@ -230,12 +245,6 @@ const ShipmentLedgerPage = () => {
             }}
             columns={columns}
           />
-
-          <div style={{ marginTop: 10 }}>
-            <Text type="secondary">
-              最近更新时间：{formatTime((data as any)?.items?.[0]?.updated_at ?? null)}
-            </Text>
-          </div>
         </Card>
       </div>
     </div>

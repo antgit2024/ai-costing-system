@@ -2,9 +2,10 @@ import { Alert, Button, Card, DatePicker, Form, Input, Select, Space, Table, Typ
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { useMemo, useState } from 'react'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 
-import { fetchReturnsRateBySku, importAfterSalesXlsx } from '@/services/planner'
-import type { ReturnsRateBySkuItem, ReturnsRateBySkuResponse } from '@/types/planner'
+import { fetchAfterSalesImportBatches, fetchReturnsRateBySku, importAfterSalesXlsx } from '@/services/planner'
+import type { AfterSalesImportBatch, ReturnsRateBySkuItem, ReturnsRateBySkuResponse } from '@/types/planner'
 
 type GroupBy = 'day' | 'month'
 
@@ -39,6 +40,14 @@ const AfterSalesInsightsPage = () => {
   const [uploadExportDate, setUploadExportDate] = useState<string | undefined>(dayjs().format('YYYY-MM-DD'))
   const [uploadRequestedBy, setUploadRequestedBy] = useState<string>('planner_user')
   const [lastImportSummary, setLastImportSummary] = useState<string | null>(null)
+  const [batchPage, setBatchPage] = useState(1)
+  const [batchPageSize, setBatchPageSize] = useState(10)
+
+  const batchesQuery = useQuery({
+    queryKey: ['after-sales', 'import-batches', batchPage, batchPageSize],
+    queryFn: () => fetchAfterSalesImportBatches({ page: batchPage, page_size: batchPageSize }),
+    placeholderData: keepPreviousData,
+  })
 
   const columns = useMemo<ColumnsType<ReturnsRateBySkuItem>>(
     () => [
@@ -75,7 +84,7 @@ const AfterSalesInsightsPage = () => {
         group_by: groupBy,
         channel: v.channel?.trim() || undefined,
         sku_code: v.sku_code?.trim() || undefined,
-      })
+      }, { timeoutMs: 120000 })
       setData(resp)
     } catch (e: any) {
       setError(String(e?.response?.data?.detail ?? e?.message ?? e))
@@ -155,6 +164,7 @@ const AfterSalesInsightsPage = () => {
                   )
                   message.success('售后退货单导入成功')
                   setUploadFile(null)
+                  batchesQuery.refetch()
                 } catch (e: any) {
                   message.error(String(e?.response?.data?.detail ?? e?.message ?? e))
                 } finally {
@@ -173,6 +183,48 @@ const AfterSalesInsightsPage = () => {
             说明：先导入发货单（`/costing/shipments`），再导入售后退货单；然后到本页选择时间范围点击“查询”。
           </Typography.Text>
         )}
+      </Card>
+
+      <Card
+        title="导入记录（最近）"
+        size="small"
+        style={{ marginBottom: 12 }}
+        extra={
+          <Button size="small" onClick={() => batchesQuery.refetch()} loading={batchesQuery.isFetching}>
+            刷新
+          </Button>
+        }
+      >
+        <Table<AfterSalesImportBatch>
+          rowKey="id"
+          size="small"
+          loading={batchesQuery.isFetching}
+          dataSource={(batchesQuery.data?.items ?? []) as AfterSalesImportBatch[]}
+          pagination={{
+            current: batchPage,
+            pageSize: batchPageSize,
+            total: batchesQuery.data?.total ?? 0,
+            showSizeChanger: true,
+            onChange: (p, ps) => {
+              setBatchPage(p)
+              setBatchPageSize(ps)
+            },
+          }}
+          columns={[
+            { title: '导入批次', dataIndex: 'id', width: 220, ellipsis: true },
+            { title: '文件名', dataIndex: 'file_name', width: 220, ellipsis: true },
+            { title: '导出日期', dataIndex: 'export_date', width: 120, render: (v) => String(v ?? '-') },
+            { title: '插入', dataIndex: 'inserted_rows', width: 90 },
+            { title: '跳过', dataIndex: 'skipped_rows', width: 90 },
+            { title: '异常', dataIndex: 'exception_rows', width: 90 },
+            { title: '状态', dataIndex: 'status', width: 120 },
+            { title: '导入时间', dataIndex: 'created_at', width: 180, ellipsis: true },
+          ]}
+          scroll={{ x: 1100 }}
+        />
+        <Typography.Text type="secondary">
+          提示：若“查询为空/失败”，通常是 1）还没导入发货单（`/costing/shipments`），或 2）时间范围过大导致查询超时；可先缩小到 7~30 天再试。
+        </Typography.Text>
       </Card>
 
       <Card size="small" style={{ marginBottom: 12 }}>

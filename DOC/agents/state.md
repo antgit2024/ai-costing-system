@@ -269,6 +269,23 @@
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-27（售后分析：导入记录可见 + 查询超时上调）
+  - 现象：
+    - `/costing/insights/after-sales` 上传后“看不到文件/不知道导入到哪里”。
+    - 查询偶发 `timeout of 20000ms exceeded`（前端 axios 默认 20s 超时）。
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/AfterSalesInsightsPage.tsx`
+      - 新增“导入记录（最近）”表格：对接后端 `GET /api/planner/after-sales/import-batches`，可看到批次/文件名/导出日期/插入跳过异常/状态/导入时间。
+      - “查询”调用退货率接口时将超时提高到 120s，避免大范围/服务忙时误判失败。
+    - `frontend/src/services/planner.ts`
+      - `importAfterSalesXlsx` 默认超时提升（10min）。
+      - `fetchReturnsRateBySku`/`fetchReturnsRateByChannel` 默认超时提升（60s，可传 opts 覆盖）。
+      - 新增 `fetchAfterSalesImportBatches` 请求封装。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-23（标准模型：清单编辑/标签色统一为 antd 主题色）
   - 本轮范围：在“标准模型管理 → 清单编辑”中，将彩色文字/标签/提示色从硬编码色值统一替换为 antd 主题色变量（success/error/warning/text-secondary/fill-tertiary/link/primary），使暗色主题下不刺眼、风格一致。
   - 产物（前端）：

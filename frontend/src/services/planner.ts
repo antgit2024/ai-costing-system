@@ -1623,6 +1623,8 @@ export const fetchShipmentImportBatches = async (
 // Note: execute may take much longer than preview (it writes lines + generates BOM snapshots).
 const SHIPMENTS_PREVIEW_TIMEOUT_MS = 5 * 60 * 1000
 const SHIPMENTS_EXECUTE_TIMEOUT_MS = 30 * 60 * 1000
+const AFTER_SALES_IMPORT_TIMEOUT_MS = 10 * 60 * 1000
+const ANALYTICS_QUERY_TIMEOUT_MS = 60 * 1000
 
 export const fetchShipmentImportBatch = async (batchId: string): Promise<ShipmentImportBatch> => {
   const resp = await plannerClient.get(`/shipments/import-batches/${batchId}`)
@@ -1737,9 +1739,11 @@ export const fetchReturnsRateBySku = async (params: {
   group_by?: 'day' | 'month'
   channel?: string
   sku_code?: string
-}): Promise<ReturnsRateBySkuResponse> => {
+}, opts: PlannerRequestOptions = {}): Promise<ReturnsRateBySkuResponse> => {
   const response = await plannerClient.get('/analytics/returns-rate/sku', {
     params: sanitizeParams(params as Record<string, unknown>),
+    timeout: opts.timeoutMs ?? ANALYTICS_QUERY_TIMEOUT_MS,
+    signal: opts.signal,
   })
   return response.data
 }
@@ -1825,9 +1829,11 @@ export const fetchReturnsRateByChannel = async (params: {
   end: string
   group_by?: 'day' | 'month'
   channel?: string
-}): Promise<ReturnsRateByChannelResponse> => {
+}, opts: PlannerRequestOptions = {}): Promise<ReturnsRateByChannelResponse> => {
   const response = await plannerClient.get('/analytics/returns-rate/channel', {
     params: sanitizeParams(params as Record<string, unknown>),
+    timeout: opts.timeoutMs ?? ANALYTICS_QUERY_TIMEOUT_MS,
+    signal: opts.signal,
   })
   return response.data
 }
@@ -1879,13 +1885,27 @@ export const importAfterSalesXlsx = async (params: {
   file: File
   export_date?: string
   requested_by?: string
-}): Promise<AfterSalesImportBatch> => {
+}, opts: PlannerRequestOptions = {}): Promise<AfterSalesImportBatch> => {
   const formData = new FormData()
   formData.append('file', params.file)
   if (params.export_date) formData.append('export_date', params.export_date)
   if (params.requested_by) formData.append('requested_by', params.requested_by)
   const response = await plannerClient.post('/after-sales/import', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: opts.timeoutMs ?? AFTER_SALES_IMPORT_TIMEOUT_MS,
+    signal: opts.signal,
+  })
+  return response.data
+}
+
+export const fetchAfterSalesImportBatches = async (
+  params: { page?: number; page_size?: number } = {},
+  opts: PlannerRequestOptions = {},
+): Promise<PaginatedResponse<AfterSalesImportBatch>> => {
+  const response = await plannerClient.get('/after-sales/import-batches', {
+    params: sanitizeParams(params as Record<string, unknown>),
+    timeout: opts.timeoutMs ?? ANALYTICS_QUERY_TIMEOUT_MS,
+    signal: opts.signal,
   })
   return response.data
 }

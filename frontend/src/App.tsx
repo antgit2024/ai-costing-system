@@ -14,6 +14,7 @@ const ProcessModulesPage = lazy(() => import('./pages/costing/ProcessModulesPage
 const ProcessesPage = lazy(() => import('./pages/costing/ProcessesPage'))
 const PricingToolsPage = lazy(() => import('./pages/costing/PricingToolsPage'))
 const ShipmentMonitorPage = lazy(() => import('./pages/costing/ShipmentMonitorPage'))
+const ShipmentLedgerPage = lazy(() => import('./pages/costing/ShipmentLedgerPage'))
 const ShippingRulesPage = lazy(() => import('./pages/costing/ShippingRulesPage'))
 const SkuMasterWorkspacePage = lazy(() => import('./pages/costing/SkuMasterWorkspacePage'))
 const SkuSpecMatchingPage = lazy(() => import('./pages/costing/SkuSpecMatchingPage'))
@@ -54,7 +55,8 @@ const App = () => {
           <Route path="/costing/taxonomy" element={<TaxonomyManagementPage />} />
           <Route path="/costing/structure-standards" element={<StructureStandardsPage />} />
           <Route path="/costing/pricing-tools" element={<PricingToolsPage />} />
-          <Route path="/costing/shipments" element={<ShipmentMonitorPage />} />
+          <Route path="/costing/shipments" element={<ShipmentLedgerPage />} />
+          <Route path="/costing/shipments/ops" element={<ShipmentMonitorPage />} />
           <Route path="/costing/shipping-rules" element={<ShippingRulesPage />} />
           <Route path="/costing/product-listing" element={<ProductListingPage />} />
           <Route path="/costing/bundle-templates" element={<BundleTemplatesPage />} />

@@ -6,6 +6,7 @@ import DeploymentUnitOutlined from '@ant-design/icons/lib/icons/DeploymentUnitOu
 import ExperimentOutlined from '@ant-design/icons/lib/icons/ExperimentOutlined'
 import SettingOutlined from '@ant-design/icons/lib/icons/SettingOutlined'
 import ShopOutlined from '@ant-design/icons/lib/icons/ShopOutlined'
+import CloudSyncOutlined from '@ant-design/icons/lib/icons/CloudSyncOutlined'
 import UnorderedListOutlined from '@ant-design/icons/lib/icons/UnorderedListOutlined'
 import ToolOutlined from '@ant-design/icons/lib/icons/ToolOutlined'
 import type { MenuProps } from 'antd'
@@ -73,9 +74,15 @@ const menuItems: MenuProps['items'] = [
     children: [
       { key: '/costing/sku-master', label: subItemLabel('商品关联', '/costing/sku-master') },
       { key: '/costing/spec-matching', label: subItemLabel('规格解析', '/costing/spec-matching') },
-      { key: '/costing/shipments', label: subItemLabel('发货订单', '/costing/shipments') },
+      { key: '/costing/shipments', label: subItemLabel('发货台账', '/costing/shipments') },
       { key: '/costing/shipping-rules', label: subItemLabel('发货规则', '/costing/shipping-rules') },
     ],
+  },
+  {
+    key: '/costing/automation',
+    icon: <CloudSyncOutlined />,
+    label: '自动化/作业中心',
+    children: [{ key: '/costing/shipments/ops', label: subItemLabel('发货作业中心', '/costing/shipments/ops') }],
   },
   {
     key: '/costing/insights',
@@ -192,6 +199,7 @@ const AppLayout = ({ children }: AppLayoutProps) => {
         return ['/costing/pricing-tools']
       }
       if (location.pathname.startsWith('/costing/shipments')) {
+        if (location.pathname.startsWith('/costing/shipments/ops')) return ['/costing/shipments/ops']
         return ['/costing/shipments']
       }
       if (location.pathname.startsWith('/costing/product-listing')) {

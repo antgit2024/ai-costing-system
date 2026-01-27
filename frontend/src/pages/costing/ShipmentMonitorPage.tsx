@@ -31,7 +31,6 @@ import {
   fetchShipmentBomSnapshots,
   fetchShipmentExceptions,
   fetchShipmentImportBatches,
-  fetchShipmentLines,
   generateBom,
   parseSpec,
   fetchSkuMasterByBarcode,
@@ -44,7 +43,6 @@ import type {
   BomSnapshot,
   ShipmentException,
   ShipmentImportBatch,
-  ShipmentLineListResponse,
   SkuMasterScanResponse,
 } from '@/types/planner'
 
@@ -390,23 +388,6 @@ const ShipmentMonitorPage = () => {
   const [exceptionLimit, setExceptionLimit] = useState(200)
   const [retryingExceptions, setRetryingExceptions] = useState(false)
 
-  // Daily shipments ledger (ERP-like)
-  const [ledgerForm] = Form.useForm()
-  const [ledgerTab, setLedgerTab] = useState<'all' | 'processed' | 'pending'>('all')
-  const [ledgerPage, setLedgerPage] = useState(1)
-  const [ledgerPageSize, setLedgerPageSize] = useState(50)
-  const [ledgerRange, setLedgerRange] = useState<[any, any]>(() => [
-    dayjs().subtract(6, 'day').startOf('day'),
-    dayjs().add(1, 'day').startOf('day'),
-  ])
-  const [ledgerFilters, setLedgerFilters] = useState<{
-    channel?: string
-    sku_code?: string
-    shipment_no?: string
-    order_no?: string
-    product_link_id?: string
-  }>({})
-
   const [snapshotForm] = Form.useForm()
   const [snapshotsUseCurrentBatch, setSnapshotsUseCurrentBatch] = useState(true)
   const [snapshotQuery, setSnapshotQuery] = useState<{
@@ -503,20 +484,6 @@ const ShipmentMonitorPage = () => {
         ...(snapshotsUseCurrentBatch && selectedBatchId ? { batch_id: selectedBatchId } : {}),
       }),
     enabled: batchesDrawerOpen && activeTab === 'snapshots',
-  })
-
-  const shipmentLinesQuery = useQuery({
-    queryKey: ['shipments', 'lines', ledgerTab, ledgerPage, ledgerPageSize, ledgerRange, ledgerFilters],
-    queryFn: () =>
-      fetchShipmentLines({
-        page: ledgerPage,
-        page_size: ledgerPageSize,
-        start: ledgerRange?.[0]?.toISOString?.() ?? undefined,
-        end: ledgerRange?.[1]?.toISOString?.() ?? undefined,
-        status: ledgerTab === 'all' ? undefined : (ledgerTab as any),
-        ...ledgerFilters,
-      }),
-    placeholderData: keepPreviousData,
   })
 
   const handoffExceptionsQuery = useQuery({
@@ -1160,10 +1127,10 @@ const ShipmentMonitorPage = () => {
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
         <div>
           <Title level={3} style={{ marginBottom: 4 }}>
-            发货订单
+            发货作业中心
           </Title>
           <Text type="secondary">
-            主页面默认展示最新批次的发货记录；上传与导入记录放在抽屉里，交互更接近 ERP。
+            面向自动化/排查：上传导入、批次、异常队列、BOM快照与回填。运营查账请到“发货台账”。
           </Text>
         </div>
         <Space>
@@ -1176,6 +1143,7 @@ const ShipmentMonitorPage = () => {
           <Button type="primary" onClick={() => setUploadDrawerOpen(true)}>
             上传/导入发货单（xlsx）
           </Button>
+          <Button onClick={() => navigate('/costing/shipments')}>去发货台账</Button>
           <Button
             onClick={() => {
               setBatchesDrawerOpen(true)
@@ -1189,7 +1157,7 @@ const ShipmentMonitorPage = () => {
 
       {selectedBatchId ? (
         <div style={{ marginTop: 12 }}>
-          <Card size="small" title="当前批次摘要">
+          <Card size="small" title="当前批次摘要（作业视角）">
             <Descriptions bordered size="small" column={3}>
               <Descriptions.Item label="文件名">{selectedBatch?.file_name ?? '-'}</Descriptions.Item>
               <Descriptions.Item label="导出日期">{selectedBatch?.export_date ?? '-'}</Descriptions.Item>
@@ -1221,175 +1189,6 @@ const ShipmentMonitorPage = () => {
           </Card>
         </div>
       ) : null}
-
-      <div style={{ marginTop: 16 }}>
-        <Card
-          title="发货记录（每日台账）"
-          size="small"
-        >
-          <Tabs
-            activeKey={ledgerTab}
-            onChange={(k) => {
-              setLedgerTab(k as any)
-              setLedgerPage(1)
-            }}
-            tabBarExtraContent={
-              <Space wrap>
-                <DatePicker.RangePicker
-                  value={ledgerRange as any}
-                  onChange={(v) => {
-                    if (v && v[0] && v[1]) setLedgerRange(v as any)
-                    setLedgerPage(1)
-                  }}
-                  allowClear={false}
-                  format="YYYY-MM-DD"
-                />
-                <Form
-                  form={ledgerForm}
-                  layout="inline"
-                  onFinish={(values) => {
-                    const next = {
-                      channel: values.channel ? String(values.channel).trim() : undefined,
-                      sku_code: values.sku_code ? String(values.sku_code).trim() : undefined,
-                      shipment_no: values.shipment_no ? String(values.shipment_no).trim() : undefined,
-                      order_no: values.order_no ? String(values.order_no).trim() : undefined,
-                      product_link_id: values.product_link_id ? String(values.product_link_id).trim() : undefined,
-                    }
-                    setLedgerFilters(next)
-                    setLedgerPage(1)
-                  }}
-                >
-                  <Form.Item name="sku_code">
-                    <Input style={{ width: 140 }} placeholder="SKU" allowClear />
-                  </Form.Item>
-                  <Form.Item name="shipment_no">
-                    <Input style={{ width: 150 }} placeholder="发货单号" allowClear />
-                  </Form.Item>
-                  <Form.Item name="order_no">
-                    <Input style={{ width: 150 }} placeholder="订单号" allowClear />
-                  </Form.Item>
-                  <Form.Item name="product_link_id">
-                    <Input style={{ width: 150 }} placeholder="链接ID" allowClear />
-                  </Form.Item>
-                  <Form.Item name="channel">
-                    <Input style={{ width: 120 }} placeholder="渠道" allowClear />
-                  </Form.Item>
-                  <Button type="primary" onClick={() => ledgerForm.submit()} loading={shipmentLinesQuery.isFetching}>
-                    查询
-                  </Button>
-                </Form>
-              </Space>
-            }
-            items={[
-              { key: 'all', label: '全部发货' },
-              { key: 'processed', label: '已处理（已计价/已落快照）' },
-              { key: 'pending', label: '待处理（未计价/异常）' },
-            ]}
-          />
-
-          <div style={{ marginBottom: 10 }}>
-            <Text type="secondary">
-              说明：2025 模式不落 BOM 快照但会落“计价结果/扣库”；2026 模式会落 BOM 快照。列表的“已处理”口径统一为：有快照或有计价结果。
-            </Text>
-          </div>
-
-          <Table
-            rowKey="id"
-            size="small"
-            loading={shipmentLinesQuery.isFetching}
-            dataSource={(shipmentLinesQuery.data as ShipmentLineListResponse | undefined)?.items ?? []}
-            pagination={{
-              current: ledgerPage,
-              pageSize: ledgerPageSize,
-              total: (shipmentLinesQuery.data as ShipmentLineListResponse | undefined)?.total ?? 0,
-              showSizeChanger: true,
-            }}
-            onChange={(pagination) => {
-              const p = pagination as any
-              setLedgerPage(Number(p?.current) || 1)
-              setLedgerPageSize(Number(p?.pageSize) || 50)
-            }}
-            columns={[
-              {
-                title: '发货日期',
-                dataIndex: 'completed_at',
-                width: 110,
-                render: (v) => {
-                  const d = dayjs(safeString(v))
-                  return d.isValid() ? d.format('YYYY-MM-DD') : (safeString(v) || '-')
-                },
-              },
-              { title: '发货单号', dataIndex: 'shipment_no', width: 160, ellipsis: true },
-              { title: '订单号', dataIndex: 'order_no', width: 160, ellipsis: true },
-              {
-                title: '链接ID',
-                dataIndex: 'product_link_id',
-                width: 140,
-                render: (v) => {
-                  const id = safeString(v).trim()
-                  if (!id) return '-'
-                  const href = `https://detail.tmall.com/item.htm?id=${encodeURIComponent(id)}`
-                  return (
-                    <a href={href} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
-                      {id}
-                    </a>
-                  )
-                },
-              },
-              { title: '渠道', dataIndex: 'channel', width: 140, ellipsis: true },
-              { title: 'SKU', dataIndex: 'sku_code', width: 160, ellipsis: true },
-              {
-                title: '规格',
-                dataIndex: 'spec_text',
-                ellipsis: true,
-                render: (v) => {
-                  const s = safeString(v)
-                  if (!s) return '-'
-                  return (
-                    <Text ellipsis={{ tooltip: s }} style={{ maxWidth: 520, display: 'inline-block' }}>
-                      {s}
-                    </Text>
-                  )
-                },
-              },
-              { title: '数量', dataIndex: 'qty', width: 90, render: (v) => safeString(v) || '-' },
-              { title: '金额', dataIndex: 'revenue_amount', width: 110, render: (v) => safeString(v) || '-' },
-              {
-                title: '处理状态',
-                key: 'status',
-                width: 180,
-                render: (_v, r: any) => {
-                  const status = safeString(r?.status)
-                  const src = safeString(r?.processed_source)
-                  const mode = safeString(r?.mode)
-                  const reason = safeString(r?.unresolved_reason)
-                  const msg = safeString(r?.unresolved_message)
-                  if (status === 'processed') {
-                    const text = src === 'bom_snapshot' || mode === '2026' ? '已落快照' : '已计价'
-                    const badge = mode ? `（${mode}）` : ''
-                    return (
-                      <Tag color="green">
-                        {text}
-                        {badge}
-                      </Tag>
-                    )
-                  }
-                  if (reason) {
-                    return (
-                      <Tag color="red">
-                        待处理（{reason}）
-                        {msg ? `：${msg}` : ''}
-                      </Tag>
-                    )
-                  }
-                  return <Tag color="orange">待处理</Tag>
-                },
-              },
-              { title: '批次', dataIndex: 'batch_id', width: 220, ellipsis: true },
-            ]}
-          />
-        </Card>
-      </div>
 
       <Drawer
         title="上传发货单（预览→执行）"

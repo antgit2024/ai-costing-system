@@ -139,7 +139,8 @@
 
 #### 7.1 前端落点（只读监控 + 操作入口）
 
-- 页面：`frontend/src/pages/costing/ShipmentMonitorPage.tsx`（路由：`/costing/shipments`）
+- 台账页（运营查账）：`frontend/src/pages/costing/ShipmentLedgerPage.tsx`（路由：`/costing/shipments`）
+- 作业中心（自动化/排查）：`frontend/src/pages/costing/ShipmentMonitorPage.tsx`（路由：`/costing/shipments/ops`）
 - 关键动作：
   - **上传预览**：`POST /api/planner/shipments/import/preview`（只做预览与问题统计，不写发货行/快照）
   - **执行导入**：`POST /api/planner/shipments/import/execute`（使用预览缓存文件执行，写发货行、轻量扣库/计价结果；2026 模式额外写 BOM 快照）

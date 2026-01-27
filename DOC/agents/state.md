@@ -232,6 +232,18 @@
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-27（信息架构：发货台账与作业中心拆分，运营页与自动化解耦）
+  - 背景：运营查账（台账/报表）不应与系统自动化（导入/解析/快照/重试/回填）混在同一页，避免误操作与权限边界不清。
+  - 调整：
+    - 台账页（运营查账）：`/costing/shipments` → `frontend/src/pages/costing/ShipmentLedgerPage.tsx`
+    - 发货作业中心（自动化/排查）：`/costing/shipments/ops` → `frontend/src/pages/costing/ShipmentMonitorPage.tsx`
+    - 菜单新增：`自动化/作业中心` → `发货作业中心`
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-22（天猫SKU生成器：尺寸胶囊常显 + Z 规格同列不变色 + 检验补齐商家编码）
   - 本轮范围：对齐业务口径：检验用于校验“商品规格（网店）+ 商家编码”是否能命中系统编码/公式；尺寸展示与检验解绑；Z- 规格字样显示在“TOKEN/公式”列但不做红绿高亮。
   - 本轮产物：

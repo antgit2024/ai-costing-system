@@ -20,6 +20,19 @@
 
 > 注：若需要对外一句话解释本项目——“以 SKU 绑定已发布标准版本为入口，在发货导入时解析交易规格并生成可追溯的 BOM 快照，用异常队列兜底，支撑扣库与成本核算对账”。
 
+- **最近校对（北京时间 GMT+8）**：2026-01-27（数据洞察：首屏不再“空白”，默认轻量查询 + 记住筛选）
+  - 现象：`/costing/insights/after-sales`、`/costing/insights/sales`、`/costing/insights/models` 进入页面首屏为空，必须点“查询”才有内容，体验弱于常见 ERP 报表页。
+  - 处理策略（不新增重复列表，只让原列表首屏有真实数据）：
+    - 售后退货率（按 SKU 明细表）：进入页面默认自动查询最近 30 天（默认按月），并记住/恢复上次筛选。
+    - 销售明细：进入页面默认自动查询最近 30 天，并记住/恢复上次筛选。
+    - 模型分析：进入页面默认自动查询最近 30 天榜单，并记住/恢复上次筛选。
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/SalesInsightsPage.tsx`
+    - `frontend/src/pages/costing/ProfitInsightsPage.tsx`
+    - `frontend/src/pages/costing/AfterSalesInsightsPage.tsx`
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-26（线上深链接 404：BrowserRouter /costing/* Not Found 兜底）
   - 现象：直接访问 `https://<host>/costing/insights/models` 返回 `Not Found`（history 深链接无法回退到 SPA 入口）。
   - 根因：前端使用 `BrowserRouter`（history 模式），需要服务端对 `/costing/*` 做 `try_files ... /index.html` 回退。
@@ -191,6 +204,33 @@
     - 在网关/Nginx 放开上传限制（例如 `client_max_body_size 20m;`），并在对应 location / upstream 路径生效。
   - 验收命令（必须，全部 0 退出码）：
     - Frontend：`npm -C frontend run build`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-27（发货导入链路防丢：交易规格解析→扣库/计价落库→快照/异常/重试）
+  - 你关心的“解析交易规格 / 以后落库动作放哪里”——**不在前端**，主链在后端：
+    - `backend/src/planner/services/shipment_import_service.py`
+  - 实际流程（按代码执行顺序）：
+    - 1) **预览（不落库）**：`POST /api/planner/shipments/import/preview`
+      - 只读取 xlsx、归一化字段（含 `spec_text`），统计 missing_sku/missing_spec/unbound_sku，并把文件缓存到 `logs/shipment_previews/<file_hash>.xlsx` 供 execute 复用。
+    - 2) **执行导入（落库）**：`POST /api/planner/shipments/import/execute` → `import_shipment_xlsx(...)`
+      - 写 `shipment_lines`（每行一条发货行，含 `sku_code/spec_text/spec_hash/qty/revenue_amount/...`）
+      - **spec_hash 缓存解析并落库**：`_upsert_spec_snapshot(...)` → `SpecParseSnapshot`（调用 `spec_parser_service.parse_spec`）
+      - **扣库/计价轻量落库**：`_persist_deduction_artifacts(...)` → `shipment_costing_results` + `shipment_inventory_deduction_lines`
+      - **BOM 快照（可追溯 trace）**：
+        - `mode=2026`：写 `bom_snapshots(final_lines_json + trace_json)`
+        - `mode=2025`：不写 `bom_snapshots`，但仍写上面的“轻量结果”
+      - 失败兜底：写 `shipment_exception_queue`（如 `SKU_NOT_BOUND/SPEC_EMPTY/BOM_GENERATION_FAILED/...`）
+    - 3) **异常重试（不回写历史，生成新快照）**：`POST /api/planner/shipments/exceptions/retry`
+      - 重新走“绑定→spec_snapshot→bom”，成功则创建**新** `bom_snapshot` 并把旧异常标记 resolved；失败则保留 unresolved 并累计 retry trace。
+    - 4) **历史快照回填（覆盖该快照内容）**：`POST /api/planner/shipments/bom-snapshots/{snapshot_id}/recompute`
+      - 重新生成并覆盖 `final_lines_json/trace_json`（用于旧快照缺字段/成本回填等场景）。
+  - `/costing/shipments` 页面 UI 结构说明（避免误删能力）：
+    - “当前批次摘要”卡片本质是**快捷导航**：两个按钮只是打开“导入记录/排查”抽屉并切 Tab（异常/快照）；能力本身在抽屉内，不依赖该卡片。
+    - “解析交易规格”按钮仅用于**现场对比/排查**（调用 `POST /api/planner/spec/parse`），不影响导入落库链路。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
 
 - **最近校对（北京时间 GMT+8）**：2026-01-22（天猫SKU生成器：尺寸胶囊常显 + Z 规格同列不变色 + 检验补齐商家编码）
   - 本轮范围：对齐业务口径：检验用于校验“商品规格（网店）+ 商家编码”是否能命中系统编码/公式；尺寸展示与检验解绑；Z- 规格字样显示在“TOKEN/公式”列但不做红绿高亮。

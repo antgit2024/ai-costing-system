@@ -133,3 +133,32 @@
 - `DOC/costing/manuals/standard_model_variants_ops_rules.md`（**必须以此为准**）
 
 
+### 7) 发货批次 / BOM 快照（/costing/shipments）关键链路（防丢）
+
+> 目的：避免后续“优化 UI/删区块”时把核心能力（交易规格解析→扣库/计价落库→快照/异常）误删。
+
+#### 7.1 前端落点（只读监控 + 操作入口）
+
+- 页面：`frontend/src/pages/costing/ShipmentMonitorPage.tsx`（路由：`/costing/shipments`）
+- 关键动作：
+  - **上传预览**：`POST /api/planner/shipments/import/preview`（只做预览与问题统计，不写发货行/快照）
+  - **执行导入**：`POST /api/planner/shipments/import/execute`（使用预览缓存文件执行，写发货行、轻量扣库/计价结果；2026 模式额外写 BOM 快照）
+  - **异常列表/重试**：`GET /api/planner/shipments/exceptions`、`POST /api/planner/shipments/exceptions/retry`
+  - **快照查询/回填**：`GET /api/planner/shipments/bom-snapshots`、`POST /api/planner/shipments/bom-snapshots/{snapshot_id}/recompute`
+
+#### 7.2 后端“解析交易规格 + 落库”真实发生位置（不是在前端）
+
+- 导入主链服务：`backend/src/planner/services/shipment_import_service.py`
+  - Excel 行归一化：把“交易规格/商品规格（网店）”统一为 `spec_text`（并做 `_sha1_text(spec_text)` 得到 `spec_hash`）
+  - **spec_hash 缓存解析**：`_upsert_spec_snapshot(...)` 会调用 `spec_parser_service.parse_spec(spec_text)` 并落库 `SpecParseSnapshot`
+  - **扣库/计价（轻量落库）**：`_persist_deduction_artifacts(...)` 每条发货行都会写：
+    - `shipment_costing_results`（计价结果，如 total_cost/material/process/overhead）
+    - `shipment_inventory_deduction_lines`（扣库清单：真实物料展开）
+  - **BOM 快照（可追溯大快照）**：当 `mode != "2025"`（即 2026 模式）时，会额外写 `bom_snapshots`（含 `final_lines_json` + `trace_json`）
+
+#### 7.3 两种模式（2025/2026）口径
+
+- `mode=2025`：不写 `bom_snapshots` 大快照，但仍会落 **计价结果 + 扣库明细**（用于对账/报表）。
+- `mode=2026`：写 **BOM 快照**，并同步落 **计价结果 + 扣库明细**。
+
+

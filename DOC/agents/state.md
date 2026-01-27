@@ -257,6 +257,18 @@
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-27（规格匹配：保存 500 幂等修复）
+  - 现象：`/costing/spec-matching` 的“保存/执行”偶发返回 500。
+  - 根因（高概率）：`spec_parse_snapshots.spec_hash` 为 UNIQUE；大批量/并发保存时同一 `spec_hash` 可能被并发插入，触发 `IntegrityError`，导致接口 500。
+  - 本轮产物（后端）：
+    - `backend/src/planner/services/sku_master_service.py`
+      - 新增 `_ensure_spec_parse_snapshot(...)`：使用 nested transaction 做 **冲突忽略**，避免唯一冲突污染外层事务。
+      - 应用到 `save_spec_preparse` / `bulk_save_spec_preparse` / `execute_spec_preparse`（快照写入改为 best-effort）。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-23（标准模型：清单编辑/标签色统一为 antd 主题色）
   - 本轮范围：在“标准模型管理 → 清单编辑”中，将彩色文字/标签/提示色从硬编码色值统一替换为 antd 主题色变量（success/error/warning/text-secondary/fill-tertiary/link/primary），使暗色主题下不刺眼、风格一致。
   - 产物（前端）：

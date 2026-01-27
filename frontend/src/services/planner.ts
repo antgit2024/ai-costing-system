@@ -1651,8 +1651,68 @@ export const fetchShipmentLines = async (
     product_link_id?: string
   } = {},
 ): Promise<ShipmentLineListResponse> => {
-  const response = await plannerClient.get('/shipments/lines', { params: sanitizeParams(params as any) })
-  return response.data
+  try {
+    const response = await plannerClient.get('/shipments/lines', { params: sanitizeParams(params as any) })
+    return response.data
+  } catch (err: any) {
+    // Backward-compat: some deployments may not have /shipments/lines yet.
+    // Fall back to /analytics/sales/lines which provides similar line-level fields.
+    const status = Number(err?.response?.status)
+    const detail = String(err?.response?.data?.detail ?? '')
+    if (status !== 404 || detail.toLowerCase() !== 'not found') throw err
+
+    const includeMissing = params.status === 'processed' ? false : true
+    const resp = await plannerClient.get('/analytics/sales/lines', {
+      params: sanitizeParams({
+        start: params.start,
+        end: params.end,
+        page: params.page,
+        page_size: params.page_size,
+        channel: params.channel,
+        sku_code: params.sku_code,
+        shipment_no: params.shipment_no,
+        order_no: params.order_no,
+        product_link_id: params.product_link_id,
+        include_missing: includeMissing,
+      } as any),
+    })
+    const data = resp.data as any
+    const items = (data?.items ?? []).map((r: any) => {
+      const hasSnapshot = !!r?.bom_snapshot_id
+      const hasCost = r?.cost_amount !== null && r?.cost_amount !== undefined && r?.cost_amount !== ''
+      return {
+        id: String(r?.shipment_line_id ?? ''),
+        batch_id: r?.batch_id ?? null,
+        row_index: r?.row_index ?? null,
+        shipment_no: r?.shipment_no ?? null,
+        order_no: r?.order_no ?? null,
+        product_link_id: r?.product_link_id ?? null,
+        completed_at: r?.completed_at ?? null,
+        channel: r?.channel ?? null,
+        sku_code: r?.sku_code ?? null,
+        spec_text: r?.spec_text ?? null,
+        spec_hash: r?.spec_hash ?? null,
+        qty: r?.qty ?? null,
+        revenue_amount: r?.revenue_amount ?? null,
+        status: hasSnapshot || hasCost ? 'processed' : 'pending',
+        processed_source: hasSnapshot ? 'bom_snapshot' : hasCost ? 'costing_result' : null,
+        mode: hasSnapshot ? '2026' : null,
+        unresolved_reason: null,
+        unresolved_message: null,
+      }
+    })
+    return {
+      start: data?.start,
+      end: data?.end,
+      total: Number(data?.total ?? items.length) || 0,
+      page: Number(data?.page ?? params.page ?? 1) || 1,
+      page_size: Number(data?.page_size ?? params.page_size ?? items.length) || (params.page_size ?? 50),
+      items,
+      lines_with_bom_snapshots: Number(data?.lines_with_bom_snapshots ?? 0) || 0,
+      lines_missing_costing: Number(data?.lines_missing_costing ?? 0) || 0,
+      note: 'fallback_to_analytics_sales_lines',
+    } as any
+  }
 }
 
 export const importShipmentsXlsx = async (params: {

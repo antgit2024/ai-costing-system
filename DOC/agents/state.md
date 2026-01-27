@@ -256,6 +256,14 @@
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-27（发货台账：线上后端未升级时 404 兜底回退）
+  - 现象：线上台账请求 `GET /api/planner/shipments/lines` 返回 404（`{"detail":"Not Found"}`），导致页面提示“台账加载失败 Not Found”。
+  - 兼容修复（前端）：
+    - `frontend/src/services/planner.ts`
+      - `fetchShipmentLines(...)` 若命中 404 Not Found，则回退到 `GET /api/planner/analytics/sales/lines` 拉明细并映射为台账结构（短期兼容，待线上后端发布补齐 `/shipments/lines` 后可移除）。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-22（天猫SKU生成器：尺寸胶囊常显 + Z 规格同列不变色 + 检验补齐商家编码）
   - 本轮范围：对齐业务口径：检验用于校验“商品规格（网店）+ 商家编码”是否能命中系统编码/公式；尺寸展示与检验解绑；Z- 规格字样显示在“TOKEN/公式”列但不做红绿高亮。
   - 本轮产物：

@@ -146,8 +146,8 @@ const AppLayout = ({ children }: AppLayoutProps) => {
       const hasRunning = items.some((t) =>
         ['pending', 'running', 'processing'].includes(String((t as any)?.status ?? '')),
       )
-      // 降低频率：运行中 5s / 空闲 15s
-      return hasRunning ? 5000 : 15000
+      // 降低频率：运行中 10s / 空闲 60s（任务角标只是探针，避免频繁轮询占用网络/主线程）
+      return hasRunning ? 10000 : 60000
     },
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,

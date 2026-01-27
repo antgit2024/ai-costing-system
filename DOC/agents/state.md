@@ -286,6 +286,14 @@
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-27（任务角标探针：空闲轮询降频）
+  - 背景：右上角“任务列表”角标探针会定时请求 `task-center/recent?limit=5`；多数人很少用该功能，频繁轮询会占用网络并在弱网/代理环境下放大体感卡顿。
+  - 本轮产物（前端）：
+    - `frontend/src/components/layout/AppLayout.tsx`
+      - 调整探针轮询：运行中 10s / 空闲 60s；页面不可见时停止轮询（保持原行为）。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-23（标准模型：清单编辑/标签色统一为 antd 主题色）
   - 本轮范围：在“标准模型管理 → 清单编辑”中，将彩色文字/标签/提示色从硬编码色值统一替换为 antd 主题色变量（success/error/warning/text-secondary/fill-tertiary/link/primary），使暗色主题下不刺眼、风格一致。
   - 产物（前端）：

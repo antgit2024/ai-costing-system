@@ -409,9 +409,15 @@
   - **修复（后端）**：
     - `backend/src/planner/services/sku_master_service.py`：`execute_spec_preparse` 与 `bulk_save_spec_preparse` 将空规格改为 **skipped_empty_spec**（不再作为 error）。
     - `backend/src/planner/schemas.py`：响应增加 `skipped_empty_spec` 字段，便于前端展示真实原因。
+    - **补充：Z/指定型（force）套装不依赖规格文本**：
+      - 当 `bundle_template_id + bundle_preset_selector` 对应 preset 为 `mode=force`（或模板 code 以 `Z-` 开头）且 `spec_text` 为空时，允许“标记为已预解析”：
+        - 写入 `preparse_spec_hash=sha1("__BUNDLE_FORCE__:template_id:preset")`
+        - 写入 `preparse_mode="bundle_force"`，并保持 dims/tokens 为空（表示无需解析）
+      - 目的：Z/指定型套装在“未解析”TAB 批量执行时不再永远 `saved=0`。
   - **修复（前端）**：
     - `frontend/src/pages/costing/SkuSpecMatchingPage.tsx`：执行保存/一键跑完展示 `空规格跳过`、`相同Hash跳过`；最终提示不再无条件 success 覆盖 error，并给出完整汇总。
     - `frontend/src/services/planner.ts`：补齐返回字段类型（`skipped_empty_spec`）。
+    - `frontend/src/pages/costing/SkuSpecMatchingPage.tsx`：左侧单条按钮文案改为 **“保存本条（当前行）”**，避免和批量“执行保存（仅选中候选）”混淆。
   - **关于“模型预解析是否丢失”**：
     - 预解析结果写在 `sku_master.metadata_json` 的 `preparse_*` 字段中；本次修复只改变“空规格”是跳过还是报错，不会清空或覆盖已有预解析数据（除非用户勾选“强制覆盖”）。
   - **验收命令**：

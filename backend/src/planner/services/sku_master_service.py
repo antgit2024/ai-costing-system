@@ -1093,6 +1093,43 @@ def bulk_save_spec_preparse(
     """
     limit = max(min(int(limit or 200), 5000), 1)
 
+    # For bundle "Z/force" presets: allow marking preparse as done even when spec_text is empty.
+    # This prevents "一键跑完累计保存0" for Z-mode bundle items that do not rely on spec_text parsing.
+    _tpl_cache: Dict[str, Any] = {}
+    _preset_mode_cache: Dict[tuple[str, str], str] = {}
+
+    def _bundle_preset_mode(meta: Dict[str, Any]) -> str:
+        tid = str(meta.get("bundle_template_id") or "").strip()
+        sel = str(meta.get("bundle_preset_selector") or "").strip().upper()
+        if not tid or not sel:
+            return ""
+        key = (tid, sel)
+        if key in _preset_mode_cache:
+            return _preset_mode_cache[key]
+        mode = ""
+        try:
+            t = _tpl_cache.get(tid)
+            if t is None:
+                t = bundle_template_service.get_template(db, tid, include_archived=True)
+                _tpl_cache[tid] = t
+            tcode = str(getattr(t, "code", "") or "").strip().upper()
+            tmeta = getattr(t, "metadata_json", None) or getattr(t, "metadata", None) or {}
+            if not isinstance(tmeta, dict):
+                tmeta = {}
+            presets = tmeta.get("phrase_presets") or []
+            if isinstance(presets, list):
+                for p in presets:
+                    if str((p or {}).get("selector", "") or "").strip().upper() == sel:
+                        mode = str((p or {}).get("mode", "") or "").strip().lower()
+                        break
+            # Template code starting with Z- is also treated as "force" mode.
+            if not mode and tcode.startswith("Z-"):
+                mode = "force"
+        except Exception:
+            mode = ""
+        _preset_mode_cache[key] = mode
+        return mode
+
     def _parse_terms(raw: Optional[str]) -> List[str]:
         if not raw:
             return []
@@ -1313,24 +1350,40 @@ def bulk_save_spec_preparse(
     errors: List[Dict[str, Any]] = []
 
     # First pass: decide which rows need work, compute hash once
-    work: List[Tuple[models.SkuMaster, str, str]] = []  # (row, spec_text, spec_hash)
+    # work item: (row, spec_text_used_or_key, spec_hash, is_bundle_force)
+    work: List[Tuple[models.SkuMaster, str, str, bool]] = []
     for r in rows:
         scanned += 1
         try:
             meta = dict(r.metadata_json or {})
             spec_text = (meta.get("last_shipment_spec_text") or r.spec_text or "").strip()
             if not spec_text:
+                mode = _bundle_preset_mode(meta)
+                if mode == "force":
+                    tid = str(meta.get("bundle_template_id") or "").strip()
+                    sel = str(meta.get("bundle_preset_selector") or "").strip().upper()
+                    key_text = f"__BUNDLE_FORCE__:{tid}:{sel}"
+                    spec_hash = _sha1_text(key_text)
+                    if (
+                        skip_if_same_hash
+                        and meta.get("preparse_spec_hash") == spec_hash
+                        and meta.get("preparse_parser_version") == PARSER_VERSION
+                    ):
+                        skipped_same_hash += 1
+                        continue
+                    work.append((r, key_text, spec_hash, True))
+                    continue
                 skipped_empty_spec += 1
                 continue
             spec_hash = _sha1_text(spec_text)
             if skip_if_same_hash and meta.get("preparse_spec_hash") == spec_hash and meta.get("preparse_parser_version") == PARSER_VERSION:
                 skipped_same_hash += 1
                 continue
-            work.append((r, spec_text, spec_hash))
+            work.append((r, spec_text, spec_hash, False))
         except Exception as exc:  # noqa: BLE001
             errors.append({"sku_id": getattr(r, "id", None), "sku_code": getattr(r, "erp_sku_barcode", None), "error": str(exc)})
 
-    hashes = sorted({h for _r, _t, h in work})
+    hashes = sorted({h for _r, _t, h, is_force in work if not is_force})
     existing_hashes: set[str] = set()
     if hashes:
         existing_hashes = {
@@ -1341,7 +1394,9 @@ def bulk_save_spec_preparse(
         }
 
     parsed_cache: Dict[str, Dict[str, Any]] = {}  # spec_hash -> parsed dict
-    for _r, spec_text, spec_hash in work:
+    for _r, spec_text, spec_hash, is_force in work:
+        if is_force:
+            continue
         parsed = parsed_cache.get(spec_hash)
         if parsed is None:
             parsed = spec_parser_service.parse_spec(spec_text)
@@ -1350,10 +1405,13 @@ def bulk_save_spec_preparse(
             _ensure_spec_parse_snapshot(db, spec_hash=spec_hash, spec_text=spec_text, parsed=parsed)
 
     now_iso = _utcnow().isoformat()
-    for r, spec_text, spec_hash in work:
+    for r, spec_text, spec_hash, is_force in work:
         try:
             meta = dict(r.metadata_json or {})
-            parsed = parsed_cache.get(spec_hash) or spec_parser_service.parse_spec(spec_text)
+            if is_force:
+                parsed = {"tokens": []}
+            else:
+                parsed = parsed_cache.get(spec_hash) or spec_parser_service.parse_spec(spec_text)
             dims = {
                 "width_cm": parsed.get("width_cm"),
                 "height_cm": parsed.get("height_cm"),
@@ -1372,6 +1430,7 @@ def bulk_save_spec_preparse(
                     "preparse_has_dims": bool(has_dims2),
                     "preparse_saved_at": now_iso,
                     "preparse_saved_by": (requested_by or meta.get("requested_by") or None),
+                    "preparse_mode": "bundle_force" if is_force else "spec_parse",
                 }
             )
             r.metadata_json = meta
@@ -1459,11 +1518,73 @@ def preview_spec_preparse(
     items: List[Dict[str, Any]] = []
     skipped_empty_spec = 0
     errors: List[Dict[str, Any]] = []
+
+    _tpl_cache: Dict[str, Any] = {}
+    _preset_mode_cache: Dict[tuple[str, str], str] = {}
+
+    def _bundle_preset_mode(meta: Dict[str, Any]) -> str:
+        tid = str(meta.get("bundle_template_id") or "").strip()
+        sel = str(meta.get("bundle_preset_selector") or "").strip().upper()
+        if not tid or not sel:
+            return ""
+        key = (tid, sel)
+        if key in _preset_mode_cache:
+            return _preset_mode_cache[key]
+        mode = ""
+        try:
+            t = _tpl_cache.get(tid)
+            if t is None:
+                t = bundle_template_service.get_template(db, tid, include_archived=True)
+                _tpl_cache[tid] = t
+            tcode = str(getattr(t, "code", "") or "").strip().upper()
+            tmeta = getattr(t, "metadata_json", None) or getattr(t, "metadata", None) or {}
+            if not isinstance(tmeta, dict):
+                tmeta = {}
+            presets = tmeta.get("phrase_presets") or []
+            if isinstance(presets, list):
+                for p in presets:
+                    if str((p or {}).get("selector", "") or "").strip().upper() == sel:
+                        mode = str((p or {}).get("mode", "") or "").strip().lower()
+                        break
+            if not mode and tcode.startswith("Z-"):
+                mode = "force"
+        except Exception:
+            mode = ""
+        _preset_mode_cache[key] = mode
+        return mode
+
     for r in rows:
         try:
             meta = dict(r.metadata_json or {})
             spec_text_used = (meta.get("last_shipment_spec_text") or r.spec_text or "").strip()
             if not spec_text_used:
+                # Z/force bundle preset does not require spec_text; still include it for "mark as parsed".
+                mode = _bundle_preset_mode(meta)
+                if mode == "force":
+                    tid = str(meta.get("bundle_template_id") or "").strip()
+                    sel = str(meta.get("bundle_preset_selector") or "").strip().upper()
+                    key_text = f"__BUNDLE_FORCE__:{tid}:{sel}"
+                    items.append(
+                        {
+                            "sku_id": r.id,
+                            "erp_sku_barcode": r.erp_sku_barcode,
+                            "channel": r.channel,
+                            "product_name": getattr(r, "product_name", None),
+                            "product_code": getattr(r, "product_code", None),
+                            "spec_text": getattr(r, "spec_text", None),
+                            "bound_model_code": getattr(r, "bound_model_code", None),
+                            "bound_model_name": getattr(r, "bound_model_name", None),
+                            "bound_version_label": getattr(r, "bound_version_label", None),
+                            "spec_text_used": f"[Z指定型：无需规格解析 {sel}]",
+                            "spec_hash": _sha1_text(key_text),
+                            "width_cm": None,
+                            "height_cm": None,
+                            "diameter_cm": None,
+                            "area_m2": None,
+                            "perimeter_m": None,
+                        }
+                    )
+                    continue
                 skipped_empty_spec += 1
                 continue
             parsed = spec_parser_service.parse_spec(spec_text_used)
@@ -1516,24 +1637,73 @@ def execute_spec_preparse(
     skipped_empty_spec = 0
     errors: List[Dict[str, Any]] = []
 
-    work: List[Tuple[models.SkuMaster, str, str]] = []
+    _tpl_cache: Dict[str, Any] = {}
+    _preset_mode_cache: Dict[tuple[str, str], str] = {}
+
+    def _bundle_preset_mode(meta: Dict[str, Any]) -> str:
+        tid = str(meta.get("bundle_template_id") or "").strip()
+        sel = str(meta.get("bundle_preset_selector") or "").strip().upper()
+        if not tid or not sel:
+            return ""
+        key = (tid, sel)
+        if key in _preset_mode_cache:
+            return _preset_mode_cache[key]
+        mode = ""
+        try:
+            t = _tpl_cache.get(tid)
+            if t is None:
+                t = bundle_template_service.get_template(db, tid, include_archived=True)
+                _tpl_cache[tid] = t
+            tcode = str(getattr(t, "code", "") or "").strip().upper()
+            tmeta = getattr(t, "metadata_json", None) or getattr(t, "metadata", None) or {}
+            if not isinstance(tmeta, dict):
+                tmeta = {}
+            presets = tmeta.get("phrase_presets") or []
+            if isinstance(presets, list):
+                for p in presets:
+                    if str((p or {}).get("selector", "") or "").strip().upper() == sel:
+                        mode = str((p or {}).get("mode", "") or "").strip().lower()
+                        break
+            if not mode and tcode.startswith("Z-"):
+                mode = "force"
+        except Exception:
+            mode = ""
+        _preset_mode_cache[key] = mode
+        return mode
+
+    work: List[Tuple[models.SkuMaster, str, str, bool]] = []
     for r in rows:
         scanned += 1
         try:
             meta = dict(r.metadata_json or {})
             spec_text = (meta.get("last_shipment_spec_text") or r.spec_text or "").strip()
             if not spec_text:
+                mode = _bundle_preset_mode(meta)
+                if mode == "force":
+                    tid = str(meta.get("bundle_template_id") or "").strip()
+                    sel = str(meta.get("bundle_preset_selector") or "").strip().upper()
+                    key_text = f"__BUNDLE_FORCE__:{tid}:{sel}"
+                    spec_hash = _sha1_text(key_text)
+                    if (
+                        skip_if_same_hash
+                        and meta.get("preparse_spec_hash") == spec_hash
+                        and meta.get("preparse_parser_version") == PARSER_VERSION
+                    ):
+                        skipped_same_hash += 1
+                        continue
+                    work.append((r, key_text, spec_hash, True))
+                    continue
                 skipped_empty_spec += 1
                 continue
             spec_hash = _sha1_text(spec_text)
             if skip_if_same_hash and meta.get("preparse_spec_hash") == spec_hash and meta.get("preparse_parser_version") == PARSER_VERSION:
                 skipped_same_hash += 1
                 continue
-            work.append((r, spec_text, spec_hash))
+            work.append((r, spec_text, spec_hash, False))
         except Exception as exc:  # noqa: BLE001
             errors.append({"sku_id": getattr(r, "id", None), "sku_code": getattr(r, "erp_sku_barcode", None), "error": str(exc)})
 
-    hashes = sorted({h for _r, _t, h in work})
+    hashes = sorted({h for _r, _t, h, is_force in work if not is_force})
     existing_hashes: set[str] = set()
     if hashes:
         existing_hashes = {
@@ -1544,7 +1714,9 @@ def execute_spec_preparse(
         }
 
     parsed_cache: Dict[str, Dict[str, Any]] = {}
-    for _r, spec_text, spec_hash in work:
+    for _r, spec_text, spec_hash, is_force in work:
+        if is_force:
+            continue
         parsed = parsed_cache.get(spec_hash)
         if parsed is None:
             parsed = spec_parser_service.parse_spec(spec_text)
@@ -1553,10 +1725,13 @@ def execute_spec_preparse(
             _ensure_spec_parse_snapshot(db, spec_hash=spec_hash, spec_text=spec_text, parsed=parsed)
 
     now_iso = _utcnow().isoformat()
-    for r, spec_text, spec_hash in work:
+    for r, spec_text, spec_hash, is_force in work:
         try:
             meta = dict(r.metadata_json or {})
-            parsed = parsed_cache.get(spec_hash) or spec_parser_service.parse_spec(spec_text)
+            if is_force:
+                parsed = {"tokens": []}
+            else:
+                parsed = parsed_cache.get(spec_hash) or spec_parser_service.parse_spec(spec_text)
             dims = {
                 "width_cm": parsed.get("width_cm"),
                 "height_cm": parsed.get("height_cm"),
@@ -1575,6 +1750,7 @@ def execute_spec_preparse(
                     "preparse_has_dims": bool(has_dims2),
                     "preparse_saved_at": now_iso,
                     "preparse_saved_by": (requested_by or meta.get("requested_by") or None),
+                    "preparse_mode": "bundle_force" if is_force else "spec_parse",
                 }
             )
             r.metadata_json = meta

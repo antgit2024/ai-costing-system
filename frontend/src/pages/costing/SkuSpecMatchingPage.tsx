@@ -1150,7 +1150,7 @@ export default function SkuSpecMatchingPage() {
                       onClick={() => savePreparseMutation.mutate()}
                       disabled={!effectiveSpecText || !activeSku?.id}
                     >
-                      保存预解析
+                      保存本条（当前行）
                     </Button>
                   </Space>
                   <Alert

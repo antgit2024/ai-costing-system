@@ -422,7 +422,8 @@ export default function ProductInfoPage() {
                         setBoundModelId(v)
                         setPage(1)
                       }}
-                      style={{ width: '100%' }}
+                      // 运营常用：模型名较长，但这里主用于筛选，缩窄以给“版本”更多空间
+                      style={{ width: 240 }}
                       filterOption={false}
                       loading={publishedModelsQuery.isFetching}
                     />
@@ -432,7 +433,8 @@ export default function ProductInfoPage() {
                         setOnlyPublishedVersion(v === 'published')
                         setPage(1)
                       }}
-                      style={{ width: 150 }}
+                      // 放大版本筛选，避免“二级：版本(全部)”挤压
+                      style={{ width: 220 }}
                       options={[
                         { value: 'all', label: '二级：版本(全部)' },
                         { value: 'published', label: '二级：仅发布' },
@@ -454,7 +456,7 @@ export default function ProductInfoPage() {
                         setSelectedBundlePresetSelector(undefined)
                         setPage(1)
                       }}
-                      style={{ width: '100%' }}
+                      style={{ width: 240 }}
                       filterOption={false}
                       loading={bundleTemplatesQuery.isFetching}
                     />
@@ -467,7 +469,7 @@ export default function ProductInfoPage() {
                         setSelectedBundlePresetSelector(v)
                         setPage(1)
                       }}
-                      style={{ width: 150 }}
+                      style={{ width: 220 }}
                       disabled={!selectedBundleTemplateId}
                     />
                   </>
@@ -478,6 +480,15 @@ export default function ProductInfoPage() {
             </Col>
           </Row>
         </Card>
+
+        <div style={{ marginTop: 4, marginBottom: 4 }}>
+          <Space size={8} align="center">
+            <Text type="secondary">当前页：{items.length} 条</Text>
+            <Tooltip title="默认不计算总数（compute_total=false），以支持后续几十万条数据仍能快速首屏加载。需要统计总数再单独加“统计总数”入口。">
+              <InfoCircleOutlined style={{ color: '#999' }} />
+            </Tooltip>
+          </Space>
+        </div>
 
         <Table<SkuMaster>
           rowKey={(r) => String(r.id)}

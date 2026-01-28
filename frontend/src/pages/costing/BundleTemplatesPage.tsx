@@ -1533,22 +1533,25 @@ export default function BundleTemplatesPage() {
           if (hasTokenCond) tokenDepBaseLineIds.add(baseId)
         }
 
+        // 降噪：同一组件内，若多条 base_line 指向同名物料，避免输出重复提示
+        const issuedTokenDepHints = new Set<string>()
         for (const baseLineId of tokenDepBaseLineIds) {
           const base = baseMap.get(String(baseLineId))
-          const baseName = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
+          const baseNameRaw = String(base?.material_name ?? base?.material_code ?? baseLineId).trim()
+          const slot = getLineStructureLabel(base, versionId)
+          const baseName = slot ? `${slot}：${baseNameRaw}` : baseNameRaw
           const isZeroCostFallback = baseName.includes('兜底-零成本')
           const forcedVariantId = String(forceMapForComp?.[String(baseLineId)] ?? '').trim()
           if (!forcedVariantId) {
-            if (isZeroCostFallback) {
+            const hintKey = `${cIdx}:${baseName}:token_dep_unforced`
+            if (!issuedTokenDepHints.has(hintKey)) {
+              issuedTokenDepHints.add(hintKey)
+              // 口径调整：Z 指定型允许不强制指定（默认走“基准/兜底”分支），只提示风险，不阻塞保存
               issues.push({
                 level: 'warn',
-                message: `组件${cIdx + 1}：Z 模式下「${baseName}」存在依赖触发词的规则，但当前未强制指定；将按兜底分支执行（默认“无/不选”）。如需“有/选中”请在“筛选”里勾选对应强制规则并保存。`,
-              })
-            } else {
-              okThisComp = false
-              issues.push({
-                level: 'error',
-                message: `组件${cIdx + 1}：Z 模式下「${baseName}」依赖触发词但未强制指定（请在“筛选”里选中对应规则并保存）`,
+                message: isZeroCostFallback
+                  ? `组件${cIdx + 1}：Z 模式下「${baseName}」存在依赖触发词的规则，但当前未强制指定；将按兜底分支执行（默认“无/不选”）。如需“有/选中”请在“筛选”里勾选对应强制规则并保存。`
+                  : `组件${cIdx + 1}：Z 模式下「${baseName}」存在依赖触发词的规则，但当前未强制指定；将按默认指定（基准物料/兜底分支）执行。若要固定命中某个变体，请在“筛选”里勾选并保存强制规则。`,
               })
             }
             continue

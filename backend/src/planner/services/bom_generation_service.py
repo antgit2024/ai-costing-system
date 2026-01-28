@@ -756,8 +756,9 @@ def generate_bom_by_spec(
     ]
 
     # Merge template-level shared trigger text (applies to all components)
+    # NOTE: disabled under strict token policy (B-parse), otherwise template could inject tokens (e.g. 雪尼尔).
     tpl_shared = str(tpl_meta.get("shared_trigger_text") or "").strip()
-    if tpl_shared:
+    if tpl_shared and (not strict_tx_tokens):
         tpl_shared_parsed = spec_parser_service.parse_spec(tpl_shared)
         tpl_shared_tokens = [str(x) for x in (tpl_shared_parsed.get("tokens") or []) if str(x).strip()]
         tpl_shared_tokens = [
@@ -774,7 +775,9 @@ def generate_bom_by_spec(
     # - Trigger: ERP spec_text may contain alias; we must still match original variant TOKEN conditions
     # Strategy: if spec_text contains alias, also inject original token into shared_tokens.
     sel_for_alias = (forced_preset_selector or bundle_selector or "").strip().upper() or None
-    if sel_for_alias:
+    # NOTE: disabled under strict token policy (B-parse). If we inject original tokens (e.g. 雪尼尔) based on
+    # an alias (e.g. 黄金绒), we would violate "spec_text must contain 雪尼尔/相关词" requirement.
+    if sel_for_alias and (not strict_tx_tokens):
         alias_cfg = tpl_meta.get("variant_token_alias_overrides")
         if isinstance(alias_cfg, dict):
             per = alias_cfg.get(sel_for_alias)

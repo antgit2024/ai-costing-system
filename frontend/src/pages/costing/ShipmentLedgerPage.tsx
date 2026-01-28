@@ -1,4 +1,4 @@
-import { Alert, Button, Card, DatePicker, Form, Input, Select, Space, Table, Tabs, Tag, Tooltip, Typography } from 'antd'
+import { Alert, Button, Card, DatePicker, Form, Input, Modal, Select, Space, Table, Tabs, Tag, Tooltip, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { useState } from 'react'
@@ -45,6 +45,10 @@ const ShipmentLedgerPage = () => {
     spec_text?: string
     unresolved_reason?: string
   }>({})
+
+  const [bulkModalOpen, setBulkModalOpen] = useState(false)
+  const [bulkOverwrite, setBulkOverwrite] = useState(false)
+  const [bulkLimit, setBulkLimit] = useState(200)
 
   const shipmentLinesQuery = useQuery({
     queryKey: ['shipments', 'lines', ledgerTab, ledgerPage, ledgerPageSize, ledgerRange, ledgerFilters],
@@ -168,9 +172,82 @@ const ShipmentLedgerPage = () => {
           <Text type="secondary">面向运营查账：按时间范围查询发货行；异常与快照生成属于“作业中心”。</Text>
         </div>
         <Space>
+          <Button type="primary" onClick={() => setBulkModalOpen(true)}>
+            批量计价快照
+          </Button>
           <Button onClick={() => navigate('/costing/shipments/ops')}>去发货作业中心</Button>
         </Space>
       </div>
+
+      <Modal
+        title="批量计价快照（按当前台账筛选范围）"
+        open={bulkModalOpen}
+        onCancel={() => setBulkModalOpen(false)}
+        okText={bulkOverwrite ? '继续（覆盖重算）' : '继续（只补齐缺失）'}
+        okButtonProps={bulkOverwrite ? { danger: true } : undefined}
+        onOk={() => {
+          const start = ledgerRange?.[0]?.toISOString?.()
+          const end = ledgerRange?.[1]?.toISOString?.()
+          const status = ledgerTab === 'all' ? undefined : ledgerTab
+
+          const qp = new URLSearchParams()
+          qp.set('tab', 'bulk')
+          qp.set('from', 'ledger')
+          if (start) qp.set('start', String(start))
+          if (end) qp.set('end', String(end))
+          if (status) qp.set('status', String(status))
+          if (ledgerFilters.channel) qp.set('channel', String(ledgerFilters.channel))
+          if (ledgerFilters.sku_code) qp.set('sku_code', String(ledgerFilters.sku_code))
+          if (ledgerFilters.shipment_no) qp.set('shipment_no', String(ledgerFilters.shipment_no))
+          if (ledgerFilters.order_no) qp.set('order_no', String(ledgerFilters.order_no))
+          if (ledgerFilters.product_link_id) qp.set('product_link_id', String(ledgerFilters.product_link_id))
+          if (ledgerFilters.spec_text) qp.set('spec_text', String(ledgerFilters.spec_text))
+          if (ledgerFilters.unresolved_reason) qp.set('unresolved_reason', String(ledgerFilters.unresolved_reason))
+          qp.set('limit', String(Math.max(1, Math.min(2000, Math.floor(bulkLimit || 200)))))
+          if (bulkOverwrite) qp.set('overwrite', '1')
+
+          setBulkModalOpen(false)
+          navigate(`/costing/shipments/ops?${qp.toString()}`)
+        }}
+      >
+        <Space direction="vertical" style={{ width: '100%' }} size={8}>
+          <Alert
+            type="info"
+            showIcon
+            message="说明"
+            description={
+              <div>
+                <div>
+                  默认是<strong>只补齐缺失</strong>：已有快照/计价结果的行会跳过。
+                </div>
+                <div>
+                  勾选“覆盖重算”后，会对已有快照执行覆盖重算（高风险，可能改写历史核算结果）。
+                </div>
+              </div>
+            }
+          />
+          <Space wrap>
+            <span>最多处理</span>
+            <Input
+              style={{ width: 120 }}
+              value={String(bulkLimit)}
+              onChange={(e) => setBulkLimit(Number(e.target.value) || 200)}
+            />
+            <span>条（建议先缩小时间范围/筛选条件）</span>
+          </Space>
+          <div>
+            <label style={{ cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={bulkOverwrite}
+                onChange={(e) => setBulkOverwrite(e.target.checked)}
+                style={{ marginRight: 8 }}
+              />
+              覆盖重算（高风险）
+            </label>
+          </div>
+        </Space>
+      </Modal>
 
       <div style={{ marginTop: 16 }}>
         <Card title="发货记录（每日台账）" size="small">

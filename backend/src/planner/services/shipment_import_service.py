@@ -1235,6 +1235,14 @@ def list_shipment_lines(
         .correlate(models.ShipmentLine)
         .scalar_subquery()
     )
+    latest_snapshot_id_sq = (
+        db.query(models.BomSnapshot.id)
+        .filter(models.BomSnapshot.shipment_line_id == models.ShipmentLine.id)
+        .order_by(models.BomSnapshot.created_at.desc())
+        .limit(1)
+        .correlate(models.ShipmentLine)
+        .scalar_subquery()
+    )
 
     # Active SKU -> model binding (BundleAsModel is represented as model_code like "B-XXXXYY").
     bound_model_code_sq = (
@@ -1286,6 +1294,7 @@ def list_shipment_lines(
         models.ShipmentLine,
         has_bom.label("has_bom_snapshot"),
         has_costing.label("has_costing_result"),
+        latest_snapshot_id_sq.label("bom_snapshot_id"),
         unresolved_reason_sq.label("unresolved_reason"),
         unresolved_message_sq.label("unresolved_message"),
         cost_mode_sq.label("cost_mode"),
@@ -1338,6 +1347,7 @@ def list_shipment_lines(
         line,
         has_bom_snapshot,
         has_costing_result,
+        bom_snapshot_id,
         unresolved_reason,
         unresolved_message,
         cost_mode,
@@ -1391,6 +1401,7 @@ def list_shipment_lines(
                 "revenue_amount": getattr(line, "revenue_amount", None),
                 "bound_model_code": (str(bound_model_code).strip() if bound_model_code not in (None, "") else None),
                 "bound_model_name": (str(bound_model_name).strip() if bound_model_name not in (None, "") else None),
+                "bom_snapshot_id": (str(bom_snapshot_id).strip() if bom_snapshot_id not in (None, "") else None),
                 "status": "processed" if processed else "pending",
                 "processed_source": processed_source,
                 "mode": mode,
@@ -1400,6 +1411,104 @@ def list_shipment_lines(
         )
 
     return {"total": int(total), "page": p, "page_size": ps, "items": items}
+
+
+def compute_snapshot_for_shipment_line(
+    db: Session,
+    *,
+    shipment_line_id: str,
+    operator_id: Optional[str] = None,
+    overwrite: bool = False,
+) -> Dict[str, Any]:
+    """
+    Compute (or recompute) a BOM snapshot for a given shipment line using current SKU binding.
+
+    - overwrite=False: only fill missing (skip if already has bom_snapshot or costing_result)
+    - overwrite=True : recompute if snapshot exists; otherwise generate a new snapshot
+    """
+    lid = (shipment_line_id or "").strip()
+    if not lid:
+        raise ValueError("shipment_line_id 不能为空")
+
+    line = db.get(models.ShipmentLine, lid)
+    if not line or getattr(line, "is_archived", False):
+        raise ValueError("发货行不存在或已归档")
+
+    # If not overwriting, skip processed rows (either snapshot or costing result).
+    if not overwrite:
+        has_bom = (
+            db.query(models.BomSnapshot.id)
+            .filter(models.BomSnapshot.shipment_line_id == line.id)
+            .limit(1)
+            .first()
+            is not None
+        )
+        has_costing = (
+            db.query(models.ShipmentCostingResult.id)
+            .filter(models.ShipmentCostingResult.shipment_line_id == line.id)
+            .limit(1)
+            .first()
+            is not None
+        )
+        if has_bom or has_costing:
+            return {
+                "action": "skipped",
+                "shipment_line_id": str(line.id),
+                "bom_snapshot_id": None,
+                "detail": "已存在快照/计价结果，按“只补齐缺失”跳过",
+            }
+
+    # latest snapshot id (if any)
+    latest = (
+        db.query(models.BomSnapshot.id)
+        .filter(models.BomSnapshot.shipment_line_id == line.id)
+        .order_by(models.BomSnapshot.created_at.desc())
+        .first()
+    )
+    latest_id = str(latest[0]) if latest and latest[0] else None
+
+    if overwrite and latest_id:
+        snap = recompute_bom_snapshot(db, snapshot_id=latest_id, operator_id=operator_id)
+        # resolve unresolved exceptions for this line (best-effort)
+        try:
+            db.query(models.ShipmentExceptionQueue).filter(
+                models.ShipmentExceptionQueue.shipment_line_id == line.id,
+                models.ShipmentExceptionQueue.resolved_at.is_(None),
+            ).update({"resolved_at": _utcnow()})
+            db.commit()
+        except Exception:
+            db.rollback()
+        return {"action": "recomputed", "shipment_line_id": str(line.id), "bom_snapshot_id": str(snap.id), "detail": None}
+
+    # Otherwise: generate a new snapshot (2026 style, also persists deduction artifacts).
+    batch_id = getattr(line, "batch_id", None)
+    if not batch_id:
+        raise ValueError("发货行缺 batch_id，无法生成快照")
+    batch = db.get(models.ShipmentImportBatch, str(batch_id))
+    if not batch or getattr(batch, "is_archived", False):
+        raise ValueError("关联批次不存在或已归档")
+
+    snap2 = _generate_bom_snapshot(db, batch=batch, line=line, persist_snapshot=True, mode="2026")
+    if not snap2:
+        # Exception was queued; surface a generic error for UI.
+        return {
+            "action": "failed",
+            "shipment_line_id": str(line.id),
+            "bom_snapshot_id": None,
+            "detail": "生成快照失败（已写入异常队列，请到异常处理查看原因）",
+        }
+
+    # resolve unresolved exceptions for this line (best-effort)
+    try:
+        db.query(models.ShipmentExceptionQueue).filter(
+            models.ShipmentExceptionQueue.shipment_line_id == line.id,
+            models.ShipmentExceptionQueue.resolved_at.is_(None),
+        ).update({"resolved_at": _utcnow()})
+        db.commit()
+    except Exception:
+        db.rollback()
+
+    return {"action": "created", "shipment_line_id": str(line.id), "bom_snapshot_id": str(snap2.id), "detail": None}
 
 
 def recompute_bom_snapshot(db: Session, *, snapshot_id: str, operator_id: Optional[str]) -> models.BomSnapshot:

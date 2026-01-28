@@ -70,6 +70,33 @@
   - 下一步（如需更强约束）：
     - 若希望“发货导入/计价当下就报警（不是事后列表提示）”，可在发货导入 preview/execute 阶段把“发货规格 vs 网店规格不一致”写入 warnings，并在作业中心交接视图聚合展示。
 
+- **最近校对（北京时间 GMT+8）**：2026-01-28（发货作业中心 ERP 化：主从工作台 + 批量计价快照）
+  - 背景：原“发货作业中心”以抽屉+技术Tab为主，运营难以理解与操作；需要按 ERP 习惯把任务流（导入→待处理→已完成→批量作业）梳理清楚，并提供从“发货台账”一键带筛选进入的批量入口。
+  - 口径：
+    - 批量入口默认 **只补齐缺失**（已有快照/计价结果跳过）。
+    - 可选 **覆盖重算（高风险）**：对已有快照执行覆盖写回（用于历史对账/洞察回算）。
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/ShipmentMonitorPage.tsx`
+      - 改为新作业中心入口（ERP式页面），旧实现已从主路径移除（可从 Git 历史回溯）。
+    - `frontend/src/pages/costing/shipment-ops/ShipmentOpsPage.tsx`
+      - 新作业中心：顶部“导入发货单/去发货台账”，主Tab：`单据/待处理/快照` + `批量计价快照（按台账范围）`。
+    - `frontend/src/pages/costing/shipment-ops/components/BatchWorkbench.tsx`
+      - 单据主从工作台：左侧批次列表，右侧单据详情（对账概览/异常/快照）。
+    - `frontend/src/pages/costing/shipment-ops/components/BulkCostingTab.tsx`
+      - 批量执行器：预览范围→逐条执行→进度/可停止→汇总结果；支持从台账 URL 参数恢复筛选与默认覆盖开关。
+    - `frontend/src/pages/costing/ShipmentLedgerPage.tsx`
+      - 右上新增按钮 `批量计价快照`：弹窗确认（默认只补齐缺失，可勾选覆盖重算）→带当前筛选跳转到作业中心批量页。
+    - `frontend/src/services/planner.ts` + `frontend/src/types/planner.ts`
+      - 新增 `computeShipmentLineSnapshot` 调用；补齐相关类型字段。
+  - 本轮产物（后端）：
+    - `GET /api/planner/shipments/lines` 返回补齐 `bom_snapshot_id`（用于批量覆盖重算定位最新快照）
+    - `POST /api/planner/shipments/lines/{shipment_line_id}/compute-snapshot`
+      - 支持“只补齐缺失/覆盖重算”，用于批量计价快照执行器逐条落库。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shipment_import_bom_snapshots_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shipment_exception_retry_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-26（线上深链接 404：BrowserRouter /costing/* Not Found 兜底）
   - 现象：直接访问 `https://<host>/costing/insights/models` 返回 `Not Found`（history 深链接无法回退到 SPA 入口）。
   - 根因：前端使用 `BrowserRouter`（history 模式），需要服务端对 `/costing/*` 做 `try_files ... /index.html` 回退。

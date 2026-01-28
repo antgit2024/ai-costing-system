@@ -11,8 +11,10 @@ from ..schemas import (
     BomSnapshotRecomputeRequest,
     PaginatedShipmentImportBatchResponse,
     PaginatedShipmentLineResponse,
-  ShipmentImportPreviewResponse,
-  ShipmentImportExecuteRequest,
+    ShipmentImportPreviewResponse,
+    ShipmentImportExecuteRequest,
+    ShipmentLineComputeSnapshotRequest,
+    ShipmentLineComputeSnapshotResponse,
     ShipmentExceptionRead,
     ShipmentExceptionRetryRequest,
     ShipmentExceptionRetryResponse,
@@ -221,5 +223,22 @@ def list_shipment_lines(
             unresolved_reason=unresolved_reason,
         )
         return payload
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/lines/{shipment_line_id}/compute-snapshot", response_model=ShipmentLineComputeSnapshotResponse)
+def compute_snapshot_for_shipment_line(
+    shipment_line_id: str,
+    payload: ShipmentLineComputeSnapshotRequest,
+    db: Session = Depends(get_db_session),
+):
+    try:
+        return shipment_import_service.compute_snapshot_for_shipment_line(
+            db,
+            shipment_line_id=shipment_line_id,
+            operator_id=payload.operator_id,
+            overwrite=bool(payload.overwrite),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

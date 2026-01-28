@@ -1471,6 +1471,7 @@ export interface ShipmentLineListItem {
   spec_hash?: string | null
   qty?: string | null
   revenue_amount?: string | null
+  bom_snapshot_id?: string | null
   status: ShipmentLineStatus
   processed_source?: ShipmentLineProcessedSource | null
   mode?: ShipmentLineMode | null
@@ -1479,6 +1480,20 @@ export interface ShipmentLineListItem {
 }
 
 export interface ShipmentLineListResponse extends PaginatedResponse<ShipmentLineListItem> {}
+
+export interface ShipmentLineComputeSnapshotRequest {
+  operator_id?: string | null
+  overwrite: boolean
+}
+
+export type ShipmentLineComputeSnapshotAction = 'skipped' | 'created' | 'recomputed' | 'failed'
+
+export interface ShipmentLineComputeSnapshotResponse {
+  action: ShipmentLineComputeSnapshotAction
+  shipment_line_id: string
+  bom_snapshot_id?: string | null
+  detail?: string | null
+}
 
 export interface ShipmentException {
   id: string

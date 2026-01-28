@@ -116,6 +116,8 @@ import type {
   SalesProfitDashboardResponse,
   ShipmentProfitLinesResponse,
   ShipmentLineListResponse,
+  ShipmentLineComputeSnapshotRequest,
+  ShipmentLineComputeSnapshotResponse,
   AfterSalesImportBatch,
   AfterSalesModelOptionsResponse,
   AfterSalesReasonOptionsResponse,
@@ -1852,6 +1854,15 @@ export const fetchShipmentProfitLines = async (params: {
 
 export const recomputeShipmentBomSnapshot = async (snapshot_id: string, payload?: { operator_id?: string }): Promise<BomSnapshot> => {
   const response = await plannerClient.post(`/shipments/bom-snapshots/${snapshot_id}/recompute`, payload ?? {})
+  return response.data
+}
+
+export const computeShipmentLineSnapshot = async (
+  shipment_line_id: string,
+  payload: ShipmentLineComputeSnapshotRequest,
+): Promise<ShipmentLineComputeSnapshotResponse> => {
+  const id = String(shipment_line_id || '').trim()
+  const response = await plannerClient.post(`/shipments/lines/${id}/compute-snapshot`, payload)
   return response.data
 }
 

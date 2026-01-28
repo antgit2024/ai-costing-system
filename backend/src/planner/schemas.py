@@ -2336,6 +2336,8 @@ class ShipmentLineListItem(BaseModel):
     spec_hash: Optional[str] = None
     qty: Optional[Decimal] = None
     revenue_amount: Optional[Decimal] = None
+    # latest snapshot id (if any) for bulk recompute
+    bom_snapshot_id: Optional[str] = None
 
     # processing status (2025/2026 unified)
     status: Literal["processed", "pending"]
@@ -2353,6 +2355,18 @@ class PaginatedShipmentLineResponse(BaseModel):
     page: int
     page_size: int
     items: List[ShipmentLineListItem]
+
+
+class ShipmentLineComputeSnapshotRequest(BaseModel):
+    operator_id: Optional[str] = None
+    overwrite: bool = False  # True = 覆盖重算（高风险）
+
+
+class ShipmentLineComputeSnapshotResponse(BaseModel):
+    action: Literal["skipped", "created", "recomputed", "failed"]
+    shipment_line_id: str
+    bom_snapshot_id: Optional[str] = None
+    detail: Optional[str] = None
 
 
 class ShipmentImportPreviewIssue(BaseModel):

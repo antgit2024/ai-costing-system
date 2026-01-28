@@ -41,6 +41,9 @@ TOKEN_SPLIT_PATTERN = re.compile(r"[;\n\r,，/\\\+|、]+")
 # avoid token explosion and accidental over-matching.
 PHRASE_TOKEN_WHITELIST = [
     "背面纯色",
+    # Pillow variants (运营口径：只要交易规格出现这些词才允许命中对应变体物料)
+    "毛球",
+    "雪尼尔",
 ]
 
 # e.g. "竖120CM*横150CM" / "横150*竖120" / "宽120×高150"

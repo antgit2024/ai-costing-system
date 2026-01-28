@@ -2817,6 +2817,7 @@
     - 同时禁用“预设强制命中”（`phrase_presets[*].components[*].force_variant_by_base_line(_stable)`）在 B-解析型下的生效，避免“即使交易规格没写毛球/雪尼尔也被强制替换”的绕口径（Z-指定型仍保留强制能力）。
   - 结果：不会再出现“规格里没写雪尼尔但命中雪尼尔物料”的情况；示例中 `runtime_tokens` 不再包含 `雪尼尔`，`WB02339` 不再命中。
   - 关联文件：`backend/src/planner/services/bom_generation_service.py`
+  - 补充：将 `spec_parser_service` 增加保守白名单（`毛球`/`雪尼尔`），使“中文触发词”能被抽成独立 token；否则会被当作整段文本 token，导致规则 `spec_contains_any/all` 无法命中。
   - 本轮验收命令（必须，均已通过）：
     - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
     - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`

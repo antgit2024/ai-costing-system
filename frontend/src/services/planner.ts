@@ -1395,6 +1395,9 @@ export type BundleTemplateRead = {
   components: BundleTemplateComponent[]
   metadata: Record<string, any>
   shared_trigger_text?: string | null
+  published_version_id?: string | null
+  published_version_label?: string | null
+  published_at?: string | null
   is_archived: boolean
   created_at?: string
   updated_at?: string
@@ -1447,6 +1450,39 @@ export const cloneBundleTemplate = async (
 
 export const archiveBundleTemplate = async (templateId: string): Promise<void> => {
   await plannerClient.delete(`/bundle-templates/${templateId}`)
+}
+
+export type BundleTemplateVersionRead = {
+  id: string
+  template_id: string
+  template_code: string
+  template_name?: string | null
+  version_status: string
+  version_label?: string | null
+  published_at?: string | null
+  published_by?: string | null
+  components: BundleTemplateComponent[]
+  metadata: Record<string, any>
+  is_archived: boolean
+  created_at?: string
+}
+
+export type BundleTemplateVersionsResponse = {
+  total: number
+  items: BundleTemplateVersionRead[]
+}
+
+export const fetchBundleTemplateVersions = async (templateId: string): Promise<BundleTemplateVersionsResponse> => {
+  const response = await plannerClient.get(`/bundle-templates/${templateId}/versions`)
+  return response.data
+}
+
+export const publishBundleTemplate = async (
+  templateId: string,
+  payload: { operator_id?: string; note?: string } = {},
+): Promise<{ version: BundleTemplateVersionRead }> => {
+  const response = await plannerClient.post(`/bundle-templates/${templateId}/publish`, payload)
+  return response.data
 }
 
 export type BomGenerateBySpecRequest = {

@@ -692,6 +692,7 @@ const SkuMasterWorkspacePage = () => {
     onError: (e: any) => {
       const status = Number(e?.response?.status ?? 0)
       const msg = String(e?.message ?? '')
+      const detail = String(e?.response?.data?.detail ?? '').trim()
       const isTimeout = msg.toLowerCase().includes('timeout') || String(e?.code ?? '').toUpperCase() === 'ECONNABORTED'
       if (isTimeout) {
         message.error('绑定请求超时：后端可能仍在执行，请稍后点“刷新”确认是否已绑定（大批量建议用“一键跑完”）')
@@ -701,7 +702,11 @@ const SkuMasterWorkspacePage = () => {
         message.error('绑定失败（405）：线上后端尚未部署“套装绑定”接口，请先发布后端再重试')
         return
       }
-      message.error(e?.message || '绑定失败')
+      if (status === 400 && detail.includes('尚未发布版本')) {
+        message.error('绑定失败：该套装模板尚未发布版本，请先去“套装模板”页面点“发布为新版本”再绑定')
+        return
+      }
+      message.error(detail || e?.message || '绑定失败')
     },
   })
 

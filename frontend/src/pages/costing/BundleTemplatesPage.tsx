@@ -42,6 +42,7 @@ import {
   cloneBundleTemplate,
   createBundleTemplate,
   fetchBundleTemplates,
+  fetchBundleTemplateVersions,
   generateBomBySpecDebug,
   fetchProcessModule,
   fetchProductModelVersionLines,
@@ -49,6 +50,7 @@ import {
   fetchStructureStandards,
   fetchProductModelVersionsPaged,
   listLineVariants,
+  publishBundleTemplate,
   updateBundleTemplate,
 } from '@/services/planner'
 
@@ -564,6 +566,7 @@ export default function BundleTemplatesPage() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [editing, setEditing] = useState<any | null>(null)
   const [createdTokenHint, setCreatedTokenHint] = useState<string | null>(null)
+  const [publishNote, setPublishNote] = useState<string>('')
 
   const [form] = Form.useForm()
   const [phrasePresets, setPhrasePresets] = useState<PhrasePresetRow[]>([])
@@ -2261,6 +2264,38 @@ export default function BundleTemplatesPage() {
     onError: (e: any) => message.error(String(e?.message ?? e)),
   })
 
+  const versionsQuery = useQuery({
+    queryKey: ['bundle-template-versions', String(editing?.id ?? '')],
+    queryFn: () => fetchBundleTemplateVersions(String(editing?.id ?? '')),
+    enabled: !!editing?.id && drawerOpen,
+    staleTime: 0,
+  })
+
+  const publishMutation = useMutation({
+    mutationFn: async () => {
+      if (!editing?.id) throw new Error('请先打开一个套装模板')
+      return publishBundleTemplate(String(editing.id), { operator_id: 'system', note: publishNote || undefined })
+    },
+    onSuccess: (res: any) => {
+      qc.invalidateQueries({ queryKey: ['bundle-templates'] })
+      qc.invalidateQueries({ queryKey: ['bundle-template-versions', String(editing?.id ?? '')] })
+      const v = res?.version ?? {}
+      const vlabel = String(v?.version_label ?? '').trim()
+      setEditing((prev: any) =>
+        prev
+          ? {
+              ...prev,
+              published_version_id: String(v?.id ?? '').trim() || prev?.published_version_id,
+              published_version_label: vlabel || prev?.published_version_label,
+              published_at: String(v?.published_at ?? '').trim() || prev?.published_at,
+            }
+          : prev,
+      )
+      message.success(vlabel ? `已发布为新版本：${vlabel}` : '已发布为新版本')
+    },
+    onError: (e: any) => message.error(String(e?.response?.data?.detail ?? e?.message ?? e)),
+  })
+
   const items = (listQuery.data?.items ?? []) as any[]
 
   const filteredItems = useMemo(() => {
@@ -2903,17 +2938,53 @@ export default function BundleTemplatesPage() {
 
       <Drawer
         open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
+        onClose={() => {
+          setDrawerOpen(false)
+          setPublishNote('')
+        }}
         width={1280}
         destroyOnClose={false}
         title={
-          editing?.id
-            ? `编辑套装模板（${toBundleTokenDash(String(editing?.code ?? ''), 'AA')}）`
-            : '新建套装模板'
+          <Space wrap>
+            <span>
+              {editing?.id ? `编辑套装模板（${toBundleTokenDash(String(editing?.code ?? ''), 'AA')}）` : '新建套装模板'}
+            </span>
+            {String((editing as any)?.published_version_label ?? '').trim() ? (
+              <Tag color="geekblue">已发布：{String((editing as any).published_version_label)}</Tag>
+            ) : (
+              <Tag color="orange">未发布</Tag>
+            )}
+          </Space>
         }
         extra={
           <Space>
             <Button onClick={() => setDrawerOpen(false)}>关闭</Button>
+            {editing?.id ? (
+              <>
+                <Input
+                  placeholder="发布备注（可选）"
+                  value={publishNote}
+                  onChange={(e) => setPublishNote(e.target.value)}
+                  style={{ width: 220 }}
+                />
+                <Button
+                  type="primary"
+                  loading={publishMutation.isPending}
+                  onClick={() => {
+                    Modal.confirm({
+                      title: '发布为新版本？',
+                      content:
+                        '发布后会生成不可变更的版本快照，用于发货/快照/洞察口径稳定。后续改动请先保存草稿，再再次发布新版本。',
+                      okText: '确认发布',
+                      cancelText: '取消',
+                      onOk: async () => publishMutation.mutateAsync(),
+                    })
+                  }}
+                >
+                  发布为新版本
+                </Button>
+              </>
+            ) : null}
             <Button type="primary" loading={saveMutation.isPending} onClick={() => saveMutation.mutate()}>
               保存模板
             </Button>
@@ -2921,6 +2992,16 @@ export default function BundleTemplatesPage() {
         }
       >
         <Space direction="vertical" style={{ width: '100%' }} size={12}>
+          {editing?.id ? (
+            <Alert
+              type="info"
+              showIcon
+              message="口径说明：只有“已发布版本”会用于 SKU 绑定 → 发货快照 → 洞察对账。"
+              description={`历史版本数：${
+                versionsQuery.isFetching ? '加载中…' : String((versionsQuery.data as any)?.total ?? 0)
+              }`}
+            />
+          ) : null}
           {/* 降噪：不在编辑页重复提示“把短码放进交易规格” */}
 
           <Form layout="vertical" form={form}>

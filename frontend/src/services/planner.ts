@@ -2178,6 +2178,7 @@ export const bindSkuMastersByModelBulk = async (
 export const bindSkuMastersByBundleTemplate = async (
   payload: {
     template_id: string
+    preset_selector?: string
     sku_master_ids: string[]
     requested_by?: string
     allow_rebind?: boolean
@@ -2199,6 +2200,7 @@ export const bindSkuMastersByBundleTemplate = async (
 export const bindSkuMastersByBundleTemplateBulk = async (
   payload: {
     template_id: string
+    preset_selector?: string
     requested_by?: string
     limit?: number
     bound_state?: 'unbound' | 'bound' | 'all'

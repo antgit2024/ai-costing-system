@@ -916,6 +916,7 @@ def _attach_parsed_fields(rows: List[models.SkuMaster]) -> None:
         # 套装模板绑定（Phase0：存 metadata_json；用于 sku-master 人工兜底/前置校验）
         r.bundle_template_id = meta.get("bundle_template_id")
         r.bundle_template_code = meta.get("bundle_template_code")
+        r.bundle_preset_selector = meta.get("bundle_preset_selector")
         r.erp_spec_hash = meta.get("erp_spec_hash")
         r.erp_parser_version = meta.get("erp_parser_version")
         r.erp_dimensions = meta.get("erp_dimensions") or {}
@@ -1783,6 +1784,7 @@ def bind_sku_master_by_bundle_template(
     db: Session,
     *,
     template_id: str,
+    preset_selector: Optional[str] = None,
     sku_master_ids: List[str],
     requested_by: Optional[str],
     allow_rebind: bool = False,
@@ -1811,6 +1813,7 @@ def bind_sku_master_by_bundle_template(
     errors: List[Dict[str, Any]] = []
     now_iso = _utcnow().isoformat()
     tcode = str(getattr(t, "code", "") or "").strip() or None
+    selector = str(preset_selector or "").strip().upper() or None
 
     for sid in ids:
         row = by_id.get(sid)
@@ -1826,6 +1829,7 @@ def bind_sku_master_by_bundle_template(
             {
                 "bundle_template_id": tid,
                 "bundle_template_code": tcode,
+                "bundle_preset_selector": selector,
                 "bundle_bound_at": now_iso,
                 "bundle_bound_by": (requested_by or meta.get("requested_by") or None),
                 "bundle_binding_method": "manual_by_template_rebind" if allow_rebind else "manual_by_template",
@@ -1847,6 +1851,7 @@ def bind_sku_master_by_bundle_template_bulk(
     db: Session,
     *,
     template_id: str,
+    preset_selector: Optional[str] = None,
     requested_by: Optional[str],
     limit: int = 200,
     bound_state: str = "unbound",
@@ -1871,6 +1876,7 @@ def bind_sku_master_by_bundle_template_bulk(
     if not t or getattr(t, "is_archived", False):
         raise ValueError("套装模板不存在或已归档")
     tcode = str(getattr(t, "code", "") or "").strip() or None
+    selector = str(preset_selector or "").strip().upper() or None
 
     limit2 = max(min(int(limit or 200), 2000), 1)
     excluded_list = list(set([str(x) for x in (excluded_sku_master_ids or []) if str(x).strip()]))
@@ -2003,6 +2009,7 @@ def bind_sku_master_by_bundle_template_bulk(
             {
                 "bundle_template_id": tid,
                 "bundle_template_code": tcode,
+                "bundle_preset_selector": selector,
                 "bundle_bound_at": now_iso,
                 "bundle_bound_by": (requested_by or meta.get("requested_by") or None),
                 "bundle_binding_method": "manual_bulk_template_rebind" if allow_rebind else "manual_bulk_template",

@@ -318,6 +318,21 @@
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-27（商品关联 UI 优化：目标下拉同一行 + 套装二级 preset 绑定）
+  - 需求：人工审核的“模型类型下拉 + 模型/套装下拉”合并为同一行；套装绑定改为二级（先选模板，再选 `preset_selector`，第二级才是最终绑定目标）。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/SkuMasterWorkspacePage.tsx`
+      - 目标选择改为一行：类型 +（模型或套装模板）+（套装 preset）
+      - 套装绑定强制选择 `preset_selector`（无 preset 时默认 AA）
+      - 列表/详情展示：`套装 <code>-<selector>`
+    - 后端：`backend/src/planner/schemas.py`、`backend/src/planner/services/sku_master_service.py`、`backend/src/planner/routers/sku_master.py`
+      - 套装绑定接口新增参数：`preset_selector` 并落库到 `sku_master.metadata_json.bundle_preset_selector`
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-22（天猫SKU生成器：尺寸胶囊常显 + Z 规格同列不变色 + 检验补齐商家编码）
   - 本轮范围：对齐业务口径：检验用于校验“商品规格（网店）+ 商家编码”是否能命中系统编码/公式；尺寸展示与检验解绑；Z- 规格字样显示在“TOKEN/公式”列但不做红绿高亮。
   - 本轮产物：

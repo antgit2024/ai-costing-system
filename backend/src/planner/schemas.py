@@ -3178,6 +3178,8 @@ class SkuMasterRead(BaseModel):
     # 套装模板绑定（Phase0：存储在 sku_master.metadata_json，作为“商家编码锚点”的人工兜底入口）
     bundle_template_id: Optional[str] = None
     bundle_template_code: Optional[str] = None
+    # 套装模板二级（phrase preset selector，如 AA/AB/...；第二级才是最终绑定目标）
+    bundle_preset_selector: Optional[str] = None
     channel: Optional[str] = None
     product_name: Optional[str] = None
     product_code: Optional[str] = None
@@ -3449,6 +3451,7 @@ class SkuMasterBindByModelBulkResponse(BaseModel):
 
 class SkuMasterBindByBundleTemplateRequest(BaseModel):
     template_id: str
+    preset_selector: Optional[str] = None
     sku_master_ids: List[str] = Field(default_factory=list)
     requested_by: Optional[str] = None
     # if true, overwrite existing bundle_template binding
@@ -3469,6 +3472,7 @@ class SkuMasterBindByBundleTemplateBulkRequest(BaseModel):
     """
 
     template_id: str
+    preset_selector: Optional[str] = None
     requested_by: Optional[str] = None
     limit: int = Field(200, ge=1, le=2000)
     bound_state: Literal["unbound", "bound", "all"] = "unbound"

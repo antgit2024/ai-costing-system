@@ -143,6 +143,7 @@ const SkuMasterWorkspacePage = () => {
   const [targetKind, setTargetKind] = useState<'model' | 'bundle'>('model')
   const [bundleSearch, setBundleSearch] = useState<string>('')
   const [selectedBundleTemplateId, setSelectedBundleTemplateId] = useState<string | undefined>(undefined)
+  const [selectedBundlePresetSelector, setSelectedBundlePresetSelector] = useState<string | undefined>(undefined)
   const [autoPreviewText, setAutoPreviewText] = useState<string>('')
   const [autoPreviewCandidates, setAutoPreviewCandidates] = useState<SkuMasterAutoBindPreviewItem[]>([])
   const [autoCandidatesOnly, setAutoCandidatesOnly] = useState(false)
@@ -413,7 +414,15 @@ const SkuMasterWorkspacePage = () => {
         const source = safeString((record.metadata_json as any)?.source)
         const srcTag = source === 'shipment_autobackfill' ? <Tag color="gold">发货回写</Tag> : null
         const bundleCode = safeString((record as any)?.bundle_template_code ?? (record.metadata_json as any)?.bundle_template_code).trim()
-        const bundleTag = bundleCode ? <Tag color="purple">套装 {bundleCode}</Tag> : null
+        const preset = safeString(
+          (record as any)?.bundle_preset_selector ?? (record.metadata_json as any)?.bundle_preset_selector,
+        ).trim()
+        const bundleTag = bundleCode ? (
+          <Tag color="purple">
+            套装 {bundleCode}
+            {preset ? `-${preset}` : ''}
+          </Tag>
+        ) : null
         return (
           <Space size={6}>
             {bound ? <Tag color="green">已绑定</Tag> : <Tag color="red">未绑定</Tag>}
@@ -521,12 +530,54 @@ const SkuMasterWorkspacePage = () => {
     return m
   }, [bundleTemplateOptions])
 
+  const bundlePresetsForSelectedTemplate = useMemo(() => {
+    if (!selectedBundleTemplateId) return []
+    const items = (bundleTemplatesQuery.data as any)?.items ?? []
+    const hit = (items as any[]).find((x) => String(x?.id) === String(selectedBundleTemplateId))
+    const meta = (hit?.metadata ?? hit?.metadata_json ?? {}) as any
+    const pp = Array.isArray(meta?.phrase_presets) ? meta.phrase_presets : []
+    // BundleTemplatesPage has a migration: if top-level components exist but no preset components, map to preset A.
+    if (!pp.length) {
+      return [{ selector: 'AA', phrase: '默认', mode: 'parse', enabled: true }]
+    }
+    return pp
+      .map((p: any) => ({
+        selector: String(p?.selector ?? '').trim().toUpperCase(),
+        phrase: String(p?.phrase ?? '').trim(),
+        mode: String(p?.mode ?? 'parse').trim(),
+        enabled: p?.enabled !== false,
+      }))
+      .filter((p: any) => !!p.selector)
+  }, [bundleTemplatesQuery.data, selectedBundleTemplateId])
+
+  const bundlePresetOptions = useMemo(() => {
+    return (bundlePresetsForSelectedTemplate as any[]).map((p) => {
+      const mode = String(p.mode || 'parse').trim() === 'force' ? '指定' : '解析'
+      const label = `${p.selector}（${mode}）${p.phrase ? ` ${p.phrase}` : ''}`.trim()
+      return { label, value: p.selector }
+    })
+  }, [bundlePresetsForSelectedTemplate])
+
+  useEffect(() => {
+    if (targetKind !== 'bundle') return
+    if (!selectedBundleTemplateId) {
+      setSelectedBundlePresetSelector(undefined)
+      return
+    }
+    // When template changes, default to the first enabled preset.
+    const first = (bundlePresetsForSelectedTemplate as any[]).find((x) => x?.enabled !== false) ?? bundlePresetsForSelectedTemplate?.[0]
+    const sel = String((first as any)?.selector ?? '').trim().toUpperCase()
+    setSelectedBundlePresetSelector(sel || undefined)
+  }, [targetKind, selectedBundleTemplateId, bundlePresetsForSelectedTemplate])
+
   const bindMutation = useMutation({
     mutationFn: async () => {
       if (targetKind === 'bundle') {
         if (!selectedBundleTemplateId) throw new Error('请选择套装模板')
+        if (!selectedBundlePresetSelector) throw new Error('请选择套装二级（preset）')
         return await bindSkuMastersByBundleTemplate({
           template_id: selectedBundleTemplateId,
+          preset_selector: selectedBundlePresetSelector,
           sku_master_ids: selectedRowKeys,
           requested_by: requestedBy || undefined,
         })
@@ -586,6 +637,10 @@ const SkuMasterWorkspacePage = () => {
         message.warning('请先选择套装模板')
         return
       }
+      if (!selectedBundlePresetSelector) {
+        message.warning('请先选择套装二级（preset）')
+        return
+      }
     } else if (!selectedModelId) {
       message.warning('请先选择目标模型（已发布）')
       return
@@ -615,6 +670,7 @@ const SkuMasterWorkspacePage = () => {
           // 点“开始执行”后立即关闭弹窗，后台继续跑；进度/停止在页面里看
           const modelId = selectedModelId
           const templateId = selectedBundleTemplateId
+          const presetSelector = selectedBundlePresetSelector
           const idsAll = [...selectedRowKeys]
           const reqBy = requestedBy || undefined
 
@@ -642,6 +698,7 @@ const SkuMasterWorkspacePage = () => {
                     res = await bindSkuMastersByBundleTemplate(
                       {
                         template_id: templateId as string,
+                        preset_selector: presetSelector as string,
                         sku_master_ids: batch,
                         requested_by: reqBy,
                       },
@@ -773,6 +830,7 @@ const SkuMasterWorkspacePage = () => {
         // 点“开始执行”后立即关闭弹窗，后台继续跑；进度/停止在页面里看
         const modelId = selectedModelId
         const templateId = selectedBundleTemplateId
+        const presetSelector = selectedBundlePresetSelector
         const reqBy = requestedBy || undefined
         const fSearch = search || undefined
         const fChannel = channel
@@ -803,6 +861,7 @@ const SkuMasterWorkspacePage = () => {
                   res = await bindSkuMastersByBundleTemplateBulk(
                     {
                       template_id: templateId as string,
+                      preset_selector: presetSelector as string,
                       requested_by: reqBy,
                       limit: 200,
                       search: fSearch,
@@ -1082,7 +1141,7 @@ const SkuMasterWorkspacePage = () => {
                         <Text type="secondary">
                           先选“目标类型”，再选“目标对象”。标准模型会自动落到该模型唯一在线发布版本；套装模块会写入模板绑定（Phase0：存主档 metadata）。
                         </Text>
-                        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                        <Space wrap size={8} style={{ width: '100%' }}>
                           <Select
                             value={targetKind}
                             options={[
@@ -1093,20 +1152,37 @@ const SkuMasterWorkspacePage = () => {
                               setTargetKind(v as any)
                               setSelectedModelId(undefined)
                               setSelectedBundleTemplateId(undefined)
+                              setSelectedBundlePresetSelector(undefined)
                             }}
+                            style={{ minWidth: 120 }}
                           />
                           {targetKind === 'bundle' ? (
-                            <Select
-                              showSearch
-                              allowClear
-                              placeholder="套装模板（按 code/name 搜索）"
-                              options={bundleTemplateOptions}
-                              value={selectedBundleTemplateId}
-                              onChange={(v) => setSelectedBundleTemplateId(v)}
-                              onSearch={(v) => setBundleSearch(v)}
-                              filterOption={false}
-                              loading={bundleTemplatesQuery.isFetching}
-                            />
+                            <>
+                              <Select
+                                showSearch
+                                allowClear
+                                placeholder="套装模板"
+                                options={bundleTemplateOptions}
+                                value={selectedBundleTemplateId}
+                                onChange={(v) => setSelectedBundleTemplateId(v)}
+                                onSearch={(v) => setBundleSearch(v)}
+                                filterOption={false}
+                                loading={bundleTemplatesQuery.isFetching}
+                                style={{ minWidth: 220, flex: 1 }}
+                              />
+                              <Select
+                                showSearch
+                                allowClear={false}
+                                placeholder="套装二级（preset）"
+                                options={bundlePresetOptions}
+                                value={selectedBundlePresetSelector}
+                                onChange={(v) => setSelectedBundlePresetSelector(String(v || '').trim().toUpperCase() || undefined)}
+                                filterOption={(input, opt) =>
+                                  String(opt?.label ?? '').toUpperCase().includes(String(input ?? '').toUpperCase())
+                                }
+                                style={{ minWidth: 180 }}
+                              />
+                            </>
                           ) : (
                             <Select
                               showSearch
@@ -1118,6 +1194,7 @@ const SkuMasterWorkspacePage = () => {
                               onSearch={(v) => setModelSearch(v)}
                               filterOption={false}
                               loading={candidatesQuery.isFetching}
+                              style={{ minWidth: 260, flex: 1 }}
                             />
                           )}
                         </Space>
@@ -1159,8 +1236,9 @@ const SkuMasterWorkspacePage = () => {
                           block
                           type="primary"
                           disabled={
-                            (targetKind === 'bundle' ? !selectedBundleTemplateId : !selectedModelId) ||
-                            selectedRowKeys.length === 0
+                            (targetKind === 'bundle'
+                              ? !selectedBundleTemplateId || !selectedBundlePresetSelector
+                              : !selectedModelId) || selectedRowKeys.length === 0
                           }
                           loading={bindMutation.isPending}
                           onClick={() => bindMutation.mutate()}
@@ -1172,7 +1250,9 @@ const SkuMasterWorkspacePage = () => {
                           type="primary"
                           danger
                           disabled={
-                            (targetKind === 'bundle' ? !selectedBundleTemplateId : !selectedModelId) ||
+                            (targetKind === 'bundle'
+                              ? !selectedBundleTemplateId || !selectedBundlePresetSelector
+                              : !selectedModelId) ||
                             manualRunAllRunning ||
                             bindMutation.isPending
                           }
@@ -1478,7 +1558,18 @@ const SkuMasterWorkspacePage = () => {
                   {(detailQuery.data as any).shop_spec_code ?? (detailQuery.data.metadata_json as any)?.shop_spec_code ?? '-'}
                 </Descriptions.Item>
                 <Descriptions.Item label="套装模板绑定">
-                  {(detailQuery.data as any).bundle_template_code ?? (detailQuery.data.metadata_json as any)?.bundle_template_code ?? '-'}
+                  {(() => {
+                    const code =
+                      (detailQuery.data as any).bundle_template_code ??
+                      (detailQuery.data.metadata_json as any)?.bundle_template_code ??
+                      ''
+                    const sel =
+                      (detailQuery.data as any).bundle_preset_selector ??
+                      (detailQuery.data.metadata_json as any)?.bundle_preset_selector ??
+                      ''
+                    const s = [String(code || '').trim(), String(sel || '').trim().toUpperCase()].filter(Boolean).join('-')
+                    return s || '-'
+                  })()}
                 </Descriptions.Item>
                 <Descriptions.Item label="ERP匹配状态（网店↔ERP）">
                   {detailQuery.data.match_status ?? '-'}

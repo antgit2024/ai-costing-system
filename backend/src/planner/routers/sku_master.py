@@ -129,6 +129,7 @@ def bind_by_bundle(payload: schemas.SkuMasterBindByBundleTemplateRequest, db: Se
         return sku_master_service.bind_sku_master_by_bundle_template(
             db,
             template_id=payload.template_id,
+            preset_selector=payload.preset_selector,
             sku_master_ids=payload.sku_master_ids,
             requested_by=payload.requested_by,
             allow_rebind=payload.allow_rebind,
@@ -143,6 +144,7 @@ def bind_by_bundle_bulk(payload: schemas.SkuMasterBindByBundleTemplateBulkReques
         return sku_master_service.bind_sku_master_by_bundle_template_bulk(
             db,
             template_id=payload.template_id,
+            preset_selector=payload.preset_selector,
             requested_by=payload.requested_by,
             limit=payload.limit,
             bound_state=payload.bound_state,

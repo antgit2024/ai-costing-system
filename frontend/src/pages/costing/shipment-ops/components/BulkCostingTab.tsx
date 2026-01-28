@@ -52,7 +52,6 @@ export default function BulkCostingTab() {
       status,
       channel: pick(sp, 'channel'),
       sku_code: pick(sp, 'sku_code'),
-      shipment_no: pick(sp, 'shipment_no'),
       order_no: pick(sp, 'order_no'),
       product_link_id: pick(sp, 'product_link_id'),
       spec_text: pick(sp, 'spec_text'),
@@ -72,7 +71,6 @@ export default function BulkCostingTab() {
         status: filters.status,
         channel: filters.channel,
         sku_code: filters.sku_code,
-        shipment_no: filters.shipment_no,
         order_no: filters.order_no,
         product_link_id: filters.product_link_id,
         spec_text: filters.spec_text,
@@ -190,7 +188,6 @@ export default function BulkCostingTab() {
     s('status', 'status')
     s('channel', '店铺')
     s('sku_code', 'SKU')
-    s('shipment_no', '发货单号')
     s('spec_text', '交易规格')
     s('unresolved_reason', '状态')
     return parts.join('；') || '（未携带筛选条件：请从发货台账点击“批量计价快照”进入）'

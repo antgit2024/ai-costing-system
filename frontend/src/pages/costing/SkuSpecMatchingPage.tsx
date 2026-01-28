@@ -53,8 +53,27 @@ const safeString = (v: unknown): string => {
 
 const isFilled = (v: unknown): boolean => !!safeString(v).trim()
 
+const stripCnAttrLabels = (input: unknown): string => {
+  const raw = safeString(input).trim()
+  if (!raw) return ''
+  // unify punctuation first
+  let t = raw.replace(/；/g, ';').replace(/：/g, ':').replace(/，/g, ',')
+  // Strip Chinese attribute label prefixes like "颜色分类:" / "尺寸:" / "组合形式:".
+  // Only labels containing Chinese chars are removed to avoid breaking internal tokens like "BUNDLE:XXXX".
+  t = t.replace(
+    /(^|[;\n\r,，/\\+|、])\s*([^;\n\r,，/\\+|、:]{1,40}[\u4e00-\u9fff][^;\n\r,，/\\+|、:]{0,40})\s*:\s*/g,
+    '$1',
+  )
+  // normalize delimiters for stable compare/display
+  t = t.replace(/[;\n\r,，/\\+|、]+/g, ';')
+  t = t.replace(/;{2,}/g, ';')
+  t = t.replace(/\s+/g, ' ').trim()
+  t = t.replace(/^[;\s]+|[;\s]+$/g, '')
+  return t
+}
+
 const normalizeSpecForCompare = (v: unknown): string => {
-  const s = safeString(v).trim()
+  const s = stripCnAttrLabels(v)
   if (!s) return ''
   return (
     s
@@ -475,6 +494,8 @@ export default function SkuSpecMatchingPage() {
     // In preview mode, rows carry `spec_text_used` (computed by backend preview endpoint).
     // Do NOT confuse it with real "last_shipment_spec_text" (shipment snapshot).
     const src = (activeSku as any)?.spec_text_used || activeSku?.last_shipment_spec_text || activeSku?.spec_text || ''
+    // 发货规格会携带“颜色分类: / 尺寸: / 组合形式:”等属性名；默认剥离后再解析，避免 token/对比口径被属性名污染
+    if ((activeSku as any)?.spec_text_used || activeSku?.last_shipment_spec_text) return stripCnAttrLabels(src)
     return String(src || '').trim()
   }, [activeSku, specTextDraft])
 
@@ -940,7 +961,8 @@ export default function SkuSpecMatchingPage() {
         render: (v, row) => {
           const ship = safeString(v).trim()
           const shop = safeString((row as any)?.spec_text).trim()
-          const text = isPreviewMode ? safeString((row as any)?.spec_text_used) : ship || shop
+          const textRaw = isPreviewMode ? safeString((row as any)?.spec_text_used) : ship || shop
+          const text = !isPreviewMode && ship ? stripCnAttrLabels(textRaw) : safeString(textRaw).trim()
           const shown = text || '-'
           const dims = (row as any)?._preview_dims
           const mismatch = !isPreviewMode && !!ship && !!shop && normalizeSpecForCompare(ship) !== normalizeSpecForCompare(shop)
@@ -954,7 +976,7 @@ export default function SkuSpecMatchingPage() {
                     title={
                       <div style={{ maxWidth: 560 }}>
                         <div>
-                          <b>发货规格（用于解析）</b>：{ship}
+                          <b>发货规格（用于解析，已剥离属性名）</b>：{stripCnAttrLabels(ship)}
                         </div>
                         <div style={{ marginTop: 6 }}>
                           <b>网店规格</b>：{shop}
@@ -981,7 +1003,7 @@ export default function SkuSpecMatchingPage() {
                   title={
                     <div style={{ maxWidth: 560 }}>
                       <div>
-                        <b>发货规格（用于解析）</b>：{ship}
+                        <b>发货规格（用于解析，已剥离属性名）</b>：{stripCnAttrLabels(ship)}
                       </div>
                       <div style={{ marginTop: 6 }}>
                         <b>网店规格</b>：{shop}

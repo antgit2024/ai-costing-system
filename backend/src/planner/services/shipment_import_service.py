@@ -268,7 +268,8 @@ def _normalize_rows_from_xlsx(file_bytes: bytes) -> Tuple[List[Dict[str, Any]], 
 
 
 def _upsert_spec_snapshot(db: Session, *, spec_text: str) -> models.SpecParseSnapshot:
-    spec_hash = _sha1_text(spec_text)
+    normalized = spec_parser_service.normalize_tx_spec_text(spec_text)
+    spec_hash = _sha1_text(normalized)
     existing = (
         db.query(models.SpecParseSnapshot)
         .filter(models.SpecParseSnapshot.spec_hash == spec_hash)
@@ -277,7 +278,7 @@ def _upsert_spec_snapshot(db: Session, *, spec_text: str) -> models.SpecParseSna
     if existing:
         return existing
 
-    parsed = spec_parser_service.parse_spec(spec_text)
+    parsed = spec_parser_service.parse_spec(normalized)
     dimensions = {
         "width_cm": parsed.get("width_cm"),
         "height_cm": parsed.get("height_cm"),
@@ -287,7 +288,8 @@ def _upsert_spec_snapshot(db: Session, *, spec_text: str) -> models.SpecParseSna
     }
     snap = models.SpecParseSnapshot(
         spec_hash=spec_hash,
-        spec_text=spec_text,
+        # store normalized text (raw tx spec is kept on shipment_lines.spec_text for audit)
+        spec_text=normalized,
         tokens_json=list(parsed.get("tokens") or []),
         dimensions_json=_json_safe(dimensions),
         parser_version=PARSER_VERSION,
@@ -604,13 +606,14 @@ def import_shipment_xlsx(
         qty = payload.get("qty")
         revenue_amount = payload.get("revenue_amount")
 
-        revision_group = _sha1_text("|".join([shipment_no or "", sku_code or "", spec_text or ""]))
+        spec_text_norm = spec_parser_service.normalize_tx_spec_text(spec_text or "") if spec_text else ""
+        revision_group = _sha1_text("|".join([shipment_no or "", sku_code or "", spec_text_norm or ""]))
         ext_hash = _sha1_text(
             "|".join(
                 [
                     shipment_no or "",
                     sku_code or "",
-                    spec_text or "",
+                    spec_text_norm or "",
                     str(qty) if qty is not None else "",
                     str(revenue_amount) if revenue_amount is not None else "",
                 ]
@@ -639,7 +642,7 @@ def import_shipment_xlsx(
             channel=payload.get("channel"),
             sku_code=sku_code,
             spec_text=spec_text,
-            spec_hash=_sha1_text(spec_text) if spec_text else None,
+            spec_hash=_sha1_text(spec_text_norm) if spec_text_norm else None,
             qty=qty,
             revenue_amount=revenue_amount,
             external_line_key_hash=ext_hash,
@@ -691,7 +694,7 @@ def import_shipment_xlsx(
                 "shipment_import_batch_id": batch.id,
                 "shipment_line_id": line.id,
                 "shipment_no": shipment_no,
-                "spec_hash": _sha1_text(spec_text) if spec_text else None,
+                "spec_hash": _sha1_text(spec_text_norm) if spec_text_norm else None,
                 "shop_spec_code": payload.get("shop_spec_code"),
                 "platform_sku_id": payload.get("platform_sku_id"),
             },

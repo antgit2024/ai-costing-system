@@ -36,6 +36,14 @@ DIAMETER_PATTERN = re.compile(
 )
 TOKEN_SPLIT_PATTERN = re.compile(r"[;\n\r,，/\\\+|、]+")
 
+# In “发货规格/交易规格” some channels prepend attribute names like:
+# - 颜色分类:xxx;尺寸:xxx;组合形式:xxx
+# These labels are not customer-facing tokens and should not affect parsing/matching.
+# We ONLY strip labels that contain Chinese characters to avoid breaking internal tokens like "BUNDLE:DB9EAE".
+ATTR_LABEL_PREFIX_PATTERN = re.compile(
+    r"(^|[;\n\r,，/\\\+|、])\s*(?P<label>[^;\n\r,，/\\\+|、:：]{1,40}[\u4e00-\u9fff][^;\n\r,，/\\\+|、:：]{0,40})\s*[：:]\s*"
+)
+
 # Common, business-meaningful phrases that should be emitted as standalone tokens
 # when present in the ERP “交易规格（spec_text）”. Keep this list conservative to
 # avoid token explosion and accidental over-matching.
@@ -112,8 +120,30 @@ def _derive_area_perimeter(
     return None, None
 
 
+def normalize_tx_spec_text(spec_text: str) -> str:
+    """
+    Normalize transaction spec_text for parsing & hashing:
+    - unify punctuation (fullwidth → ascii)
+    - strip Chinese attribute label prefixes like "颜色分类:" / "尺寸:" / "组合形式:"
+    - normalize delimiters to ';' and collapse whitespace
+    """
+    t = str(spec_text or "").strip()
+    if not t:
+        return ""
+    t = t.replace("；", ";").replace("：", ":").replace("，", ",").replace("（", "(").replace("）", ")")
+    # strip Chinese attribute labels, keep separators
+    t = ATTR_LABEL_PREFIX_PATTERN.sub(r"\1", t)
+    # normalize delimiters to ';' for stable hashing
+    t = TOKEN_SPLIT_PATTERN.sub(";", t)
+    t = re.sub(r";{2,}", ";", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    # trim leading/trailing separators
+    t = t.strip(" ;")
+    return t
+
+
 def parse_spec(spec_text: str) -> Dict[str, Any]:
-    text = (spec_text or "").strip()
+    text = normalize_tx_spec_text(spec_text)
     tokens: List[str] = []
     explanations: List[Dict[str, str]] = []
     width_cm: Decimal | None = None

@@ -39,7 +39,6 @@ const ShipmentLedgerPage = () => {
   const [ledgerFilters, setLedgerFilters] = useState<{
     channel?: string
     sku_code?: string
-    shipment_no?: string
     order_no?: string
     product_link_id?: string
     spec_text?: string
@@ -74,7 +73,6 @@ const ShipmentLedgerPage = () => {
         return d.isValid() ? d.format('YYYY-MM-DD') : (safeString(v) || '-')
       },
     },
-    { title: '发货单号', dataIndex: 'shipment_no', width: 160, ellipsis: true },
     { title: '订单号', dataIndex: 'order_no', width: 160, ellipsis: true },
     {
       title: '链接ID',
@@ -198,7 +196,6 @@ const ShipmentLedgerPage = () => {
           if (status) qp.set('status', String(status))
           if (ledgerFilters.channel) qp.set('channel', String(ledgerFilters.channel))
           if (ledgerFilters.sku_code) qp.set('sku_code', String(ledgerFilters.sku_code))
-          if (ledgerFilters.shipment_no) qp.set('shipment_no', String(ledgerFilters.shipment_no))
           if (ledgerFilters.order_no) qp.set('order_no', String(ledgerFilters.order_no))
           if (ledgerFilters.product_link_id) qp.set('product_link_id', String(ledgerFilters.product_link_id))
           if (ledgerFilters.spec_text) qp.set('spec_text', String(ledgerFilters.spec_text))
@@ -284,7 +281,6 @@ const ShipmentLedgerPage = () => {
                     const next = {
                       channel: values.channel ? String(values.channel).trim() : undefined,
                       sku_code: values.sku_code ? String(values.sku_code).trim() : undefined,
-                      shipment_no: values.shipment_no ? String(values.shipment_no).trim() : undefined,
                       order_no: values.order_no ? String(values.order_no).trim() : undefined,
                       product_link_id: values.product_link_id ? String(values.product_link_id).trim() : undefined,
                       spec_text: values.spec_text ? String(values.spec_text).trim() : undefined,
@@ -296,9 +292,6 @@ const ShipmentLedgerPage = () => {
                 >
                   <Form.Item name="sku_code">
                     <Input style={{ width: 140 }} placeholder="SKU" allowClear />
-                  </Form.Item>
-                  <Form.Item name="shipment_no">
-                    <Input style={{ width: 150 }} placeholder="发货单号" allowClear />
                   </Form.Item>
                   <Form.Item name="order_no">
                     <Input style={{ width: 150 }} placeholder="订单号" allowClear />

@@ -2950,3 +2950,22 @@
     - `npm -C frontend run build`
     - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
     - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+
+- **本轮补强（发货规格属性名前缀剥离：颜色分类/尺寸/组合形式… 不再污染解析与对比）**：
+  - 最近校对（北京时间 GMT+8）：2026-01-28
+  - 背景：发货规格常见形态 `颜色分类:xxx;尺寸:xxx;组合形式:xxx`；这些“属性名:”会导致：
+    - 发货规格 vs 网店规格对比出现“规格不一致”（实际上只是多了属性名）
+    - TOKEN 被 `颜色分类/尺寸/组合形式` 等无意义词污染，影响规则命中
+  - 变更：
+    - 后端：新增 `normalize_tx_spec_text()`（仅剥离**包含中文**的 `xxx:` 前缀，避免破坏 `BUNDLE:XXXX` 等内部 token），并用于：
+      - `spec_parser_service.parse_spec()` 的预处理
+      - 发货导入/落库的 `spec_hash` 计算与 `SpecParseSnapshot` upsert（用剥离后的文本做 hash 与解析）
+    - 前端：规格解析工作台（`/costing/spec-matching`）展示/默认解析/规格不一致对比时，发货规格默认显示为“已剥离属性名”的文本
+  - 关联文件：
+    - `backend/src/planner/services/spec_parser_service.py`
+    - `backend/src/planner/services/shipment_import_service.py`
+    - `frontend/src/pages/costing/SkuSpecMatchingPage.tsx`
+  - 本轮验收命令（必须，均已通过）：
+    - `npm -C frontend run build`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`

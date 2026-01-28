@@ -322,6 +322,13 @@
   - 现象：线上 `/costing/sku-master` 仍反馈“刷新后闪空”，且页面未出现我们新增的“状态/提示/红框错误提示”，更像是运行时崩溃导致 React 未能稳定挂载。
   - 诊断要点：
     - 线上静态资源与页面 HTML 均可 200 返回，但用户侧仍表现为空白，可能是运行时异常被吞掉/不易复现（浏览器扩展、环境差异、偶发 JS 错误等）。
+  - 追加定位（已复现的真实报错）：
+    - 报错：`TypeError: (D.data ?? []).find is not a function`
+    - 根因：`bundleTemplatesQuery.data` 实际为分页对象 `{ items, total, ... }`，但渲染时误当成数组直接 `.find()` 导致崩溃。
+  - 追加修复（前端）：
+    - `frontend/src/pages/costing/SkuMasterWorkspacePage.tsx`
+      - 将 `bundleTemplatesQuery.data` 统一归一为数组 `bundleTemplates`（仅取 `data.items`）
+      - 列表/详情里对套装模板的 `.find()` 全部改为在 `bundleTemplates` 上查找，并兼容 `metadata/metadata_json` 下的 `phrase_presets`
   - 修复（前端）：
     - `frontend/src/main.tsx`
       - 新增 `FatalErrorBoundary`：捕获 React 渲染错误并在页面直接显示 message/stack（避免“白屏无提示”）

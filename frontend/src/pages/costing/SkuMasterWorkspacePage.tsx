@@ -439,9 +439,14 @@ const SkuMasterWorkspacePage = () => {
           const code = bundleCode
           const sel = preset
           if (!code) return ''
-          const tpl = ((bundleTemplatesQuery.data ?? []) as any[]).find((t: any) => String(t?.id ?? '') === String((record as any)?.bundle_template_id ?? (record.metadata_json as any)?.bundle_template_id ?? ''))
-            ?? ((bundleTemplatesQuery.data ?? []) as any[]).find((t: any) => String(t?.code ?? '').trim() === code)
-          const presets = Array.isArray((tpl as any)?.phrase_presets) ? ((tpl as any).phrase_presets as any[]) : []
+          const tpl =
+            (bundleTemplates as any[]).find(
+              (t: any) =>
+                String(t?.id ?? '') ===
+                String((record as any)?.bundle_template_id ?? (record.metadata_json as any)?.bundle_template_id ?? ''),
+            ) ?? (bundleTemplates as any[]).find((t: any) => String(t?.code ?? '').trim() === code)
+          const meta = (tpl as any)?.metadata ?? (tpl as any)?.metadata_json ?? tpl ?? {}
+          const presets = Array.isArray((meta as any)?.phrase_presets) ? ((meta as any).phrase_presets as any[]) : []
           const p = presets.find((x: any) => String(x?.selector ?? '').trim().toUpperCase() === String(sel || '').trim().toUpperCase())
           const mode = String((p as any)?.mode ?? '').trim()
           const prefix = mode === 'force' ? 'Z' : 'B'
@@ -530,6 +535,11 @@ const SkuMasterWorkspacePage = () => {
     placeholderData: keepPreviousData,
   })
 
+  const bundleTemplates = useMemo(() => {
+    const items = (bundleTemplatesQuery.data as any)?.items
+    return Array.isArray(items) ? (items as any[]) : []
+  }, [bundleTemplatesQuery.data])
+
   const modelOptions = useMemo(() => {
     const items = (candidatesQuery.data as any)?.items ?? []
     return (items as PublishedStandardModelCandidate[]).map((m) => ({
@@ -546,12 +556,11 @@ const SkuMasterWorkspacePage = () => {
   }, [modelOptions])
 
   const bundleTemplateOptions = useMemo(() => {
-    const items = (bundleTemplatesQuery.data as any)?.items ?? []
-    return (items as any[]).map((t) => ({
+    return (bundleTemplates as any[]).map((t) => ({
       label: `${safeString(t.code)} ${safeString(t.name)}`.trim(),
       value: String(t.id),
     }))
-  }, [bundleTemplatesQuery.data])
+  }, [bundleTemplates])
 
   const bundleTemplateLabelById = useMemo(() => {
     const m = new Map<string, string>()
@@ -561,8 +570,7 @@ const SkuMasterWorkspacePage = () => {
 
   const bundlePresetsForSelectedTemplate = useMemo(() => {
     if (!selectedBundleTemplateId) return []
-    const items = (bundleTemplatesQuery.data as any)?.items ?? []
-    const hit = (items as any[]).find((x) => String(x?.id) === String(selectedBundleTemplateId))
+    const hit = (bundleTemplates as any[]).find((x) => String(x?.id) === String(selectedBundleTemplateId))
     const meta = (hit?.metadata ?? hit?.metadata_json ?? {}) as any
     const pp = Array.isArray(meta?.phrase_presets) ? meta.phrase_presets : []
     // BundleTemplatesPage has a migration: if top-level components exist but no preset components, map to preset A.
@@ -577,7 +585,7 @@ const SkuMasterWorkspacePage = () => {
         enabled: p?.enabled !== false,
       }))
       .filter((p: any) => !!p.selector)
-  }, [bundleTemplatesQuery.data, selectedBundleTemplateId])
+  }, [bundleTemplates, selectedBundleTemplateId])
 
   const bundlePresetOptions = useMemo(() => {
     return (bundlePresetsForSelectedTemplate as any[]).map((p) => {
@@ -1682,9 +1690,10 @@ const SkuMasterWorkspacePage = () => {
                         '',
                     ).trim()
                     const tpl =
-                      ((bundleTemplatesQuery.data ?? []) as any[]).find((t: any) => String(t?.id ?? '') === tid) ??
-                      ((bundleTemplatesQuery.data ?? []) as any[]).find((t: any) => String(t?.code ?? '').trim() === bundleCode)
-                    const presets = Array.isArray((tpl as any)?.phrase_presets) ? ((tpl as any).phrase_presets as any[]) : []
+                      (bundleTemplates as any[]).find((t: any) => String(t?.id ?? '') === tid) ??
+                      (bundleTemplates as any[]).find((t: any) => String(t?.code ?? '').trim() === bundleCode)
+                    const meta = (tpl as any)?.metadata ?? (tpl as any)?.metadata_json ?? tpl ?? {}
+                    const presets = Array.isArray((meta as any)?.phrase_presets) ? ((meta as any).phrase_presets as any[]) : []
                     const p = presets.find(
                       (x: any) => String(x?.selector ?? '').trim().toUpperCase() === String(preset || '').trim().toUpperCase(),
                     )

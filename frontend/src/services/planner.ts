@@ -1685,6 +1685,8 @@ export const fetchShipmentLines = async (
     shipment_no?: string
     order_no?: string
     product_link_id?: string
+    spec_text?: string
+    unresolved_reason?: string
   } = {},
 ): Promise<ShipmentLineListResponse> => {
   try {

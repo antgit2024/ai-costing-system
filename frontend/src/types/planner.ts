@@ -1463,6 +1463,10 @@ export interface ShipmentLineListItem {
   sku_code?: string | null
   shop_spec_code?: string | null
   platform_sku_id?: string | null
+  bundle_template_code?: string | null
+  bundle_preset_selector?: string | null
+  bound_model_code?: string | null
+  bound_model_name?: string | null
   spec_text?: string | null
   spec_hash?: string | null
   qty?: string | null
@@ -1907,6 +1911,7 @@ export interface SalesLineItem {
   mark?: string | null
   bundle_template_code?: string | null
   bundle_preset_selector?: string | null
+  bundle_preset_phrase?: string | null
   bom_snapshot_id?: string | null
   status: 'costed' | 'missing_snapshot' | 'missing_costing' | 'unknown'
   note?: string | null
@@ -1965,6 +1970,9 @@ export interface SalesProfitDashboardTopSkuItem {
 export interface SalesProfitDashboardTopModelItem {
   model_code: string
   model_name?: string | null
+  bundle_template_code?: string | null
+  bundle_preset_selector?: string | null
+  bundle_preset_phrase?: string | null
   shipped_qty: string
   revenue_amount: string
   cost_amount: string

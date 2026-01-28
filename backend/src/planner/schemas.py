@@ -2329,6 +2329,9 @@ class ShipmentLineListItem(BaseModel):
     # 套装锚点（Phase0：来自 sku-master 绑定并贯穿到发货行）
     bundle_template_code: Optional[str] = None
     bundle_preset_selector: Optional[str] = None
+    # 绑定目标（当前生效绑定；BundleAsModel 也会以 model_code="B-XXXXYY" 的形式体现）
+    bound_model_code: Optional[str] = None
+    bound_model_name: Optional[str] = None
     spec_text: Optional[str] = None
     spec_hash: Optional[str] = None
     qty: Optional[Decimal] = None
@@ -3109,6 +3112,8 @@ class SalesLineItem(BaseModel):
     # 套装锚点（用于对账/排查/看板，不做组件拆解）
     bundle_template_code: Optional[str] = None
     bundle_preset_selector: Optional[str] = None
+    # 套装二级名称（phrase preset 文本，如 "[{}{毛球}][{黄金绒}{雪尼尔}]0*0*0"）
+    bundle_preset_phrase: Optional[str] = None
 
     bom_snapshot_id: Optional[str] = None
     status: str = "unknown"  # costed | missing_snapshot | missing_costing
@@ -3186,6 +3191,10 @@ class SalesProfitDashboardTopSkuItem(BaseModel):
 class SalesProfitDashboardTopModelItem(BaseModel):
     model_code: str
     model_name: Optional[str] = None
+    # Optional bundle (BundleAsModel) display helpers
+    bundle_template_code: Optional[str] = None
+    bundle_preset_selector: Optional[str] = None
+    bundle_preset_phrase: Optional[str] = None
     shipped_qty: Decimal
     revenue_amount: Decimal
     cost_amount: Decimal

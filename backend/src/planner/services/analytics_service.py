@@ -2452,6 +2452,9 @@ def sales_lines(
         .all()
     )
 
+    # Avoid N+1 lookups for bundle phrase presets on the current page.
+    bundle_phrase_cache: Dict[Tuple[str, str], Optional[str]] = {}
+
     items: List[Dict[str, Any]] = []
     with_bom = 0
     missing_costing = 0
@@ -2473,6 +2476,16 @@ def sales_lines(
             meta_line = {}
         bundle_code = str(meta_line.get("bundle_template_code") or "").strip() or None
         bundle_sel = str(meta_line.get("bundle_preset_selector") or "").strip().upper() or None
+        bundle_phrase: Optional[str] = None
+        if bundle_code and bundle_sel:
+            ck = (bundle_code, bundle_sel)
+            if ck in bundle_phrase_cache:
+                bundle_phrase = bundle_phrase_cache[ck]
+            else:
+                # Construct BundleAsModel-like code (B-<tpl><sel>) for phrase lookup.
+                _, _, phrase = _try_get_bundle_phrase_preset(db, f"B-{bundle_code}{bundle_sel}")
+                bundle_phrase_cache[ck] = phrase
+                bundle_phrase = phrase
         raw = getattr(line, "raw_row_json", None) or getattr(line, "raw_row", None) or {}
         payment_at = _guess(raw, ["付款时间", "支付时间", "pay_time", "paid_at", "付款日期", "payment_at", "payment_time"])
         sku_no = _guess(raw, ["货品编号", "商品编号", "货品编码", "goods_code", "sku_no", "product_code"])
@@ -2549,6 +2562,7 @@ def sales_lines(
                 "mark": mark,
                 "bundle_template_code": bundle_code,
                 "bundle_preset_selector": bundle_sel,
+                "bundle_preset_phrase": bundle_phrase,
                 "bom_snapshot_id": str(bom_snapshot_id) if has_snap else None,
                 "status": status,
                 "note": note,
@@ -2851,6 +2865,22 @@ def sales_profit_dashboard(
     model_items_all.sort(key=lambda x: (_d(x["gross_profit"]), _d(x["revenue_amount"])), reverse=True)
     top_models_profit = model_items_all[:top_n]
     top_models_loss = sorted(model_items_all, key=lambda x: (_d(x["gross_profit"]), _d(x["revenue_amount"])))[:top_n]
+
+    # Enrich top models for BundleAsModel display (optional).
+    def _enrich_bundle_fields(items0: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        for it in items0:
+            mc = str(it.get("model_code") or "")
+            tpl_code, selector, phrase = _try_get_bundle_phrase_preset(db, mc)
+            it2 = dict(it)
+            it2["bundle_template_code"] = tpl_code
+            it2["bundle_preset_selector"] = selector
+            it2["bundle_preset_phrase"] = phrase
+            out.append(it2)
+        return out
+
+    top_models_profit = _enrich_bundle_fields(top_models_profit)
+    top_models_loss = _enrich_bundle_fields(top_models_loss)
 
     return {
         "group_by": group_by,

@@ -191,6 +191,8 @@ def list_shipment_lines(
     shipment_no: str | None = None,
     order_no: str | None = None,
     product_link_id: str | None = None,
+    spec_text: str | None = None,
+    unresolved_reason: str | None = Query(None, description="例如：SKU_NOT_BOUND / SPEC_EMPTY / BOM_GENERATION_FAILED"),
     db: Session = Depends(get_db_session),
 ):
     def parse_dt(s: str) -> datetime:
@@ -215,6 +217,8 @@ def list_shipment_lines(
             order_no=order_no,
             product_link_id=product_link_id,
             status=status,
+            spec_text=spec_text,
+            unresolved_reason=unresolved_reason,
         )
         return payload
     except ValueError as exc:

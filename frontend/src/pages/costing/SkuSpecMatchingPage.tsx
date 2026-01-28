@@ -1,4 +1,23 @@
-import { Alert, Button, Card, Checkbox, Col, Descriptions, Input, InputNumber, Modal, Row, Select, Space, Table, Tabs, Tag, Typography, message } from 'antd'
+import {
+  Alert,
+  Button,
+  Card,
+  Checkbox,
+  Col,
+  Descriptions,
+  Input,
+  InputNumber,
+  Modal,
+  Row,
+  Select,
+  Space,
+  Table,
+  Tabs,
+  Tag,
+  Tooltip,
+  Typography,
+  message,
+} from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -33,6 +52,21 @@ const safeString = (v: unknown): string => {
 }
 
 const isFilled = (v: unknown): boolean => !!safeString(v).trim()
+
+const normalizeSpecForCompare = (v: unknown): string => {
+  const s = safeString(v).trim()
+  if (!s) return ''
+  return (
+    s
+      .replace(/\s+/g, ' ')
+      .replace(/；/g, ';')
+      .replace(/：/g, ':')
+      .replace(/，/g, ',')
+      .replace(/（/g, '(')
+      .replace(/）/g, ')')
+      .trim()
+  )
+}
 
 const dimGet = (dims: any, key: string): string => {
   const v = dims?.[key]
@@ -909,11 +943,30 @@ export default function SkuSpecMatchingPage() {
           const text = isPreviewMode ? safeString((row as any)?.spec_text_used) : ship || shop
           const shown = text || '-'
           const dims = (row as any)?._preview_dims
+          const mismatch = !isPreviewMode && !!ship && !!shop && normalizeSpecForCompare(ship) !== normalizeSpecForCompare(shop)
           if (!dims) {
             return (
               <div style={{ whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.2 }}>
                 <div>{shown}</div>
                 {!isPreviewMode && !ship && shop ? <Tag color="orange">回退：网店规格</Tag> : null}
+                {mismatch ? (
+                  <Tooltip
+                    title={
+                      <div style={{ maxWidth: 560 }}>
+                        <div>
+                          <b>发货规格（用于解析）</b>：{ship}
+                        </div>
+                        <div style={{ marginTop: 6 }}>
+                          <b>网店规格</b>：{shop}
+                        </div>
+                      </div>
+                    }
+                  >
+                    <Tag color="red" style={{ marginTop: 4, cursor: 'help' }}>
+                      规格不一致
+                    </Tag>
+                  </Tooltip>
+                ) : null}
               </div>
             )
           }
@@ -923,6 +976,24 @@ export default function SkuSpecMatchingPage() {
             <div style={{ whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.2 }}>
               <div>{shown}</div>
               {!isPreviewMode && !ship && shop ? <Tag color="orange">回退：网店规格</Tag> : null}
+              {mismatch ? (
+                <Tooltip
+                  title={
+                    <div style={{ maxWidth: 560 }}>
+                      <div>
+                        <b>发货规格（用于解析）</b>：{ship}
+                      </div>
+                      <div style={{ marginTop: 6 }}>
+                        <b>网店规格</b>：{shop}
+                      </div>
+                    </div>
+                  }
+                >
+                  <Tag color="red" style={{ marginTop: 4, cursor: 'help' }}>
+                    规格不一致
+                  </Tag>
+                </Tooltip>
+              ) : null}
               <Tag color="purple" style={{ marginTop: 4 }}>
                 解析尺寸：宽{w}cm × 高{h}cm
               </Tag>

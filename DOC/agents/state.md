@@ -48,6 +48,28 @@
   - 下一步：
     - 若需要把 “B-DB9EAE-AE 印花抱枕（26前历史）” 也直接拼成一个稳定展示串，可在前端用 `bundle_template_code + bundle_preset_selector` 组合生成，并决定是否显示为独立列/换行。
 
+- **最近校对（北京时间 GMT+8）**：2026-01-28（发货台账/销售洞察：套装二级短语贯穿 + 台账筛选增强 + 未绑定短提示）
+  - 背景：
+    - 运营需要以“用于解析的规格（发货规格优先）”为准，但 `sku-master` 的“商品规格（网店）”历史可能较乱，若两者不一致容易造成成本核算误判。
+    - 发货台账“待处理（SKU_NOT_BOUND）：SKU 未绑定已发布标准版本”过长，不利于快速扫表；同时需要更细粒度筛选与“绑定目标”对账列。
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/ShipmentLedgerPage.tsx`
+      - 处理状态：`SKU_NOT_BOUND` 统一短展示为 `未绑定`（tooltip 保留原 reason/message）。
+      - 筛选增强：新增“状态（待处理原因）”下拉、`交易规格`搜索框。
+      - 表格新增列：`绑定目标`（展示当前生效绑定的 model_code/model_name；套装也会以 `B-XXXXYY` 体现）。
+    - `frontend/src/pages/costing/ProductInfoPage.tsx`、`frontend/src/pages/costing/SkuSpecMatchingPage.tsx`
+      - 当“发货规格（用于解析）”与“商品规格（网店）”同时存在且不一致时，增加红色 `规格不一致` 提示（tooltip 展示两段原文对比）。
+  - 本轮产物（后端）：
+    - `/api/planner/shipments/lines`：
+      - 支持新增查询参数：`spec_text`（交易规格模糊匹配）、`unresolved_reason`（待处理原因过滤）。
+      - 返回补齐：`bound_model_code / bound_model_name`（用于台账“绑定目标”列展示）。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shipment_import_bom_snapshots_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shipment_exception_retry_mvp.py -q`
+  - 下一步（如需更强约束）：
+    - 若希望“发货导入/计价当下就报警（不是事后列表提示）”，可在发货导入 preview/execute 阶段把“发货规格 vs 网店规格不一致”写入 warnings，并在作业中心交接视图聚合展示。
+
 - **最近校对（北京时间 GMT+8）**：2026-01-26（线上深链接 404：BrowserRouter /costing/* Not Found 兜底）
   - 现象：直接访问 `https://<host>/costing/insights/models` 返回 `Not Found`（history 深链接无法回退到 SPA 入口）。
   - 根因：前端使用 `BrowserRouter`（history 模式），需要服务端对 `/costing/*` 做 `try_files ... /index.html` 回退。

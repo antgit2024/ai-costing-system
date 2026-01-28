@@ -1177,6 +1177,8 @@ def list_shipment_lines(
     order_no: Optional[str] = None,
     product_link_id: Optional[str] = None,
     status: Optional[str] = None,  # processed | pending | None
+    spec_text: Optional[str] = None,
+    unresolved_reason: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Shipment daily ledger (line-level) across batches.
@@ -1234,6 +1236,52 @@ def list_shipment_lines(
         .scalar_subquery()
     )
 
+    # Active SKU -> model binding (BundleAsModel is represented as model_code like "B-XXXXYY").
+    bound_model_code_sq = (
+        db.query(models.ProductModel.model_code)
+        .select_from(models.SkuModelVersionMapping)
+        .join(
+            models.ProductModelVersion,
+            models.ProductModelVersion.id == models.SkuModelVersionMapping.model_version_id,
+        )
+        .join(
+            models.ProductModel,
+            models.ProductModel.id == models.ProductModelVersion.model_id,
+        )
+        .filter(
+            models.SkuModelVersionMapping.is_archived.is_(False),
+            models.SkuModelVersionMapping.is_active.is_(True),
+            models.SkuModelVersionMapping.sku_code == models.ShipmentLine.sku_code,
+            models.ProductModelVersion.is_archived.is_(False),
+            models.ProductModel.is_archived.is_(False),
+        )
+        .limit(1)
+        .correlate(models.ShipmentLine)
+        .scalar_subquery()
+    )
+    bound_model_name_sq = (
+        db.query(models.ProductModel.model_name)
+        .select_from(models.SkuModelVersionMapping)
+        .join(
+            models.ProductModelVersion,
+            models.ProductModelVersion.id == models.SkuModelVersionMapping.model_version_id,
+        )
+        .join(
+            models.ProductModel,
+            models.ProductModel.id == models.ProductModelVersion.model_id,
+        )
+        .filter(
+            models.SkuModelVersionMapping.is_archived.is_(False),
+            models.SkuModelVersionMapping.is_active.is_(True),
+            models.SkuModelVersionMapping.sku_code == models.ShipmentLine.sku_code,
+            models.ProductModelVersion.is_archived.is_(False),
+            models.ProductModel.is_archived.is_(False),
+        )
+        .limit(1)
+        .correlate(models.ShipmentLine)
+        .scalar_subquery()
+    )
+
     q = db.query(
         models.ShipmentLine,
         has_bom.label("has_bom_snapshot"),
@@ -1241,6 +1289,8 @@ def list_shipment_lines(
         unresolved_reason_sq.label("unresolved_reason"),
         unresolved_message_sq.label("unresolved_message"),
         cost_mode_sq.label("cost_mode"),
+        bound_model_code_sq.label("bound_model_code"),
+        bound_model_name_sq.label("bound_model_name"),
     ).filter(
         models.ShipmentLine.is_archived.is_(False),
         models.ShipmentLine.is_active.is_(True),
@@ -1261,11 +1311,18 @@ def list_shipment_lines(
         q = q.filter(models.ShipmentLine.order_no == order_no)
     if product_link_id:
         q = q.filter(models.ShipmentLine.product_link_id == product_link_id)
+    if spec_text:
+        pat = f"%{str(spec_text).strip()}%"
+        q = q.filter(models.ShipmentLine.spec_text.ilike(pat))
 
     if st == "processed":
         q = q.filter(processed_pred)
     elif st == "pending":
         q = q.filter(~processed_pred)
+    if unresolved_reason:
+        rr = str(unresolved_reason).strip()
+        if rr:
+            q = q.filter(unresolved_reason_sq == rr)
 
     total = q.with_entities(func.count(models.ShipmentLine.id)).scalar() or 0
 
@@ -1277,7 +1334,16 @@ def list_shipment_lines(
     )
 
     items: List[Dict[str, Any]] = []
-    for line, has_bom_snapshot, has_costing_result, unresolved_reason, unresolved_message, cost_mode in rows:
+    for (
+        line,
+        has_bom_snapshot,
+        has_costing_result,
+        unresolved_reason,
+        unresolved_message,
+        cost_mode,
+        bound_model_code,
+        bound_model_name,
+    ) in rows:
         processed = bool(has_bom_snapshot or has_costing_result)
         processed_source = "bom_snapshot" if has_bom_snapshot else ("costing_result" if has_costing_result else None)
         mode = "2026" if has_bom_snapshot else (str(cost_mode) if cost_mode else None)
@@ -1323,6 +1389,8 @@ def list_shipment_lines(
                 "spec_hash": getattr(line, "spec_hash", None),
                 "qty": getattr(line, "qty", None),
                 "revenue_amount": getattr(line, "revenue_amount", None),
+                "bound_model_code": (str(bound_model_code).strip() if bound_model_code not in (None, "") else None),
+                "bound_model_name": (str(bound_model_name).strip() if bound_model_name not in (None, "") else None),
                 "status": "processed" if processed else "pending",
                 "processed_source": processed_source,
                 "mode": mode,

@@ -1,4 +1,23 @@
-import { Alert, Button, Card, Col, DatePicker, Form, Input, Progress, Row, Segmented, Select, Space, Statistic, Table, Tabs, Typography, message } from 'antd'
+import {
+  Alert,
+  Button,
+  Card,
+  Col,
+  DatePicker,
+  Form,
+  Input,
+  Progress,
+  Row,
+  Segmented,
+  Select,
+  Space,
+  Statistic,
+  Table,
+  Tabs,
+  Tooltip,
+  Typography,
+  message,
+} from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -89,12 +108,37 @@ const SalesInsightsPage = () => {
       {
         title: '套装',
         key: 'bundle',
-        width: 140,
+        width: 260,
         render: (_v, r) => {
           const code = String((r as any)?.bundle_template_code ?? '').trim()
           const sel = String((r as any)?.bundle_preset_selector ?? '').trim().toUpperCase()
+          const phrase = String((r as any)?.bundle_preset_phrase ?? '').trim()
           const s = [code, sel].filter(Boolean).join('-')
-          return s || '-'
+          if (!s && !phrase) return '-'
+          const pillStyle = {
+            display: 'inline-block',
+            padding: '0px 6px',
+            borderRadius: 6,
+            border: '1px solid',
+            borderColor: 'color-mix(in srgb, var(--ant-color-success) 45%, var(--ant-color-border))',
+            background: 'color-mix(in srgb, var(--ant-color-success) 18%, var(--ant-color-fill-tertiary))',
+            fontSize: 11,
+            lineHeight: '18px',
+            color: 'var(--ant-color-success)',
+            whiteSpace: 'nowrap',
+          } as const
+          return (
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+              <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {s || '-'}
+              </span>
+              {phrase ? (
+                <Tooltip title={phrase}>
+                  <span style={pillStyle}>{phrase}</span>
+                </Tooltip>
+              ) : null}
+            </span>
+          )
         },
       },
       { title: '销售单价', dataIndex: 'sale_unit_price', width: 110, render: (v) => formatMoney(v) },
@@ -598,8 +642,35 @@ const SalesInsightsPage = () => {
                               title: '模型',
                               key: 'model',
                               ellipsis: true,
-                              render: (_: any, r: SalesProfitDashboardTopModelItem) =>
-                                `${r.model_code}${r.model_name ? ` ${r.model_name}` : ''}`,
+                              render: (_: any, r: SalesProfitDashboardTopModelItem) => {
+                                const main = `${r.model_code}${r.model_name ? ` ${r.model_name}` : ''}`
+                                const phrase = String((r as any)?.bundle_preset_phrase ?? '').trim()
+                                if (!phrase) return main
+                                const pillStyle = {
+                                  display: 'inline-block',
+                                  padding: '0px 6px',
+                                  borderRadius: 6,
+                                  border: '1px solid',
+                                  borderColor: 'color-mix(in srgb, var(--ant-color-success) 45%, var(--ant-color-border))',
+                                  background: 'color-mix(in srgb, var(--ant-color-success) 18%, var(--ant-color-fill-tertiary))',
+                                  fontSize: 11,
+                                  lineHeight: '18px',
+                                  color: 'var(--ant-color-success)',
+                                  whiteSpace: 'nowrap',
+                                } as const
+                                return (
+                                  <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                                    <span
+                                      style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                                    >
+                                      {main}
+                                    </span>
+                                    <Tooltip title={phrase}>
+                                      <span style={pillStyle}>{phrase}</span>
+                                    </Tooltip>
+                                  </span>
+                                )
+                              },
                             },
                             { title: '销售额', dataIndex: 'revenue_amount', width: 110, render: (v: any) => formatMoney(v) },
                             {
@@ -633,8 +704,35 @@ const SalesInsightsPage = () => {
                               title: '模型',
                               key: 'model',
                               ellipsis: true,
-                              render: (_: any, r: SalesProfitDashboardTopModelItem) =>
-                                `${r.model_code}${r.model_name ? ` ${r.model_name}` : ''}`,
+                              render: (_: any, r: SalesProfitDashboardTopModelItem) => {
+                                const main = `${r.model_code}${r.model_name ? ` ${r.model_name}` : ''}`
+                                const phrase = String((r as any)?.bundle_preset_phrase ?? '').trim()
+                                if (!phrase) return main
+                                const pillStyle = {
+                                  display: 'inline-block',
+                                  padding: '0px 6px',
+                                  borderRadius: 6,
+                                  border: '1px solid',
+                                  borderColor: 'color-mix(in srgb, var(--ant-color-success) 45%, var(--ant-color-border))',
+                                  background: 'color-mix(in srgb, var(--ant-color-success) 18%, var(--ant-color-fill-tertiary))',
+                                  fontSize: 11,
+                                  lineHeight: '18px',
+                                  color: 'var(--ant-color-success)',
+                                  whiteSpace: 'nowrap',
+                                } as const
+                                return (
+                                  <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                                    <span
+                                      style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                                    >
+                                      {main}
+                                    </span>
+                                    <Tooltip title={phrase}>
+                                      <span style={pillStyle}>{phrase}</span>
+                                    </Tooltip>
+                                  </span>
+                                )
+                              },
                             },
                             { title: '销售额', dataIndex: 'revenue_amount', width: 110, render: (v: any) => formatMoney(v) },
                             {

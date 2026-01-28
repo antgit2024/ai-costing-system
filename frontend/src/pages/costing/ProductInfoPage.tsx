@@ -26,6 +26,23 @@ const safeString = (v: unknown): string => {
 
 const isFilled = (v: unknown): boolean => !!safeString(v).trim()
 
+const normalizeSpecForCompare = (v: unknown): string => {
+  const s = safeString(v).trim()
+  if (!s) return ''
+  return (
+    s
+      // unify whitespace
+      .replace(/\s+/g, ' ')
+      // unify common punctuation variants
+      .replace(/；/g, ';')
+      .replace(/：/g, ':')
+      .replace(/，/g, ',')
+      .replace(/（/g, '(')
+      .replace(/）/g, ')')
+      .trim()
+  )
+}
+
 const tokensPreview = (tokens: any): string => {
   if (!Array.isArray(tokens) || tokens.length === 0) return '-'
   const parts = tokens
@@ -290,10 +307,32 @@ export default function ProductInfoPage() {
           const shop = safeString(row?.spec_text).trim()
           const text = ship || shop
           const fromFallback = !ship && !!shop
+          const mismatch = !!ship && !!shop && normalizeSpecForCompare(ship) !== normalizeSpecForCompare(shop)
           return (
             <Space direction="vertical" size={2}>
               <div style={{ whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.2 }}>{text || '-'}</div>
               {fromFallback ? <Tag color="orange">回退：网店规格</Tag> : null}
+              {mismatch ? (
+                <Tooltip
+                  title={
+                    <div style={{ maxWidth: 560 }}>
+                      <div>
+                        <b>发货规格（用于解析）</b>：{ship}
+                      </div>
+                      <div style={{ marginTop: 6 }}>
+                        <b>网店规格</b>：{shop}
+                      </div>
+                      <div style={{ marginTop: 6, color: 'var(--ant-color-text-secondary)' }}>
+                        建议以“发货规格”为准；如网店规格长期不可信，可通过自动化/作业中心做批量修正或建立更稳定的商家编码锚点。
+                      </div>
+                    </div>
+                  }
+                >
+                  <Tag color="red" style={{ cursor: 'help' }}>
+                    规格不一致
+                  </Tag>
+                </Tooltip>
+              ) : null}
             </Space>
           )
         },

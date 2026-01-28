@@ -1,4 +1,4 @@
-import { Alert, Button, Card, DatePicker, Form, Input, Space, Table, Tabs, Typography } from 'antd'
+import { Alert, Button, Card, DatePicker, Form, Input, Select, Space, Table, Tabs, Tag, Tooltip, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { useState } from 'react'
@@ -13,6 +13,15 @@ const { Title, Text } = Typography
 const safeString = (v: unknown): string => {
   if (v === null || v === undefined) return ''
   return String(v)
+}
+
+const reasonLabel = (reason: string): string => {
+  const r = String(reason || '').trim()
+  if (!r) return ''
+  if (r === 'SKU_NOT_BOUND') return '未绑定'
+  if (r === 'SPEC_EMPTY') return '缺规格'
+  if (r === 'BOM_GENERATION_FAILED') return 'BOM失败'
+  return r
 }
 
 const ShipmentLedgerPage = () => {
@@ -33,6 +42,8 @@ const ShipmentLedgerPage = () => {
     shipment_no?: string
     order_no?: string
     product_link_id?: string
+    spec_text?: string
+    unresolved_reason?: string
   }>({})
 
   const shipmentLinesQuery = useQuery({
@@ -80,6 +91,23 @@ const ShipmentLedgerPage = () => {
     { title: 'SKU', dataIndex: 'sku_code', width: 160, ellipsis: true },
     { title: '商家编码', dataIndex: 'shop_spec_code', width: 160, ellipsis: true },
     {
+      title: '绑定目标',
+      key: 'bound_target',
+      width: 220,
+      render: (_v, r: any) => {
+        const code = safeString(r?.bound_model_code).trim()
+        const name = safeString(r?.bound_model_name).trim()
+        if (!code) return '-'
+        const isBundle = code.startsWith('B-') || code.startsWith('Z-')
+        return (
+          <span>
+            <Tag color={isBundle ? 'purple' : 'blue'}>{code}</Tag>
+            {name ? <span style={{ color: '#666' }}> {name}</span> : null}
+          </span>
+        )
+      },
+    },
+    {
       title: '交易规格',
       dataIndex: 'spec_text',
       ellipsis: true,
@@ -111,10 +139,14 @@ const ShipmentLedgerPage = () => {
           return <Text style={{ color: '#2e7d32' }}>{text}{badge}</Text>
         }
         if (reason) {
+          const short = reasonLabel(reason) || '待处理'
+          const full = `待处理（${reason}）${msg ? `：${msg}` : ''}`
           return (
-            <Text style={{ color: '#c62828' }}>
-              待处理（{reason}）{msg ? `：${msg}` : ''}
-            </Text>
+            <Tooltip title={full}>
+              <Tag color="red" style={{ cursor: 'help' }}>
+                {short}
+              </Tag>
+            </Tooltip>
           )
         }
         return <Text style={{ color: '#b26a00' }}>待处理</Text>
@@ -178,6 +210,8 @@ const ShipmentLedgerPage = () => {
                       shipment_no: values.shipment_no ? String(values.shipment_no).trim() : undefined,
                       order_no: values.order_no ? String(values.order_no).trim() : undefined,
                       product_link_id: values.product_link_id ? String(values.product_link_id).trim() : undefined,
+                      spec_text: values.spec_text ? String(values.spec_text).trim() : undefined,
+                      unresolved_reason: values.unresolved_reason ? String(values.unresolved_reason).trim() : undefined,
                     }
                     setLedgerFilters(next)
                     setLedgerPage(1)
@@ -194,6 +228,21 @@ const ShipmentLedgerPage = () => {
                   </Form.Item>
                   <Form.Item name="product_link_id">
                     <Input style={{ width: 150 }} placeholder="链接ID" allowClear />
+                  </Form.Item>
+                  <Form.Item name="spec_text">
+                    <Input style={{ width: 220 }} placeholder="交易规格" allowClear />
+                  </Form.Item>
+                  <Form.Item name="unresolved_reason">
+                    <Select
+                      allowClear
+                      placeholder="状态"
+                      style={{ width: 150 }}
+                      options={[
+                        { value: 'SKU_NOT_BOUND', label: '未绑定' },
+                        { value: 'SPEC_EMPTY', label: '缺规格' },
+                        { value: 'BOM_GENERATION_FAILED', label: 'BOM失败' },
+                      ]}
+                    />
                   </Form.Item>
                   <Form.Item name="channel">
                     <Input style={{ width: 120 }} placeholder="渠道" allowClear />

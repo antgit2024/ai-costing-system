@@ -517,6 +517,37 @@
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
 
+- **2026-01-28（套装模板发布版本 + 套装=模型版本（单出口 model_version_id））**
+  - **目标**：避免“标准模型 / 套装模板”双出口导致口径漂移；让套装也像 ERP 一样成为“可销售商品”，并最终统一落到 `model_version_id`。
+  - **实现要点**：
+    - **套装模板增加“发布版本”**（不可变更快照）：
+      - 新表：`bundle_template_versions`（迁移 `backend/migrations/versions/0029_bundle_template_versions.py`）
+      - 后端接口：
+        - `POST /api/planner/bundle-templates/{template_id}/publish`（发布为新版本）
+        - `GET /api/planner/bundle-templates/{template_id}/versions`（历史版本列表）
+      - 前端：`/costing/bundle-templates` 编辑抽屉新增“发布为新版本”按钮与发布状态提示
+    - **BundleAsModel（套装模板发布版本 → 套装模型版本）**：
+      - `product_model_service.ensure_bundle_model_version(...)`：按 `(bundle_template_version_id, preset_selector)` 幂等生成并发布 `ProductModelVersion(version_kind='bundle')`
+      - `sku-master` 套装绑定：要求模板先发布版本；绑定时同时写入 `sku_model_version_mapping`（单出口），并在 `sku_master.metadata_json` 记录：
+        - `bundle_template_version_id / bundle_template_version_label / bundle_model_version_id`
+      - `bom_generation_service.generate_bom`：当 SKU 绑定到 `version_kind=bundle` 时，改为走 `generate_bom_by_spec` 生成套装 BOM，并将 `trace.model_version_id` 覆盖为“套装模型版本”（保证发货快照/洞察按模型聚合）
+  - **产物**：
+    - 后端：`backend/src/planner/models.py`、`backend/src/planner/services/bundle_template_service.py`、`backend/src/planner/routers/bundle_templates.py`
+    - 后端：`backend/src/planner/services/product_model_service.py`、`backend/src/planner/services/sku_master_service.py`、`backend/src/planner/services/bom_generation_service.py`
+    - 迁移：`backend/migrations/versions/0029_bundle_template_versions.py`
+    - 前端：`frontend/src/pages/costing/BundleTemplatesPage.tsx`、`frontend/src/services/planner.ts`
+    - 回填脚本：`backend/scripts/backfill_bundle_model_bindings.py`
+    - 测试：`backend/tests/planner/test_bundle_as_model.py`
+  - **验收命令（全部 0 退出码）**：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_bundle_as_model.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_migrations.py -q`
+  - **下一步建议**：
+    - 运营流程：修改套装模板后先“保存草稿”→ 再“发布新版本”→ 再去 `sku-master` 绑定/覆盖绑定（保证口径稳定）。
+
 - **最近校对（北京时间 GMT+8）**：2026-01-27（商品关联 UI 优化：目标下拉同一行 + 套装二级 preset 绑定）
   - 需求：人工审核的“模型类型下拉 + 模型/套装下拉”合并为同一行；套装绑定改为二级（先选模板，再选 `preset_selector`，第二级才是最终绑定目标）。
   - 本轮产物：

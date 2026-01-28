@@ -122,13 +122,25 @@ export default function BatchWorkbench(props: { onOpenImport: () => void }) {
   const selectedBatch = selectedBatchQuery.data
 
   const exceptionsQuery = useQuery({
-    queryKey: ['shipments', 'exceptions', selectedBatchId, exceptionResolved, exceptionLimit],
+    queryKey: [
+      'shipments',
+      'exceptions',
+      selectedBatchId,
+      exceptionResolved,
+      exceptionLimit,
+      excFilterSkuCode,
+      excFilterChannel,
+      excFilterSpecText,
+    ],
     queryFn: () =>
       fetchShipmentExceptions({
         batch_id: selectedBatchId || undefined,
         resolved:
           exceptionResolved === 'all' ? undefined : exceptionResolved === 'resolved' ? true : false,
         limit: exceptionLimit,
+        sku_code: excFilterSkuCode.trim() || undefined,
+        channel: excFilterChannel.trim() || undefined,
+        spec_text: excFilterSpecText.trim() || undefined,
       }),
     enabled: !!selectedBatchId,
   })
@@ -268,17 +280,8 @@ export default function BatchWorkbench(props: { onOpenImport: () => void }) {
 
   const filteredExceptions = useMemo(() => {
     const rows = (exceptionsQuery.data ?? []) as ShipmentException[]
-    const qSku = excFilterSkuCode.trim()
-    const qChannel = excFilterChannel.trim()
-    const qSpec = excFilterSpecText.trim()
-    if (!qSku && !qChannel && !qSpec) return rows
-    const inc = (src: unknown, q: string) => safeString(src).toLowerCase().includes(q.toLowerCase())
-    return rows.filter((r: any) => {
-      if (qSku && !inc(r?.sku_code, qSku)) return false
-      if (qChannel && !inc(r?.channel, qChannel)) return false
-      if (qSpec && !inc(r?.spec_text, qSpec)) return false
-      return true
-    })
+    // Server-side filtered; keep this memo for consistent downstream usage.
+    return rows
   }, [exceptionsQuery.data, excFilterSkuCode, excFilterChannel, excFilterSpecText])
 
   const filteredSnapshots = useMemo(() => {

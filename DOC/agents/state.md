@@ -2969,3 +2969,19 @@
     - `npm -C frontend run build`
     - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
     - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+
+- **本轮补强（发货作业中心：异常队列支持后端真筛选，避免 limit 截断导致“搜不到”）**：
+  - 最近校对（北京时间 GMT+8）：2026-01-28
+  - 背景：单批次异常量可达 1w+；此前前端用“拉取前 N 条 + 本地过滤”的方式，容易出现“目标条码在最早的异常里 → 即使 limit=10000 仍筛不到”的情况。
+  - 变更：
+    - 后端 `GET /shipments/exceptions` 新增筛选参数：`sku_code` / `channel` / `spec_text`（按发货行字段 LIKE 匹配），可直接命中任意位置的异常。
+    - 前端异常队列筛选改为**服务端查询**（输入条码/渠道/交易规格后直接请求后端过滤结果）。
+  - 关联文件：
+    - `backend/src/planner/routers/shipments.py`
+    - `backend/src/planner/services/shipment_import_service.py`
+    - `frontend/src/pages/costing/shipment-ops/components/BatchWorkbench.tsx`
+    - `frontend/src/services/planner.ts`
+  - 本轮验收命令（必须，均已通过）：
+    - `npm -C frontend run build`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`

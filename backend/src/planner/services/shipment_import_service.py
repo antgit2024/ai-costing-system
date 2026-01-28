@@ -947,6 +947,9 @@ def list_exceptions(
     *,
     batch_id: Optional[str] = None,
     resolved: Optional[bool] = None,
+    sku_code: Optional[str] = None,
+    channel: Optional[str] = None,
+    spec_text: Optional[str] = None,
     limit: int = 200,
 ) -> List[models.ShipmentExceptionQueue]:
     limit = max(min(int(limit or 200), 1000), 1)
@@ -957,6 +960,21 @@ def list_exceptions(
         query = query.filter(models.ShipmentExceptionQueue.resolved_at.isnot(None))
     elif resolved is False:
         query = query.filter(models.ShipmentExceptionQueue.resolved_at.is_(None))
+
+    # Server-side filters (important for large batches): avoid "limit truncation then client-side filter".
+    if sku_code or channel or spec_text:
+        query = query.join(
+            models.ShipmentLine, models.ShipmentLine.id == models.ShipmentExceptionQueue.shipment_line_id
+        ).filter(models.ShipmentLine.is_archived.is_(False))
+        if sku_code:
+            s = f"%{str(sku_code).strip()}%"
+            query = query.filter(models.ShipmentLine.sku_code.ilike(s))
+        if channel:
+            s = f"%{str(channel).strip()}%"
+            query = query.filter(models.ShipmentLine.channel.ilike(s))
+        if spec_text:
+            s = f"%{str(spec_text).strip()}%"
+            query = query.filter(models.ShipmentLine.spec_text.ilike(s))
     items = query.order_by(models.ShipmentExceptionQueue.created_at.desc()).limit(limit).all()
 
     # Attach shipment line fields for readability (Excel-like columns)

@@ -1817,7 +1817,14 @@ export const executeShipmentsFromPreview = async (
 }
 
 export const fetchShipmentExceptions = async (
-  params: { batch_id?: string; resolved?: boolean; limit?: number } = {},
+  params: {
+    batch_id?: string
+    resolved?: boolean
+    limit?: number
+    sku_code?: string
+    channel?: string
+    spec_text?: string
+  } = {},
 ): Promise<ShipmentException[]> => {
   const response = await plannerClient.get('/shipments/exceptions', { params: sanitizeParams(params) })
   return response.data

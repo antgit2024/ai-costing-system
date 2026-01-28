@@ -106,10 +106,21 @@ def get_import_batch(batch_id: str, db: Session = Depends(get_db_session)):
 def list_exceptions(
     batch_id: str | None = None,
     resolved: bool | None = None,
+    sku_code: str | None = None,
+    channel: str | None = None,
+    spec_text: str | None = None,
     limit: int = 200,
     db: Session = Depends(get_db_session),
 ):
-    return shipment_import_service.list_exceptions(db, batch_id=batch_id, resolved=resolved, limit=limit)
+    return shipment_import_service.list_exceptions(
+        db,
+        batch_id=batch_id,
+        resolved=resolved,
+        sku_code=sku_code,
+        channel=channel,
+        spec_text=spec_text,
+        limit=limit,
+    )
 
 
 @router.post("/exceptions/retry", response_model=ShipmentExceptionRetryResponse)

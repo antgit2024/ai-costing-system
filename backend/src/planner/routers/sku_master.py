@@ -123,6 +123,47 @@ def bind_by_model_bulk(payload: schemas.SkuMasterBindByModelBulkRequest, db: Ses
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+@router.post("/bind-by-bundle", response_model=schemas.SkuMasterBindByBundleTemplateResponse)
+def bind_by_bundle(payload: schemas.SkuMasterBindByBundleTemplateRequest, db: Session = Depends(get_db_session)):
+    try:
+        return sku_master_service.bind_sku_master_by_bundle_template(
+            db,
+            template_id=payload.template_id,
+            sku_master_ids=payload.sku_master_ids,
+            requested_by=payload.requested_by,
+            allow_rebind=payload.allow_rebind,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/bind-by-bundle/bulk", response_model=schemas.SkuMasterBindByBundleTemplateBulkResponse)
+def bind_by_bundle_bulk(payload: schemas.SkuMasterBindByBundleTemplateBulkRequest, db: Session = Depends(get_db_session)):
+    try:
+        return sku_master_service.bind_sku_master_by_bundle_template_bulk(
+            db,
+            template_id=payload.template_id,
+            requested_by=payload.requested_by,
+            limit=payload.limit,
+            bound_state=payload.bound_state,
+            allow_rebind=payload.allow_rebind,
+            search=payload.search,
+            channel=payload.channel,
+            match_status=payload.match_status,
+            spec_mismatch=payload.spec_mismatch,
+            preparse_state=payload.preparse_state,
+            include_terms=payload.include_terms,
+            exclude_terms=payload.exclude_terms,
+            match_scope=payload.match_scope,
+            bound_model_id=payload.bound_model_id,
+            bound_model_code=payload.bound_model_code,
+            bound_version_id=payload.bound_version_id,
+            excluded_sku_master_ids=payload.excluded_sku_master_ids,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @router.post("/auto-bind/preview", response_model=schemas.SkuMasterAutoBindPreviewResponse)
 def auto_bind_preview(payload: schemas.SkuMasterAutoBindPreviewRequest, db: Session = Depends(get_db_session)):
     return sku_master_service.auto_bind_preview(db, limit=payload.limit, scan_limit=payload.scan_limit)

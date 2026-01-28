@@ -3175,6 +3175,9 @@ class SkuMasterRead(BaseModel):
     platform_sku_id: Optional[str] = None
     # 商家编码 / 网店规格编码：2026 新规则的“预置锚点”（模型码/套装码等）
     shop_spec_code: Optional[str] = None
+    # 套装模板绑定（Phase0：存储在 sku_master.metadata_json，作为“商家编码锚点”的人工兜底入口）
+    bundle_template_id: Optional[str] = None
+    bundle_template_code: Optional[str] = None
     channel: Optional[str] = None
     product_name: Optional[str] = None
     product_code: Optional[str] = None
@@ -3439,6 +3442,58 @@ class SkuMasterBindByModelBulkResponse(BaseModel):
     bound_count: int
     skipped_already_bound: int
     skipped_missing_barcode: int
+    skipped_excluded: int
+    errors: List[Dict[str, Any]] = Field(default_factory=list)
+    has_more: bool
+
+
+class SkuMasterBindByBundleTemplateRequest(BaseModel):
+    template_id: str
+    sku_master_ids: List[str] = Field(default_factory=list)
+    requested_by: Optional[str] = None
+    # if true, overwrite existing bundle_template binding
+    allow_rebind: bool = False
+
+
+class SkuMasterBindByBundleTemplateResponse(BaseModel):
+    total_selected: int
+    bound_count: int
+    skipped_already_bound: int
+    errors: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class SkuMasterBindByBundleTemplateBulkRequest(BaseModel):
+    """
+    Bind bundle_template to SKU masters matched by current filters (server-side).
+    Used by UI "人工审核：按筛选条件一键跑完（跨页）" for bundle bindings.
+    """
+
+    template_id: str
+    requested_by: Optional[str] = None
+    limit: int = Field(200, ge=1, le=2000)
+    bound_state: Literal["unbound", "bound", "all"] = "unbound"
+    allow_rebind: bool = False
+
+    # Filters (same semantics as list endpoint)
+    search: Optional[str] = None
+    channel: Optional[str] = None
+    match_status: Optional[str] = None
+    spec_mismatch: Optional[bool] = None
+    preparse_state: Optional[str] = None
+    include_terms: Optional[str] = None
+    exclude_terms: Optional[str] = None
+    match_scope: Optional[str] = None
+    bound_model_id: Optional[str] = None
+    bound_model_code: Optional[str] = None
+    bound_version_id: Optional[str] = None
+
+    excluded_sku_master_ids: List[str] = Field(default_factory=list)
+
+
+class SkuMasterBindByBundleTemplateBulkResponse(BaseModel):
+    batch_candidates: int
+    bound_count: int
+    skipped_already_bound: int
     skipped_excluded: int
     errors: List[Dict[str, Any]] = Field(default_factory=list)
     has_more: bool

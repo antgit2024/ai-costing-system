@@ -289,6 +289,35 @@
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-27（商品关联增强：保留原 UI，新增“标准模型/套装模块”两段绑定）
+  - 背景：商品关联（`/costing/sku-master`）是 2026 “前置”体系的人工兜底入口：商家编码（`shop_spec_code`）承载“模型码/套装码锚点”，交易规格负责解析尺寸/TOKEN。
+  - 本轮产物（后端）：
+    - `backend/src/planner/routers/sku_master.py`
+      - 新增：`POST /api/planner/sku-master/bind-by-bundle`（按勾选绑定套装模板）
+      - 新增：`POST /api/planner/sku-master/bind-by-bundle/bulk`（跨页一键跑完绑定套装模板）
+    - `backend/src/planner/services/sku_master_service.py`
+      - 新增：`bind_sku_master_by_bundle_template` / `bind_sku_master_by_bundle_template_bulk`
+      - Phase0 存储策略：套装绑定写入 `sku_master.metadata_json`（`bundle_template_id/bundle_template_code/...`），不覆盖原始 `shop_spec_code`
+    - `backend/src/planner/schemas.py`
+      - `SkuMasterRead` 增加：`bundle_template_id/bundle_template_code`
+      - 新增：套装绑定请求/响应 schema（bind-by-bundle + bulk）
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/SkuMasterWorkspacePage.tsx`
+      - 保留原“人工审核/自动识别/一键跑完”等交互
+      - 人工审核新增“目标类型：标准模型/套装模块”两段选择：标准模型复用原逻辑；套装模块下拉来自 `/bundle-templates`
+      - 列表状态新增紫色 Tag：`套装 <code>`；详情增加“套装模板绑定”字段
+    - `frontend/src/services/planner.ts`
+      - 新增：`bindSkuMastersByBundleTemplate` / `bindSkuMastersByBundleTemplateBulk`
+    - `frontend/src/types/planner.ts`
+      - `SkuMaster` 增加：`bundle_template_id/bundle_template_code`
+  - 下一步：
+    - 若要把“套装绑定”用于发货自动扣库/快照生成：需要在 BOM 生成/发货导入主链里识别并优先使用 `bundle_template_code`（再结合交易规格 dims/tokens 做组件条件），建议单开迭代避免口径混改。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-22（天猫SKU生成器：尺寸胶囊常显 + Z 规格同列不变色 + 检验补齐商家编码）
   - 本轮范围：对齐业务口径：检验用于校验“商品规格（网店）+ 商家编码”是否能命中系统编码/公式；尺寸展示与检验解绑；Z- 规格字样显示在“TOKEN/公式”列但不做红绿高亮。
   - 本轮产物：

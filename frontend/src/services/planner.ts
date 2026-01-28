@@ -2175,6 +2175,63 @@ export const bindSkuMastersByModelBulk = async (
   return response.data
 }
 
+export const bindSkuMastersByBundleTemplate = async (
+  payload: {
+    template_id: string
+    sku_master_ids: string[]
+    requested_by?: string
+    allow_rebind?: boolean
+  },
+  opts: PlannerRequestOptions = {},
+): Promise<{
+  total_selected: number
+  bound_count: number
+  skipped_already_bound: number
+  errors: Array<Record<string, unknown>>
+}> => {
+  const response = await plannerClient.post('/sku-master/bind-by-bundle', payload, {
+    timeout: opts.timeoutMs,
+    signal: opts.signal,
+  })
+  return response.data
+}
+
+export const bindSkuMastersByBundleTemplateBulk = async (
+  payload: {
+    template_id: string
+    requested_by?: string
+    limit?: number
+    bound_state?: 'unbound' | 'bound' | 'all'
+    allow_rebind?: boolean
+    search?: string
+    channel?: string
+    match_status?: string
+    spec_mismatch?: boolean
+    preparse_state?: string
+    include_terms?: string
+    exclude_terms?: string
+    match_scope?: 'spec' | 'name' | 'auto' | 'spec_or_name'
+    bound_model_id?: string
+    bound_model_code?: string
+    bound_version_id?: string
+    excluded_sku_master_ids?: string[]
+  },
+  opts: PlannerRequestOptions = {},
+): Promise<{
+  batch_candidates: number
+  bound_count: number
+  skipped_already_bound: number
+  skipped_excluded: number
+  errors: Array<Record<string, unknown>>
+  has_more: boolean
+}> => {
+  const response = await plannerClient.post('/sku-master/bind-by-bundle/bulk', payload, {
+    timeout: opts.timeoutMs,
+    signal: opts.signal,
+  })
+  return response.data
+}
+
 export const autoBindSkuMastersPreview = async (payload: {
   limit?: number
   scan_limit?: number

@@ -26,9 +26,12 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import {
   autoBindSkuMastersExecute,
   autoBindSkuMastersPreview,
+  bindSkuMastersByBundleTemplate,
+  bindSkuMastersByBundleTemplateBulk,
   bindSkuMastersByModel,
   bindSkuMastersByModelBulk,
   fetchPublishedStandardModels,
+  fetchBundleTemplates,
   fetchSkuMaster,
   fetchSkuMasterDetail,
   importSkuMasterXlsx,
@@ -137,6 +140,9 @@ const SkuMasterWorkspacePage = () => {
   const [workbenchTab, setWorkbenchTab] = useState<'auto' | 'manual'>('manual')
   const [modelSearch, setModelSearch] = useState<string>('')
   const [selectedModelId, setSelectedModelId] = useState<string | undefined>(undefined)
+  const [targetKind, setTargetKind] = useState<'model' | 'bundle'>('model')
+  const [bundleSearch, setBundleSearch] = useState<string>('')
+  const [selectedBundleTemplateId, setSelectedBundleTemplateId] = useState<string | undefined>(undefined)
   const [autoPreviewText, setAutoPreviewText] = useState<string>('')
   const [autoPreviewCandidates, setAutoPreviewCandidates] = useState<SkuMasterAutoBindPreviewItem[]>([])
   const [autoCandidatesOnly, setAutoCandidatesOnly] = useState(false)
@@ -406,11 +412,14 @@ const SkuMasterWorkspacePage = () => {
         const bound = isFilled(v as any)
         const source = safeString((record.metadata_json as any)?.source)
         const srcTag = source === 'shipment_autobackfill' ? <Tag color="gold">发货回写</Tag> : null
+        const bundleCode = safeString((record as any)?.bundle_template_code ?? (record.metadata_json as any)?.bundle_template_code).trim()
+        const bundleTag = bundleCode ? <Tag color="purple">套装 {bundleCode}</Tag> : null
         return (
           <Space size={6}>
             {bound ? <Tag color="green">已绑定</Tag> : <Tag color="red">未绑定</Tag>}
             {record.spec_mismatch ? <Tag color="orange">规格差异</Tag> : null}
             {renderModelChip(record.bound_model_code, record.bound_model_name)}
+            {bundleTag}
             {srcTag}
           </Space>
         )
@@ -477,6 +486,12 @@ const SkuMasterWorkspacePage = () => {
     placeholderData: keepPreviousData,
   })
 
+  const bundleTemplatesQuery = useQuery({
+    queryKey: ['bundle-templates', 'list', bundleSearch],
+    queryFn: () => fetchBundleTemplates({ search: bundleSearch || undefined, page: 1, page_size: 50 }),
+    placeholderData: keepPreviousData,
+  })
+
   const modelOptions = useMemo(() => {
     const items = (candidatesQuery.data as any)?.items ?? []
     return (items as PublishedStandardModelCandidate[]).map((m) => ({
@@ -492,8 +507,30 @@ const SkuMasterWorkspacePage = () => {
     return m
   }, [modelOptions])
 
+  const bundleTemplateOptions = useMemo(() => {
+    const items = (bundleTemplatesQuery.data as any)?.items ?? []
+    return (items as any[]).map((t) => ({
+      label: `${safeString(t.code)} ${safeString(t.name)}`.trim(),
+      value: String(t.id),
+    }))
+  }, [bundleTemplatesQuery.data])
+
+  const bundleTemplateLabelById = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const it of bundleTemplateOptions) m.set(String(it.value), String(it.label))
+    return m
+  }, [bundleTemplateOptions])
+
   const bindMutation = useMutation({
     mutationFn: async () => {
+      if (targetKind === 'bundle') {
+        if (!selectedBundleTemplateId) throw new Error('请选择套装模板')
+        return await bindSkuMastersByBundleTemplate({
+          template_id: selectedBundleTemplateId,
+          sku_master_ids: selectedRowKeys,
+          requested_by: requestedBy || undefined,
+        })
+      }
       if (!selectedModelId) throw new Error('请选择模型')
       return await bindSkuMastersByModel({
         model_id: selectedModelId,
@@ -544,7 +581,12 @@ const SkuMasterWorkspacePage = () => {
 
   const handleManualRunAll = () => {
     if (manualRunAllRunning) return
-    if (!selectedModelId) {
+    if (targetKind === 'bundle') {
+      if (!selectedBundleTemplateId) {
+        message.warning('请先选择套装模板')
+        return
+      }
+    } else if (!selectedModelId) {
       message.warning('请先选择目标模型（已发布）')
       return
     }
@@ -559,15 +601,20 @@ const SkuMasterWorkspacePage = () => {
         return
       }
       const total = selectedRowKeys.length
+      const targetLabel =
+        targetKind === 'bundle'
+          ? bundleTemplateLabelById.get(String(selectedBundleTemplateId)) || '（未选套装模板）'
+          : modelLabelById.get(String(selectedModelId)) || '（未选模型）'
       Modal.confirm({
         title: '确认一键跑完（当页勾选）？',
-        content: `将对当前勾选的 ${total} 条记录按 200 条/轮循环绑定（不会覆盖已有绑定）。`,
+        content: `将对当前勾选的 ${total} 条记录按 200 条/轮循环绑定到：${targetLabel}（不会覆盖已有绑定）。`,
         okText: '开始执行',
         cancelText: '取消',
         onOk: () => {
           // 关键：不要 await（否则 confirm 弹窗会一直“转圈”不关闭）
           // 点“开始执行”后立即关闭弹窗，后台继续跑；进度/停止在页面里看
           const modelId = selectedModelId
+          const templateId = selectedBundleTemplateId
           const idsAll = [...selectedRowKeys]
           const reqBy = requestedBy || undefined
 
@@ -591,14 +638,25 @@ const SkuMasterWorkspacePage = () => {
                 const timer = window.setTimeout(() => ac.abort(), 45_000)
                 let res: any
                 try {
-                  res = await bindSkuMastersByModel(
-                    {
-                      model_id: modelId as string,
-                      sku_master_ids: batch,
-                      requested_by: reqBy,
-                    },
-                    { timeoutMs: 45_000, signal: ac.signal },
-                  )
+                  if (targetKind === 'bundle') {
+                    res = await bindSkuMastersByBundleTemplate(
+                      {
+                        template_id: templateId as string,
+                        sku_master_ids: batch,
+                        requested_by: reqBy,
+                      },
+                      { timeoutMs: 45_000, signal: ac.signal },
+                    )
+                  } else {
+                    res = await bindSkuMastersByModel(
+                      {
+                        model_id: modelId as string,
+                        sku_master_ids: batch,
+                        requested_by: reqBy,
+                      },
+                      { timeoutMs: 45_000, signal: ac.signal },
+                    )
+                  }
                 } finally {
                   window.clearTimeout(timer)
                 }
@@ -633,7 +691,9 @@ const SkuMasterWorkspacePage = () => {
 
               message.success(`人工审核自动绑定完成：累计bound=${totalBound} errors=${totalErrors}`)
               setSelectedRowKeys([])
-              setListTab('bound')
+              if (targetKind === 'model') {
+                setListTab('bound')
+              }
               setPage(1)
               setPageSize(DEFAULT_PAGE_SIZE)
               await queryClient.invalidateQueries({ queryKey: ['sku-master', 'list'] })
@@ -660,11 +720,13 @@ const SkuMasterWorkspacePage = () => {
     }
 
     const _normConfirm = (s: string) => String(s || '').replace(/\s+/g, ' ').trim()
-    const modelLabelRaw = modelLabelById.get(String(selectedModelId)) || ''
-    const modelLabel = _normConfirm(modelLabelRaw)
-    // “请输入模型名称再次确认”：允许输入模型全称（去掉 model_code）或完整 label（含 model_code）
-    const modelNameOnly = _normConfirm(modelLabel.replace(/^\S+\s+/, ''))
-    const expected = modelNameOnly || modelLabel || '确认'
+    const targetLabelRaw =
+      targetKind === 'bundle'
+        ? bundleTemplateLabelById.get(String(selectedBundleTemplateId)) || ''
+        : modelLabelById.get(String(selectedModelId)) || ''
+    const targetLabel = _normConfirm(targetLabelRaw)
+    const targetNameOnly = _normConfirm(targetLabel.replace(/^\S+\s+/, ''))
+    const expected = targetNameOnly || targetLabel || '确认'
     const excludedCount = new Set(manualExcludedIds.map((x) => String(x))).size
     const filterSummary = [
       `关键词：${search ? `“${search}”` : '（空）'}`,
@@ -684,13 +746,13 @@ const SkuMasterWorkspacePage = () => {
       content: (
         <div>
           <div style={{ marginBottom: 8 }}>
-            你当前筛选条件将直接匹配绑定标准模型：<b>{modelLabel || '（未选模型）'}</b>
+            你当前筛选条件将直接匹配绑定到：<b>{targetLabel || '（未选目标）'}</b>
           </div>
           <div style={{ marginBottom: 8, color: '#666' }}>{filterSummary}</div>
           <div style={{ marginBottom: 8 }}>
-            为防误操作，请输入模型名称确认：<b>{expected}</b>
+            为防误操作，请输入目标名称确认：<b>{expected}</b>
           </div>
-          <Input placeholder="请输入上面的模型名称以确认" onChange={(e) => (typed = String(e.target.value || '').trim())} />
+          <Input placeholder="请输入上面的目标名称以确认" onChange={(e) => (typed = String(e.target.value || '').trim())} />
           <div style={{ marginTop: 8, color: '#999' }}>
             所有页勾选模式：视为“全选筛选结果（跨页）”，你在本页取消勾选的条目会加入“排除列表”，不会写入绑定。
           </div>
@@ -700,7 +762,8 @@ const SkuMasterWorkspacePage = () => {
       cancelText: '取消',
       onOk: () => {
         const typed2 = _normConfirm(typed)
-        const ok = typed2 === _normConfirm(expected) || typed2 === _normConfirm(modelLabel) || typed2 === _normConfirm(modelNameOnly)
+        const ok =
+          typed2 === _normConfirm(expected) || typed2 === _normConfirm(targetLabel) || typed2 === _normConfirm(targetNameOnly)
         if (!ok) {
           message.error('确认输入不一致，已取消执行')
           return Promise.reject(new Error('confirm mismatch'))
@@ -709,6 +772,7 @@ const SkuMasterWorkspacePage = () => {
         // 关键：不要 await（否则 confirm 弹窗会一直“转圈”不关闭）
         // 点“开始执行”后立即关闭弹窗，后台继续跑；进度/停止在页面里看
         const modelId = selectedModelId
+        const templateId = selectedBundleTemplateId
         const reqBy = requestedBy || undefined
         const fSearch = search || undefined
         const fChannel = channel
@@ -735,21 +799,39 @@ const SkuMasterWorkspacePage = () => {
               const timer = window.setTimeout(() => ac.abort(), 45_000)
               let res: any
               try {
-                res = await bindSkuMastersByModelBulk(
-                  {
-                    model_id: modelId as string,
-                    requested_by: reqBy,
-                    limit: 200,
-                    search: fSearch,
-                    channel: fChannel,
-                    match_status: fMatchStatus,
-                    include_terms: fIncludeTerms,
-                    exclude_terms: fExcludeTerms,
-                    match_scope: fMatchScope,
-                    excluded_sku_master_ids: excluded,
-                  },
-                  { timeoutMs: 45_000, signal: ac.signal },
-                )
+                if (targetKind === 'bundle') {
+                  res = await bindSkuMastersByBundleTemplateBulk(
+                    {
+                      template_id: templateId as string,
+                      requested_by: reqBy,
+                      limit: 200,
+                      search: fSearch,
+                      channel: fChannel,
+                      match_status: fMatchStatus,
+                      include_terms: fIncludeTerms,
+                      exclude_terms: fExcludeTerms,
+                      match_scope: fMatchScope as any,
+                      excluded_sku_master_ids: excluded,
+                    },
+                    { timeoutMs: 45_000, signal: ac.signal },
+                  )
+                } else {
+                  res = await bindSkuMastersByModelBulk(
+                    {
+                      model_id: modelId as string,
+                      requested_by: reqBy,
+                      limit: 200,
+                      search: fSearch,
+                      channel: fChannel,
+                      match_status: fMatchStatus,
+                      include_terms: fIncludeTerms,
+                      exclude_terms: fExcludeTerms,
+                      match_scope: fMatchScope,
+                      excluded_sku_master_ids: excluded,
+                    },
+                    { timeoutMs: 45_000, signal: ac.signal },
+                  )
+                }
               } finally {
                 window.clearTimeout(timer)
               }
@@ -789,7 +871,9 @@ const SkuMasterWorkspacePage = () => {
             message.success(`人工审核自动绑定完成：累计bound=${totalBound} errors=${totalErrors}`)
             setSelectedRowKeys([])
             setManualExcludedIds([])
-            setListTab('bound')
+            if (targetKind === 'model') {
+              setListTab('bound')
+            }
             setPage(1)
             setPageSize(DEFAULT_PAGE_SIZE)
             await queryClient.invalidateQueries({ queryKey: ['sku-master', 'list'] })
@@ -985,7 +1069,7 @@ const SkuMasterWorkspacePage = () => {
         {/* 左侧：绑定工作台（1/4） */}
         <Col xs={24} lg={6}>
           <Space direction="vertical" size={12} style={{ width: '100%' }}>
-            <Card size="small" title="映射工作台（SKU→标准模型）">
+            <Card size="small" title="映射工作台（SKU→标准模型/套装模块）">
               <Tabs
                 activeKey={workbenchTab}
                 onChange={(k) => setWorkbenchTab(k as any)}
@@ -995,18 +1079,48 @@ const SkuMasterWorkspacePage = () => {
                     label: '人工审核',
                     children: (
                       <Space direction="vertical" style={{ width: '100%' }}>
-                        <Text type="secondary">选择目标标准模型（系统会自动落到该模型唯一在线发布版本）。</Text>
-                        <Select
-                          showSearch
-                          allowClear
-                          placeholder="目标标准模型（已发布）"
-                          options={modelOptions}
-                          value={selectedModelId}
-                          onChange={(v) => setSelectedModelId(v)}
-                          onSearch={(v) => setModelSearch(v)}
-                          filterOption={false}
-                          loading={candidatesQuery.isFetching}
-                        />
+                        <Text type="secondary">
+                          先选“目标类型”，再选“目标对象”。标准模型会自动落到该模型唯一在线发布版本；套装模块会写入模板绑定（Phase0：存主档 metadata）。
+                        </Text>
+                        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                          <Select
+                            value={targetKind}
+                            options={[
+                              { label: '标准模型', value: 'model' },
+                              { label: '套装模块', value: 'bundle' },
+                            ]}
+                            onChange={(v) => {
+                              setTargetKind(v as any)
+                              setSelectedModelId(undefined)
+                              setSelectedBundleTemplateId(undefined)
+                            }}
+                          />
+                          {targetKind === 'bundle' ? (
+                            <Select
+                              showSearch
+                              allowClear
+                              placeholder="套装模板（按 code/name 搜索）"
+                              options={bundleTemplateOptions}
+                              value={selectedBundleTemplateId}
+                              onChange={(v) => setSelectedBundleTemplateId(v)}
+                              onSearch={(v) => setBundleSearch(v)}
+                              filterOption={false}
+                              loading={bundleTemplatesQuery.isFetching}
+                            />
+                          ) : (
+                            <Select
+                              showSearch
+                              allowClear
+                              placeholder="目标标准模型（已发布）"
+                              options={modelOptions}
+                              value={selectedModelId}
+                              onChange={(v) => setSelectedModelId(v)}
+                              onSearch={(v) => setModelSearch(v)}
+                              filterOption={false}
+                              loading={candidatesQuery.isFetching}
+                            />
+                          )}
+                        </Space>
                         <Input
                           value={requestedBy}
                           onChange={(e) => setRequestedBy(e.target.value)}
@@ -1044,7 +1158,10 @@ const SkuMasterWorkspacePage = () => {
                         <Button
                           block
                           type="primary"
-                          disabled={!selectedModelId || selectedRowKeys.length === 0}
+                          disabled={
+                            (targetKind === 'bundle' ? !selectedBundleTemplateId : !selectedModelId) ||
+                            selectedRowKeys.length === 0
+                          }
                           loading={bindMutation.isPending}
                           onClick={() => bindMutation.mutate()}
                         >
@@ -1054,7 +1171,11 @@ const SkuMasterWorkspacePage = () => {
                           block
                           type="primary"
                           danger
-                          disabled={!selectedModelId || manualRunAllRunning || bindMutation.isPending}
+                          disabled={
+                            (targetKind === 'bundle' ? !selectedBundleTemplateId : !selectedModelId) ||
+                            manualRunAllRunning ||
+                            bindMutation.isPending
+                          }
                           loading={manualRunAllRunning}
                           onClick={handleManualRunAll}
                         >
@@ -1355,6 +1476,9 @@ const SkuMasterWorkspacePage = () => {
                 </Descriptions.Item>
                 <Descriptions.Item label="规格编码（网店）/商家编码">
                   {(detailQuery.data as any).shop_spec_code ?? (detailQuery.data.metadata_json as any)?.shop_spec_code ?? '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="套装模板绑定">
+                  {(detailQuery.data as any).bundle_template_code ?? (detailQuery.data.metadata_json as any)?.bundle_template_code ?? '-'}
                 </Descriptions.Item>
                 <Descriptions.Item label="ERP匹配状态（网店↔ERP）">
                   {detailQuery.data.match_status ?? '-'}

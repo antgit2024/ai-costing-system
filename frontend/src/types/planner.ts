@@ -2147,6 +2147,8 @@ export interface SkuMaster {
   platform_product_id?: string | null
   platform_sku_id?: string | null
   shop_spec_code?: string | null
+  bundle_template_id?: string | null
+  bundle_template_code?: string | null
   channel?: string | null
   product_name?: string | null
   product_code?: string | null

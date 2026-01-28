@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from .. import models
 from . import product_model_service, spec_parser_service
+from . import bundle_template_service
 
 
 def _utcnow() -> datetime:
@@ -912,6 +913,9 @@ def _attach_parsed_fields(rows: List[models.SkuMaster]) -> None:
         # 商家编码 / 网店规格编码（用于 2026 新规则：渠道侧携带的预置编码，包含模型码/套装码等锚点）
         # 目前来源：ERP SKU 主档导入时写入 metadata_json.shop_spec_code（同时也会写 shop_sku_mappings.shop_spec_code）
         r.shop_spec_code = meta.get("shop_spec_code")
+        # 套装模板绑定（Phase0：存 metadata_json；用于 sku-master 人工兜底/前置校验）
+        r.bundle_template_id = meta.get("bundle_template_id")
+        r.bundle_template_code = meta.get("bundle_template_code")
         r.erp_spec_hash = meta.get("erp_spec_hash")
         r.erp_parser_version = meta.get("erp_parser_version")
         r.erp_dimensions = meta.get("erp_dimensions") or {}
@@ -1769,6 +1773,249 @@ def bind_sku_master_by_model_bulk(
         "bound_count": bound_count,
         "skipped_already_bound": skipped_already_bound,
         "skipped_missing_barcode": skipped_missing_barcode,
+        "skipped_excluded": skipped_excluded,
+        "errors": errors,
+        "has_more": has_more,
+    }
+
+
+def bind_sku_master_by_bundle_template(
+    db: Session,
+    *,
+    template_id: str,
+    sku_master_ids: List[str],
+    requested_by: Optional[str],
+    allow_rebind: bool = False,
+) -> Dict[str, Any]:
+    tid = (template_id or "").strip()
+    if not tid:
+        raise ValueError("template_id 不能为空")
+    t = bundle_template_service.get_template(db, tid, include_archived=True)
+    if not t or getattr(t, "is_archived", False):
+        raise ValueError("套装模板不存在或已归档")
+
+    ids = [str(x).strip() for x in (sku_master_ids or []) if str(x).strip()]
+    total_selected = len(ids)
+    if total_selected <= 0:
+        return {"total_selected": 0, "bound_count": 0, "skipped_already_bound": 0, "errors": []}
+
+    rows = (
+        db.query(models.SkuMaster)
+        .filter(models.SkuMaster.id.in_(list(set(ids))), models.SkuMaster.is_archived.is_(False))
+        .all()
+    )
+    by_id = {r.id: r for r in rows}
+
+    bound_count = 0
+    skipped_already_bound = 0
+    errors: List[Dict[str, Any]] = []
+    now_iso = _utcnow().isoformat()
+    tcode = str(getattr(t, "code", "") or "").strip() or None
+
+    for sid in ids:
+        row = by_id.get(sid)
+        if not row:
+            errors.append({"sku_master_id": sid, "error": "sku_master not found"})
+            continue
+        meta = dict(row.metadata_json or {})
+        existing_tid = str(meta.get("bundle_template_id") or "").strip()
+        if existing_tid and not allow_rebind:
+            skipped_already_bound += 1
+            continue
+        meta.update(
+            {
+                "bundle_template_id": tid,
+                "bundle_template_code": tcode,
+                "bundle_bound_at": now_iso,
+                "bundle_bound_by": (requested_by or meta.get("requested_by") or None),
+                "bundle_binding_method": "manual_by_template_rebind" if allow_rebind else "manual_by_template",
+            }
+        )
+        row.metadata_json = meta
+        bound_count += 1
+
+    db.commit()
+    return {
+        "total_selected": total_selected,
+        "bound_count": bound_count,
+        "skipped_already_bound": skipped_already_bound,
+        "errors": errors,
+    }
+
+
+def bind_sku_master_by_bundle_template_bulk(
+    db: Session,
+    *,
+    template_id: str,
+    requested_by: Optional[str],
+    limit: int = 200,
+    bound_state: str = "unbound",
+    allow_rebind: bool = False,
+    search: Optional[str] = None,
+    channel: Optional[str] = None,
+    match_status: Optional[str] = None,
+    spec_mismatch: Optional[bool] = None,
+    preparse_state: Optional[str] = None,
+    include_terms: Optional[str] = None,
+    exclude_terms: Optional[str] = None,
+    match_scope: Optional[str] = None,
+    bound_model_id: Optional[str] = None,
+    bound_model_code: Optional[str] = None,
+    bound_version_id: Optional[str] = None,
+    excluded_sku_master_ids: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    tid = (template_id or "").strip()
+    if not tid:
+        raise ValueError("template_id 不能为空")
+    t = bundle_template_service.get_template(db, tid, include_archived=True)
+    if not t or getattr(t, "is_archived", False):
+        raise ValueError("套装模板不存在或已归档")
+    tcode = str(getattr(t, "code", "") or "").strip() or None
+
+    limit2 = max(min(int(limit or 200), 2000), 1)
+    excluded_list = list(set([str(x) for x in (excluded_sku_master_ids or []) if str(x).strip()]))
+    skipped_excluded = len(excluded_list)
+
+    # Reuse list_sku_master semantics to build the base query (server-side filters)
+    q = db.query(models.SkuMaster).filter(models.SkuMaster.is_archived.is_(False))
+    if search:
+        s_like = f"%{search.strip()}%"
+        q = q.filter(
+            (models.SkuMaster.erp_sku_barcode.ilike(s_like))
+            | (models.SkuMaster.product_name.ilike(s_like))
+            | (models.SkuMaster.product_code.ilike(s_like))
+        )
+    if channel:
+        q = q.filter(models.SkuMaster.channel == channel)
+    if match_status:
+        q = q.filter(models.SkuMaster.match_status == match_status)
+    if excluded_list:
+        q = q.filter(~models.SkuMaster.id.in_(excluded_list))
+    if spec_mismatch is True:
+        q = q.filter(models.SkuMaster.metadata_json["spec_mismatch"].as_boolean() == True)  # noqa: E712
+    if preparse_state:
+        state = str(preparse_state).strip().lower()
+        ph = models.SkuMaster.metadata_json["preparse_spec_hash"].as_string()
+        if state in ("parsed", "done", "yes", "1", "true"):
+            q = q.filter(func.coalesce(ph, "") != "")
+        elif state in ("unparsed", "none", "no", "0", "false"):
+            q = q.filter(func.coalesce(ph, "") == "")
+
+    # Keep consistency with model bulk binding filters
+    # (bound_model_id/bound_model_code/bound_version_id are optional extra restrictors)
+    if bound_model_id or bound_model_code or bound_version_id:
+        subq = (
+            db.query(models.SkuModelVersionMapping.id)
+            .join(
+                models.ProductModelVersion,
+                models.ProductModelVersion.id == models.SkuModelVersionMapping.model_version_id,
+            )
+            .join(models.ProductModel, models.ProductModel.id == models.ProductModelVersion.model_id)
+            .filter(
+                models.SkuModelVersionMapping.sku_code == models.SkuMaster.erp_sku_barcode,
+                models.SkuModelVersionMapping.is_active.is_(True),
+                models.SkuModelVersionMapping.is_archived.is_(False),
+                models.ProductModelVersion.is_archived.is_(False),
+                models.ProductModel.is_archived.is_(False),
+            )
+        )
+        if bound_version_id:
+            subq = subq.filter(models.SkuModelVersionMapping.model_version_id == str(bound_version_id).strip())
+        if bound_model_id:
+            subq = subq.filter(models.ProductModelVersion.model_id == str(bound_model_id).strip())
+        if bound_model_code:
+            subq = subq.filter(models.ProductModel.model_code == str(bound_model_code).strip())
+        q = q.filter(subq.exists())
+
+    # bound_state here refers to "bundle already bound" state
+    state = str(bound_state or "unbound").strip().lower()
+    if state not in ("unbound", "bound", "all"):
+        state = "unbound"
+    existing_expr = func.coalesce(models.SkuMaster.metadata_json["bundle_template_id"].as_string(), "")
+    if state == "unbound":
+        q = q.filter(existing_expr == "")
+    elif state == "bound":
+        q = q.filter(existing_expr != "")
+    else:
+        pass
+
+    # NOTE: include_terms/exclude_terms/match_scope are interpreted the same as list_sku_master.
+    # For Phase0, we keep it minimal and reuse list_sku_master helper by calling it is expensive here,
+    # so we approximate using spec_text/product_name filter patterns.
+    def _parse_terms(raw: Optional[str]) -> List[str]:
+        if not raw:
+            return []
+        s0 = str(raw)
+        for ch in ("，", ";", "；", "\n", "\t"):
+            s0 = s0.replace(ch, " ")
+        parts = [p.strip() for p in s0.split(" ") if p.strip()]
+        out: List[str] = []
+        seen: set[str] = set()
+        for p in parts:
+            if p in seen:
+                continue
+            seen.add(p)
+            out.append(p)
+        return out
+
+    include_list = _parse_terms(include_terms)
+    exclude_list = _parse_terms(exclude_terms)
+    scope = (match_scope or "auto").strip()
+    if scope not in ("auto", "spec", "name", "spec_or_name"):
+        scope = "auto"
+    name_channels = ["小红书", "京东"]
+
+    def _field_expr_for_scope(term: str):
+        pattern = f"%{term}%"
+        spec_hit = models.SkuMaster.spec_text.ilike(pattern)
+        name_hit = models.SkuMaster.product_name.ilike(pattern)
+        if scope == "spec":
+            return spec_hit
+        if scope == "name":
+            return name_hit
+        if scope == "spec_or_name":
+            return spec_hit | name_hit
+        return (models.SkuMaster.channel.in_(name_channels) & name_hit) | (
+            ~models.SkuMaster.channel.in_(name_channels) & spec_hit
+        )
+
+    for tterm in include_list:
+        q = q.filter(_field_expr_for_scope(tterm))
+    for tterm in exclude_list:
+        q = q.filter(~_field_expr_for_scope(tterm))
+
+    rows = q.order_by(models.SkuMaster.updated_at.desc()).limit(limit2 + 1).all()
+    has_more = len(rows) > limit2
+    batch_rows = rows[:limit2]
+
+    bound_count = 0
+    skipped_already_bound = 0
+    errors: List[Dict[str, Any]] = []
+    now_iso = _utcnow().isoformat()
+
+    for row in batch_rows:
+        meta = dict(row.metadata_json or {})
+        existing_tid = str(meta.get("bundle_template_id") or "").strip()
+        if existing_tid and not allow_rebind:
+            skipped_already_bound += 1
+            continue
+        meta.update(
+            {
+                "bundle_template_id": tid,
+                "bundle_template_code": tcode,
+                "bundle_bound_at": now_iso,
+                "bundle_bound_by": (requested_by or meta.get("requested_by") or None),
+                "bundle_binding_method": "manual_bulk_template_rebind" if allow_rebind else "manual_bulk_template",
+            }
+        )
+        row.metadata_json = meta
+        bound_count += 1
+
+    db.commit()
+    return {
+        "batch_candidates": len(batch_rows),
+        "bound_count": bound_count,
+        "skipped_already_bound": skipped_already_bound,
         "skipped_excluded": skipped_excluded,
         "errors": errors,
         "has_more": has_more,

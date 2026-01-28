@@ -392,7 +392,10 @@
       - 列表展示侧增加“锚点准入”过滤：只展示满足其一的 SKU：
         - 已绑定模型（`active_model_version_id`/`bound_model_*` 任一存在）
         - 已绑定套装（`bundle_template_*` 或 `metadata_json.bundle_template_*` 任一存在）
-      - 新增列“已绑定套装”，避免“未绑定模型”被误解为“完全未绑定”
+      - 列展示由“两列（已绑定模型/已绑定套装）”合并为“一列（已绑定目标）”，规则：
+        - 若绑定模型：显示 `model_code model_name`（如：`F6A 皮革桌垫`）
+        - 若绑定套装：显示 `B-/Z-` 前缀 + 业务码(+preset) + ` template_name`（如：`B-DB9EAE 印花抱枕（26前历史）`）
+        - 若两者同时存在：同一格分两行展示，避免口径混淆
       - 展示口径对齐 `sku-master`：
         - 模型列仅展示：`<model_code> <model_name>`
         - 套装列展示：`B-/Z-` 前缀 + 业务码（必要时拼接 preset 后缀）+ ` <template_name>`（例如：`B-DB9EAE 印花抱枕（26前历史）`）

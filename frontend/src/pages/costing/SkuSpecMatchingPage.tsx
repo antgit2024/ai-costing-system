@@ -759,31 +759,21 @@ export default function SkuSpecMatchingPage() {
       },
       { title: '销售渠道', dataIndex: 'channel', width: 120, render: (v) => safeString(v) || '-' },
       {
-        title: '已绑定模型',
-        dataIndex: 'bound_model_code',
-        width: 180,
-        render: (_v, row) =>
-          row.bound_model_code ? (
-            <Space size={6}>
-              <Tag color="blue">{row.bound_model_code}</Tag>
-              <span style={{ color: '#666' }}>{row.bound_model_name || ''}</span>
-            </Space>
-          ) : (
-            <Tag color="red">未绑定</Tag>
-          ),
-      },
-      {
-        title: '已绑定套装',
-        dataIndex: 'bundle_template_code',
-        width: 260,
+        title: '已绑定目标',
+        key: 'bound_target',
+        width: 320,
         render: (_v, row) => {
+          const modelCode = safeString((row as any)?.bound_model_code).trim()
+          const modelName = safeString((row as any)?.bound_model_name).trim()
+          const hasModel = !!modelCode
+
           const meta = (row as any)?.metadata_json ?? {}
           const codeRaw = safeString((row as any)?.bundle_template_code ?? meta?.bundle_template_code).trim()
           const tid = safeString((row as any)?.bundle_template_id ?? meta?.bundle_template_id).trim()
           const selRaw = safeString((row as any)?.bundle_preset_selector ?? meta?.bundle_preset_selector)
             .trim()
             .toUpperCase()
-          if (!codeRaw) return <Tag>未绑定</Tag>
+          const hasBundle = !!codeRaw
 
           const normalize = (s: string) =>
             String(s || '')
@@ -792,28 +782,44 @@ export default function SkuSpecMatchingPage() {
               .replace(/^([BZ])-/, '')
               .replace(/[^A-Z0-9]/g, '')
 
-          const base = normalize(codeRaw)
-          const sel = normalize(selRaw)
+          const bundleTag = (() => {
+            if (!hasBundle) return null
+            const base = normalize(codeRaw)
+            const sel = normalize(selRaw)
+            const tpl =
+              (bundleTemplates as any[]).find((t: any) => String(t?.id ?? '').trim() === tid) ??
+              (bundleTemplates as any[]).find((t: any) => normalize(String(t?.code ?? '')) === base) ??
+              (bundleTemplates as any[]).find((t: any) => normalize(String(t?.code ?? '')).endsWith(base))
+            const tplCode = String((tpl as any)?.code ?? '').trim()
+            const tplName = String((tpl as any)?.name ?? '').trim()
+            const tplMeta = (tpl as any)?.metadata ?? (tpl as any)?.metadata_json ?? tpl ?? {}
+            const presets = Array.isArray((tplMeta as any)?.phrase_presets) ? ((tplMeta as any).phrase_presets as any[]) : []
+            const presetHit = presets.find((p: any) => normalize(String(p?.selector ?? '')) === sel)
+            const mode = String((presetHit as any)?.mode ?? '').trim()
+            const prefix = mode === 'force' || tplCode.toUpperCase().startsWith('Z-') ? 'Z' : 'B'
 
-          const tpl =
-            (bundleTemplates as any[]).find((t: any) => String(t?.id ?? '').trim() === tid) ??
-            (bundleTemplates as any[]).find((t: any) => normalize(String(t?.code ?? '')) === base) ??
-            (bundleTemplates as any[]).find((t: any) => normalize(String(t?.code ?? '')).endsWith(base))
+            let displayBase = base
+            if (sel && !displayBase.endsWith(sel)) displayBase = `${displayBase}${sel}`
 
-          const tplCode = String((tpl as any)?.code ?? '').trim()
-          const tplName = String((tpl as any)?.name ?? '').trim()
-          const tplMeta = (tpl as any)?.metadata ?? (tpl as any)?.metadata_json ?? tpl ?? {}
-          const presets = Array.isArray((tplMeta as any)?.phrase_presets) ? ((tplMeta as any).phrase_presets as any[]) : []
-          const presetHit = presets.find((p: any) => normalize(String(p?.selector ?? '')) === sel)
-          const mode = String((presetHit as any)?.mode ?? '').trim()
-          const prefix = mode === 'force' || tplCode.toUpperCase().startsWith('Z-') ? 'Z' : 'B'
+            const label = `${prefix}-${displayBase}`
+            const text = tplName ? `${label} ${tplName}` : label
+            return <Tag color="purple">{text}</Tag>
+          })()
 
-          let displayBase = base
-          if (sel && !displayBase.endsWith(sel)) displayBase = `${displayBase}${sel}`
+          if (!hasModel && !bundleTag) return <Tag>未绑定</Tag>
 
-          const label = `${prefix}-${displayBase}`
-          const text = tplName ? `${label} ${tplName}` : label
-          return <Tag color="purple">{text}</Tag>
+          // 若两者同时存在：同一格里分两行展示，避免混淆口径
+          return (
+            <Space direction="vertical" size={2}>
+              {hasModel ? (
+                <span>
+                  <Tag color="blue">{modelCode}</Tag>
+                  {modelName ? <span style={{ color: '#666' }}> {modelName}</span> : null}
+                </span>
+              ) : null}
+              {bundleTag}
+            </Space>
+          )
         },
       },
       { title: '标准版本', dataIndex: 'bound_version_label', width: 120, render: (v) => safeString(v) || '-' },

@@ -340,6 +340,7 @@
     - `frontend/src/pages/costing/SkuMasterWorkspacePage.tsx`
       - “仅勾选绑定”改为按 200/批自动分批调用（bundle/model 同样处理），单批超时提高到 60s
       - 若仍遇到超时：提示“后端可能仍在执行，请稍后刷新确认（大批量建议用一键跑完）”
+      - UI：套装的“二级（preset）”下拉改为独占下一行，并加宽下拉面板（避免文字被截断）；若线上出现 405，会提示后端未部署套装绑定接口
   - 验收命令（必须，全部 0 退出码）：
     - Frontend：`npm -C frontend run build`
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`

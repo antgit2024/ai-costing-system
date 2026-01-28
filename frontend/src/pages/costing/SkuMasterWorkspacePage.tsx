@@ -639,10 +639,15 @@ const SkuMasterWorkspacePage = () => {
       await queryClient.invalidateQueries({ queryKey: ['sku-master', 'list'] })
     },
     onError: (e: any) => {
+      const status = Number(e?.response?.status ?? 0)
       const msg = String(e?.message ?? '')
       const isTimeout = msg.toLowerCase().includes('timeout') || String(e?.code ?? '').toUpperCase() === 'ECONNABORTED'
       if (isTimeout) {
         message.error('绑定请求超时：后端可能仍在执行，请稍后点“刷新”确认是否已绑定（大批量建议用“一键跑完”）')
+        return
+      }
+      if (status === 405) {
+        message.error('绑定失败（405）：线上后端尚未部署“套装绑定”接口，请先发布后端再重试')
         return
       }
       message.error(e?.message || '绑定失败')
@@ -1191,23 +1196,23 @@ const SkuMasterWorkspacePage = () => {
                         <Text type="secondary">
                           先选“目标类型”，再选“目标对象”。标准模型会自动落到该模型唯一在线发布版本；套装模块会写入模板绑定（Phase0：存主档 metadata）。
                         </Text>
-                        <Space wrap size={8} style={{ width: '100%' }}>
-                          <Select
-                            value={targetKind}
-                            options={[
-                              { label: '标准模型', value: 'model' },
-                              { label: '套装模块', value: 'bundle' },
-                            ]}
-                            onChange={(v) => {
-                              setTargetKind(v as any)
-                              setSelectedModelId(undefined)
-                              setSelectedBundleTemplateId(undefined)
-                              setSelectedBundlePresetSelector(undefined)
-                            }}
-                            style={{ minWidth: 120 }}
-                          />
-                          {targetKind === 'bundle' ? (
-                            <>
+                        <div style={{ width: '100%' }}>
+                          <div style={{ display: 'flex', gap: 8, width: '100%' }}>
+                            <Select
+                              value={targetKind}
+                              options={[
+                                { label: '标准模型', value: 'model' },
+                                { label: '套装模块', value: 'bundle' },
+                              ]}
+                              onChange={(v) => {
+                                setTargetKind(v as any)
+                                setSelectedModelId(undefined)
+                                setSelectedBundleTemplateId(undefined)
+                                setSelectedBundlePresetSelector(undefined)
+                              }}
+                              style={{ width: 120 }}
+                            />
+                            {targetKind === 'bundle' ? (
                               <Select
                                 showSearch
                                 allowClear
@@ -1218,8 +1223,25 @@ const SkuMasterWorkspacePage = () => {
                                 onSearch={(v) => setBundleSearch(v)}
                                 filterOption={false}
                                 loading={bundleTemplatesQuery.isFetching}
-                                style={{ minWidth: 220, flex: 1 }}
+                                style={{ flex: 1, minWidth: 260 }}
                               />
+                            ) : (
+                              <Select
+                                showSearch
+                                allowClear
+                                placeholder="目标标准模型（已发布）"
+                                options={modelOptions}
+                                value={selectedModelId}
+                                onChange={(v) => setSelectedModelId(v)}
+                                onSearch={(v) => setModelSearch(v)}
+                                filterOption={false}
+                                loading={candidatesQuery.isFetching}
+                                style={{ flex: 1, minWidth: 260 }}
+                              />
+                            )}
+                          </div>
+                          {targetKind === 'bundle' ? (
+                            <div style={{ marginTop: 8 }}>
                               <Select
                                 showSearch
                                 allowClear={false}
@@ -1230,24 +1252,13 @@ const SkuMasterWorkspacePage = () => {
                                 filterOption={(input, opt) =>
                                   String(opt?.label ?? '').toUpperCase().includes(String(input ?? '').toUpperCase())
                                 }
-                                style={{ minWidth: 180 }}
+                                style={{ width: '100%' }}
+                                popupMatchSelectWidth={false}
+                                dropdownStyle={{ minWidth: 520 }}
                               />
-                            </>
-                          ) : (
-                            <Select
-                              showSearch
-                              allowClear
-                              placeholder="目标标准模型（已发布）"
-                              options={modelOptions}
-                              value={selectedModelId}
-                              onChange={(v) => setSelectedModelId(v)}
-                              onSearch={(v) => setModelSearch(v)}
-                              filterOption={false}
-                              loading={candidatesQuery.isFetching}
-                              style={{ minWidth: 260, flex: 1 }}
-                            />
-                          )}
-                        </Space>
+                            </div>
+                          ) : null}
+                        </div>
                         <Input
                           value={requestedBy}
                           onChange={(e) => setRequestedBy(e.target.value)}

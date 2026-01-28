@@ -728,10 +728,19 @@ def generate_bom_by_spec(
             if isinstance(base_def.get("tokens"), list):
                 base_tokens = [str(x).strip() for x in base_def.get("tokens") if str(x).strip()]
             injected = sorted([str(x).strip() for x in (rec.get("tokens") or set()) if str(x).strip()])
-            base_def["tokens"] = base_tokens + injected
+            # Under strict token policy (B-parse), do NOT let template/preset tokens affect matching.
+            if strict_tx_tokens:
+                base_def["tokens"] = []
+            else:
+                base_def["tokens"] = base_tokens + injected
             scoped_by_index.append({"index": idx, "component": base_def})
 
         return scoped_by_index, remove_tokens, trace_entries, matched_any
+
+    # Strict token policy (B-parse):
+    # - Only tokens that appear in the customer-facing spec_text are allowed to trigger variant rules.
+    # - Do NOT allow template/preset injected tokens to affect matching (prevents "silent" material swaps).
+    strict_tx_tokens = (prefix_letter == "B")
 
     # Apply shared tokens from the (single) customer-facing spec_text to ALL components.
     # IMPORTANT: do NOT let spec_text dimensions override component measurement_mm.
@@ -907,7 +916,11 @@ def generate_bom_by_spec(
                 base_tokens = []
                 if isinstance(base_def.get("tokens"), list):
                     base_tokens = [str(x).strip() for x in base_def.get("tokens") if str(x).strip()]
-                base_def["tokens"] = base_tokens + scoped_tokens
+                # Under strict token policy (B-parse), do NOT inject scoped/template tokens into matching.
+                if strict_tx_tokens:
+                    base_def["tokens"] = []
+                else:
+                    base_def["tokens"] = base_tokens + scoped_tokens
                 if target_key[0] == "idx":
                     scoped_components_by_index.setdefault(int(target_key[1]), []).append(base_def)
                 else:
@@ -942,25 +955,29 @@ def generate_bom_by_spec(
             scoped_labels_done.add(label)
             continue
 
-        # Treat template's per-component spec_text as "extra trigger words" only (no size parsing).
-        extra_tokens: List[str] = []
-        extra_spec = str(c2.get("spec_text") or "").strip()
-        if extra_spec:
-            extra_parsed = spec_parser_service.parse_spec(extra_spec)
-            extra_tokens = [str(x) for x in (extra_parsed.get("tokens") or []) if str(x).strip()]
-        tokens = []
-        if isinstance(c2.get("tokens"), list):
-            tokens = [str(x).strip() for x in c2.get("tokens") if str(x).strip()]
-        # dedup keep order
-        seen = set()
-        merged_tokens: List[str] = []
-        for t in (shared_tokens + extra_tokens + tokens):
-            k = t.lower()
-            if k in seen:
-                continue
-            merged_tokens.append(t)
-            seen.add(k)
-        c2["tokens"] = merged_tokens
+        if strict_tx_tokens:
+            # Only broadcast customer-facing tokens; never allow template injected tokens to participate.
+            c2["tokens"] = list(shared_tokens)
+        else:
+            # Treat template's per-component spec_text as "extra trigger words" only (no size parsing).
+            extra_tokens: List[str] = []
+            extra_spec = str(c2.get("spec_text") or "").strip()
+            if extra_spec:
+                extra_parsed = spec_parser_service.parse_spec(extra_spec)
+                extra_tokens = [str(x) for x in (extra_parsed.get("tokens") or []) if str(x).strip()]
+            tokens = []
+            if isinstance(c2.get("tokens"), list):
+                tokens = [str(x).strip() for x in c2.get("tokens") if str(x).strip()]
+            # dedup keep order
+            seen = set()
+            merged_tokens: List[str] = []
+            for t in (shared_tokens + extra_tokens + tokens):
+                k = t.lower()
+                if k in seen:
+                    continue
+                merged_tokens.append(t)
+                seen.add(k)
+            c2["tokens"] = merged_tokens
         # Clear spec_text for component-level parsing to avoid dimension contamination.
         c2["spec_text"] = ""
         comps2.append(c2)

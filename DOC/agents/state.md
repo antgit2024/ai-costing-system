@@ -2806,3 +2806,18 @@
   - `grep -nF "SKU 绑定 → 规格解析 → 动态 BOM → 发货/扣库/核算对账" DOC/costing/blueprints/sku_binding_bom_shipment_plan.md`
   - `grep -nF "external_line_key" DOC/costing/blueprints/sku_binding_bom_shipment_plan.md`
   - `grep -nF "交易规格（spec_text）变更" DOC/costing/blueprints/sku_binding_bom_shipment_plan.md`
+
+- **本轮闭环产物（Backend / 套装 B-解析：严格 TOKEN 口径，禁止模板注入触发变体）**：
+  - 最近校对（北京时间 GMT+8）：2026-01-28
+  - 背景：`B-DB9EAE` 的 BOM 预览中出现 `WB02339 1012本白雪尼尔` 错误命中；根因是模板/预设把 `{雪尼尔}` 等 token 注入 `runtime_tokens`，从而绕过“交易规格出现触发词才命中”的口径。
+  - 变更（严格口径 / 推荐）：
+    - 当套装为 **B-解析型**（`prefix_letter == 'B'`）时：**仅允许使用交易规格 `spec_text` 解析出的 tokens** 参与 `line_variant_service.evaluate_conditions()`；
+    - 模板级 `shared_trigger_text`、组件级 `tokens/spec_text`、预设/词典映射产生的“注入 token”不再参与匹配（仅 Z-指定型仍可通过强制规则命中）。
+  - 结果：不会再出现“规格里没写雪尼尔但命中雪尼尔物料”的情况；示例中 `runtime_tokens` 不再包含 `雪尼尔`，`WB02339` 不再命中。
+  - 关联文件：`backend/src/planner/services/bom_generation_service.py`
+  - 本轮验收命令（必须，均已通过）：
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_bundle_as_model.py -q`
+    - `npm -C frontend run build`

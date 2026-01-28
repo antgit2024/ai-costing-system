@@ -452,6 +452,21 @@
   - **验收命令**：
     - 前端：`npm -C frontend run build`
     - 后端：按 `DOC/agents/commands.md`
+
+- **2026-01-28（sku-master：已关联口径修正 + 覆盖关联开关 + 规格差异释义）**
+  - **现象**：
+    - 用户已绑定套装（例如 `Z-DB9EAL`）但列表仍显示“未绑定”，容易误解为“未关联成功”。
+    - 需要“覆盖关联”勾选框，用于修正绑定错误后重新绑定。
+    - 用户询问“规格差异”含义。
+  - **根因**：
+    - `sku-master` 列表的“未绑定/已绑定”此前仅按 **模型绑定**（`active_model_version_id`）判断；套装绑定存放在 `metadata_json.bundle_*` 不计入该状态。
+  - **修复（前端）**：
+    - `frontend/src/pages/costing/SkuMasterWorkspacePage.tsx`
+      - “对接状态（本系统）”改为：**模型绑定 或 套装绑定 任一存在即显示“已关联”**（避免套装已绑仍显示未绑定）。
+      - Tab“已绑定”查询口径改为包含套装锚点（`target_kind=any + bound_state=all`）；Tab“未绑定”改为“模型未绑且套装未绑”（`bound_state=unbound + bundle_bound_state=unbound`）。
+      - 增加勾选框：`覆盖关联（允许重新绑定）`，并把 `allow_rebind` 传给模型/套装的单次/批量绑定接口。
+  - **规格差异（解释）**：
+    - `spec_mismatch` 表示：**ERP 主档里的 `spec_text` 与“最近一次发货回写看到的交易规格（last_shipment_spec_text）”不一致**（按原文比较），用于提醒主档规格可能已过时/渠道规格口径不一（非必然错误，但建议复核）。
   - **验收命令**：
     - 前端：`npm -C frontend run build`
     - 后端：按 `DOC/agents/commands.md`

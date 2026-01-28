@@ -2,6 +2,7 @@ import {
   Alert,
   Button,
   Card,
+  Checkbox,
   Col,
   Descriptions,
   Drawer,
@@ -163,6 +164,7 @@ const SkuMasterWorkspacePage = () => {
   const [autoPreviewText, setAutoPreviewText] = useState<string>('')
   const [autoPreviewCandidates, setAutoPreviewCandidates] = useState<SkuMasterAutoBindPreviewItem[]>([])
   const [autoCandidatesOnly, setAutoCandidatesOnly] = useState(false)
+  const [allowRebind, setAllowRebind] = useState(false)
   const [autoRunAllRunning, setAutoRunAllRunning] = useState(false)
   const autoRunAllStopRef = useRef(false)
   const [autoRunAllStatus, setAutoRunAllStatus] = useState<{
@@ -229,7 +231,12 @@ const SkuMasterWorkspacePage = () => {
         include_terms: includeTerms || undefined,
         exclude_terms: excludeTerms || undefined,
         match_scope: matchScope,
-        bound_state: listTab === 'bound' ? 'bound' : listTab === 'unbound' ? 'unbound' : undefined,
+        // 口径：
+        // - 已绑定：模型绑定 或 套装绑定 任一存在即可
+        // - 未绑定：模型未绑 且 套装未绑
+        target_kind: listTab === 'bound' ? 'any' : undefined,
+        bound_state: listTab === 'bound' ? 'all' : listTab === 'unbound' ? 'unbound' : undefined,
+        bundle_bound_state: listTab === 'unbound' ? 'unbound' : undefined,
       }),
     placeholderData: keepPreviousData,
     enabled: !autoCandidatesOnly, // 命中候选视图时不依赖服务端分页列表
@@ -338,7 +345,11 @@ const SkuMasterWorkspacePage = () => {
     const rows = filteredItems
     const totalRows = rows.length
     const erpMatched = rows.filter((x) => isFilled(x.match_status)).length
-    const linked = rows.filter((x) => isFilled(x.active_model_version_id as any)).length
+    const linked = rows.filter((x: any) => {
+      const hasModel = isFilled(x.active_model_version_id as any)
+      const hasBundle = isFilled((x as any)?.bundle_template_code ?? (x as any)?.metadata_json?.bundle_template_code)
+      return hasModel || hasBundle
+    }).length
     const complete = rows.filter((x) => {
       // MVP: “字段齐全” = 条码 + 渠道 + 名称 + 编码 + 规格 + 商家编码 + 平台商品Id + 平台规格Id
       return (
@@ -428,7 +439,7 @@ const SkuMasterWorkspacePage = () => {
       dataIndex: 'active_model_version_id',
       width: 240,
       render: (v, record) => {
-        const bound = isFilled(v as any)
+        const modelBound = isFilled(v as any)
         const source = safeString((record.metadata_json as any)?.source)
         const srcTag = source === 'shipment_autobackfill' ? <Tag color="gold">发货回写</Tag> : null
         const bundleCode = safeString((record as any)?.bundle_template_code ?? (record.metadata_json as any)?.bundle_template_code).trim()
@@ -457,9 +468,10 @@ const SkuMasterWorkspacePage = () => {
             套装 {bundleDisplay || bundleCode}
           </Tag>
         ) : null
+        const anyBound = modelBound || !!bundleCode
         return (
           <Space size={6}>
-            {bound ? <Tag color="green">已绑定</Tag> : <Tag color="red">未绑定</Tag>}
+            {anyBound ? <Tag color="green">已关联</Tag> : <Tag color="red">未关联</Tag>}
             {record.spec_mismatch ? <Tag color="orange">规格差异</Tag> : null}
             {renderModelChip(record.bound_model_code, record.bound_model_name)}
             {bundleTag}
@@ -633,6 +645,7 @@ const SkuMasterWorkspacePage = () => {
               preset_selector: selectedBundlePresetSelector,
               sku_master_ids: batch,
               requested_by: requestedBy || undefined,
+              allow_rebind: allowRebind,
             },
             { timeoutMs: 60_000 },
           )
@@ -657,6 +670,7 @@ const SkuMasterWorkspacePage = () => {
               model_id: selectedModelId,
               sku_master_ids: batch,
               requested_by: requestedBy || undefined,
+              allow_rebind: allowRebind,
             },
             { timeoutMs: 60_000 },
           )
@@ -754,7 +768,7 @@ const SkuMasterWorkspacePage = () => {
           : modelLabelById.get(String(selectedModelId)) || '（未选模型）'
       Modal.confirm({
         title: '确认一键跑完（当页勾选）？',
-        content: `将对当前勾选的 ${total} 条记录按 200 条/轮循环绑定到：${targetLabel}（不会覆盖已有绑定）。`,
+        content: `将对当前勾选的 ${total} 条记录按 200 条/轮循环绑定到：${targetLabel}（${allowRebind ? '会覆盖已有绑定' : '不会覆盖已有绑定'}）。`,
         okText: '开始执行',
         cancelText: '取消',
         onOk: () => {
@@ -793,6 +807,7 @@ const SkuMasterWorkspacePage = () => {
                         preset_selector: presetSelector as string,
                         sku_master_ids: batch,
                         requested_by: reqBy,
+                        allow_rebind: allowRebind,
                       },
                       { timeoutMs: 45_000, signal: ac.signal },
                     )
@@ -802,6 +817,7 @@ const SkuMasterWorkspacePage = () => {
                         model_id: modelId as string,
                         sku_master_ids: batch,
                         requested_by: reqBy,
+                        allow_rebind: allowRebind,
                       },
                       { timeoutMs: 45_000, signal: ac.signal },
                     )
@@ -956,6 +972,7 @@ const SkuMasterWorkspacePage = () => {
                       preset_selector: presetSelector as string,
                       requested_by: reqBy,
                       limit: 200,
+                      allow_rebind: allowRebind,
                       search: fSearch,
                       channel: fChannel,
                       match_status: fMatchStatus,
@@ -972,6 +989,7 @@ const SkuMasterWorkspacePage = () => {
                       model_id: modelId as string,
                       requested_by: reqBy,
                       limit: 200,
+                      allow_rebind: allowRebind,
                       search: fSearch,
                       channel: fChannel,
                       match_status: fMatchStatus,
@@ -1301,6 +1319,9 @@ const SkuMasterWorkspacePage = () => {
                           onChange={(e) => setRequestedBy(e.target.value)}
                           placeholder="操作人/审核人（可选）"
                         />
+                        <Checkbox checked={allowRebind} onChange={(e) => setAllowRebind(e.target.checked)}>
+                          覆盖关联（允许重新绑定）
+                        </Checkbox>
                         <Space wrap align="center">
                           <Tag color={manualBulkMode ? 'green' : 'default'}>
                             {manualBulkMode ? '所有页勾选模式（跨页）' : '当页勾选模式'}

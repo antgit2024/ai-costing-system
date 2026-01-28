@@ -2147,6 +2147,7 @@ export const bindSkuMastersByModel = async (
   model_id: string
   sku_master_ids: string[]
   requested_by?: string
+  allow_rebind?: boolean
   },
   opts: PlannerRequestOptions = {},
 ): Promise<SkuMasterBindByModelResponse> => {
@@ -2162,6 +2163,7 @@ export const bindSkuMastersByModelBulk = async (
     model_id: string
     requested_by?: string
     limit?: number
+    allow_rebind?: boolean
     search?: string
     channel?: string
     match_status?: string

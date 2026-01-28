@@ -440,6 +440,18 @@
       - `GET /api/planner/sku-master` 增加可选 query 参数：`compute_total/include_bindings/include_parsed_fields`（默认保持旧行为）
     - `frontend/src/services/planner.ts`
       - `fetchSkuMaster` 参数补齐上述开关字段
+
+- **2026-01-28（性能：sku-master 列表 target_kind=any 慢查询修复）**
+  - **现象**：`/costing/spec-matching` 列表请求很慢，典型请求：`GET /api/planner/sku-master?page=1&page_size=100&match_scope=spec&target_kind=any&bound_state=all`，即便 `compute_total=false` 仍 >30s。
+  - **根因**：`target_kind=any` 走了相关子查询 `EXISTS (SkuModelVersionMapping ...)` 与 `OR (bundle_template_id != '')` 组合，容易在大表下退化为嵌套循环/全表扫描。
+  - **修复（后端）**：
+    - `backend/src/planner/services/sku_master_service.py`
+      - 将 `target_kind=model/any` 的“已绑定模型”判断由相关 `EXISTS` 改为半连接：
+        - `SkuMaster.erp_sku_barcode IN (SELECT DISTINCT sku_code FROM sku_model_version_mappings WHERE is_active AND NOT is_archived)`
+      - 实测本机直连：`target_kind=any` 从 ~30s 降到 ~1~2s（首屏明显变快）。
+  - **验收命令**：
+    - 前端：`npm -C frontend run build`
+    - 后端：按 `DOC/agents/commands.md`
   - **验收命令**：
     - 前端：`npm -C frontend run build`
     - 后端：按 `DOC/agents/commands.md`

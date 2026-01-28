@@ -655,22 +655,27 @@ def list_sku_master(
     # - model: require active model binding (same check as bound_state=bound)
     # - bundle: require bundle binding in metadata_json
     if target_kind2 in ("model", "bundle", "any"):
-        # generic "has model binding" check (no joins) for large-scale filtering
-        subq2 = (
-            db.query(models.SkuModelVersionMapping.id)
+        # Generic "has model binding" filter.
+        #
+        # IMPORTANT: avoid correlated EXISTS here because `target_kind=any` is used by spec-matching
+        # and can degrade into a nested-loop scan on large datasets.
+        # Using a semi-join style `IN (SELECT DISTINCT sku_code ...)` allows DB to plan it as a hash/bitmap semi-join.
+        active_sku_codes = (
+            db.query(models.SkuModelVersionMapping.sku_code)
             .filter(
-                models.SkuModelVersionMapping.sku_code == models.SkuMaster.erp_sku_barcode,
                 models.SkuModelVersionMapping.is_active.is_(True),
                 models.SkuModelVersionMapping.is_archived.is_(False),
             )
+            .distinct()
         )
+        has_model_binding_expr = models.SkuMaster.erp_sku_barcode.in_(active_sku_codes)
         if target_kind2 == "bundle":
             q = q.filter(bt_id_expr != "")
         elif target_kind2 == "model":
-            q = q.filter(subq2.exists())
+            q = q.filter(has_model_binding_expr)
         else:
             # any: model-bound OR bundle-bound
-            q = q.filter(or_(subq2.exists(), bt_id_expr != ""))
+            q = q.filter(or_(has_model_binding_expr, bt_id_expr != ""))
 
     # preparse state filter (server-side; avoid empty pages)
     if preparse_state:

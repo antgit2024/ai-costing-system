@@ -517,37 +517,53 @@ export default function SkuSpecMatchingPage() {
       })
     },
     onSuccess: (res) => {
-      const rows = (res.items ?? []).map((x) => ({
-        id: x.sku_id,
-        erp_sku_barcode: x.erp_sku_barcode,
-        channel: x.channel ?? null,
-        product_name: (x as any).product_name ?? null,
-        product_code: (x as any).product_code ?? null,
-        spec_text: (x as any).spec_text ?? null,
-        // keep bundle anchor in preview rows, otherwise it may "flash bound then unbound"
-        bundle_template_id: (x as any).bundle_template_id ?? null,
-        bundle_template_code: (x as any).bundle_template_code ?? null,
-        bundle_preset_selector: (x as any).bundle_preset_selector ?? null,
-        bound_model_code: (x as any).bound_model_code ?? null,
-        bound_model_name: (x as any).bound_model_name ?? null,
-        bound_version_label: (x as any).bound_version_label ?? null,
-        // Preview-only: spec text actually used for parsing (shipment-first fallback to shop spec).
-        // DO NOT map it into `last_shipment_spec_text` (that field means real shipment snapshot in DB).
-        spec_text_used: x.spec_text_used,
-        _preview_spec_hash: x.spec_hash,
-        _preview_dims: {
-          width_cm: x.width_cm ?? null,
-          height_cm: x.height_cm ?? null,
-          diameter_cm: x.diameter_cm ?? null,
-          area_m2: x.area_m2 ?? null,
-          perimeter_m: x.perimeter_m ?? null,
-        },
-        metadata_json: {
-          bundle_template_id: (x as any).bundle_template_id ?? null,
-          bundle_template_code: (x as any).bundle_template_code ?? null,
-          bundle_preset_selector: (x as any).bundle_preset_selector ?? null,
-        },
-      }))
+      // 预览模式的行数据需要保留“已落库”的 preparse_* 字段（否则右侧会出现：预览命中→已解析列变未解析 的错觉）
+      const baseById = new Map<string, any>()
+      for (const r of anchoredItems as any[]) {
+        const id = String((r as any)?.id ?? '')
+        if (id) baseById.set(id, r)
+      }
+      const rows = (res.items ?? []).map((x) => {
+        const id = String((x as any)?.sku_id ?? '')
+        const base = (id && baseById.get(id)) || {}
+        const bundleTid = (x as any).bundle_template_id ?? null
+        const bundleCode = (x as any).bundle_template_code ?? null
+        const bundleSel = (x as any).bundle_preset_selector ?? null
+        const baseMeta = ((base as any)?.metadata_json ?? {}) as any
+        return {
+          ...base,
+          id,
+          erp_sku_barcode: (x as any).erp_sku_barcode ?? (base as any)?.erp_sku_barcode ?? null,
+          channel: (x as any).channel ?? (base as any)?.channel ?? null,
+          product_name: (x as any).product_name ?? (base as any)?.product_name ?? null,
+          product_code: (x as any).product_code ?? (base as any)?.product_code ?? null,
+          spec_text: (x as any).spec_text ?? (base as any)?.spec_text ?? null,
+          // keep bundle anchor in preview rows, otherwise it may "flash bound then unbound"
+          bundle_template_id: bundleTid ?? (base as any)?.bundle_template_id ?? null,
+          bundle_template_code: bundleCode ?? (base as any)?.bundle_template_code ?? null,
+          bundle_preset_selector: bundleSel ?? (base as any)?.bundle_preset_selector ?? null,
+          bound_model_code: (x as any).bound_model_code ?? (base as any)?.bound_model_code ?? null,
+          bound_model_name: (x as any).bound_model_name ?? (base as any)?.bound_model_name ?? null,
+          bound_version_label: (x as any).bound_version_label ?? (base as any)?.bound_version_label ?? null,
+          // Preview-only: spec text actually used for parsing (shipment-first fallback to shop spec).
+          // DO NOT map it into `last_shipment_spec_text` (that field means real shipment snapshot in DB).
+          spec_text_used: (x as any).spec_text_used,
+          _preview_spec_hash: (x as any).spec_hash,
+          _preview_dims: {
+            width_cm: (x as any).width_cm ?? null,
+            height_cm: (x as any).height_cm ?? null,
+            diameter_cm: (x as any).diameter_cm ?? null,
+            area_m2: (x as any).area_m2 ?? null,
+            perimeter_m: (x as any).perimeter_m ?? null,
+          },
+          metadata_json: {
+            ...baseMeta,
+            bundle_template_id: bundleTid ?? baseMeta?.bundle_template_id ?? null,
+            bundle_template_code: bundleCode ?? baseMeta?.bundle_template_code ?? null,
+            bundle_preset_selector: bundleSel ?? baseMeta?.bundle_preset_selector ?? null,
+          },
+        }
+      })
       setIsPreviewMode(true)
       setPreviewSaved(false)
       setPreviewItems(rows as any[])
@@ -888,17 +904,25 @@ export default function SkuSpecMatchingPage() {
         dataIndex: 'last_shipment_spec_text',
         width: 360,
         render: (v, row) => {
-          const text = isPreviewMode ? safeString((row as any)?.spec_text_used) : safeString(v)
+          const ship = safeString(v).trim()
+          const shop = safeString((row as any)?.spec_text).trim()
+          const text = isPreviewMode ? safeString((row as any)?.spec_text_used) : ship || shop
           const shown = text || '-'
           const dims = (row as any)?._preview_dims
           if (!dims) {
-            return <div style={{ whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.2 }}>{shown}</div>
+            return (
+              <div style={{ whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.2 }}>
+                <div>{shown}</div>
+                {!isPreviewMode && !ship && shop ? <Tag color="orange">回退：网店规格</Tag> : null}
+              </div>
+            )
           }
           const w = dims?.width_cm ?? '-'
           const h = dims?.height_cm ?? '-'
           return (
             <div style={{ whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.2 }}>
               <div>{shown}</div>
+              {!isPreviewMode && !ship && shop ? <Tag color="orange">回退：网店规格</Tag> : null}
               <Tag color="purple" style={{ marginTop: 4 }}>
                 解析尺寸：宽{w}cm × 高{h}cm
               </Tag>

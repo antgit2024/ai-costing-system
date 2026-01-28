@@ -506,6 +506,17 @@
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
 
+- **2026-01-28（规格解析：预览态不覆盖“已落库预解析”展示 + 明确回退来源）**
+  - **现象**：预览命中后右侧表格能看到“解析尺寸（预览）”，但“预解析尺寸/Token（已落库）”两列会显示未解析；默认态在 `last_shipment_spec_text` 为空时实际回退使用了网店规格，但页面只显示“-”，观感混乱。
+  - **修复（前端）**：`frontend/src/pages/costing/SkuSpecMatchingPage.tsx`
+    - 预览行构造改为：**用当前列表行（含已落库 preparse_*）作为 base，再合并预览返回**，避免预览数据源把落库字段“抹掉”。
+    - “发货规格（优先用于解析）”列：当发货规格为空且回退到网店规格时，展示 `回退：网店规格` Tag，帮助用户理解解析来源。
+  - **验收命令（全部 0 退出码）**：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-27（商品关联 UI 优化：目标下拉同一行 + 套装二级 preset 绑定）
   - 需求：人工审核的“模型类型下拉 + 模型/套装下拉”合并为同一行；套装绑定改为二级（先选模板，再选 `preset_selector`，第二级才是最终绑定目标）。
   - 本轮产物：

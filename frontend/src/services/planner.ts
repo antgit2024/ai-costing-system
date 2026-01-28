@@ -2104,6 +2104,9 @@ export const fetchSkuMaster = async (
     include_terms?: string
     exclude_terms?: string
     match_scope?: 'spec' | 'name'
+    compute_total?: boolean
+    include_bindings?: boolean
+    include_parsed_fields?: boolean
   } = {},
 ): Promise<SkuMasterListResponse> => {
   const response = await plannerClient.get('/sku-master', { params: sanitizeParams(params) })

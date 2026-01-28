@@ -51,6 +51,9 @@ def list_sku_master(
     match_scope: str | None = None,
     page: int = 1,
     page_size: int = 20,
+    compute_total: bool = True,
+    include_bindings: bool = True,
+    include_parsed_fields: bool = True,
     db: Session = Depends(get_db_session),
 ):
     total, items = sku_master_service.list_sku_master(
@@ -74,6 +77,9 @@ def list_sku_master(
         match_scope=match_scope,
         page=page,
         page_size=page_size,
+        compute_total=compute_total,
+        include_bindings=include_bindings,
+        include_parsed_fields=include_parsed_fields,
     )
     return {"total": total, "page": page, "page_size": page_size, "items": items}
 

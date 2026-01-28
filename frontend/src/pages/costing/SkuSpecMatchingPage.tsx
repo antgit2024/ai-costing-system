@@ -271,6 +271,8 @@ export default function SkuSpecMatchingPage() {
         bundle_template_id: selectedBundleTemplateId,
         bundle_preset_selector: selectedBundlePresetSelector,
         preparse_state: effectivePreparseState,
+        // spec-matching 列表不依赖 total；COUNT 代价很高，会导致首屏卡顿
+        compute_total: false,
       }),
     placeholderData: keepPreviousData,
   })

@@ -435,6 +435,11 @@
       - 条码列改为纯文本，不再渲染按钮
       - 移除商品名称/编码两列
       - `Table` 增加 `tableLayout="fixed"`，降低长文本导致的重排成本
+      - 列表请求对 `GET /api/planner/sku-master` 传 `compute_total=false`，避免默认 `COUNT()` 导致首屏卡顿（本页不依赖 total）
+    - `backend/src/planner/routers/sku_master.py`
+      - `GET /api/planner/sku-master` 增加可选 query 参数：`compute_total/include_bindings/include_parsed_fields`（默认保持旧行为）
+    - `frontend/src/services/planner.ts`
+      - `fetchSkuMaster` 参数补齐上述开关字段
   - **验收命令**：
     - 前端：`npm -C frontend run build`
     - 后端：按 `DOC/agents/commands.md`

@@ -72,8 +72,7 @@ const menuItems: MenuProps['items'] = [
     icon: <DatabaseOutlined />,
     label: '货品管理',
     children: [
-      { key: '/costing/sku-master', label: subItemLabel('商品关联', '/costing/sku-master') },
-      { key: '/costing/spec-matching', label: subItemLabel('规格解析', '/costing/spec-matching') },
+      { key: '/costing/products-info', label: subItemLabel('商品信息', '/costing/products-info') },
       { key: '/costing/shipments', label: subItemLabel('发货台账', '/costing/shipments') },
       { key: '/costing/shipping-rules', label: subItemLabel('发货规则', '/costing/shipping-rules') },
     ],
@@ -82,7 +81,11 @@ const menuItems: MenuProps['items'] = [
     key: '/costing/automation',
     icon: <CloudSyncOutlined />,
     label: '自动化/作业中心',
-    children: [{ key: '/costing/shipments/ops', label: subItemLabel('发货作业中心', '/costing/shipments/ops') }],
+    children: [
+      { key: '/costing/shipments/ops', label: subItemLabel('发货作业中心', '/costing/shipments/ops') },
+      { key: '/costing/sku-master', label: subItemLabel('商品关联（SKU 主档）', '/costing/sku-master') },
+      { key: '/costing/spec-matching', label: subItemLabel('规格解析（工作台）', '/costing/spec-matching') },
+    ],
   },
   {
     key: '/costing/insights',
@@ -207,6 +210,9 @@ const AppLayout = ({ children }: AppLayoutProps) => {
       }
       if (location.pathname.startsWith('/costing/bundle-templates')) {
         return ['/costing/bundle-templates']
+      }
+      if (location.pathname.startsWith('/costing/products-info')) {
+        return ['/costing/products-info']
       }
       if (location.pathname.startsWith('/costing/sku-master')) {
         return ['/costing/sku-master']

@@ -18,6 +18,7 @@ const ShipmentLedgerPage = lazy(() => import('./pages/costing/ShipmentLedgerPage
 const ShippingRulesPage = lazy(() => import('./pages/costing/ShippingRulesPage'))
 const SkuMasterWorkspacePage = lazy(() => import('./pages/costing/SkuMasterWorkspacePage'))
 const SkuSpecMatchingPage = lazy(() => import('./pages/costing/SkuSpecMatchingPage'))
+const ProductInfoPage = lazy(() => import('./pages/costing/ProductInfoPage'))
 const TaxonomyManagementPage = lazy(() => import('./pages/costing/TaxonomyManagementPage'))
 const StructureStandardsPage = lazy(() => import('./pages/costing/StructureStandardsPage'))
 const ProductListingPage = lazy(() => import('./pages/costing/ProductListingPage'))
@@ -62,6 +63,7 @@ const App = () => {
           <Route path="/costing/bundle-templates" element={<BundleTemplatesPage />} />
           <Route path="/costing/tmall-sku-generator" element={<SpecModulesPage />} />
           <Route path="/costing/tmall-sku-generator/:templateId" element={<TmallSkuTemplateGeneratorPage />} />
+          <Route path="/costing/products-info" element={<ProductInfoPage />} />
           <Route path="/costing/sku-master" element={<SkuMasterWorkspacePage />} />
           <Route path="/costing/production-scan" element={<ProductionScanPage />} />
           <Route path="/costing/spec-matching" element={<SkuSpecMatchingPage />} />

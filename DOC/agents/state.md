@@ -2839,3 +2839,19 @@
   - 背景：部分环境在仓库目录创建 sqlite 文件会间歇触发 `sqlite3.OperationalError: attempt to write a readonly database`，导致 pytest 偶发失败。
   - 变更：planner 测试 DB 改为写入 `/tmp/planner_test_<pid>_<uuid>.db`（session 级创建 + teardown 清理）。
   - 关联文件：`backend/tests/planner/conftest.py`
+
+- **本轮信息架构调整（Frontend / 运营“商品信息”只读页 + 技术“自动化”入口拆分）**：
+  - 最近校对（北京时间 GMT+8）：2026-01-28
+  - 背景：运营查看与技术操作混在 `sku-master/spec-matching` 两个工作台，导致同一商品需要多处来回查、口径不清晰。
+  - 变更：
+    - 新增运营只读页：`/costing/products-info`（菜单：货品管理 → 商品信息）
+      - 展示：商品基本信息 + 模型/套装关联 + 规格解析（预解析尺寸/TOKEN）+ “用于解析的规格”（含回退标识）
+      - 筛选：目标类型（模型/套装）+ 一级（模型/套装模板）+ 二级（套装 selector / 模型发布版本开关）
+    - 将技术操作页移入自动化栏目（菜单：自动化/作业中心）：
+      - `商品关联（SKU 主档）`：`/costing/sku-master`
+      - `规格解析（工作台）`：`/costing/spec-matching`
+  - 关联文件：
+    - `frontend/src/pages/costing/ProductInfoPage.tsx`
+    - `frontend/src/components/layout/AppLayout.tsx`
+    - `frontend/src/App.tsx`
+  - 本轮验收命令（必须）：`npm -C frontend run build`

@@ -401,6 +401,8 @@ const ShipmentMonitorPage = () => {
   const [snapshotDrawerOpen, setSnapshotDrawerOpen] = useState(false)
   const [activeSnapshot, setActiveSnapshot] = useState<BomSnapshot | null>(null)
   const [recomputingSnapshotId, setRecomputingSnapshotId] = useState<string | null>(null)
+  const [bulkRecomputeRunning, setBulkRecomputeRunning] = useState(false)
+  const bulkRecomputeStopRef = useRef(false)
 
   // Handoff view (SKU master preparse/binding ↔ shipment rows in current batch)
   const [handoffMode, setHandoffMode] = useState<'exceptions' | 'snapshots' | 'both'>('exceptions')
@@ -485,6 +487,63 @@ const ShipmentMonitorPage = () => {
       }),
     enabled: batchesDrawerOpen && activeTab === 'snapshots',
   })
+
+  const runBulkRecomputeSnapshots = async () => {
+    const rows = (snapshotsQuery.data ?? []) as any[]
+    if (!rows.length) {
+      message.info('当前查询结果为空，无需回填')
+      return
+    }
+    if (bulkRecomputeRunning) return
+
+    const ok = await new Promise<boolean>((resolve) => {
+      Modal.confirm({
+        title: `批量回填当前查询的快照？（${rows.length}条）`,
+        content:
+          '将逐条调用“回填/重算快照”接口，以当前 SKU 绑定重新计算 BOM/工序/成本，并覆盖写回快照（用于历史对账与洞察重算）。可随时停止。',
+        okText: '确认回填',
+        cancelText: '取消',
+        onOk: () => resolve(true),
+        onCancel: () => resolve(false),
+      })
+    })
+    if (!ok) return
+
+    bulkRecomputeStopRef.current = false
+    setBulkRecomputeRunning(true)
+
+    const MESSAGE_KEY = 'bulk-recompute-snapshots'
+    message.loading({ content: `批量回填中... 0/${rows.length}`, key: MESSAGE_KEY, duration: 0 })
+
+    let okCount = 0
+    let failCount = 0
+    for (let i = 0; i < rows.length; i += 1) {
+      if (bulkRecomputeStopRef.current) break
+      const id = String((rows[i] as any)?.id ?? '').trim()
+      if (!id) continue
+      try {
+        await recomputeShipmentBomSnapshot(id, { operator_id: uploadRequestedBy?.trim() || undefined })
+        okCount += 1
+      } catch {
+        failCount += 1
+      }
+      message.loading({
+        content: `批量回填中... ${Math.min(i + 1, rows.length)}/${rows.length}（成功${okCount} 失败${failCount}）`,
+        key: MESSAGE_KEY,
+        duration: 0,
+      })
+    }
+
+    await snapshotsQuery.refetch()
+
+    message.destroy(MESSAGE_KEY)
+    setBulkRecomputeRunning(false)
+    if (bulkRecomputeStopRef.current) {
+      message.warning(`已停止：成功${okCount} 失败${failCount}（已完成部分已生效）`)
+    } else {
+      message.success(`批量回填完成：成功${okCount} 失败${failCount}`)
+    }
+  }
 
   const handoffExceptionsQuery = useQuery({
     queryKey: ['shipments', 'handoff', 'exceptions', selectedBatchId, handoffExceptionResolved, handoffLimit],
@@ -1645,6 +1704,20 @@ const ShipmentMonitorPage = () => {
                       title="快照结果（默认本批次，可切全局检索）"
                       extra={
                         <Space>
+                          <Button
+                            danger={bulkRecomputeRunning}
+                            disabled={snapshotsQuery.isFetching || !(snapshotsQuery.data ?? []).length}
+                            loading={bulkRecomputeRunning}
+                            onClick={() => {
+                              if (bulkRecomputeRunning) {
+                                bulkRecomputeStopRef.current = true
+                                return
+                              }
+                              runBulkRecomputeSnapshots()
+                            }}
+                          >
+                            {bulkRecomputeRunning ? '停止批量回填' : '批量回填（当前结果）'}
+                          </Button>
                           <Segmented
                             value={snapshotsUseCurrentBatch ? 'current' : 'all'}
                             onChange={(v) => setSnapshotsUseCurrentBatch(v === 'current')}

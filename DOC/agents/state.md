@@ -2832,3 +2832,9 @@
     - 对套装测试输入做 sanitize：自动剥离 `[]/{}` 与 `0*0*0` 等 DSL 片段，仅保留“对客短语/自然语言规格”，并在 UI 以 Warning 提示已剥离。
   - 关联文件：`frontend/src/pages/costing/ProductListingPage.tsx`
   - 本轮验收命令（必须）：`npm -C frontend run build`
+
+- **本轮补强（Tests / SQLite 测试库改用 /tmp，避免 readonly 抖动）**：
+  - 最近校对（北京时间 GMT+8）：2026-01-28
+  - 背景：部分环境在仓库目录创建 sqlite 文件会间歇触发 `sqlite3.OperationalError: attempt to write a readonly database`，导致 pytest 偶发失败。
+  - 变更：planner 测试 DB 改为写入 `/tmp/planner_test_<pid>_<uuid>.db`（session 级创建 + teardown 清理）。
+  - 关联文件：`backend/tests/planner/conftest.py`

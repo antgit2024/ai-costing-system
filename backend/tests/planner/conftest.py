@@ -1,5 +1,7 @@
 import os
 import sys
+import tempfile
+import uuid
 from pathlib import Path
 
 import pytest
@@ -16,15 +18,24 @@ from src.main import app  # noqa: E402
 from src.planner.services import import_service  # noqa: E402
 from src.planner import models as _planner_models  # noqa: E402,F401  # ensure all tables are registered
 
-TEST_DATABASE_URL = "sqlite:///./planner_test.db"
+def _make_test_db_url() -> tuple[str, Path]:
+    """
+    Use an absolute sqlite file under /tmp for test stability.
+
+    Rationale:
+    - Some CI/runner environments mount the repo workspace with restrictive semantics that can
+      intermittently trigger "attempt to write a readonly database" for sqlite file DBs.
+    - /tmp is the safest location for ephemeral test DBs.
+    """
+
+    db_path = Path(tempfile.gettempdir()) / f"planner_test_{os.getpid()}_{uuid.uuid4().hex}.db"
+    # sqlite URL format for absolute path: sqlite:////tmp/xxx.db
+    return f"sqlite:///{db_path.as_posix()}", db_path
 
 
 @pytest.fixture(scope="session")
 def engine():
-    # Ensure a clean sqlite file for each test session.
-    # In some environments, SQLAlchemy's drop_all(checkfirst=True) can still raise
-    # "no such table" during teardown if the file is partially initialized.
-    db_path = Path("./planner_test.db")
+    test_db_url, db_path = _make_test_db_url()
     try:
         if db_path.exists():
             db_path.unlink()
@@ -32,7 +43,7 @@ def engine():
         # best-effort cleanup; tests will still attempt create_all
         pass
 
-    engine = configure_engine(TEST_DATABASE_URL)
+    engine = configure_engine(test_db_url)
     # Ensure planner models are imported *before* create_all, otherwise SQLite test DB
     # may miss newly added tables (e.g. shipment_import_batches) and fail at runtime.
     import src.planner.models  # noqa: F401

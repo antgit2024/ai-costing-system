@@ -466,6 +466,12 @@ def generate_bom_by_spec(
     elif bundle_selector and len(bundle_selector) == 2:
         forced_preset_selector = bundle_selector
 
+    # Strict token policy (B-parse):
+    # - Only tokens that appear in the customer-facing spec_text are allowed to trigger variant rules.
+    # - Do NOT allow template/preset injected tokens or forced variant mappings to affect matching
+    #   (prevents "silent" material swaps like 雪尼尔/毛球 without explicit words in spec_text).
+    strict_tx_tokens = (prefix_letter == "B")
+
     # New mode: when selector is present, allow phrase preset row to carry a full component list.
     # This supports "同模型多尺寸/多数量" (e.g. 照片墙) without relying on customer-facing text parsing.
     if forced_preset_selector or isinstance(forced_preset_index, int):
@@ -505,10 +511,10 @@ def generate_bom_by_spec(
                         "tokens": c.get("tokens") or [],
                         # Optional: force a specific line-variant per base_line_id (used by bundle template UI "指定(强制命中)")
                         # Shape: { "<base_line_id>": "<variant_id>" }
-                        "force_variant_by_base_line": c.get("force_variant_by_base_line") or {},
+                        "force_variant_by_base_line": {} if strict_tx_tokens else (c.get("force_variant_by_base_line") or {}),
                         # Optional: stable key mapping for cross-version rebinding
                         # Shape: { "<base_line_key>": "<variant_key>" }
-                        "force_variant_by_base_line_stable": c.get("force_variant_by_base_line_stable") or {},
+                        "force_variant_by_base_line_stable": {} if strict_tx_tokens else (c.get("force_variant_by_base_line_stable") or {}),
                     }
                 )
             if not comps_new:
@@ -736,11 +742,6 @@ def generate_bom_by_spec(
             scoped_by_index.append({"index": idx, "component": base_def})
 
         return scoped_by_index, remove_tokens, trace_entries, matched_any
-
-    # Strict token policy (B-parse):
-    # - Only tokens that appear in the customer-facing spec_text are allowed to trigger variant rules.
-    # - Do NOT allow template/preset injected tokens to affect matching (prevents "silent" material swaps).
-    strict_tx_tokens = (prefix_letter == "B")
 
     # Apply shared tokens from the (single) customer-facing spec_text to ALL components.
     # IMPORTANT: do NOT let spec_text dimensions override component measurement_mm.

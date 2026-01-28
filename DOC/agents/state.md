@@ -2814,6 +2814,7 @@
     - 当套装为 **B-解析型**（`prefix_letter == 'B'`）时：**仅允许使用交易规格 `spec_text` 解析出的 tokens** 参与 `line_variant_service.evaluate_conditions()`；
     - 模板级 `shared_trigger_text`、组件级 `tokens/spec_text`、预设/词典映射产生的“注入 token”不再参与匹配；
     - 同时禁用“别名注入”（`variant_token_alias_overrides` 将 alias→orig token 注入共享 tokens），避免出现“规格里只有黄金绒/别名但被注入雪尼尔”的绕口径问题（仅 Z-指定型仍可通过强制规则命中）。
+    - 同时禁用“预设强制命中”（`phrase_presets[*].components[*].force_variant_by_base_line(_stable)`）在 B-解析型下的生效，避免“即使交易规格没写毛球/雪尼尔也被强制替换”的绕口径（Z-指定型仍保留强制能力）。
   - 结果：不会再出现“规格里没写雪尼尔但命中雪尼尔物料”的情况；示例中 `runtime_tokens` 不再包含 `雪尼尔`，`WB02339` 不再命中。
   - 关联文件：`backend/src/planner/services/bom_generation_service.py`
   - 本轮验收命令（必须，均已通过）：

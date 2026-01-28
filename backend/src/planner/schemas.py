@@ -2660,6 +2660,12 @@ class AfterSalesDashboardTopReasonItem(BaseModel):
 class AfterSalesDashboardTopModelItem(BaseModel):
     model_code: str
     model_name: Optional[str] = None
+    # Optional bundle (BundleAsModel) display helpers:
+    # If model_code is a bundle code like "B-DB9EAE" (template_code=DB9E, selector=AE),
+    # we can enrich these fields for clearer UI display.
+    bundle_template_code: Optional[str] = None  # e.g. "DB9E"
+    bundle_preset_selector: Optional[str] = None  # e.g. "AE"
+    bundle_preset_phrase: Optional[str] = None  # e.g. "[{}{毛球}][{黄金绒}{雪尼尔}]0*0*0"
     shipped_qty: Decimal
     returned_qty: Decimal
     return_rate: Optional[Decimal] = None

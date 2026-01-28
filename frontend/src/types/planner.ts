@@ -2090,6 +2090,9 @@ export interface AfterSalesDashboardTopReasonItem {
 export interface AfterSalesDashboardTopModelItem {
   model_code: string
   model_name?: string | null
+  bundle_template_code?: string | null
+  bundle_preset_selector?: string | null
+  bundle_preset_phrase?: string | null
   shipped_qty: string
   returned_qty: string
   return_rate?: string | null

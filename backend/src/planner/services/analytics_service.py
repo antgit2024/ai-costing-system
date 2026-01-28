@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+import re
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from sqlalchemy import and_, func, or_
@@ -9,6 +10,50 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from . import bom_generation_service, product_model_service
+
+
+_BUNDLE_MODEL_CODE_RE = re.compile(r"^B-(?P<tpl>[A-Z0-9]{4})(?P<sel>[A-Z]{2})$", re.IGNORECASE)
+
+
+def _try_get_bundle_phrase_preset(db: Session, model_code: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """
+    BundleAsModel display enrichment.
+
+    For bundle model_code like "B-DB9EAE":
+    - tpl_code: "DB9E"
+    - selector: "AE"
+    - phrase:  metadata.phrase_presets[*].phrase matched by selector
+    """
+    mc = (model_code or "").strip().upper()
+    m = _BUNDLE_MODEL_CODE_RE.match(mc)
+    if not m:
+        return None, None, None
+    tpl_code = str(m.group("tpl") or "").strip().upper()
+    selector = str(m.group("sel") or "").strip().upper()
+    if not tpl_code or not selector:
+        return None, None, None
+
+    tpl = (
+        db.query(models.BundleTemplate)
+        .filter(models.BundleTemplate.is_archived.is_(False), models.BundleTemplate.code == tpl_code)
+        .first()
+    )
+    if not tpl:
+        return tpl_code, selector, None
+
+    meta = getattr(tpl, "metadata_json", {}) or {}
+    presets = meta.get("phrase_presets") or []
+    phrase: Optional[str] = None
+    if isinstance(presets, list):
+        for p in presets:
+            if not isinstance(p, dict):
+                continue
+            sel = str(p.get("selector") or "").strip().upper()
+            if sel == selector:
+                raw = str(p.get("phrase") or "").strip()
+                phrase = raw or None
+                break
+    return tpl_code, selector, phrase
 
 
 def _utc_date(dt: datetime) -> date:
@@ -488,10 +533,14 @@ def after_sales_dashboard(
         top_models: List[Dict[str, Any]] = []
         for it in merged_models:
             mc = str(it["key"])
+            tpl_code, selector, phrase = _try_get_bundle_phrase_preset(db, mc)
             top_models.append(
                 {
                     "model_code": mc,
                     "model_name": model_name_map.get(mc),
+                    "bundle_template_code": tpl_code,
+                    "bundle_preset_selector": selector,
+                    "bundle_preset_phrase": phrase,
                     "shipped_qty": it["shipped_qty"],
                     "returned_qty": it["returned_qty"],
                     "return_rate": it["return_rate"],
@@ -1124,12 +1173,16 @@ def after_sales_dashboard(
     top_models: List[Dict[str, Any]] = []
     for r in model_rows:
         code = str(r.model_code or "")
+        tpl_code, selector, phrase = _try_get_bundle_phrase_preset(db, code)
         shipped_qty = ship_model_map.get(code) or Decimal("0")
         returned_qty = Decimal(str(r.returned_qty or 0))
         top_models.append(
             {
                 "model_code": code,
                 "model_name": ship_model_name.get(code) or str(r.model_name or ""),
+                "bundle_template_code": tpl_code,
+                "bundle_preset_selector": selector,
+                "bundle_preset_phrase": phrase,
                 "shipped_qty": shipped_qty,
                 "returned_qty": returned_qty,
                 "return_rate": (returned_qty / shipped_qty) if shipped_qty > 0 else None,

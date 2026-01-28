@@ -23,6 +23,7 @@ import {
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { InfoCircleOutlined, ReloadOutlined } from '@ant-design/icons'
 
@@ -661,7 +662,33 @@ const AfterSalesInsightsPage = () => {
                               title: '模型',
                               key: 'model',
                               ellipsis: true,
-                              render: (_: any, r: any) => `${r.model_code}${r.model_name ? ` ${r.model_name}` : ''}`,
+                              render: (_: any, r: any) => {
+                                const main = `${r.model_code}${r.model_name ? ` ${r.model_name}` : ''}`
+                                const phrase = String(r.bundle_preset_phrase ?? '').trim()
+                                if (!phrase) return main
+                                const pillStyle: CSSProperties = {
+                                  display: 'inline-block',
+                                  padding: '0px 6px',
+                                  borderRadius: 6,
+                                  border: '1px solid',
+                                  borderColor: 'color-mix(in srgb, var(--ant-color-success) 45%, var(--ant-color-border))',
+                                  background: 'color-mix(in srgb, var(--ant-color-success) 18%, var(--ant-color-fill-tertiary))',
+                                  fontSize: 11,
+                                  lineHeight: '18px',
+                                  color: 'var(--ant-color-success)',
+                                  whiteSpace: 'nowrap',
+                                }
+                                return (
+                                  <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                                    <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                      {main}
+                                    </span>
+                                    <Tooltip title={phrase}>
+                                      <span style={pillStyle}>{phrase}</span>
+                                    </Tooltip>
+                                  </span>
+                                )
+                              },
                             },
                             { title: '发货', dataIndex: 'shipped_qty', width: 110 },
                             { title: '退货', dataIndex: 'returned_qty', width: 110 },

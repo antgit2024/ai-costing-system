@@ -33,6 +33,21 @@
   - 验收命令（必须，全部 0 退出码）：
     - Frontend：`npm -C frontend run build`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-28（售后洞察 Top 模型：展示套装二级“公式短语”胶囊）
+  - 背景：售后洞察 `/costing/insights/after-sales` 的 “Top 模型” 在遇到套装（BundleAsModel）时，仅显示 `B-DB9EAE 印花抱枕（26前历史）`，缺少二级（selector 的中文/公式短语）导致对账/排查无法识别子名称。
+  - 口径：
+    - `model_code` 仍保持 `B-<模板码><selector>`（例如 `B-DB9EAE`），作为分析聚合主键不变。
+    - UI 增强展示：在模型名称后追加一个小型胶囊标签，显示该 selector 的 `phrase_presets[*].phrase`（例如 `[{}{毛球}][{黄金绒}{雪尼尔}]0*0*0`），并提供 tooltip 全文。
+  - 本轮产物：
+    - 后端：`AfterSalesDashboardTopModelItem` 增加可选字段 `bundle_template_code / bundle_preset_selector / bundle_preset_phrase`；在 `/api/planner/analytics/after-sales/dashboard` 的 top_models 返回中，若 `model_code` 命中 `B-XXXXYY` 形式，则从 `bundle_templates.metadata.phrase_presets` 读取对应 selector 的 phrase 进行补齐。
+    - 前端：`AfterSalesInsightsPage.tsx` 的 “Top 模型” 列渲染增加胶囊样式展示 `bundle_preset_phrase`（按 antd success 主题色混合），并支持 tooltip。
+  - 验收命令（必须，全部 0 退出码）：
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Frontend：`npm -C frontend run build`
+  - 下一步：
+    - 若需要把 “B-DB9EAE-AE 印花抱枕（26前历史）” 也直接拼成一个稳定展示串，可在前端用 `bundle_template_code + bundle_preset_selector` 组合生成，并决定是否显示为独立列/换行。
+
 - **最近校对（北京时间 GMT+8）**：2026-01-26（线上深链接 404：BrowserRouter /costing/* Not Found 兜底）
   - 现象：直接访问 `https://<host>/costing/insights/models` 返回 `Not Found`（history 深链接无法回退到 SPA 入口）。
   - 根因：前端使用 `BrowserRouter`（history 模式），需要服务端对 `/costing/*` 做 `try_files ... /index.html` 回退。

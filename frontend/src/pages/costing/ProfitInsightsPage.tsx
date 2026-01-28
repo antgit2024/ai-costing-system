@@ -1,4 +1,4 @@
-import { Alert, Button, Card, DatePicker, Descriptions, Divider, Form, Input, Row, Col, Select, Space, Table, Tabs, Tag, Typography } from 'antd'
+import { Alert, Button, Card, DatePicker, Descriptions, Divider, Form, Row, Col, Select, Space, Table, Tabs, Tag, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -81,8 +81,6 @@ const ProfitInsightsPage = () => {
         start,
         end,
         channel: v.channel?.trim() || undefined,
-        bundle_template_code: v.bundle_template_code?.trim() || undefined,
-        bundle_preset_selector: v.bundle_preset_selector?.trim() || undefined,
       })
       setSummary(resp)
       // reset selection when query changes
@@ -96,8 +94,6 @@ const ProfitInsightsPage = () => {
               start,
               end,
               channel: v.channel?.trim() || undefined,
-              bundle_template_code: v.bundle_template_code?.trim() || undefined,
-              bundle_preset_selector: v.bundle_preset_selector?.trim() || undefined,
             }),
           )
         }
@@ -134,8 +130,6 @@ const ProfitInsightsPage = () => {
         form.setFieldsValue({
           range,
           channel: saved?.channel ?? undefined,
-          bundle_template_code: saved?.bundle_template_code ?? undefined,
-          bundle_preset_selector: saved?.bundle_preset_selector ?? undefined,
         })
       }
     } catch {
@@ -160,8 +154,6 @@ const ProfitInsightsPage = () => {
         channel: v.channel?.trim() || undefined,
         model_code: modelCode,
         version_id: versionId || undefined,
-        bundle_template_code: v.bundle_template_code?.trim() || undefined,
-        bundle_preset_selector: v.bundle_preset_selector?.trim() || undefined,
       })
       setDetail(resp)
     } catch (e: any) {
@@ -506,16 +498,6 @@ const ProfitInsightsPage = () => {
                         String(option?.label ?? '').toLowerCase().includes(String(input ?? '').toLowerCase())
                       }
                     />
-                  </Form.Item>
-                </Col>
-                <Col span={24}>
-                  <Form.Item label="套装模板" name="bundle_template_code">
-                    <Input placeholder="可选：bundle code" allowClear />
-                  </Form.Item>
-                </Col>
-                <Col span={24}>
-                  <Form.Item label="套装二级" name="bundle_preset_selector">
-                    <Input placeholder="可选：AA/AB" allowClear />
                   </Form.Item>
                 </Col>
                 <Col span={24}>

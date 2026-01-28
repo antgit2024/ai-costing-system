@@ -369,7 +369,7 @@
       - `model_insights_summary/detail` 在 `shipment_lines.metadata_json` 上按 bundle 锚点过滤（与销售明细筛选口径一致）
   - 本轮产物（前端）：
     - `frontend/src/pages/costing/ProfitInsightsPage.tsx`
-      - 筛选区新增“套装模板/套装二级”输入，并与查询条件一起记住/恢复
+      - 说明：前端筛选控件（套装模板/套装二级）已按运营页面简化诉求隐藏；后端接口仍保留参数能力，后续如需再开启 UI 可快速恢复
     - `frontend/src/services/planner.ts`
       - `fetchModelInsightsSummary/detail` 参数补齐 bundle 筛选项
   - 验收命令（必须，全部 0 退出码）：

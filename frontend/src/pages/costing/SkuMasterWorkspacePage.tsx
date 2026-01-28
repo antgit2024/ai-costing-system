@@ -243,6 +243,8 @@ const SkuMasterWorkspacePage = () => {
     return String(detail ?? msg ?? '').trim()
   }, [listQuery.error])
 
+  // listEmptyHint 需要在 filteredItems/total 计算之后定义（避免 TDZ）
+
   const items = autoCandidatesOnly
     ? autoPreviewCandidates.map((x) => ({
         id: x.sku_master_id,
@@ -299,6 +301,16 @@ const SkuMasterWorkspacePage = () => {
   }, [autoCandidatesOnly, items, search, includeTerms, excludeTerms])
 
   const total = autoCandidatesOnly ? filteredItems.length : listQuery.data?.total ?? 0
+
+  const listEmptyHint = useMemo(() => {
+    if (autoCandidatesOnly) {
+      return filteredItems.length === 0 ? '命中候选视图为空：请先点左侧“候选预览（命中）”，或退出候选视图查看完整列表。' : ''
+    }
+    if (listQuery.isFetching) return ''
+    return filteredItems.length === 0
+      ? '当前筛选结果为空：请清空“候选筛选/包含关键词/排除关键词”，并确认 Tab（全部/未绑定/已绑定）选择是否符合预期。'
+      : ''
+  }, [autoCandidatesOnly, filteredItems.length, listQuery.isFetching])
 
   const channelOptions = useMemo(() => {
     const set = new Set<string>()
@@ -1476,6 +1488,10 @@ const SkuMasterWorkspacePage = () => {
                 {autoCandidatesOnly ? (
                   <Tag color="purple">命中候选视图：{autoPreviewCandidates.length} 条</Tag>
                 ) : null}
+                <Text type="secondary">
+                  状态：
+                  {listQuery.isFetching ? '加载中' : listQuery.isError ? '失败' : '就绪'}｜结果 {filteredItems.length}/{total}
+                </Text>
                 <Input
                   style={{ width: 260 }}
                   placeholder={autoCandidatesOnly ? '候选筛选（本地）：条码/规格/渠道' : '候选筛选：条码/商品名/编码'}
@@ -1562,6 +1578,9 @@ const SkuMasterWorkspacePage = () => {
                 message="列表加载失败"
                 description={listQueryErrorText || '未知错误（请打开控制台查看网络请求）'}
               />
+            ) : null}
+            {listEmptyHint ? (
+              <Alert type="info" showIcon style={{ marginBottom: 8 }} message="提示" description={listEmptyHint} />
             ) : null}
             <Tabs
               activeKey={listTab}

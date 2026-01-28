@@ -2308,6 +2308,7 @@ export const bulkSaveSkuMasterSpecPreparse = async (payload: {
   scanned: number
   saved: number
   skipped_same_hash: number
+  skipped_empty_spec?: number
   errors: Array<Record<string, unknown>>
   batch_candidates?: number
   has_more?: boolean
@@ -2367,6 +2368,7 @@ export const executeSkuMasterSpecPreparse = async (payload: {
   scanned: number
   saved: number
   skipped_same_hash: number
+  skipped_empty_spec?: number
   errors: Array<Record<string, unknown>>
 }> => {
   const response = await plannerClient.post('/sku-master/spec-preparse/execute', payload, {

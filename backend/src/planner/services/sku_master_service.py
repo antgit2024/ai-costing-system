@@ -1309,6 +1309,7 @@ def bulk_save_spec_preparse(
     scanned = 0
     saved = 0
     skipped_same_hash = 0
+    skipped_empty_spec = 0
     errors: List[Dict[str, Any]] = []
 
     # First pass: decide which rows need work, compute hash once
@@ -1319,7 +1320,8 @@ def bulk_save_spec_preparse(
             meta = dict(r.metadata_json or {})
             spec_text = (meta.get("last_shipment_spec_text") or r.spec_text or "").strip()
             if not spec_text:
-                raise ValueError("spec_text empty")
+                skipped_empty_spec += 1
+                continue
             spec_hash = _sha1_text(spec_text)
             if skip_if_same_hash and meta.get("preparse_spec_hash") == spec_hash and meta.get("preparse_parser_version") == PARSER_VERSION:
                 skipped_same_hash += 1
@@ -1385,6 +1387,7 @@ def bulk_save_spec_preparse(
         "scanned": scanned,
         "saved": saved,
         "skipped_same_hash": skipped_same_hash,
+        "skipped_empty_spec": skipped_empty_spec,
         "errors": errors,
         "batch_candidates": scanned,
         "has_more": has_more,
@@ -1510,6 +1513,7 @@ def execute_spec_preparse(
     scanned = 0
     saved = 0
     skipped_same_hash = 0
+    skipped_empty_spec = 0
     errors: List[Dict[str, Any]] = []
 
     work: List[Tuple[models.SkuMaster, str, str]] = []
@@ -1519,7 +1523,8 @@ def execute_spec_preparse(
             meta = dict(r.metadata_json or {})
             spec_text = (meta.get("last_shipment_spec_text") or r.spec_text or "").strip()
             if not spec_text:
-                raise ValueError("spec_text empty")
+                skipped_empty_spec += 1
+                continue
             spec_hash = _sha1_text(spec_text)
             if skip_if_same_hash and meta.get("preparse_spec_hash") == spec_hash and meta.get("preparse_parser_version") == PARSER_VERSION:
                 skipped_same_hash += 1
@@ -1578,7 +1583,13 @@ def execute_spec_preparse(
             errors.append({"sku_id": getattr(r, "id", None), "sku_code": getattr(r, "erp_sku_barcode", None), "error": str(exc)})
 
     db.commit()
-    return {"scanned": scanned, "saved": saved, "skipped_same_hash": skipped_same_hash, "errors": errors}
+    return {
+        "scanned": scanned,
+        "saved": saved,
+        "skipped_same_hash": skipped_same_hash,
+        "skipped_empty_spec": skipped_empty_spec,
+        "errors": errors,
+    }
 
 
 def list_published_standard_model_candidates(

@@ -551,12 +551,13 @@ export default function SkuSpecMatchingPage() {
       const scanned = Number(res?.scanned ?? 0)
       const saved = Number(res?.saved ?? 0)
       const skipped = Number(res?.skipped_same_hash ?? 0)
+      const skippedEmpty = Number(res?.skipped_empty_spec ?? 0)
       if (saved > 0) {
-        message.success(`保存完成：扫描${scanned}，新增保存${saved}，已存在跳过${skipped}`)
+        message.success(`保存完成：扫描${scanned}，新增保存${saved}，已存在跳过${skipped}，空规格跳过${skippedEmpty}`)
       } else if (skipped > 0) {
-        message.success(`无新增写入：扫描${scanned}，已存在相同规格（跳过${skipped}）`)
+        message.success(`无新增写入：扫描${scanned}，已存在相同规格（跳过${skipped}），空规格跳过${skippedEmpty}`)
       } else {
-        message.success(`执行完成：扫描${scanned}（无可保存项）`)
+        message.success(`执行完成：扫描${scanned}（无可保存项；空规格跳过${skippedEmpty}）`)
       }
       setPreviewSaved(true)
       listQuery.refetch()
@@ -651,7 +652,10 @@ export default function SkuSpecMatchingPage() {
         void (async () => {
           const MESSAGE_KEY = 'spec-preparse-run-all'
           let totalSaved = 0
+          let totalSkipped = 0
+          let totalSkippedEmpty = 0
           let cursorId: string | undefined = undefined
+          let hadError = false
           try {
             for (let round = 1; round <= 999; round += 1) {
               if (runAllStopRef.current) break
@@ -679,10 +683,13 @@ export default function SkuSpecMatchingPage() {
               const scanned = Number((res as any)?.scanned ?? 0)
               const saved = Number((res as any)?.saved ?? 0)
               const skipped = Number((res as any)?.skipped_same_hash ?? 0)
+              const skippedEmpty = Number((res as any)?.skipped_empty_spec ?? 0)
               const hasMore = Boolean((res as any)?.has_more)
               const nextCursor = String((res as any)?.next_cursor_id ?? '').trim()
               const errs = ((res as any)?.errors ?? []) as any[]
               totalSaved += saved
+              totalSkipped += skipped
+              totalSkippedEmpty += skippedEmpty
               if (nextCursor) cursorId = nextCursor
 
               const now = new Date()
@@ -703,26 +710,36 @@ export default function SkuSpecMatchingPage() {
               })
 
               message.loading({
-                content: `保存中… 第${round}轮：本轮扫描${scanned} / 保存${saved} / 跳过${skipped}；累计保存${totalSaved}${hasMore ? '（还有待处理）' : '（已无更多）'}`,
+                content: `保存中… 第${round}轮：本轮扫描${scanned} / 保存${saved} / 跳过${skipped} / 空规格${skippedEmpty}；累计保存${totalSaved}${hasMore ? '（还有待处理）' : '（已无更多）'}`,
                 key: MESSAGE_KEY,
                 duration: 0,
               })
 
               if (Array.isArray(errs) && errs.length) {
                 const first = errs[0] ?? {}
+                hadError = true
                 message.error({ content: `保存失败（已中止）：${first?.error ?? '未知错误'}`, key: MESSAGE_KEY, duration: 5 })
                 break
               }
               if (!hasMore) break
-              if (saved <= 0 && skipped <= 0) {
-                message.warning({ content: '批量已停止（无进展）：本轮保存=0且跳过=0', key: MESSAGE_KEY, duration: 5 })
+              if (saved <= 0 && skipped <= 0 && skippedEmpty <= 0) {
+                message.warning({ content: '批量已停止（无进展）：本轮保存=0且跳过=0且空规格=0', key: MESSAGE_KEY, duration: 5 })
                 break
               }
             }
           } finally {
             setRunAllRunning(false)
             listQuery.refetch()
-            message.success({ content: `批量结束：累计保存${totalSaved}`, key: 'spec-preparse-run-all', duration: 3 })
+            const tail = `批量结束：累计新增保存${totalSaved}，累计相同Hash跳过${totalSkipped}，累计空规格跳过${totalSkippedEmpty}`
+            if (hadError) {
+              message.error({ content: tail, key: MESSAGE_KEY, duration: 6 })
+            } else if (totalSaved > 0) {
+              message.success({ content: tail, key: MESSAGE_KEY, duration: 4 })
+            } else if (totalSkipped > 0 || totalSkippedEmpty > 0) {
+              message.warning({ content: tail, key: MESSAGE_KEY, duration: 5 })
+            } else {
+              message.info({ content: tail, key: MESSAGE_KEY, duration: 5 })
+            }
           }
         })()
       },

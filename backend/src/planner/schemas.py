@@ -3318,6 +3318,7 @@ class SkuMasterSpecPreparseBulkResponse(BaseModel):
     scanned: int
     saved: int
     skipped_same_hash: int
+    skipped_empty_spec: int = 0
     errors: List[Dict[str, Any]] = Field(default_factory=list)
     # loop/run-all hints
     batch_candidates: int = 0
@@ -3386,6 +3387,7 @@ class SkuMasterSpecPreparseExecuteResponse(BaseModel):
     scanned: int
     saved: int
     skipped_same_hash: int
+    skipped_empty_spec: int = 0
     errors: List[Dict[str, Any]] = Field(default_factory=list)
 
 

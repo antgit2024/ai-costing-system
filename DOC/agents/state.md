@@ -400,6 +400,23 @@
         - 模型列仅展示：`<model_code> <model_name>`
         - 套装列展示：`B-/Z-` 前缀 + 业务码（必要时拼接 preset 后缀）+ ` <template_name>`（例如：`B-DB9EAE 印花抱枕（26前历史）`）
       - 若本页拉到未绑定项：提示“已隐藏未绑定记录 X 条”，并引导先去 sku-master 绑定
+
+- **2026-01-28（规格解析落库：套装/模型批量保存为 0 的排障与修复）**
+  - **现象**：在 `/costing/spec-matching` 点“执行保存/一键跑完”，提示“批量结束：累计保存0”，且用户反馈“套装解析不能落库”；同时需要确认模型预解析是否丢失。
+  - **根因**：
+    - 后端 `execute_spec_preparse`/`bulk_save_spec_preparse` 遇到 `spec_text` 为空时按 **error** 处理，导致整批落库没有任何 saved；
+    - 前端“一键跑完”结束提示只展示 `累计保存`，并且会在 finally 用 success 覆盖掉中途的 error 信息，导致“看起来像没发生错误也没落库”。
+  - **修复（后端）**：
+    - `backend/src/planner/services/sku_master_service.py`：`execute_spec_preparse` 与 `bulk_save_spec_preparse` 将空规格改为 **skipped_empty_spec**（不再作为 error）。
+    - `backend/src/planner/schemas.py`：响应增加 `skipped_empty_spec` 字段，便于前端展示真实原因。
+  - **修复（前端）**：
+    - `frontend/src/pages/costing/SkuSpecMatchingPage.tsx`：执行保存/一键跑完展示 `空规格跳过`、`相同Hash跳过`；最终提示不再无条件 success 覆盖 error，并给出完整汇总。
+    - `frontend/src/services/planner.ts`：补齐返回字段类型（`skipped_empty_spec`）。
+  - **关于“模型预解析是否丢失”**：
+    - 预解析结果写在 `sku_master.metadata_json` 的 `preparse_*` 字段中；本次修复只改变“空规格”是跳过还是报错，不会清空或覆盖已有预解析数据（除非用户勾选“强制覆盖”）。
+  - **验收命令**：
+    - 前端：`npm -C frontend run build`
+    - 后端：按 `DOC/agents/commands.md`（本仓库约定的三条 pytest：`test_profit_analytics_mvp.py` / `test_after_sales_import_mvp.py` / `test_shop_analytics_mvp.py`）
   - 验收命令（必须，全部 0 退出码）：
     - Frontend：`npm -C frontend run build`
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`

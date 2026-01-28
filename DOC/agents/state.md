@@ -393,6 +393,9 @@
         - 已绑定模型（`active_model_version_id`/`bound_model_*` 任一存在）
         - 已绑定套装（`bundle_template_*` 或 `metadata_json.bundle_template_*` 任一存在）
       - 新增列“已绑定套装”，避免“未绑定模型”被误解为“完全未绑定”
+      - 展示口径对齐 `sku-master`：
+        - 模型列仅展示：`<model_code> <model_name>`
+        - 套装列展示：`B-/Z-` 前缀 + 业务码（必要时拼接 preset 后缀）+ ` <template_name>`（例如：`B-DB9EAE 印花抱枕（26前历史）`）
       - 若本页拉到未绑定项：提示“已隐藏未绑定记录 X 条”，并引导先去 sku-master 绑定
   - 验收命令（必须，全部 0 退出码）：
     - Frontend：`npm -C frontend run build`

@@ -775,15 +775,45 @@ export default function SkuSpecMatchingPage() {
       {
         title: '已绑定套装',
         dataIndex: 'bundle_template_code',
-        width: 180,
+        width: 260,
         render: (_v, row) => {
           const meta = (row as any)?.metadata_json ?? {}
-          const code = safeString((row as any)?.bundle_template_code ?? meta?.bundle_template_code).trim()
-          const sel = safeString((row as any)?.bundle_preset_selector ?? meta?.bundle_preset_selector)
+          const codeRaw = safeString((row as any)?.bundle_template_code ?? meta?.bundle_template_code).trim()
+          const tid = safeString((row as any)?.bundle_template_id ?? meta?.bundle_template_id).trim()
+          const selRaw = safeString((row as any)?.bundle_preset_selector ?? meta?.bundle_preset_selector)
             .trim()
             .toUpperCase()
-          if (!code) return <Tag>未绑定</Tag>
-          return <Tag color="purple">{sel ? `${code}-${sel}` : code}</Tag>
+          if (!codeRaw) return <Tag>未绑定</Tag>
+
+          const normalize = (s: string) =>
+            String(s || '')
+              .trim()
+              .toUpperCase()
+              .replace(/^([BZ])-/, '')
+              .replace(/[^A-Z0-9]/g, '')
+
+          const base = normalize(codeRaw)
+          const sel = normalize(selRaw)
+
+          const tpl =
+            (bundleTemplates as any[]).find((t: any) => String(t?.id ?? '').trim() === tid) ??
+            (bundleTemplates as any[]).find((t: any) => normalize(String(t?.code ?? '')) === base) ??
+            (bundleTemplates as any[]).find((t: any) => normalize(String(t?.code ?? '')).endsWith(base))
+
+          const tplCode = String((tpl as any)?.code ?? '').trim()
+          const tplName = String((tpl as any)?.name ?? '').trim()
+          const tplMeta = (tpl as any)?.metadata ?? (tpl as any)?.metadata_json ?? tpl ?? {}
+          const presets = Array.isArray((tplMeta as any)?.phrase_presets) ? ((tplMeta as any).phrase_presets as any[]) : []
+          const presetHit = presets.find((p: any) => normalize(String(p?.selector ?? '')) === sel)
+          const mode = String((presetHit as any)?.mode ?? '').trim()
+          const prefix = mode === 'force' || tplCode.toUpperCase().startsWith('Z-') ? 'Z' : 'B'
+
+          let displayBase = base
+          if (sel && !displayBase.endsWith(sel)) displayBase = `${displayBase}${sel}`
+
+          const label = `${prefix}-${displayBase}`
+          const text = tplName ? `${label} ${tplName}` : label
+          return <Tag color="purple">{text}</Tag>
         },
       },
       { title: '标准版本', dataIndex: 'bound_version_label', width: 120, render: (v) => safeString(v) || '-' },

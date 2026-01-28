@@ -7,6 +7,7 @@ import { keepPreviousData, useMutation, useQuery } from '@tanstack/react-query'
 import {
   bulkSaveSkuMasterSpecPreparse,
   executeSkuMasterSpecPreparse,
+  fetchBundleTemplates,
   fetchPublishedStandardModels,
   fetchSkuMaster,
   parseSpec,
@@ -66,6 +67,11 @@ export default function SkuSpecMatchingPage() {
   const [modelSearch, setModelSearch] = useState<string>('')
   const [boundModelId, setBoundModelId] = useState<string | undefined>(undefined)
   const [onlyPublishedVersion, setOnlyPublishedVersion] = useState<boolean>(false)
+  const [targetKind, setTargetKind] = useState<'any' | 'model' | 'bundle'>('any')
+  const [bundleSearch, setBundleSearch] = useState<string>('')
+  const [selectedBundleTemplateId, setSelectedBundleTemplateId] = useState<string | undefined>(undefined)
+  const [selectedBundlePresetSelector, setSelectedBundlePresetSelector] = useState<string | undefined>(undefined)
+  const [forceOverride, setForceOverride] = useState<boolean>(false)
 
   const [activeSku, setActiveSku] = useState<SkuMaster | null>(null)
   const [specTextDraft, setSpecTextDraft] = useState<string>('')
@@ -112,6 +118,17 @@ export default function SkuSpecMatchingPage() {
     placeholderData: keepPreviousData,
   })
 
+  const bundleTemplatesQuery = useQuery({
+    queryKey: ['sku-spec-matching', 'bundle-templates', 'list', bundleSearch],
+    queryFn: () => fetchBundleTemplates({ search: bundleSearch || undefined, page: 1, page_size: 50 }),
+    placeholderData: keepPreviousData,
+  })
+
+  const bundleTemplates = useMemo(() => {
+    const items = (bundleTemplatesQuery.data as any)?.items
+    return Array.isArray(items) ? (items as any[]) : []
+  }, [bundleTemplatesQuery.data])
+
   const publishedModelById = useMemo(() => {
     const items = (publishedModelsQuery.data as any)?.items ?? []
     const m = new Map<string, any>()
@@ -122,6 +139,64 @@ export default function SkuSpecMatchingPage() {
     }
     return m
   }, [publishedModelsQuery.data])
+
+  const bundleTemplateOptions = useMemo(() => {
+    return (bundleTemplates as any[])
+      .map((t) => ({
+        label: `${safeString((t as any)?.code)} ${safeString((t as any)?.name)}`.trim(),
+        value: String((t as any)?.id ?? '').trim(),
+      }))
+      .filter((x) => x.value)
+  }, [bundleTemplates])
+
+  const bundlePresetsForSelectedTemplate = useMemo(() => {
+    if (!selectedBundleTemplateId) return []
+    const hit = (bundleTemplates as any[]).find((x) => String((x as any)?.id ?? '') === String(selectedBundleTemplateId))
+    const meta = (hit as any)?.metadata ?? (hit as any)?.metadata_json ?? hit ?? {}
+    const pp = Array.isArray((meta as any)?.phrase_presets) ? (meta as any).phrase_presets : []
+    if (!pp.length) return [{ selector: 'AA', phrase: '默认', mode: 'parse', enabled: true }]
+    return pp
+      .map((p: any) => ({
+        selector: String(p?.selector ?? '').trim().toUpperCase(),
+        phrase: String(p?.phrase ?? '').trim(),
+        mode: String(p?.mode ?? 'parse').trim(),
+        enabled: p?.enabled !== false,
+      }))
+      .filter((p: any) => !!p.selector)
+  }, [bundleTemplates, selectedBundleTemplateId])
+
+  const bundlePresetOptions = useMemo(() => {
+    return (bundlePresetsForSelectedTemplate as any[]).map((p) => {
+      const mode = String(p.mode || 'parse').trim() === 'force' ? '指定' : '解析'
+      const label = `${p.selector}（${mode}）${p.phrase ? ` ${p.phrase}` : ''}`.trim()
+      return { label, value: p.selector }
+    })
+  }, [bundlePresetsForSelectedTemplate])
+
+  useEffect(() => {
+    if (targetKind !== 'bundle') return
+    if (!selectedBundleTemplateId) {
+      setSelectedBundlePresetSelector(undefined)
+      return
+    }
+    const first =
+      (bundlePresetsForSelectedTemplate as any[]).find((x: any) => x?.enabled !== false) ??
+      (bundlePresetsForSelectedTemplate as any[])?.[0]
+    const sel = String((first as any)?.selector ?? '').trim().toUpperCase()
+    setSelectedBundlePresetSelector(sel || undefined)
+  }, [targetKind, selectedBundleTemplateId, bundlePresetsForSelectedTemplate])
+
+  useEffect(() => {
+    // 目标类型切换时，清理无效筛选，避免“看不见数据”的误解
+    if (targetKind === 'model') {
+      setSelectedBundleTemplateId(undefined)
+      setSelectedBundlePresetSelector(undefined)
+    } else if (targetKind === 'bundle') {
+      setBoundModelId(undefined)
+      setOnlyPublishedVersion(false)
+    }
+    setPage(1)
+  }, [targetKind])
 
   const boundVersionId = useMemo(() => {
     if (!onlyPublishedVersion || !boundModelId) return undefined
@@ -140,6 +215,22 @@ export default function SkuSpecMatchingPage() {
       .filter((x: any) => x.value)
   }, [publishedModelsQuery.data])
 
+  const listTargetKind = useMemo(() => {
+    if (targetKind === 'bundle') return 'bundle' as const
+    if (targetKind === 'model') return 'model' as const
+    return 'any' as const
+  }, [targetKind])
+
+  const listBundleBoundState = useMemo(() => {
+    if (listTargetKind === 'bundle') return 'bound' as const
+    return undefined
+  }, [listTargetKind])
+
+  const effectivePreparseState = useMemo(() => {
+    if (forceOverride) return undefined
+    return listTab === 'parsed' ? 'parsed' : listTab === 'unparsed' ? 'unparsed' : undefined
+  }, [forceOverride, listTab])
+
   const listQuery = useQuery({
     queryKey: [
       'sku-spec-matching',
@@ -155,6 +246,10 @@ export default function SkuSpecMatchingPage() {
       matchScope,
       boundModelId,
       boundVersionId,
+      targetKind,
+      selectedBundleTemplateId,
+      selectedBundlePresetSelector,
+      forceOverride,
     ],
     queryFn: () =>
       fetchSkuMaster({
@@ -166,10 +261,14 @@ export default function SkuSpecMatchingPage() {
         include_terms: includeTerms || undefined,
         exclude_terms: excludeTerms || undefined,
         match_scope: matchScope,
-        bound_state: 'bound', // 规格模块：只看已绑定模型的商品
+        target_kind: listTargetKind,
+        bound_state: listTargetKind === 'model' ? 'bound' : 'all',
         bound_model_id: boundModelId,
         bound_version_id: boundVersionId,
-        preparse_state: listTab === 'parsed' ? 'parsed' : listTab === 'unparsed' ? 'unparsed' : undefined,
+        bundle_bound_state: listBundleBoundState,
+        bundle_template_id: selectedBundleTemplateId,
+        bundle_preset_selector: selectedBundlePresetSelector,
+        preparse_state: effectivePreparseState,
       }),
     placeholderData: keepPreviousData,
   })
@@ -328,18 +427,20 @@ export default function SkuSpecMatchingPage() {
         search: search || undefined,
         channel: channel || undefined,
         match_status: matchStatus || undefined,
+        target_kind: listTargetKind,
+        bundle_bound_state: listBundleBoundState,
+        bundle_template_id: selectedBundleTemplateId,
+        bundle_preset_selector: selectedBundlePresetSelector,
         include_terms: includeTerms || undefined,
         exclude_terms: excludeTerms || undefined,
         match_scope: matchScope,
         bound_model_id: boundModelId,
         bound_version_id: boundVersionId,
-        // 对齐“一键跑完”的语义：只对“未解析”做预览与落库（收敛且避免误操作）
-        preparse_state: 'unparsed',
+        // 默认：对齐当前 TAB；若开启“强制覆盖”，允许预览全部（含已解析）
+        preparse_state: effectivePreparseState,
       })
     },
     onSuccess: (res) => {
-      // 进入预览即切到“未解析”语义，避免预览/保存口径不一致
-      setListTab('unparsed')
       const rows = (res.items ?? []).map((x) => ({
         id: x.sku_id,
         erp_sku_barcode: x.erp_sku_barcode,
@@ -384,7 +485,7 @@ export default function SkuSpecMatchingPage() {
       const ids = (previewSelectedKeys ?? []).map((x) => String(x)).filter(Boolean)
       if (!ids.length) throw new Error('请先勾选候选')
       // 单次可能较慢：提高超时，避免默认 20s 误判为“跑不动”
-      return executeSkuMasterSpecPreparse({ sku_ids: ids, skip_if_same_hash: true }, { timeoutMs: 120000 })
+      return executeSkuMasterSpecPreparse({ sku_ids: ids, skip_if_same_hash: !forceOverride }, { timeoutMs: 120000 })
     },
     onSuccess: (res: any) => {
       const errs = (res as any)?.errors ?? []
@@ -432,8 +533,8 @@ export default function SkuSpecMatchingPage() {
 
   const handleRunAllLoop = () => {
     if (runAllRunning) return
-    if (listTab !== 'unparsed') {
-      message.warning('请先切到“未解析”TAB 再执行（避免误操作）')
+    if (listTab !== 'unparsed' && !forceOverride) {
+      message.warning('请先切到“未解析”TAB 再执行（避免误操作）；如需重算已解析项，请勾选“强制覆盖”。')
       return
     }
 
@@ -464,7 +565,12 @@ export default function SkuSpecMatchingPage() {
       `范围：${matchScope}`,
       `渠道：${channel || '（全部）'}`,
       `ERP匹配：${matchStatus || '（全部）'}`,
+      `目标：${targetKind === 'bundle' ? '套装模块' : targetKind === 'model' ? '标准模型' : '自动'}`,
       boundModelId ? `模型：${modelLabel || boundModelId}${onlyPublishedVersion ? '（仅当前发布标准版本）' : ''}` : null,
+      selectedBundleTemplateId
+        ? `套装模板：${selectedBundleTemplateId}${selectedBundlePresetSelector ? `-${selectedBundlePresetSelector}` : ''}`
+        : null,
+      forceOverride ? '强制覆盖：是（忽略相同Hash）' : null,
       excludedCount ? `排除：${excludedCount} 条（取消勾选）` : null,
     ]
       .filter(Boolean)
@@ -520,15 +626,19 @@ export default function SkuSpecMatchingPage() {
                 search: search || undefined,
                 channel: channel || undefined,
                 match_status: matchStatus || undefined,
+                target_kind: listTargetKind,
+                bundle_bound_state: listBundleBoundState,
+                bundle_template_id: selectedBundleTemplateId,
+                bundle_preset_selector: selectedBundlePresetSelector,
                 include_terms: includeTerms || undefined,
                 exclude_terms: excludeTerms || undefined,
                 match_scope: matchScope,
                 bound_model_id: boundModelId,
                 bound_version_id: boundVersionId,
-                preparse_state: 'unparsed',
+                preparse_state: forceOverride ? undefined : 'unparsed',
                 cursor_id: cursorId,
                 excluded_sku_ids: excludedMerged,
-                skip_if_same_hash: true,
+                skip_if_same_hash: !forceOverride,
               }, { timeoutMs: 180000 })
 
               const scanned = Number((res as any)?.scanned ?? 0)
@@ -728,8 +838,8 @@ export default function SkuSpecMatchingPage() {
         规格匹配工作台（第一步：尺寸/规格解析）
       </Title>
       <Text type="secondary">
-        本页面用于把<strong>交易规格文本</strong>解析成<strong>尺寸(dims)/TOKEN(tokens)</strong>：解析优先使用“发货规格”，缺失时回退到“商品规格（网店）”。
-        建议先在<strong>商品关联（sku-master）</strong>完成锚点绑定：Z-（指定型）只需绑定套装编码；B-（解析型）先绑定编码再依赖 TOKEN 解析做分支。
+        本页面用于把<strong>交易规格文本</strong>解析成<strong>尺寸(dims)/TOKEN(tokens)</strong>并落库为“预解析缓存”（用于加速/预填，不改变发货快照口径）。
+        支持按<strong>模型</strong>或<strong>套装模板+preset</strong>筛选：Z-（指定型）可仅绑定套装后解析；B-（解析型）建议先绑定套装锚点再依赖 TOKEN 做分支。
       </Text>
       <div style={{ marginTop: 8 }}>
         <Button
@@ -997,30 +1107,84 @@ export default function SkuSpecMatchingPage() {
                   }}
                 />
                 <Select
-                  showSearch
-                  allowClear
-                  style={{ width: 240 }}
-                  placeholder="按模型过滤（已发布标准）"
-                  options={modelOptions}
-                  value={boundModelId}
-                  onChange={(v) => {
-                    setBoundModelId(v)
-                    setOnlyPublishedVersion(false)
-                    setPage(1)
-                  }}
-                  onSearch={(v) => setModelSearch(v)}
-                  filterOption={false}
-                  loading={publishedModelsQuery.isFetching}
+                  style={{ width: 150 }}
+                  value={targetKind}
+                  onChange={(v) => setTargetKind(v as any)}
+                  options={[
+                    { label: '目标：自动', value: 'any' },
+                    { label: '目标：标准模型', value: 'model' },
+                    { label: '目标：套装模块', value: 'bundle' },
+                  ]}
                 />
+                {targetKind === 'model' ? (
+                  <>
+                    <Select
+                      showSearch
+                      allowClear
+                      style={{ width: 240 }}
+                      placeholder="按模型过滤（已发布标准）"
+                      options={modelOptions}
+                      value={boundModelId}
+                      onChange={(v) => {
+                        setBoundModelId(v)
+                        setOnlyPublishedVersion(false)
+                        setPage(1)
+                      }}
+                      onSearch={(v) => setModelSearch(v)}
+                      filterOption={false}
+                      loading={publishedModelsQuery.isFetching}
+                    />
+                    <Checkbox
+                      checked={onlyPublishedVersion}
+                      disabled={!boundModelId}
+                      onChange={(e) => {
+                        setOnlyPublishedVersion(e.target.checked)
+                        setPage(1)
+                      }}
+                    >
+                      仅当前发布标准版本
+                    </Checkbox>
+                  </>
+                ) : null}
+                {targetKind === 'bundle' ? (
+                  <>
+                    <Select
+                      showSearch
+                      allowClear
+                      style={{ width: 240 }}
+                      placeholder="按套装模板过滤"
+                      options={bundleTemplateOptions}
+                      value={selectedBundleTemplateId}
+                      onChange={(v) => {
+                        setSelectedBundleTemplateId(v)
+                        setPage(1)
+                      }}
+                      onSearch={(v) => setBundleSearch(v)}
+                      filterOption={false}
+                      loading={bundleTemplatesQuery.isFetching}
+                    />
+                    <Select
+                      allowClear
+                      style={{ width: 200 }}
+                      placeholder="套装二级(preset)"
+                      options={bundlePresetOptions}
+                      value={selectedBundlePresetSelector}
+                      onChange={(v) => {
+                        setSelectedBundlePresetSelector(v)
+                        setPage(1)
+                      }}
+                      disabled={!selectedBundleTemplateId}
+                    />
+                  </>
+                ) : null}
                 <Checkbox
-                  checked={onlyPublishedVersion}
-                  disabled={!boundModelId}
+                  checked={forceOverride}
                   onChange={(e) => {
-                    setOnlyPublishedVersion(e.target.checked)
+                    setForceOverride(e.target.checked)
                     setPage(1)
                   }}
                 >
-                  仅当前发布标准版本
+                  强制覆盖
                 </Checkbox>
                 <Input
                   style={{ width: 220 }}

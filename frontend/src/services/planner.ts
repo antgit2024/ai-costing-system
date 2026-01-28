@@ -2090,10 +2090,15 @@ export const fetchSkuMaster = async (
     search?: string
     channel?: string
     match_status?: string
-    bound_state?: 'bound' | 'unbound'
+    target_kind?: 'model' | 'bundle' | 'any'
+    bound_state?: 'bound' | 'unbound' | 'all'
     bound_model_id?: string
     bound_model_code?: string
     bound_version_id?: string
+    bundle_bound_state?: 'bound' | 'unbound'
+    bundle_template_id?: string
+    bundle_template_code?: string
+    bundle_preset_selector?: string
     preparse_state?: 'parsed' | 'unparsed'
     spec_mismatch?: boolean
     include_terms?: string
@@ -2283,6 +2288,11 @@ export const bulkSaveSkuMasterSpecPreparse = async (payload: {
   search?: string
   channel?: string
   match_status?: string
+  target_kind?: 'model' | 'bundle' | 'any'
+  bundle_bound_state?: 'bound' | 'unbound'
+  bundle_template_id?: string
+  bundle_template_code?: string
+  bundle_preset_selector?: string
   include_terms?: string
   exclude_terms?: string
   match_scope?: string
@@ -2316,6 +2326,11 @@ export const previewSkuMasterSpecPreparse = async (payload: {
   search?: string
   channel?: string
   match_status?: string
+  target_kind?: 'model' | 'bundle' | 'any'
+  bundle_bound_state?: 'bound' | 'unbound'
+  bundle_template_id?: string
+  bundle_template_code?: string
+  bundle_preset_selector?: string
   include_terms?: string
   exclude_terms?: string
   match_scope?: string

@@ -357,6 +357,34 @@
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-28（规格解析支持“套装锚点筛选 + 强制覆盖 + 一键跑完覆盖 Z/B”）
+  - 现象：你反馈“在商品关联已绑定了几个指定型(Z-)套装编码，但在规格解析页看不见记录”。根因是 spec-matching 原先固定 `bound_state='bound'`（只看已绑定模型），导致“只绑套装未绑模型”的 SKU 被过滤。
+  - 本轮产物（后端）：
+    - `backend/src/planner/routers/sku_master.py` + `backend/src/planner/services/sku_master_service.py`
+      - `GET /api/planner/sku-master` 支持筛选参数：
+        - `target_kind`: `model|bundle|any`（any=模型绑定或套装绑定任一命中）
+        - `bundle_bound_state`: `bound|unbound`
+        - `bundle_template_id` / `bundle_template_code` / `bundle_preset_selector`
+      - `POST /api/planner/sku-master/spec-preparse/preview` 与 `/spec-preparse/bulk` 同步支持上述筛选（用于预览/一键跑完覆盖“只绑套装”的 SKU）
+    - `backend/src/planner/schemas.py`
+      - `SkuMasterSpecPreparseBulkRequest/PreviewRequest` 增加套装锚点与 `target_kind` 字段
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/SkuSpecMatchingPage.tsx`
+      - 右侧筛选栏新增：
+        - 目标类型：自动/标准模型/套装模块
+        - 套装模板下拉 + 二级 preset（仅在“套装模块”时显示）
+        - 强制覆盖（忽略相同 hash）用于重算已解析项
+      - 列表查询改为支持 `target_kind=any|model|bundle`，确保 Z/B“只绑套装”也可在本页可见并参与预览/一键跑完
+    - `frontend/src/services/planner.ts`
+      - `fetchSkuMaster`、`preview/bulk spec-preparse` 参数补齐：`target_kind` 与套装锚点筛选项
+  - 下一步：
+    - 若需要“按套装模板/二级 preset”做更强的跨页排除/勾选体验（类似 sku-master 的人工审核），可单开迭代；本轮先保证筛选与一键跑完覆盖链路正确。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-27（商品关联 UI 优化：目标下拉同一行 + 套装二级 preset 绑定）
   - 需求：人工审核的“模型类型下拉 + 模型/套装下拉”合并为同一行；套装绑定改为二级（先选模板，再选 `preset_selector`，第二级才是最终绑定目标）。
   - 本轮产物：

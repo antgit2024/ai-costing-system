@@ -3289,6 +3289,13 @@ class SkuMasterSpecPreparseBulkRequest(BaseModel):
     search: Optional[str] = None
     channel: Optional[str] = None
     match_status: Optional[str] = None
+    # target kind: model|bundle|any
+    target_kind: Optional[str] = None
+    # bundle anchor filters (from sku_master.metadata_json)
+    bundle_bound_state: Optional[str] = None
+    bundle_template_id: Optional[str] = None
+    bundle_template_code: Optional[str] = None
+    bundle_preset_selector: Optional[str] = None
     include_terms: Optional[str] = None
     exclude_terms: Optional[str] = None
     match_scope: Optional[str] = None
@@ -3348,6 +3355,11 @@ class SkuMasterSpecPreparsePreviewRequest(BaseModel):
     search: Optional[str] = None
     channel: Optional[str] = None
     match_status: Optional[str] = None
+    target_kind: Optional[str] = None
+    bundle_bound_state: Optional[str] = None
+    bundle_template_id: Optional[str] = None
+    bundle_template_code: Optional[str] = None
+    bundle_preset_selector: Optional[str] = None
     include_terms: Optional[str] = None
     exclude_terms: Optional[str] = None
     match_scope: Optional[str] = None

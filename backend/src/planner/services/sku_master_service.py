@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from openpyxl import load_workbook
 from openpyxl.utils.datetime import from_excel
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, joinedload
 
@@ -531,10 +531,15 @@ def list_sku_master(
     search: Optional[str],
     channel: Optional[str],
     match_status: Optional[str],
+    target_kind: Optional[str] = None,
     bound_state: Optional[str] = None,
     bound_model_id: Optional[str] = None,
     bound_model_code: Optional[str] = None,
     bound_version_id: Optional[str] = None,
+    bundle_bound_state: Optional[str] = None,
+    bundle_template_id: Optional[str] = None,
+    bundle_template_code: Optional[str] = None,
+    bundle_preset_selector: Optional[str] = None,
     spec_mismatch: Optional[bool] = None,
     preparse_state: Optional[str] = None,
     include_terms: Optional[str] = None,
@@ -555,8 +560,12 @@ def list_sku_master(
     page_size = max(min(int(page_size or 20), cap), 1)
     q = db.query(models.SkuMaster).filter(models.SkuMaster.is_archived.is_(False))
 
+    target_kind2 = (target_kind or "").strip().lower()
+    if target_kind2 not in ("", "any", "all", "model", "bundle"):
+        target_kind2 = ""
+
     # If filtering by bound model/version, default to "bound" unless caller explicitly requests otherwise.
-    if (bound_model_id or bound_model_code or bound_version_id) and bound_state not in ("bound", "unbound"):
+    if (bound_model_id or bound_model_code or bound_version_id) and bound_state not in ("bound", "unbound", "all"):
         bound_state = "bound"
     if search:
         s = f"%{search.strip()}%"
@@ -569,6 +578,31 @@ def list_sku_master(
         q = q.filter(models.SkuMaster.channel == channel)
     if match_status:
         q = q.filter(models.SkuMaster.match_status == match_status)
+
+    # Bundle-bound-state and bundle filters are based on sku_master.metadata_json (written by sku-master bind-by-bundle).
+    bt_id_expr = func.coalesce(models.SkuMaster.metadata_json["bundle_template_id"].as_string(), "")
+    bt_code_expr = func.coalesce(models.SkuMaster.metadata_json["bundle_template_code"].as_string(), "")
+    bp_sel_expr = func.coalesce(models.SkuMaster.metadata_json["bundle_preset_selector"].as_string(), "")
+
+    if bundle_bound_state:
+        bs = str(bundle_bound_state).strip().lower()
+        if bs in ("bound", "yes", "1", "true"):
+            q = q.filter(bt_id_expr != "")
+        elif bs in ("unbound", "none", "no", "0", "false"):
+            q = q.filter(bt_id_expr == "")
+
+    if bundle_template_id:
+        tid = str(bundle_template_id).strip()
+        if tid:
+            q = q.filter(bt_id_expr == tid)
+    if bundle_template_code:
+        tcode = str(bundle_template_code).strip()
+        if tcode:
+            q = q.filter(bt_code_expr == tcode)
+    if bundle_preset_selector:
+        sel = str(bundle_preset_selector).strip().upper()
+        if sel:
+            q = q.filter(func.upper(bp_sel_expr) == sel)
 
     excluded_list = list(set([str(x) for x in (excluded_sku_master_ids or []) if str(x).strip()]))
     if excluded_list:
@@ -616,6 +650,27 @@ def list_sku_master(
             q = q.filter(~subq.exists())
         else:
             q = q.filter(subq.exists())
+
+    # target_kind can further constrain results:
+    # - model: require active model binding (same check as bound_state=bound)
+    # - bundle: require bundle binding in metadata_json
+    if target_kind2 in ("model", "bundle", "any"):
+        # generic "has model binding" check (no joins) for large-scale filtering
+        subq2 = (
+            db.query(models.SkuModelVersionMapping.id)
+            .filter(
+                models.SkuModelVersionMapping.sku_code == models.SkuMaster.erp_sku_barcode,
+                models.SkuModelVersionMapping.is_active.is_(True),
+                models.SkuModelVersionMapping.is_archived.is_(False),
+            )
+        )
+        if target_kind2 == "bundle":
+            q = q.filter(bt_id_expr != "")
+        elif target_kind2 == "model":
+            q = q.filter(subq2.exists())
+        else:
+            # any: model-bound OR bundle-bound
+            q = q.filter(or_(subq2.exists(), bt_id_expr != ""))
 
     # preparse state filter (server-side; avoid empty pages)
     if preparse_state:
@@ -1015,6 +1070,11 @@ def bulk_save_spec_preparse(
     search: Optional[str],
     channel: Optional[str],
     match_status: Optional[str],
+    target_kind: Optional[str] = None,
+    bundle_bound_state: Optional[str] = None,
+    bundle_template_id: Optional[str] = None,
+    bundle_template_code: Optional[str] = None,
+    bundle_preset_selector: Optional[str] = None,
     include_terms: Optional[str],
     exclude_terms: Optional[str],
     match_scope: Optional[str],
@@ -1072,8 +1132,45 @@ def bulk_save_spec_preparse(
         if excluded_list:
             q = q.filter(~models.SkuMaster.id.in_(excluded_list))
 
-        # Bound-state + optional bound model/version filters (correlated EXISTS).
-        # This endpoint is for bound SKUs only.
+        # Decide target kind. If caller provides explicit anchor filters, infer kind.
+        kind2 = (target_kind or "").strip().lower()
+        if kind2 not in ("", "any", "all", "model", "bundle"):
+            kind2 = ""
+        if bound_model_id or bound_model_code or bound_version_id:
+            kind2 = "model"
+        if bundle_template_id or bundle_template_code or bundle_preset_selector:
+            kind2 = "bundle"
+        if kind2 in ("", "all"):
+            kind2 = "model"  # preserve old behavior for existing callers
+        if kind2 == "any":
+            # any: allow either model-bound or bundle-bound
+            kind2 = "any"
+
+        bt_id_expr = func.coalesce(models.SkuMaster.metadata_json["bundle_template_id"].as_string(), "")
+        bt_code_expr = func.coalesce(models.SkuMaster.metadata_json["bundle_template_code"].as_string(), "")
+        bp_sel_expr = func.coalesce(models.SkuMaster.metadata_json["bundle_preset_selector"].as_string(), "")
+
+        # Bundle filters
+        if bundle_bound_state:
+            bs = str(bundle_bound_state).strip().lower()
+            if bs in ("bound", "yes", "1", "true"):
+                q = q.filter(bt_id_expr != "")
+            elif bs in ("unbound", "none", "no", "0", "false"):
+                q = q.filter(bt_id_expr == "")
+        if bundle_template_id:
+            tid = str(bundle_template_id).strip()
+            if tid:
+                q = q.filter(bt_id_expr == tid)
+        if bundle_template_code:
+            tcode = str(bundle_template_code).strip()
+            if tcode:
+                q = q.filter(bt_code_expr == tcode)
+        if bundle_preset_selector:
+            sel = str(bundle_preset_selector).strip().upper()
+            if sel:
+                q = q.filter(func.upper(bp_sel_expr) == sel)
+
+        # Model binding EXISTS (optionally constrained to a specific model/version)
         if bound_model_id or bound_model_code or bound_version_id:
             subq = (
                 db.query(models.SkuModelVersionMapping.id)
@@ -1105,7 +1202,13 @@ def bulk_save_spec_preparse(
                     models.SkuModelVersionMapping.is_archived.is_(False),
                 )
             )
-        q = q.filter(subq.exists())
+
+        if kind2 == "bundle":
+            q = q.filter(bt_id_expr != "")
+        elif kind2 == "any":
+            q = q.filter(or_(subq.exists(), bt_id_expr != ""))
+        else:
+            q = q.filter(subq.exists())
 
         # preparse state filter (server-side)
         if preparse_state:
@@ -1162,15 +1265,31 @@ def bulk_save_spec_preparse(
     else:
         # Default mode: reuse `list_sku_master` ordering for UX (latest first),
         # while still avoiding expensive COUNT().
+        kind2 = (target_kind or "").strip().lower()
+        if kind2 not in ("", "any", "all", "model", "bundle"):
+            kind2 = ""
+        if bound_model_id or bound_model_code or bound_version_id:
+            kind2 = "model"
+        if bundle_template_id or bundle_template_code or bundle_preset_selector:
+            kind2 = "bundle"
+        if kind2 in ("", "all"):
+            kind2 = "model"
+
+        bound_state2 = "bound" if kind2 == "model" else "all"
         _total_unused, rows0 = list_sku_master(
             db,
             search=search,
             channel=channel,
             match_status=match_status,
-            bound_state="bound",
+            target_kind=target_kind,
+            bound_state=bound_state2,
             bound_model_id=bound_model_id,
             bound_model_code=bound_model_code,
             bound_version_id=bound_version_id,
+            bundle_bound_state=bundle_bound_state,
+            bundle_template_id=bundle_template_id,
+            bundle_template_code=bundle_template_code,
+            bundle_preset_selector=bundle_preset_selector,
             spec_mismatch=None,
             preparse_state=preparse_state,
             include_terms=include_terms,
@@ -1281,6 +1400,11 @@ def preview_spec_preparse(
     search: Optional[str],
     channel: Optional[str],
     match_status: Optional[str],
+    target_kind: Optional[str] = None,
+    bundle_bound_state: Optional[str] = None,
+    bundle_template_id: Optional[str] = None,
+    bundle_template_code: Optional[str] = None,
+    bundle_preset_selector: Optional[str] = None,
     include_terms: Optional[str],
     exclude_terms: Optional[str],
     match_scope: Optional[str],
@@ -1293,15 +1417,31 @@ def preview_spec_preparse(
     Preview parsed dimensions for bound SKUs, without persisting.
     """
     limit = max(min(int(limit or 200), 5000), 1)
+    kind2 = (target_kind or "").strip().lower()
+    if kind2 not in ("", "any", "all", "model", "bundle"):
+        kind2 = ""
+    if bound_model_id or bound_model_code or bound_version_id:
+        kind2 = "model"
+    if bundle_template_id or bundle_template_code or bundle_preset_selector:
+        kind2 = "bundle"
+    if kind2 in ("", "all"):
+        kind2 = "model"
+    bound_state2 = "bound" if kind2 == "model" else "all"
+
     _, rows0 = list_sku_master(
         db,
         search=search,
         channel=channel,
         match_status=match_status,
-        bound_state="bound",
+        target_kind=target_kind,
+        bound_state=bound_state2,
         bound_model_id=bound_model_id,
         bound_model_code=bound_model_code,
         bound_version_id=bound_version_id,
+        bundle_bound_state=bundle_bound_state,
+        bundle_template_id=bundle_template_id,
+        bundle_template_code=bundle_template_code,
+        bundle_preset_selector=bundle_preset_selector,
         spec_mismatch=None,
         preparse_state=preparse_state,
         include_terms=include_terms,

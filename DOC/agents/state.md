@@ -342,6 +342,21 @@
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-28（规格匹配工作台：锚点只读提示 + Z/B 推荐动作 + 跳转商品关联）
+  - 背景：你确认 spec-matching 作为“第一步：尺寸/规格解析”应保持解析底座，不在此承载模型/套装绑定的下拉入口；Z-（指定型）只需套装绑定，B-（解析型）需先绑定再用 TOKEN 分支。
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/SkuSpecMatchingPage.tsx`
+      - 左侧“单条人工审核”新增“锚点信息（只读）”：展示 `商家编码(shop_spec_code)`、`套装模板+二级preset`（若有）
+      - 自动识别 Z/B（基于 `shop_spec_code` 前缀），并给出推荐动作提示：
+        - Z：只需完成套装绑定；本页解析主要用于校验/排查
+        - B：先绑定套装模板+preset，再解析 TOKEN/尺寸用于后续 BOM 分支
+      - 提供按钮“去商品关联（sku-master）绑定/复核”，并自动带 `search` 预填（优先商家编码，其次条码）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-27（商品关联 UI 优化：目标下拉同一行 + 套装二级 preset 绑定）
   - 需求：人工审核的“模型类型下拉 + 模型/套装下拉”合并为同一行；套装绑定改为二级（先选模板，再选 `preset_selector`，第二级才是最终绑定目标）。
   - 本轮产物：

@@ -234,6 +234,32 @@ export default function SkuSpecMatchingPage() {
     onError: () => setSpecParsed(null),
   })
 
+  const activeAnchors = useMemo(() => {
+    const shopSpecCode = safeString((activeSku as any)?.shop_spec_code ?? (activeSku as any)?.metadata_json?.shop_spec_code).trim()
+    const bundleTemplateCode = safeString(
+      (activeSku as any)?.bundle_template_code ?? (activeSku as any)?.metadata_json?.bundle_template_code,
+    ).trim()
+    const bundlePresetSelector = safeString(
+      (activeSku as any)?.bundle_preset_selector ?? (activeSku as any)?.metadata_json?.bundle_preset_selector,
+    )
+      .trim()
+      .toUpperCase()
+
+    const erpSkuBarcode = safeString((activeSku as any)?.erp_sku_barcode).trim()
+    const mode =
+      shopSpecCode.toUpperCase().startsWith('Z-') ? 'Z' : shopSpecCode.toUpperCase().startsWith('B-') ? 'B' : undefined
+
+    return { shopSpecCode, bundleTemplateCode, bundlePresetSelector, erpSkuBarcode, mode }
+  }, [activeSku])
+
+  const skuMasterJumpUrl = useMemo(() => {
+    if (!activeSku) return ''
+    const q = activeAnchors.shopSpecCode || activeAnchors.erpSkuBarcode
+    if (!q) return '/costing/sku-master'
+    // 优先把用户带到“未绑定”视图，便于做绑定/复核；若已绑定也可手动切 TAB。
+    return `/costing/sku-master?tab=unbound&search=${encodeURIComponent(q)}`
+  }, [activeAnchors.erpSkuBarcode, activeAnchors.shopSpecCode, activeSku])
+
   const effectiveSpecText = useMemo(() => {
     const s = (specTextDraft || '').trim()
     if (s) return s
@@ -702,7 +728,8 @@ export default function SkuSpecMatchingPage() {
         规格匹配工作台（第一步：尺寸/规格解析）
       </Title>
       <Text type="secondary">
-        本页面仅展示<strong>已绑定模型</strong>的 SKU；解析优先使用“发货规格”，缺失时回退到“商品规格（网店）”。变体规则与词典先不启用，等你们跑完70%再上。
+        本页面用于把<strong>交易规格文本</strong>解析成<strong>尺寸(dims)/TOKEN(tokens)</strong>：解析优先使用“发货规格”，缺失时回退到“商品规格（网店）”。
+        建议先在<strong>商品关联（sku-master）</strong>完成锚点绑定：Z-（指定型）只需绑定套装编码；B-（解析型）先绑定编码再依赖 TOKEN 解析做分支。
       </Text>
       <div style={{ marginTop: 8 }}>
         <Button
@@ -820,6 +847,55 @@ export default function SkuSpecMatchingPage() {
                 <Alert type="info" showIcon message="请在右侧列表选择一条已绑定SKU，系统会自动解析尺寸。" />
               ) : (
                 <Space direction="vertical" style={{ width: '100%' }}>
+                  <Card size="small" title="锚点信息（只读）" style={{ marginBottom: 8 }}>
+                    <Space direction="vertical" style={{ width: '100%' }} size={8}>
+                      <Space wrap>
+                        <Tag color="purple">模式：{activeAnchors.mode ? `${activeAnchors.mode}-` : '未识别'}</Tag>
+                        {activeAnchors.shopSpecCode ? (
+                          <Tag color="geekblue">商家编码：{activeAnchors.shopSpecCode}</Tag>
+                        ) : (
+                          <Tag>商家编码：-</Tag>
+                        )}
+                      </Space>
+                      <Space wrap>
+                        {activeAnchors.bundleTemplateCode ? (
+                          <Tag color="purple">
+                            套装：{activeAnchors.bundleTemplateCode}
+                            {activeAnchors.bundlePresetSelector ? `-${activeAnchors.bundlePresetSelector}` : ''}
+                          </Tag>
+                        ) : (
+                          <Tag>套装：-</Tag>
+                        )}
+                        <Button
+                          size="small"
+                          type="link"
+                          disabled={!skuMasterJumpUrl}
+                          onClick={() => window.open(skuMasterJumpUrl, '_blank')}
+                        >
+                          去商品关联（sku-master）绑定/复核
+                        </Button>
+                      </Space>
+                      {activeAnchors.mode === 'Z' ? (
+                        <Alert
+                          type="success"
+                          showIcon
+                          message="Z-（指定型）：只需完成套装绑定即可；本页解析主要用于尺寸校验/排查，不依赖 TOKEN 做组件分支。"
+                        />
+                      ) : activeAnchors.mode === 'B' ? (
+                        <Alert
+                          type="info"
+                          showIcon
+                          message="B-（解析型）：先在 sku-master 绑定套装模板+二级 preset（锚点），再用本页解析 TOKEN/尺寸供后续 BOM 分支与对账。"
+                        />
+                      ) : (
+                        <Alert
+                          type="warning"
+                          showIcon
+                          message="未识别 Z/B：建议先在 sku-master 用“商家编码”完成模型/套装绑定；本页仍可解析尺寸/TOKEN 作为排查依据。"
+                        />
+                      )}
+                    </Space>
+                  </Card>
                   <Space wrap>
                     <Tag color="green">已绑定</Tag>
                     {activeSku.bound_model_code ? <Tag color="blue">{activeSku.bound_model_code}</Tag> : null}

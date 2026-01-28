@@ -318,6 +318,23 @@
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-28（SKU 主档“闪空/白屏”排障兜底：致命错误覆盖层 + ErrorBoundary）
+  - 现象：线上 `/costing/sku-master` 仍反馈“刷新后闪空”，且页面未出现我们新增的“状态/提示/红框错误提示”，更像是运行时崩溃导致 React 未能稳定挂载。
+  - 诊断要点：
+    - 线上静态资源与页面 HTML 均可 200 返回，但用户侧仍表现为空白，可能是运行时异常被吞掉/不易复现（浏览器扩展、环境差异、偶发 JS 错误等）。
+  - 修复（前端）：
+    - `frontend/src/main.tsx`
+      - 新增 `FatalErrorBoundary`：捕获 React 渲染错误并在页面直接显示 message/stack（避免“白屏无提示”）
+      - 新增 `installFatalOverlay()`：捕获 `window.error`/`unhandledrejection` 的第一条非 chunkload 类错误，并用覆盖层显示（即使 React 未挂载也能看到）
+      - 与原有 `installChunkLoadRecovery()` 配合：chunk/preload 类错误仍优先自动刷新恢复，覆盖层不干扰该路径
+  - 下一步：
+    - 若线上仍“闪空”，请直接截图页面覆盖层（或 ErrorBoundary）中的第一条错误 message/stack，用于定位真实根因（例如某字段为空导致渲染异常、第三方脚本冲突等）。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-27（商品关联 UI 优化：目标下拉同一行 + 套装二级 preset 绑定）
   - 需求：人工审核的“模型类型下拉 + 模型/套装下拉”合并为同一行；套装绑定改为二级（先选模板，再选 `preset_selector`，第二级才是最终绑定目标）。
   - 本轮产物：

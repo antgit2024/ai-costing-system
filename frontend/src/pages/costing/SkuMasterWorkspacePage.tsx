@@ -233,7 +233,15 @@ const SkuMasterWorkspacePage = () => {
       }),
     placeholderData: keepPreviousData,
     enabled: !autoCandidatesOnly, // 命中候选视图时不依赖服务端分页列表
+    retry: 0,
   })
+
+  const listQueryErrorText = useMemo(() => {
+    const e: any = listQuery.error
+    const detail = e?.response?.data?.detail
+    const msg = e?.message
+    return String(detail ?? msg ?? '').trim()
+  }, [listQuery.error])
 
   const items = autoCandidatesOnly
     ? autoPreviewCandidates.map((x) => ({
@@ -1544,6 +1552,15 @@ const SkuMasterWorkspacePage = () => {
                 showIcon
                 style={{ marginBottom: 8 }}
                 message="当前为“命中候选视图”：仅展示自动预览命中的候选记录；要看全部/未绑定/已绑定，请点击右上角“退出候选视图”。"
+              />
+            ) : null}
+            {!autoCandidatesOnly && listQuery.isError ? (
+              <Alert
+                type="error"
+                showIcon
+                style={{ marginBottom: 8 }}
+                message="列表加载失败"
+                description={listQueryErrorText || '未知错误（请打开控制台查看网络请求）'}
               />
             ) : null}
             <Tabs

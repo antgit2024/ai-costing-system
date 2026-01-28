@@ -343,6 +343,7 @@
       - UI：套装的“二级（preset）”下拉改为独占下一行，并加宽下拉面板（避免文字被截断）；若线上出现 405，会提示后端未部署套装绑定接口
       - 修复：页面刷新后“先有数据→几秒后闪空”的体验问题（URL 的 `search/tab` 预填改为初始化阶段生效，避免二次 setState 覆盖）
       - 展示口径：套装绑定展示改为短码（按 preset 模式自动显示 `Z-<code><selector>` 或 `B-<code><selector>`；例如 `Z-DB9EAC`）
+      - 可观测性：列表加载失败时显示错误 Alert（避免“空白=不知道发生了什么”）
   - 验收命令（必须，全部 0 退出码）：
     - Frontend：`npm -C frontend run build`
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`

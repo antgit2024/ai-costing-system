@@ -572,22 +572,64 @@ const SkuMasterWorkspacePage = () => {
 
   const bindMutation = useMutation({
     mutationFn: async () => {
+      const chunk = <T,>(arr: T[], size: number) => {
+        const out: T[][] = []
+        for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
+        return out
+      }
+
       if (targetKind === 'bundle') {
         if (!selectedBundleTemplateId) throw new Error('请选择套装模板')
         if (!selectedBundlePresetSelector) throw new Error('请选择套装二级（preset）')
-        return await bindSkuMastersByBundleTemplate({
-          template_id: selectedBundleTemplateId,
-          preset_selector: selectedBundlePresetSelector,
-          sku_master_ids: selectedRowKeys,
-          requested_by: requestedBy || undefined,
-        })
+        // 说明：plannerClient 默认 20s；勾选量大时容易前端超时。
+        // 这里按 200/批自动分批，避免单次请求过大。
+        const ids = [...selectedRowKeys]
+        const batches = chunk(ids, 200)
+        let totalSelected = 0
+        let bound = 0
+        let skipped = 0
+        const errors: any[] = []
+        for (const batch of batches) {
+          const res = await bindSkuMastersByBundleTemplate(
+            {
+              template_id: selectedBundleTemplateId,
+              preset_selector: selectedBundlePresetSelector,
+              sku_master_ids: batch,
+              requested_by: requestedBy || undefined,
+            },
+            { timeoutMs: 60_000 },
+          )
+          totalSelected += Number(res?.total_selected || 0)
+          bound += Number(res?.bound_count || 0)
+          skipped += Number(res?.skipped_already_bound || 0)
+          errors.push(...((res?.errors ?? []) as any[]))
+        }
+        return { total_selected: totalSelected, bound_count: bound, skipped_already_bound: skipped, errors }
       }
       if (!selectedModelId) throw new Error('请选择模型')
-      return await bindSkuMastersByModel({
-        model_id: selectedModelId,
-        sku_master_ids: selectedRowKeys,
-        requested_by: requestedBy || undefined,
-      })
+      {
+        const ids = [...selectedRowKeys]
+        const batches = chunk(ids, 200)
+        let totalSelected = 0
+        let bound = 0
+        let skipped = 0
+        const errors: any[] = []
+        for (const batch of batches) {
+          const res = await bindSkuMastersByModel(
+            {
+              model_id: selectedModelId,
+              sku_master_ids: batch,
+              requested_by: requestedBy || undefined,
+            },
+            { timeoutMs: 60_000 },
+          )
+          totalSelected += Number(res?.total_selected || 0)
+          bound += Number(res?.bound_count || 0)
+          skipped += Number(res?.skipped_already_bound || 0)
+          errors.push(...((res?.errors ?? []) as any[]))
+        }
+        return { total_selected: totalSelected, bound_count: bound, skipped_already_bound: skipped, errors }
+      }
     },
     onSuccess: async (res: any) => {
       message.success(
@@ -596,7 +638,15 @@ const SkuMasterWorkspacePage = () => {
       setSelectedRowKeys([])
       await queryClient.invalidateQueries({ queryKey: ['sku-master', 'list'] })
     },
-    onError: (e: any) => message.error(e?.message || '绑定失败'),
+    onError: (e: any) => {
+      const msg = String(e?.message ?? '')
+      const isTimeout = msg.toLowerCase().includes('timeout') || String(e?.code ?? '').toUpperCase() === 'ECONNABORTED'
+      if (isTimeout) {
+        message.error('绑定请求超时：后端可能仍在执行，请稍后点“刷新”确认是否已绑定（大批量建议用“一键跑完”）')
+        return
+      }
+      message.error(e?.message || '绑定失败')
+    },
   })
 
   // 人工审核：按筛选条件“隐式全选”（跨页）

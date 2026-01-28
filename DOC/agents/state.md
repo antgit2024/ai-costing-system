@@ -333,6 +333,19 @@
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-27（SKU 主档：人工勾选绑定超时修复，自动分批 + 超时提示）
+  - 现象：`/costing/sku-master` 中“人工审核→执行绑定（仅勾选）”在勾选量较大时出现前端超时，导致用户误以为“没绑定上”。
+  - 根因：`plannerClient` 默认 `timeout=20s`；该按钮路径未传入更长超时，也未做分批。
+  - 修复（前端）：
+    - `frontend/src/pages/costing/SkuMasterWorkspacePage.tsx`
+      - “仅勾选绑定”改为按 200/批自动分批调用（bundle/model 同样处理），单批超时提高到 60s
+      - 若仍遇到超时：提示“后端可能仍在执行，请稍后刷新确认（大批量建议用一键跑完）”
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-27（套装锚点贯穿：发货导入/计价/快照 + 销售分析可筛选）
   - 背景：你确认“后期大部分都会用套装模板关联”，且将要导入大批量数据；为避免未来按套装维度对账/排查时需要回头重算历史快照，本轮先做“锚点贯通（不做组件拆解）”。
   - 本轮产物（后端）：

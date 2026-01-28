@@ -996,15 +996,35 @@ def list_exceptions(
             if sku:
                 sku_to_model[str(sku)] = (str(mc) if mc else None, str(mn) if mn else None)
 
-    # spec parse snapshot dims (spec_hash -> width/height)
+    # Prefer sku-master preparse cache for “规格解析” (this matches what users operate in spec-matching).
+    sku_to_preparse: Dict[str, Tuple[bool, Optional[Decimal], Optional[Decimal]]] = {}
+    if sku_codes:
+        sms = (
+            db.query(models.SkuMaster)
+            .filter(
+                models.SkuMaster.is_archived.is_(False),
+                models.SkuMaster.erp_sku_barcode.in_(sku_codes),
+            )
+            .all()
+        )
+        for sm in sms:
+            sku = str(getattr(sm, "erp_sku_barcode", "") or "").strip()
+            if not sku:
+                continue
+            meta = getattr(sm, "metadata_json", None) or {}
+            if not isinstance(meta, dict):
+                meta = {}
+            parsed = bool(str(meta.get("preparse_spec_hash") or "").strip())
+            dims = meta.get("preparse_dimensions") if isinstance(meta.get("preparse_dimensions"), dict) else {}
+            w = _to_decimal(dims.get("width_cm")) if isinstance(dims, dict) else None
+            h = _to_decimal(dims.get("height_cm")) if isinstance(dims, dict) else None
+            sku_to_preparse[sku] = (parsed, w, h)
+
+    # Fallback: spec parse snapshot dims (spec_hash -> width/height) for old data
     spec_hashes = list({str(getattr(l, "spec_hash", "") or "").strip() for l in lines if getattr(l, "spec_hash", None)})
     spec_dims: Dict[str, Tuple[Optional[Decimal], Optional[Decimal]]] = {}
     if spec_hashes:
-        snaps = (
-            db.query(models.SpecParseSnapshot)
-            .filter(models.SpecParseSnapshot.spec_hash.in_(spec_hashes))
-            .all()
-        )
+        snaps = db.query(models.SpecParseSnapshot).filter(models.SpecParseSnapshot.spec_hash.in_(spec_hashes)).all()
         for s in snaps:
             dims = getattr(s, "dimensions_json", None) or {}
             w = _to_decimal(dims.get("width_cm")) if isinstance(dims, dict) else None
@@ -1026,14 +1046,21 @@ def list_exceptions(
         mc, mn = sku_to_model.get(sku, (None, None))
         exc.bound_model_code = mc
         exc.bound_model_name = mn
-        sh = str(getattr(line, "spec_hash", "") or "").strip()
-        if sh:
-            exc.spec_parsed = True
-            w, h = spec_dims.get(sh, (None, None))
+        # spec parse status/dims (prefer sku-master preparse)
+        if sku and sku in sku_to_preparse:
+            parsed, w, h = sku_to_preparse[sku]
+            exc.spec_parsed = bool(parsed)
             exc.spec_width_cm = w
             exc.spec_height_cm = h
         else:
-            exc.spec_parsed = False
+            sh = str(getattr(line, "spec_hash", "") or "").strip()
+            if sh and sh in spec_dims:
+                exc.spec_parsed = True
+                w, h = spec_dims.get(sh, (None, None))
+                exc.spec_width_cm = w
+                exc.spec_height_cm = h
+            else:
+                exc.spec_parsed = False
         exc.qty = getattr(line, "qty", None)
         exc.revenue_amount = getattr(line, "revenue_amount", None)
     return items

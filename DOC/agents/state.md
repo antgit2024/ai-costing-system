@@ -2934,3 +2934,19 @@
     - `frontend/src/components/layout/AppLayout.tsx`
     - `frontend/src/App.tsx`
   - 本轮验收命令（必须）：`npm -C frontend run build`
+
+- **本轮补强（发货作业中心 / 异常队列口径：已绑定/已解析不再误显示“未绑定/全已解析”）**：
+  - 最近校对（北京时间 GMT+8）：2026-01-28
+  - 背景：
+    - 运营在 sku-master 已完成绑定、spec-matching 已完成预解析，但作业中心“待处理（异常）”仍显示 `SKU_NOT_BOUND`/“未绑定”，且“规格解析”几乎全部显示“已解析”，造成口径混乱。
+    - 事实：异常队列的 `reason` 是**产生异常当时**的原因；即使后续绑定/补齐解析，异常仍需要一次“重试/生成快照”才能自动标记为已解决。
+  - 变更：
+    - 后端异常列表 enrichment：**规格解析优先读取 sku-master 的预解析缓存**（`preparse_spec_hash/preparse_dimensions`），仅在缺失时才回退到发货链路 `SpecParseSnapshot`。
+    - 前端原因展示：当异常原因为 `SKU_NOT_BOUND` 但当前已能读到绑定时，显示为 **“已绑定待重试”**；当原因为 `SPEC_EMPTY/SPEC_PARSE_FAILED` 但当前已能读到解析时，显示为 **“已补齐待重试”**，并提示点击“批量重试/处理所选”即可消除异常。
+  - 关联文件：
+    - `backend/src/planner/services/shipment_import_service.py`
+    - `frontend/src/pages/costing/shipment-ops/components/BatchWorkbench.tsx`
+  - 本轮验收命令（必须，均已通过）：
+    - `npm -C frontend run build`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`

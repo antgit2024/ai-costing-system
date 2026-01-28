@@ -367,10 +367,10 @@ export default function BatchWorkbench(props: { onOpenImport: () => void }) {
         key: 'spec_parse',
         width: 180,
         render: (_v, r: any) => {
-          const ok = r?.spec_parsed === true || !!safeString(r?.spec_hash).trim()
-          if (!ok) return <Tag>未解析</Tag>
           const w = safeString(r?.spec_width_cm).trim()
           const h = safeString(r?.spec_height_cm).trim()
+          const ok = r?.spec_parsed === true || (!!w && !!h)
+          if (!ok) return <Tag>未解析</Tag>
           if (w && h) return <Tag color="green">宽{w}×高{h}cm</Tag>
           return <Tag color="green">已解析</Tag>
         },
@@ -379,11 +379,31 @@ export default function BatchWorkbench(props: { onOpenImport: () => void }) {
         title: '原因',
         dataIndex: 'reason',
         width: 180,
-        render: (v, r: any) => (
-          <Tag color="red" title={safeString(r?.message) ? `详情：${safeString(r?.message)}` : undefined}>
-            {formatExceptionReason(v)}
-          </Tag>
-        ),
+        render: (v, r: any) => {
+          const reason = safeString(v).trim().toUpperCase()
+          const hasBoundNow = !!safeString(r?.bound_model_code).trim()
+          const hasSpecParsedNow = r?.spec_parsed === true
+          // Avoid misleading “未绑定/缺规格” when user has already fixed it in sku-master/spec-matching.
+          if (reason === 'SKU_NOT_BOUND' && hasBoundNow) {
+            return (
+              <Tag color="orange" title="已绑定但该异常仍未重新处理；请点“批量重试/处理所选”生成快照后会自动消失。">
+                已绑定待重试
+              </Tag>
+            )
+          }
+          if ((reason === 'SPEC_EMPTY' || reason === 'SPEC_PARSE_FAILED') && hasSpecParsedNow) {
+            return (
+              <Tag color="orange" title="规格解析已补齐，但该异常仍未重新处理；请点“批量重试/处理所选”生成快照后会自动消失。">
+                已补齐待重试
+              </Tag>
+            )
+          }
+          return (
+            <Tag color="red" title={safeString(r?.message) ? `详情：${safeString(r?.message)}` : undefined}>
+              {formatExceptionReason(v)}
+            </Tag>
+          )
+        },
       },
     ],
     [],

@@ -423,6 +423,21 @@
   - **验收命令**：
     - 前端：`npm -C frontend run build`
     - 后端：按 `DOC/agents/commands.md`（本仓库约定的三条 pytest：`test_profit_analytics_mvp.py` / `test_after_sales_import_mvp.py` / `test_shop_analytics_mvp.py`）
+
+- **2026-01-28（规格解析列表 UX：精简列 + 提升渲染性能）**
+  - **需求**：
+    - 列表“货品条码（系统）”去掉“去重绑”按钮（意义不大，且影响渲染）
+    - 去掉两列：“商品名称（网店）”、“商品编码（网店）”
+    - 评估“宽/高(ERP缓存)”：该列用于快速核对 ERP 维度缓存与预解析结果；暂时保留（后续如确认无用可再下线）
+    - 列表整体渲染偏慢，需优化
+  - **处理**：
+    - `frontend/src/pages/costing/SkuSpecMatchingPage.tsx`
+      - 条码列改为纯文本，不再渲染按钮
+      - 移除商品名称/编码两列
+      - `Table` 增加 `tableLayout="fixed"`，降低长文本导致的重排成本
+  - **验收命令**：
+    - 前端：`npm -C frontend run build`
+    - 后端：按 `DOC/agents/commands.md`
   - 验收命令（必须，全部 0 退出码）：
     - Frontend：`npm -C frontend run build`
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`

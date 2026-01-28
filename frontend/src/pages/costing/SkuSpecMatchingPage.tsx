@@ -755,23 +755,7 @@ export default function SkuSpecMatchingPage() {
         fixed: 'left',
         render: (v) => {
           const barcode = safeString(v).trim()
-          return (
-            <Space size={6}>
-              <Text style={{ fontFamily: 'monospace' }}>{barcode || '-'}</Text>
-              {barcode ? (
-                <Button
-                  size="small"
-                  type="link"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    window.open(`/costing/sku-master?tab=bound&search=${encodeURIComponent(barcode)}`, '_blank')
-                  }}
-                >
-                  去重绑
-                </Button>
-              ) : null}
-            </Space>
-          )
+          return <Text style={{ fontFamily: 'monospace' }}>{barcode || '-'}</Text>
         },
       },
       { title: '销售渠道', dataIndex: 'channel', width: 120, render: (v) => safeString(v) || '-' },
@@ -840,15 +824,6 @@ export default function SkuSpecMatchingPage() {
         },
       },
       { title: '标准版本', dataIndex: 'bound_version_label', width: 120, render: (v) => safeString(v) || '-' },
-      {
-        title: '商品名称（网店）',
-        dataIndex: 'product_name',
-        width: 260,
-        render: (v) => (
-          <div style={{ whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.2 }}>{safeString(v) || '-'}</div>
-        ),
-      },
-      { title: '商品编码（网店）', dataIndex: 'product_code', width: 140, render: (v) => safeString(v) || '-' },
       {
         title: '商品规格（网店）',
         dataIndex: 'spec_text',
@@ -1367,6 +1342,7 @@ export default function SkuSpecMatchingPage() {
             <Table
               rowKey="id"
               size="small"
+              tableLayout="fixed"
               loading={listQuery.isFetching}
               columns={columns}
               dataSource={tableRows}

@@ -19,6 +19,7 @@ import {
   Space,
   Switch,
   Table,
+  Tabs,
   Tag,
   Typography,
   message,
@@ -567,6 +568,7 @@ export default function BundleTemplatesPage() {
   const [editing, setEditing] = useState<any | null>(null)
   const [createdTokenHint, setCreatedTokenHint] = useState<string | null>(null)
   const [publishNote, setPublishNote] = useState<string>('')
+  const [drawerTab, setDrawerTab] = useState<'settings' | 'versions'>('settings')
 
   const [form] = Form.useForm()
   const [phrasePresets, setPhrasePresets] = useState<PhrasePresetRow[]>([])
@@ -1882,6 +1884,7 @@ export default function BundleTemplatesPage() {
   const openCreate = () => {
     setEditing(null)
     setCreatedTokenHint(null)
+    setDrawerTab('settings')
     form.setFieldsValue({ name: '', category: '', tags: [], shared_trigger_text: '' })
     setModelPoolVersionIds([])
     setPresetSelectedByIdx({})
@@ -1898,6 +1901,7 @@ export default function BundleTemplatesPage() {
   const openEdit = (row: any) => {
     setEditing(row)
     setCreatedTokenHint(null)
+    setDrawerTab('settings')
     const meta = row?.metadata ?? {}
     form.setFieldsValue({
       name: row?.name ?? '',
@@ -2275,6 +2279,39 @@ export default function BundleTemplatesPage() {
     mutationFn: async () => {
       if (!editing?.id) throw new Error('请先打开一个套装模板')
       return publishBundleTemplate(String(editing.id), { operator_id: 'system', note: publishNote || undefined })
+    },
+    onSuccess: (res: any) => {
+      qc.invalidateQueries({ queryKey: ['bundle-templates'] })
+      qc.invalidateQueries({ queryKey: ['bundle-template-versions', String(editing?.id ?? '')] })
+      const v = res?.version ?? {}
+      const vlabel = String(v?.version_label ?? '').trim()
+      setEditing((prev: any) =>
+        prev
+          ? {
+              ...prev,
+              published_version_id: String(v?.id ?? '').trim() || prev?.published_version_id,
+              published_version_label: vlabel || prev?.published_version_label,
+              published_at: String(v?.published_at ?? '').trim() || prev?.published_at,
+            }
+          : prev,
+      )
+      message.success(vlabel ? `已发布为新版本：${vlabel}` : '已发布为新版本')
+    },
+    onError: (e: any) => message.error(String(e?.response?.data?.detail ?? e?.message ?? e)),
+  })
+
+  const publishFromVersionMutation = useMutation({
+    mutationFn: async (vrow: any) => {
+      if (!editing?.id) throw new Error('请先打开一个套装模板')
+      const tid = String(editing.id)
+      const meta = (vrow?.metadata && typeof vrow.metadata === 'object') ? (vrow.metadata as any) : {}
+      const comps = Array.isArray(vrow?.components) ? vrow.components : []
+      await updateBundleTemplate(tid, {
+        name: String(editing?.name ?? '').trim() || undefined,
+        components: comps as any,
+        metadata: meta as any,
+      })
+      return publishBundleTemplate(tid, { operator_id: 'system', note: publishNote || undefined })
     },
     onSuccess: (res: any) => {
       qc.invalidateQueries({ queryKey: ['bundle-templates'] })
@@ -2941,6 +2978,7 @@ export default function BundleTemplatesPage() {
         onClose={() => {
           setDrawerOpen(false)
           setPublishNote('')
+          setDrawerTab('settings')
         }}
         width={1280}
         destroyOnClose={false}
@@ -2959,107 +2997,232 @@ export default function BundleTemplatesPage() {
         extra={
           <Space>
             <Button onClick={() => setDrawerOpen(false)}>关闭</Button>
-            {editing?.id ? (
-              <>
-                <Input
-                  placeholder="发布备注（可选）"
-                  value={publishNote}
-                  onChange={(e) => setPublishNote(e.target.value)}
-                  style={{ width: 220 }}
-                />
-                <Button
-                  type="primary"
-                  loading={publishMutation.isPending}
-                  onClick={() => {
-                    Modal.confirm({
-                      title: '发布为新版本？',
-                      content:
-                        '发布后会生成不可变更的版本快照，用于发货/快照/洞察口径稳定。后续改动请先保存草稿，再再次发布新版本。',
-                      okText: '确认发布',
-                      cancelText: '取消',
-                      onOk: async () => publishMutation.mutateAsync(),
-                    })
-                  }}
-                >
-                  发布为新版本
-                </Button>
-              </>
+            {drawerTab === 'settings' ? (
+              <Button type="primary" loading={saveMutation.isPending} onClick={() => saveMutation.mutate()}>
+                保存模板
+              </Button>
             ) : null}
-            <Button type="primary" loading={saveMutation.isPending} onClick={() => saveMutation.mutate()}>
-              保存模板
-            </Button>
           </Space>
         }
       >
-        <Space direction="vertical" style={{ width: '100%' }} size={12}>
-          {editing?.id ? (
-            <Alert
-              type="info"
-              showIcon
-              message="口径说明：只有“已发布版本”会用于 SKU 绑定 → 发货快照 → 洞察对账。"
-              description={`历史版本数：${
-                versionsQuery.isFetching ? '加载中…' : String((versionsQuery.data as any)?.total ?? 0)
-              }`}
-            />
-          ) : null}
-          {/* 降噪：不在编辑页重复提示“把短码放进交易规格” */}
+        <Tabs
+          activeKey={drawerTab}
+          onChange={(k) => setDrawerTab((k as any) || 'settings')}
+          items={[
+            {
+              key: 'versions',
+              label: '版本管理',
+              children: (
+                <Space direction="vertical" style={{ width: '100%' }} size={12}>
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="说明：发布版本=不可变更快照，用于 SKU 绑定 → 发货快照 → 洞察对账。"
+                    description="推荐流程：先在“套装设置”里保存草稿 → 再来这里发布为新版本；需要回滚/复用历史口径时，可在此“载入为草稿”再发布。"
+                  />
 
-          <Form layout="vertical" form={form}>
-            <Row gutter={12}>
-              <Col span={10}>
-                <Form.Item name="name" label="模板名称（可选）">
-                  <Input placeholder="例如：三件套（活动款）" />
-                </Form.Item>
-              </Col>
-              <Col span={7}>
-                <Form.Item name="category" label="分类（metadata.category）">
-                  <Input placeholder="例如：gift / packaging" />
-                </Form.Item>
-              </Col>
-              <Col span={7}>
-                <Form.Item name="tags" label="标签（metadata.tags）">
-                  <Select mode="tags" placeholder="例如：gift, 渠道A, 活动款" />
-                </Form.Item>
-              </Col>
-            </Row>
+                  <Card
+                    size="small"
+                    title="发布新版本"
+                    extra={
+                      <Space wrap>
+                        <Input
+                          placeholder="发布备注（可选）"
+                          value={publishNote}
+                          onChange={(e) => setPublishNote(e.target.value)}
+                          style={{ width: 260 }}
+                        />
+                        <Button
+                          type="primary"
+                          disabled={!editing?.id}
+                          loading={publishMutation.isPending}
+                          onClick={() => {
+                            Modal.confirm({
+                              title: '发布为新版本？',
+                              content:
+                                '发布后会生成不可变更的版本快照，用于发货/快照/洞察口径稳定。后续改动请先保存草稿，再再次发布新版本。',
+                              okText: '确认发布',
+                              cancelText: '取消',
+                              onOk: async () => publishMutation.mutateAsync(),
+                            })
+                          }}
+                        >
+                          发布为新版本
+                        </Button>
+                      </Space>
+                    }
+                  >
+                    <Space wrap>
+                      <Tag color={String((editing as any)?.published_version_label ?? '').trim() ? 'geekblue' : 'orange'}>
+                        当前发布：{String((editing as any)?.published_version_label ?? '').trim() || '无（未发布）'}
+                      </Tag>
+                      <Tag>
+                        历史版本：{versionsQuery.isFetching ? '加载中…' : String((versionsQuery.data as any)?.total ?? 0)}
+                      </Tag>
+                    </Space>
+                  </Card>
 
-            <Form.Item label="模型选择（缩小范围，多选）">
-              <Select
-                className="bt-model-pool-select"
-                mode="multiple"
-                showSearch
-                allowClear
-                placeholder="先选本模板可能用到的模型版本（用于缩小下方下拉范围）"
-                loading={versionPickerQuery.isLoading}
-                options={versionOptions as any}
-                value={modelPoolVersionIds}
-                onChange={(v) => setModelPoolVersionIds(Array.isArray(v) ? (v as any[]).map((x) => String(x)).filter(Boolean) : [])}
-              />
-            </Form.Item>
-          </Form>
-
-          {/* 已按运营心智收口：不再展示“全局字段映射/可变词列表”，避免误会与绕圈。 */}
-
-          <div style={{ display: 'flex', gap: 12, width: '100%', alignItems: 'stretch' }}>
-            {/* 左侧：属性列表 + 新建/复制/停用 */}
-            <Card
-              size="small"
-              style={{ flex: '0 0 380px', minWidth: 340 }}
-              title={
-                <Space size={8}>
-                  <Text strong>属性列表</Text>
-                  <Tag>{phrasePresets.length}</Tag>
+                  <Card size="small" title="历史版本列表">
+                    <Table
+                      rowKey="id"
+                      size="small"
+                      loading={versionsQuery.isFetching}
+                      pagination={false}
+                      dataSource={Array.isArray((versionsQuery.data as any)?.items) ? ((versionsQuery.data as any).items as any[]) : []}
+                      columns={[
+                        { title: '版本', dataIndex: 'version_label', width: 140, render: (v: any) => String(v ?? '').trim() || '-' },
+                        {
+                          title: '发布时间',
+                          dataIndex: 'published_at',
+                          width: 140,
+                          render: (v: any) => {
+                            const s = String(v ?? '').trim()
+                            if (!s) return '-'
+                            const d = s.includes('T') ? s.split('T')[0] : s.split(' ')[0]
+                            return d || s
+                          },
+                        },
+                        { title: '发布人', dataIndex: 'published_by', width: 120, render: (v: any) => String(v ?? '').trim() || '-' },
+                        {
+                          title: '操作',
+                          width: 320,
+                          render: (_: any, r: any) => (
+                            <Space wrap>
+                              <Button
+                                size="small"
+                                disabled={!editing?.id}
+                                onClick={() => {
+                                  // Load snapshot into current editor state (draft). User still needs to click “保存模板”.
+                                  const row2 = {
+                                    ...(editing ?? {}),
+                                    name: (editing as any)?.name ?? (editing as any)?.template_name ?? '',
+                                    metadata: (r?.metadata && typeof r.metadata === 'object') ? r.metadata : {},
+                                    components: Array.isArray(r?.components) ? r.components : [],
+                                  }
+                                  openEdit(row2)
+                                  message.success('已载入该版本为当前草稿（请在“套装设置”里保存模板）')
+                                }}
+                              >
+                                载入为草稿
+                              </Button>
+                              <Button
+                                size="small"
+                                type="primary"
+                                disabled={!editing?.id}
+                                loading={publishFromVersionMutation.isPending}
+                                onClick={() => {
+                                  Modal.confirm({
+                                    title: '基于该历史版本发布新版本？',
+                                    content:
+                                      '系统将先把该历史版本内容写回为当前草稿，然后立即发布为一个新的“已发布版本”。用于回滚/复用历史口径。',
+                                    okText: '确认发布',
+                                    cancelText: '取消',
+                                    onOk: async () => publishFromVersionMutation.mutateAsync(r),
+                                  })
+                                }}
+                              >
+                                复制发布
+                              </Button>
+                              <Button
+                                size="small"
+                                onClick={() => {
+                                  Modal.info({
+                                    title: `版本详情：${String(r?.version_label ?? '').trim() || r?.id}`,
+                                    width: 980,
+                                    content: (
+                                      <pre style={{ whiteSpace: 'pre-wrap', margin: 0 }}>
+                                        {JSON.stringify(r ?? {}, null, 2)}
+                                      </pre>
+                                    ),
+                                  })
+                                }}
+                              >
+                                查看JSON
+                              </Button>
+                            </Space>
+                          ),
+                        },
+                      ]}
+                    />
+                  </Card>
                 </Space>
-              }
-              extra={
-                <Space size={8}>
-                  <Button size="small" type="dashed" onClick={addPhrasePreset}>
-                    新建
-            </Button>
-                </Space>
-              }
-              bodyStyle={{ padding: 8 }}
-            >
+              ),
+            },
+            {
+              key: 'settings',
+              label: '套装设置',
+              children: (
+                <Space direction="vertical" style={{ width: '100%' }} size={12}>
+                  {editing?.id ? (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      message="提示：这里的修改是“草稿”。只有在“版本管理”里发布为新版本后，才会用于 SKU 绑定/发货快照/洞察对账。"
+                      description={`当前发布：${String((editing as any)?.published_version_label ?? '').trim() || '无（未发布）'}`}
+                    />
+                  ) : null}
+                  {/* 降噪：不在编辑页重复提示“把短码放进交易规格” */}
+
+                  <Form layout="vertical" form={form}>
+                    <Row gutter={12}>
+                      <Col span={10}>
+                        <Form.Item name="name" label="模板名称（可选）">
+                          <Input placeholder="例如：三件套（活动款）" />
+                        </Form.Item>
+                      </Col>
+                      <Col span={7}>
+                        <Form.Item name="category" label="分类（metadata.category）">
+                          <Input placeholder="例如：gift / packaging" />
+                        </Form.Item>
+                      </Col>
+                      <Col span={7}>
+                        <Form.Item name="tags" label="标签（metadata.tags）">
+                          <Select mode="tags" placeholder="例如：gift, 渠道A, 活动款" />
+                        </Form.Item>
+                      </Col>
+                    </Row>
+
+                    <Form.Item label="模型选择（缩小范围，多选）">
+                      <Select
+                        className="bt-model-pool-select"
+                        mode="multiple"
+                        showSearch
+                        allowClear
+                        placeholder="先选本模板可能用到的模型版本（用于缩小下方下拉范围）"
+                        loading={versionPickerQuery.isLoading}
+                        options={versionOptions as any}
+                        value={modelPoolVersionIds}
+                        onChange={(v) =>
+                          setModelPoolVersionIds(
+                            Array.isArray(v) ? (v as any[]).map((x) => String(x)).filter(Boolean) : [],
+                          )
+                        }
+                      />
+                    </Form.Item>
+                  </Form>
+
+                  {/* 已按运营心智收口：不再展示“全局字段映射/可变词列表”，避免误会与绕圈。 */}
+
+                  <div style={{ display: 'flex', gap: 12, width: '100%', alignItems: 'stretch' }}>
+                    {/* 左侧：属性列表 + 新建/复制/停用 */}
+                    <Card
+                      size="small"
+                      style={{ flex: '0 0 380px', minWidth: 340 }}
+                      title={
+                        <Space size={8}>
+                          <Text strong>属性列表</Text>
+                          <Tag>{phrasePresets.length}</Tag>
+                        </Space>
+                      }
+                      extra={
+                        <Space size={8}>
+                          <Button size="small" type="dashed" onClick={addPhrasePreset}>
+                            新建
+                          </Button>
+                        </Space>
+                      }
+                      bodyStyle={{ padding: 8 }}
+                    >
               <style>{`
                 /* BundleTemplatesPage: phrase card list micro-UX */
                 .bt-phrase-card-icon-btn.ant-btn {
@@ -4061,6 +4224,10 @@ export default function BundleTemplatesPage() {
             </Form.Item>
           </Form>
         </Space>
+              ),
+            },
+          ]}
+        />
       </Drawer>
     </div>
   )

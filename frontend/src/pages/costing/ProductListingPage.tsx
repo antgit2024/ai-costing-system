@@ -250,6 +250,26 @@ const toBundleTokenDash = (code: string, selector?: string | null, prefix: 'B' |
   return `${prefix}-${c}`
 }
 
+// Bundle test helper:
+// In the "套装测试" tab, operators sometimes paste the "属性规格词/公式" output like:
+//   B-XXXXAA[{}{毛球}][{黄金绒}{雪尼尔}]0*0*0
+// Those bracket/brace fragments are NOT customer-facing transaction spec_text, but a template/debug DSL.
+// Under strict policy, we must not let them participate in token parsing/matching.
+const sanitizeBundleTestExtraSpecText = (input: string): { text: string; hadDslFragments: boolean } => {
+  const raw = String(input ?? '')
+  const hadDslFragments = /[\[\]\{\}]/.test(raw) || /\b0\*0\*0\b/.test(raw)
+  let t = raw
+  // Remove [] groups like [{}{毛球}] / [{黄金绒}{雪尼尔}]
+  t = t.replace(/\[[^\]]*]/g, ' ')
+  // Remove {} groups (defensive; may remain if nested or partial)
+  t = t.replace(/\{[^}]*}/g, ' ')
+  // Remove the common "dims triple" placeholder in DSL (e.g. 0*0*0)
+  t = t.replace(/\b0\*0\*0\b/g, ' ')
+  // Collapse whitespace
+  t = t.replace(/\s+/g, ' ').trim()
+  return { text: t, hadDslFragments }
+}
+
 const extractTokensForVariant = (v: any): string[] => {
   const cond = (v?.conditions ?? {}) as any
   const anyTokens = Array.isArray(cond?.spec_contains_any) ? cond.spec_contains_any : []
@@ -590,6 +610,8 @@ export default function ProductListingPage() {
   const [bundleDebugRaw, setBundleDebugRaw] = useState<any | null>(null)
   const [lastError, setLastError] = useState<string | null>(null)
   const [bundleDebugMode, setBundleDebugMode] = useState(true)
+  const [bundleLastRequestSpecText, setBundleLastRequestSpecText] = useState<string | null>(null)
+  const [bundleDslStrippedHint, setBundleDslStrippedHint] = useState<string | null>(null)
 
   const [salesDraft, setSalesDraft] = useState<SalesPricingDraft>({
     channel: 'tmall',
@@ -1054,6 +1076,8 @@ export default function ProductListingPage() {
       setLastError(null)
       setBundleComponentsDebug(null)
       setBundleDebugRaw(null)
+      setBundleLastRequestSpecText(null)
+      setBundleDslStrippedHint(null)
       const code = String(effectiveBundleCode ?? '').trim()
       if (!code) throw new Error('请先选择套装，或在输入框中包含 B-XXXXAA / B-CODE-AA / B:CODE(:AA)')
       // UI 已选择套装编码：这里允许用户在输入里直接写 B:CODE:A，
@@ -1075,19 +1099,26 @@ export default function ProductListingPage() {
           )
           ?.[3]?.toUpperCase() ??
         ''
-      const extra = String(bundleDraft.spec_text ?? '')
+      const extraRaw = String(bundleDraft.spec_text ?? '')
         .replace(/(?:BUNDLE:|B:|Z:)[A-Z0-9]{4,16}/gi, '')
         // Remove legacy and new short tokens
         .replace(/\b(?:B|Z)-[A-Z0-9]{4,16}(?:-[A-Za-z]{1,2})?\b/gi, '')
         .replace(/\b(?:B|Z)-[A-Z0-9]{4}[A-Za-z]{2}\b/gi, '')
         .trim()
+      const extraSan = sanitizeBundleTestExtraSpecText(extraRaw)
       const sel =
         String(bundleDraft.bundle_selector ?? '').trim().toUpperCase() ||
         inputSelector ||
         String(bundleTokenFromBundleInput.selector ?? '').trim().toUpperCase()
       const token = toBundleTokenDash(code, sel && (sel.length === 1 || sel.length === 2) ? sel : null, selectedBundlePresetPrefix)
       // 不强制使用“；”分隔，直接拼接 (B:CODE[:A]) 即可
-      const spec_text = extra ? `${extra}(${token})` : `${token}`
+      const spec_text = extraSan.text ? `${extraSan.text}(${token})` : `${token}`
+      setBundleLastRequestSpecText(spec_text)
+      if (extraSan.hadDslFragments && extraRaw) {
+        setBundleDslStrippedHint(
+          `检测到“属性规格词/公式”片段（[]/{} 或 0*0*0），已自动忽略，仅按对客短语解析：${extraSan.text || '(空)'}`,
+        )
+      }
       if (bundleDebugMode) {
         const dbg = await generateBomBySpecDebug({
         spec_text,
@@ -2770,6 +2801,8 @@ export default function ProductListingPage() {
                     setParsed(null)
                     setBom(null)
                     setLastError(null)
+                    setBundleLastRequestSpecText(null)
+                    setBundleDslStrippedHint(null)
                   }}
                 >
                   清空结果
@@ -2997,6 +3030,38 @@ export default function ProductListingPage() {
               <Tabs
                 className="product-listing-tabs product-listing-tabs--right"
                 items={[
+                ...(mode === 'multi'
+                  ? ([
+                      {
+                        key: 'bundle_request',
+                        label: '请求/输入',
+                        children: (
+                          <Space direction="vertical" style={{ width: '100%' }} size={10}>
+                            {bundleDslStrippedHint ? (
+                              <Alert type="warning" showIcon message="已自动忽略“属性规格词/公式”片段" description={bundleDslStrippedHint} />
+                            ) : (
+                              <Alert
+                                type="info"
+                                showIcon
+                                message="这里展示“实际请求给后端的 spec_text”"
+                                description="右侧诊断/物料命中均以该 spec_text 为准。若你粘贴了带 []/{} 的属性规格词，会被自动剥离，只保留对客短语。"
+                              />
+                            )}
+                            <div>
+                              <Text strong>本次请求 spec_text：</Text>
+                              {bundleLastRequestSpecText ? (
+                                <pre style={{ whiteSpace: 'pre-wrap', margin: '8px 0 0 0' }}>
+                                  {bundleLastRequestSpecText}
+                                </pre>
+                              ) : (
+                                <Text type="secondary">暂无（先点左侧“套装：预演 BOM”）</Text>
+                              )}
+                            </div>
+                          </Space>
+                        ),
+                      },
+                    ] as any)
+                  : []),
                 ...(mode === 'single'
                   ? ([
                       {

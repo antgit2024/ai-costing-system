@@ -2822,3 +2822,12 @@
     - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
     - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_bundle_as_model.py -q`
     - `npm -C frontend run build`
+
+- **本轮补强（Frontend / 套装测试台：展示“实际请求 spec_text” + 自动剥离属性规格词 DSL）**：
+  - 最近校对（北京时间 GMT+8）：2026-01-28
+  - 背景：运营在 `/costing/product-listing`（套装测试）里粘贴“属性规格词/公式”（含 `[]/{}`/`0*0*0`），导致右侧诊断出现 `毛球/雪尼尔` 等 token，看起来像“解析没生效/口径不一致”。
+  - 变更：
+    - 新增“请求/输入”Tab：**展示本次实际请求给后端的 `spec_text`**，诊断口径一眼可核对；
+    - 对套装测试输入做 sanitize：自动剥离 `[]/{}` 与 `0*0*0` 等 DSL 片段，仅保留“对客短语/自然语言规格”，并在 UI 以 Warning 提示已剥离。
+  - 关联文件：`frontend/src/pages/costing/ProductListingPage.tsx`
+  - 本轮验收命令（必须）：`npm -C frontend run build`

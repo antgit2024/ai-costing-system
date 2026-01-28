@@ -27,9 +27,30 @@ def _serialize(t) -> schemas.BundleTemplateRead:
         components=[schemas.BundleTemplateComponent(**x) for x in (t.components_json or [])],
         metadata=meta,
         shared_trigger_text=str(meta.get("shared_trigger_text") or "").strip() or None,
+        published_version_id=str(meta.get("published_version_id") or "").strip() or None,
+        published_version_label=str(meta.get("published_version_label") or "").strip() or None,
+        published_at=str(meta.get("published_at") or "").strip() or None,
         is_archived=bool(t.is_archived),
         created_at=getattr(t, "created_at", None),
         updated_at=getattr(t, "updated_at", None),
+    )
+
+
+def _serialize_version(v) -> schemas.BundleTemplateVersionRead:
+    meta = v.metadata_json or {}
+    return schemas.BundleTemplateVersionRead(
+        id=v.id,
+        template_id=v.template_id,
+        template_code=v.template_code,
+        template_name=v.template_name,
+        version_status=v.version_status,
+        version_label=v.version_label,
+        published_at=getattr(v, "published_at", None),
+        published_by=getattr(v, "published_by", None),
+        components=[schemas.BundleTemplateComponent(**x) for x in (v.components_json or [])],
+        metadata=meta,
+        is_archived=bool(v.is_archived),
+        created_at=getattr(v, "created_at", None),
     )
 
 
@@ -147,5 +168,32 @@ def archive_bundle_template(template_id: str, db: Session = Depends(get_db)):
         bundle_template_service.archive_template(db, template_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/{template_id}/versions", response_model=schemas.BundleTemplateVersionsResponse, status_code=status.HTTP_200_OK)
+def list_bundle_template_versions(template_id: str, db: Session = Depends(get_db)) -> schemas.BundleTemplateVersionsResponse:
+    t = bundle_template_service.get_template(db, template_id, include_archived=True)
+    if not t:
+        raise HTTPException(status_code=404, detail="套装模板不存在")
+    rows = bundle_template_service.list_versions(db, template_id=template_id, include_archived=True)
+    return schemas.BundleTemplateVersionsResponse(total=len(rows), items=[_serialize_version(x) for x in rows])
+
+
+@router.post("/{template_id}/publish", response_model=schemas.BundleTemplatePublishResponse, status_code=status.HTTP_200_OK)
+def publish_bundle_template(
+    template_id: str,
+    payload: schemas.BundleTemplatePublishRequest,
+    db: Session = Depends(get_db),
+) -> schemas.BundleTemplatePublishResponse:
+    try:
+        v = bundle_template_service.publish_template(
+            db,
+            template_id=template_id,
+            published_by=payload.operator_id,
+            note=payload.note,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return schemas.BundleTemplatePublishResponse(version=_serialize_version(v))
 
 

@@ -777,6 +777,34 @@ class BundleTemplate(Base, TimestampMixin, SoftDeleteMixin):
     metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict, nullable=False)
 
 
+class BundleTemplateVersion(Base, TimestampMixin, SoftDeleteMixin):
+    """
+    Immutable published snapshot for a bundle template.
+
+    Why:
+    - Bundle template is edited frequently; shipment/costing/analytics must be reproducible.
+    - Publishing creates a frozen version row; bindings can reference a specific version_id.
+    """
+
+    __tablename__ = "bundle_template_versions"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    template_id: Mapped[str] = Column(
+        String(36), ForeignKey("bundle_templates.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # Snapshot basic identity (keep stable even if base template is renamed later)
+    template_code: Mapped[str] = Column(String(32), nullable=False, index=True)
+    template_name: Mapped[str | None] = Column(String(128))
+    version_status: Mapped[str] = Column(String(32), nullable=False, default="published")
+    version_label: Mapped[str | None] = Column(String(64))
+    published_at: Mapped[datetime | None] = Column(DateTime)
+    published_by: Mapped[str | None] = Column(String(64))
+    components_json: Mapped[List[Dict[str, Any]]] = Column("components", JSON, default=list, nullable=False)
+    metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict, nullable=False)
+
+    template: Mapped["BundleTemplate"] = relationship("BundleTemplate")
+
+
 class ShippingRule(Base, TimestampMixin, SoftDeleteMixin):
     """
     Shipping / conditional material rules.

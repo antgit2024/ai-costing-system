@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import secrets
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from sqlalchemy.orm import Session
@@ -170,5 +171,92 @@ def clone_template(db: Session, *, template_id: str, name: Optional[str] = None)
         components=list(src.components_json or []),
         metadata=dict(src.metadata_json or {}),
     )
+
+
+def list_versions(
+    db: Session,
+    *,
+    template_id: str,
+    include_archived: bool = False,
+) -> Sequence[models.BundleTemplateVersion]:
+    tid = str(template_id or "").strip()
+    if not tid:
+        return []
+    q = db.query(models.BundleTemplateVersion).filter(models.BundleTemplateVersion.template_id == tid)
+    if not include_archived:
+        q = q.filter(models.BundleTemplateVersion.is_archived.is_(False))
+    # SQLite doesn't support NULLS LAST; use (published_at is None) trick for portability
+    return (
+        q.order_by(
+            models.BundleTemplateVersion.published_at.is_(None).asc(),
+            models.BundleTemplateVersion.published_at.desc(),
+            models.BundleTemplateVersion.created_at.desc(),
+        )
+        .all()
+    )
+
+
+def get_latest_published_version(db: Session, *, template_id: str) -> Optional[models.BundleTemplateVersion]:
+    rows = list_versions(db, template_id=template_id, include_archived=False)
+    for r in rows:
+        if (r.version_status or "") == "published":
+            return r
+    return None
+
+
+def publish_template(
+    db: Session,
+    *,
+    template_id: str,
+    published_by: Optional[str] = None,
+    note: Optional[str] = None,
+) -> models.BundleTemplateVersion:
+    """
+    Freeze current bundle template definition into an immutable published version row.
+    """
+    t = get_template(db, template_id, include_archived=True)
+    if not t:
+        raise ValueError("套装模板不存在")
+    if getattr(t, "is_archived", False):
+        raise ValueError("套装模板已归档，无法发布")
+
+    now = datetime.now(timezone.utc)
+    # Generate a readable version label (per-template sequence)
+    existing_count = (
+        db.query(models.BundleTemplateVersion)
+        .filter(models.BundleTemplateVersion.template_id == t.id)
+        .count()
+    )
+    vlabel = f"{now.strftime('%Y%m%d')}-{existing_count + 1:02d}"
+    meta = dict(t.metadata_json or {})
+    if note:
+        meta.setdefault("publish_note", str(note))
+
+    v = models.BundleTemplateVersion(
+        template_id=t.id,
+        template_code=str(t.code or "").strip().upper(),
+        template_name=t.name,
+        version_status="published",
+        version_label=vlabel,
+        published_at=now,
+        published_by=published_by,
+        components_json=list(t.components_json or []),
+        metadata_json=meta,
+    )
+    db.add(v)
+    db.flush()
+
+    # Light pointer for convenience (do NOT rely on it for integrity)
+    meta_t = dict(t.metadata_json or {})
+    meta_t["published_version_id"] = v.id
+    meta_t["published_version_label"] = vlabel
+    meta_t["published_at"] = now.isoformat()
+    meta_t["published_by"] = published_by
+    t.metadata_json = meta_t
+
+    db.add(t)
+    db.commit()
+    db.refresh(v)
+    return v
 
 

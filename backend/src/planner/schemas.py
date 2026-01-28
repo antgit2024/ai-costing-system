@@ -2202,9 +2202,42 @@ class BundleTemplateRead(BaseModel):
     components: List[BundleTemplateComponent] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
     shared_trigger_text: Optional[str] = None
+    # Published pointer (best-effort, stored in metadata; used for UI hints)
+    published_version_id: Optional[str] = None
+    published_version_label: Optional[str] = None
+    published_at: Optional[str] = None
     is_archived: bool = False
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+
+class BundleTemplateVersionRead(BaseModel):
+    id: str
+    template_id: str
+    template_code: str
+    template_name: Optional[str] = None
+    version_status: str = "published"
+    version_label: Optional[str] = None
+    published_at: Optional[datetime] = None
+    published_by: Optional[str] = None
+    components: List[BundleTemplateComponent] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    is_archived: bool = False
+    created_at: Optional[datetime] = None
+
+
+class BundleTemplatePublishRequest(BaseModel):
+    operator_id: Optional[str] = Field("system", max_length=64)
+    note: Optional[str] = Field(None, max_length=256)
+
+
+class BundleTemplatePublishResponse(BaseModel):
+    version: BundleTemplateVersionRead
+
+
+class BundleTemplateVersionsResponse(BaseModel):
+    total: int
+    items: List[BundleTemplateVersionRead] = Field(default_factory=list)
 
 
 class BundleTemplateUpdateRequest(BaseModel):
@@ -3186,6 +3219,10 @@ class SkuMasterRead(BaseModel):
     bundle_template_code: Optional[str] = None
     # 套装模板二级（phrase preset selector，如 AA/AB/...；第二级才是最终绑定目标）
     bundle_preset_selector: Optional[str] = None
+    # 套装模板发布版本（口径稳定：发布版本 → 套装模型版本）
+    bundle_template_version_id: Optional[str] = None
+    bundle_template_version_label: Optional[str] = None
+    bundle_model_version_id: Optional[str] = None
     channel: Optional[str] = None
     product_name: Optional[str] = None
     product_code: Optional[str] = None

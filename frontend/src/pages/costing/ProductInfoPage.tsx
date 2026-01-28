@@ -1,4 +1,5 @@
-import { Alert, Card, Col, Input, Row, Select, Space, Table, Tag, Typography } from 'antd'
+import { Card, Col, Input, Row, Select, Space, Table, Tag, Tooltip, Typography } from 'antd'
+import InfoCircleOutlined from '@ant-design/icons/lib/icons/InfoCircleOutlined'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { useEffect, useMemo, useState } from 'react'
@@ -223,7 +224,7 @@ export default function ProductInfoPage() {
         fixed: 'left',
         render: (v) => <Text style={{ fontFamily: 'monospace' }}>{safeString(v).trim() || '-'}</Text>,
       },
-      { title: '销售渠道', dataIndex: 'channel', width: 120, render: (v) => safeString(v) || '-' },
+      { title: '店铺', dataIndex: 'channel', width: 120, render: (v) => safeString(v) || '-' },
       { title: '商家编码', dataIndex: 'shop_spec_code', width: 160, render: (v) => safeString(v) || '-' },
       {
         title: '已绑定目标',
@@ -329,15 +330,27 @@ export default function ProductInfoPage() {
     <div style={{ padding: 16 }}>
       <Space direction="vertical" size={12} style={{ width: '100%' }}>
         <div>
-          <Title level={4} style={{ margin: 0 }}>
-            商品信息（只读）
-          </Title>
-          <Text type="secondary">面向运营查看：商品基本信息 + 模型/套装关联 + 规格解析/TOKEN 结果。绑定与批量作业请到“自动化/作业中心”。</Text>
+          <Space align="center" size={8}>
+            <Title level={4} style={{ margin: 0 }}>
+              商品信息（只读）
+            </Title>
+            <Tooltip
+              title={
+                <div style={{ maxWidth: 520 }}>
+                  <div>口径：解析结果以“用于解析的规格（发货规格优先，缺省回退网店规格）”与预解析缓存为准。</div>
+                  <div>筛选：二级 selector 仅用于套装筛选（不改变解析口径）。</div>
+                  <div>操作入口：绑定与批量作业在“自动化/作业中心”。</div>
+                </div>
+              }
+            >
+              <InfoCircleOutlined style={{ color: '#999' }} />
+            </Tooltip>
+          </Space>
         </div>
 
         <Card size="small">
           <Row gutter={[12, 12]}>
-            <Col xs={24} lg={7}>
+            <Col xs={24} lg={6}>
               <Input.Search
                 allowClear
                 placeholder="搜索：条码/商家编码/规格/商品名"
@@ -346,10 +359,10 @@ export default function ProductInfoPage() {
                 onSearch={() => setPage(1)}
               />
             </Col>
-            <Col xs={24} lg={4}>
+            <Col xs={24} lg={3}>
               <Select
                 allowClear
-                placeholder="渠道"
+                placeholder="店铺"
                 value={channel}
                 onChange={(v) => {
                   setChannel(v)
@@ -365,7 +378,7 @@ export default function ProductInfoPage() {
                 ]}
               />
             </Col>
-            <Col xs={24} lg={4}>
+            <Col xs={24} lg={3}>
               <Select
                 allowClear
                 placeholder="关联状态"
@@ -382,7 +395,7 @@ export default function ProductInfoPage() {
                 ]}
               />
             </Col>
-            <Col xs={24} lg={4}>
+            <Col xs={24} lg={3}>
               <Select
                 value={targetKind}
                 onChange={(v) => setTargetKind(v)}
@@ -394,100 +407,76 @@ export default function ProductInfoPage() {
                 ]}
               />
             </Col>
-            <Col xs={24} lg={5}>
-              {targetKind === 'model' ? (
-                <Select
-                  showSearch
-                  allowClear
-                  placeholder="一级：选择标准模型（已发布）"
-                  value={boundModelId}
-                  options={modelOptions as any}
-                  onSearch={(q) => setModelSearch(q)}
-                  onChange={(v) => {
-                    setBoundModelId(v)
-                    setPage(1)
-                  }}
-                  style={{ width: '100%' }}
-                  filterOption={false}
-                  loading={publishedModelsQuery.isFetching}
-                />
-              ) : targetKind === 'bundle' ? (
-                <Select
-                  showSearch
-                  allowClear
-                  placeholder="一级：选择套装模板"
-                  value={selectedBundleTemplateId}
-                  options={bundleTemplateOptions as any}
-                  onSearch={(q) => setBundleSearch(q)}
-                  onChange={(v) => {
-                    setSelectedBundleTemplateId(v)
-                    setSelectedBundlePresetSelector(undefined)
-                    setPage(1)
-                  }}
-                  style={{ width: '100%' }}
-                  filterOption={false}
-                  loading={bundleTemplatesQuery.isFetching}
-                />
-              ) : (
-                <Alert type="info" showIcon message="提示" description="选择“目标类型”后可启用一级/二级筛选。" />
-              )}
+            <Col xs={24} lg={9}>
+              <Space.Compact style={{ width: '100%' }}>
+                {targetKind === 'model' ? (
+                  <>
+                    <Select
+                      showSearch
+                      allowClear
+                      placeholder="一级：标准模型（已发布）"
+                      value={boundModelId}
+                      options={modelOptions as any}
+                      onSearch={(q) => setModelSearch(q)}
+                      onChange={(v) => {
+                        setBoundModelId(v)
+                        setPage(1)
+                      }}
+                      style={{ width: '100%' }}
+                      filterOption={false}
+                      loading={publishedModelsQuery.isFetching}
+                    />
+                    <Select
+                      value={onlyPublishedVersion ? 'published' : 'all'}
+                      onChange={(v) => {
+                        setOnlyPublishedVersion(v === 'published')
+                        setPage(1)
+                      }}
+                      style={{ width: 150 }}
+                      options={[
+                        { value: 'all', label: '二级：版本(全部)' },
+                        { value: 'published', label: '二级：仅发布' },
+                      ]}
+                      disabled={!boundModelId}
+                    />
+                  </>
+                ) : targetKind === 'bundle' ? (
+                  <>
+                    <Select
+                      showSearch
+                      allowClear
+                      placeholder="一级：套装模板"
+                      value={selectedBundleTemplateId}
+                      options={bundleTemplateOptions as any}
+                      onSearch={(q) => setBundleSearch(q)}
+                      onChange={(v) => {
+                        setSelectedBundleTemplateId(v)
+                        setSelectedBundlePresetSelector(undefined)
+                        setPage(1)
+                      }}
+                      style={{ width: '100%' }}
+                      filterOption={false}
+                      loading={bundleTemplatesQuery.isFetching}
+                    />
+                    <Select
+                      allowClear
+                      placeholder="二级：selector"
+                      value={selectedBundlePresetSelector}
+                      options={bundlePresetOptions as any}
+                      onChange={(v) => {
+                        setSelectedBundlePresetSelector(v)
+                        setPage(1)
+                      }}
+                      style={{ width: 150 }}
+                      disabled={!selectedBundleTemplateId}
+                    />
+                  </>
+                ) : (
+                  <Select disabled placeholder="一级/二级筛选" style={{ width: '100%' }} />
+                )}
+              </Space.Compact>
             </Col>
           </Row>
-
-          {targetKind === 'bundle' ? (
-            <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
-              <Col xs={24} lg={7}>
-                <Select
-                  allowClear
-                  placeholder="二级：selector（AA/AB…）"
-                  value={selectedBundlePresetSelector}
-                  options={bundlePresetOptions as any}
-                  onChange={(v) => {
-                    setSelectedBundlePresetSelector(v)
-                    setPage(1)
-                  }}
-                  style={{ width: '100%' }}
-                  disabled={!selectedBundleTemplateId}
-                />
-              </Col>
-              <Col xs={24} lg={5}>
-                <Select
-                  value={pageSize}
-                  onChange={(v) => setPageSize(v)}
-                  style={{ width: '100%' }}
-                  options={[50, 100, 200, 500].map((n) => ({ value: n, label: `每页 ${n}` }))}
-                />
-              </Col>
-              <Col xs={24} lg={12}>
-                <Alert type="info" showIcon message="口径" description="二级 selector 仅用于套装筛选；解析结果仍以“用于解析的规格”与预解析缓存为准。" />
-              </Col>
-            </Row>
-          ) : (
-            <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
-              <Col xs={24} lg={5}>
-                <Select
-                  value={pageSize}
-                  onChange={(v) => setPageSize(v)}
-                  style={{ width: '100%' }}
-                  options={[50, 100, 200, 500].map((n) => ({ value: n, label: `每页 ${n}` }))}
-                />
-              </Col>
-              <Col xs={24} lg={7}>
-                {targetKind === 'model' ? (
-                  <Select
-                    value={onlyPublishedVersion ? 'published' : 'all'}
-                    onChange={(v) => setOnlyPublishedVersion(v === 'published')}
-                    style={{ width: '100%' }}
-                    options={[
-                      { value: 'all', label: '二级：版本（全部）' },
-                      { value: 'published', label: '二级：仅发布版本' },
-                    ]}
-                    disabled={!boundModelId}
-                  />
-                ) : null}
-              </Col>
-            </Row>
-          )}
         </Card>
 
         <Table<SkuMaster>
@@ -502,7 +491,12 @@ export default function ProductInfoPage() {
             current: page,
             pageSize,
             onChange: (p) => setPage(p),
-            showSizeChanger: false,
+            showSizeChanger: true,
+            pageSizeOptions: [50, 100, 200, 500],
+            onShowSizeChange: (_p, ps) => {
+              setPage(1)
+              setPageSize(ps)
+            },
           }}
           locale={{ emptyText: '暂无数据（先调整筛选条件）' }}
         />

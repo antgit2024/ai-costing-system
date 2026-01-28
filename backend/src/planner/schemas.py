@@ -3336,6 +3336,10 @@ class SkuMasterSpecPreparsePreviewItem(BaseModel):
     product_name: Optional[str] = None
     product_code: Optional[str] = None
     spec_text: Optional[str] = None
+    # bundle anchor (from sku_master.metadata_json)
+    bundle_template_id: Optional[str] = None
+    bundle_template_code: Optional[str] = None
+    bundle_preset_selector: Optional[str] = None
     bound_model_code: Optional[str] = None
     bound_model_name: Optional[str] = None
     bound_version_label: Optional[str] = None

@@ -524,6 +524,10 @@ export default function SkuSpecMatchingPage() {
         product_name: (x as any).product_name ?? null,
         product_code: (x as any).product_code ?? null,
         spec_text: (x as any).spec_text ?? null,
+        // keep bundle anchor in preview rows, otherwise it may "flash bound then unbound"
+        bundle_template_id: (x as any).bundle_template_id ?? null,
+        bundle_template_code: (x as any).bundle_template_code ?? null,
+        bundle_preset_selector: (x as any).bundle_preset_selector ?? null,
         bound_model_code: (x as any).bound_model_code ?? null,
         bound_model_name: (x as any).bound_model_name ?? null,
         bound_version_label: (x as any).bound_version_label ?? null,
@@ -537,6 +541,11 @@ export default function SkuSpecMatchingPage() {
           diameter_cm: x.diameter_cm ?? null,
           area_m2: x.area_m2 ?? null,
           perimeter_m: x.perimeter_m ?? null,
+        },
+        metadata_json: {
+          bundle_template_id: (x as any).bundle_template_id ?? null,
+          bundle_template_code: (x as any).bundle_template_code ?? null,
+          bundle_preset_selector: (x as any).bundle_preset_selector ?? null,
         },
       }))
       setIsPreviewMode(true)

@@ -490,6 +490,22 @@
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
 
+- **2026-01-28（规格解析：候选预览保持“已绑定目标”不回跳未绑定）**
+  - **现象**：在 `spec-matching` 点“候选预览(命中)”后，右侧列表在刷新时会先显示套装编码为“已绑定”，待预览数据返回后又变成“未绑定”。
+  - **根因**：预览接口 `/sku-master/spec-preparse/preview` 返回的 items 未携带 `bundle_template_id / bundle_template_code / bundle_preset_selector`，前端切换到 preview 数据源后无法渲染套装锚点，导致“回跳”。
+  - **修复**：
+    - 后端：`backend/src/planner/services/sku_master_service.py`
+      - `preview_spec_preparse` 的每条 item 补齐套装锚点字段（从 `sku_master.metadata_json` 读取）。
+    - 后端：`backend/src/planner/schemas.py`
+      - `SkuMasterSpecPreparsePreviewItem` 增加：`bundle_template_id / bundle_template_code / bundle_preset_selector`。
+    - 前端：`frontend/src/pages/costing/SkuSpecMatchingPage.tsx`
+      - 预览行映射时保留套装锚点，并写入 `metadata_json.bundle_*` 供“已绑定目标”列稳定渲染。
+  - **验收命令（全部 0 退出码）**：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-27（商品关联 UI 优化：目标下拉同一行 + 套装二级 preset 绑定）
   - 需求：人工审核的“模型类型下拉 + 模型/套装下拉”合并为同一行；套装绑定改为二级（先选模板，再选 `preset_selector`，第二级才是最终绑定目标）。
   - 本轮产物：

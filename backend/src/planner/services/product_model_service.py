@@ -4023,6 +4023,197 @@ def publish_standard_version(
     return version
 
 
+def publish_bundle_version(
+    db: Session,
+    *,
+    version: models.ProductModelVersion,
+    published_by: str | None = None,
+    note: str | None = None,
+) -> models.ProductModelVersion:
+    """
+    Publish a bundle kind version.
+
+    Differences vs standard:
+    - No "1000×1000×1" constraint
+    - No requirement for version materials/process ledger (bundle BOM is generated from bundle templates)
+    """
+    if (version.version_kind or "") != "bundle":
+        raise ValueError("仅套装版本（bundle）允许发布")
+    if version.is_archived:
+        raise ValueError("版本已归档，无法发布")
+
+    model = db.get(models.ProductModel, version.model_id)
+    if not model or model.is_archived:
+        raise ValueError("Product model not found")
+
+    now = datetime.now(timezone.utc)
+    # Archive other published bundle versions for this model (keep history)
+    db.query(models.ProductModelVersion).filter(
+        models.ProductModelVersion.model_id == model.id,
+        models.ProductModelVersion.id != version.id,
+        models.ProductModelVersion.version_kind == "bundle",
+        models.ProductModelVersion.version_status == "published",
+        models.ProductModelVersion.is_archived.is_(False),
+    ).update({"version_status": "archived", "updated_at": now}, synchronize_session=False)
+
+    published_count = (
+        db.query(models.ProductModelVersion)
+        .filter(
+            models.ProductModelVersion.model_id == model.id,
+            models.ProductModelVersion.version_kind == "bundle",
+            models.ProductModelVersion.version_status == "published",
+        )
+        .count()
+    )
+    version.version_status = "published"
+    version.published_at = now
+    version.published_by = published_by
+    version.version_label = version.version_label or f"{model.model_code}-BUNDLE-{now.strftime('%Y%m%d')}-{published_count + 1:02d}"
+    meta = version.metadata_json or {}
+    if note:
+        meta.setdefault("publish_note", note)
+        version.metadata_json = _json_safe(meta)
+
+    if (model.status or "") == "draft":
+        model.status = "active"
+
+    db.commit()
+    db.refresh(version)
+    return version
+
+
+def ensure_bundle_model_version(
+    db: Session,
+    *,
+    template_version: models.BundleTemplateVersion,
+    preset_selector: str,
+    requested_by: str | None = None,
+) -> models.ProductModelVersion:
+    """
+    Ensure a published "bundle model version" exists for a specific bundle template *published version* + preset selector.
+
+    This is the core of "BundleAsModel": make bundle sales also land on model_version_id (single exit).
+    """
+    if not template_version or getattr(template_version, "is_archived", False):
+        raise ValueError("套装模板发布版本不存在/已归档")
+    if (template_version.version_status or "") != "published":
+        raise ValueError("套装模板版本未发布")
+
+    sel = str(preset_selector or "").strip().upper()
+    if not sel:
+        raise ValueError("preset_selector 不能为空")
+
+    tpl_code_raw = str(getattr(template_version, "template_code", "") or "").strip().upper()
+    tpl_name = str(getattr(template_version, "template_name", "") or "").strip() or None
+
+    def _normalize_base(code: str) -> str:
+        c = (code or "").strip().upper()
+        if c.startswith(("B-", "Z-")):
+            c = c[2:]
+        return "".join([ch for ch in c if ch.isalnum()])  # remove '-' etc
+
+    base = _normalize_base(tpl_code_raw)
+    if not base:
+        raise ValueError("套装模板编码非法")
+
+    # Determine prefix (B/Z) from preset mode or template code
+    prefix = "B"
+    try:
+        meta_v = template_version.metadata_json or {}
+        presets = meta_v.get("phrase_presets") if isinstance(meta_v.get("phrase_presets"), list) else []
+        mode = ""
+        for p in presets:
+            if not isinstance(p, dict):
+                continue
+            if str(p.get("selector") or "").strip().upper() == sel:
+                mode = str(p.get("mode") or "").strip().lower()
+                break
+        if mode == "force" or tpl_code_raw.startswith("Z-"):
+            prefix = "Z"
+    except Exception:
+        prefix = "Z" if tpl_code_raw.startswith("Z-") else "B"
+
+    display_base = base
+    if sel and not display_base.endswith(sel):
+        display_base = f"{display_base}{sel}"
+    model_code = f"{prefix}-{display_base}"
+    model_name = tpl_name or model_code
+
+    model = (
+        db.query(models.ProductModel)
+        .filter(models.ProductModel.model_code == model_code, models.ProductModel.is_archived.is_(False))
+        .one_or_none()
+    )
+    if not model:
+        model = models.ProductModel(
+            model_code=model_code,
+            model_name=model_name,
+            status="active",
+            metadata_json=_json_safe(
+                {
+                    "kind": "bundle",
+                    "bundle_template_code": tpl_code_raw,
+                }
+            ),
+        )
+        db.add(model)
+        db.flush()
+
+    # Find existing version by metadata (portable across DBs)
+    want_tid = str(getattr(template_version, "template_id", "") or "").strip()
+    want_vid = str(getattr(template_version, "id", "") or "").strip()
+    want_vlabel = str(getattr(template_version, "version_label", "") or "").strip() or None
+    existing: Optional[models.ProductModelVersion] = None
+
+    # Prefer a narrowed query for performance, then filter in Python for SQLite compatibility.
+    candidates = (
+        db.query(models.ProductModelVersion)
+        .filter(
+            models.ProductModelVersion.model_id == model.id,
+            models.ProductModelVersion.version_kind == "bundle",
+            models.ProductModelVersion.is_archived.is_(False),
+        )
+        .order_by(models.ProductModelVersion.created_at.desc())
+        .limit(50)
+        .all()
+    )
+    for v in candidates:
+        meta = getattr(v, "metadata_json", None) or {}
+        if str(meta.get("bundle_template_id") or "").strip() != want_tid:
+            continue
+        if str(meta.get("bundle_template_version_id") or "").strip() != want_vid:
+            continue
+        if str(meta.get("bundle_preset_selector") or "").strip().upper() != sel:
+            continue
+        if (v.version_status or "") == "published":
+            existing = v
+            break
+    if existing:
+        return existing
+
+    v = models.ProductModelVersion(
+        model_id=model.id,
+        version_kind="bundle",
+        version_status="draft",
+        version_label=(f"{model_code}-BUNDLE-{want_vlabel}" if want_vlabel else None),
+        metadata_json=_json_safe(
+            {
+                "kind": "bundle",
+                "bundle_template_id": want_tid,
+                "bundle_template_code": tpl_code_raw,
+                "bundle_template_version_id": want_vid,
+                "bundle_template_version_label": want_vlabel,
+                "bundle_preset_selector": sel,
+            }
+        ),
+    )
+    db.add(v)
+    db.flush()
+
+    # Publish it (archives previous published bundle versions for this model)
+    return publish_bundle_version(db, version=v, published_by=requested_by, note=None)
+
+
 def bind_sku_to_version(
     db: Session,
     *,
@@ -4037,19 +4228,23 @@ def bind_sku_to_version(
     version = get_model_version(db, version_id)
     if not version:
         raise ValueError("版本不存在")
-    if (version.version_kind or "") != "standard" or (version.version_status or "") != "published":
-        raise ValueError("SKU 只能绑定到已发布的标准版本")
+    if (version.version_status or "") != "published":
+        raise ValueError("SKU 只能绑定到已发布版本")
+    if (version.version_kind or "") not in ("standard", "bundle"):
+        raise ValueError("SKU 仅支持绑定 standard/bundle 版本")
 
     model = db.get(models.ProductModel, version.model_id)
     if not model or model.is_archived:
         raise ValueError("Product model not found")
 
     parsed = parse_sku_code(sku)
-    # Verify model_code prefix
+    # Verify model_code prefix (bundle versions always skip)
     prefix = (model.model_code or "").strip().upper()
     norm = str(parsed.get("normalized") or "").upper()
     skip_prefix_check = False
     if source_system in ("sku_master_manual", "sku_master_auto", "shipment_autobind", "erp_barcode"):
+        skip_prefix_check = True
+    if (version.version_kind or "") == "bundle":
         skip_prefix_check = True
     if isinstance(metadata, dict) and metadata.get("skip_prefix_check") is True:
         skip_prefix_check = True

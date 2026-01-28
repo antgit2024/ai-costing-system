@@ -153,6 +153,36 @@ def generate_bom(
     if not model or model.is_archived:
         raise ValueError("产品模型不存在或已归档")
 
+    # Bundle-as-model: when SKU is bound to a bundle version, generate BOM by bundle spec token.
+    if str(getattr(version, "version_kind", "") or "") == "bundle":
+        meta_v = getattr(version, "metadata_json", None) or {}
+        bt_vid = str(meta_v.get("bundle_template_version_id") or "").strip() or None
+        merged = generate_bom_by_spec(
+            db,
+            spec_text=spec_text,
+            sku_code=sku_code,
+            include_disabled_variants=include_disabled_variants,
+            return_components=False,
+            bundle_template_version_id=bt_vid,
+        )
+        trace0 = merged.get("trace") if isinstance(merged.get("trace"), dict) else {}
+        trace = dict(trace0 or {})
+        trace.update(
+            {
+                "sold_as_bundle": True,
+                "sold_model_id": model.id,
+                "sold_model_code": model.model_code,
+                "sold_model_name": model.model_name,
+                "sold_model_version_id": version.id,
+                "sold_model_version_label": getattr(version, "version_label", None),
+                # unify output: model_id/model_version_id reflect the sold item
+                "model_id": model.id,
+                "model_version_id": version.id,
+            }
+        )
+        merged["trace"] = trace
+        return merged
+
     spec_result = spec_parser_service.parse_spec(spec_text or "")
     # IMPORTANT:
     # - Keep parse_spec output "pure" (only from spec_text) for audit/replay.
@@ -307,6 +337,7 @@ def generate_bom_by_spec(
     sku_code: Optional[str],
     include_disabled_variants: bool = False,
     return_components: bool = False,
+    bundle_template_version_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Generate BOM by spec_text tokens (high-priority, customer-facing).
@@ -363,9 +394,27 @@ def generate_bom_by_spec(
     if not code:
         raise ValueError("套装编码非法")
 
-    tpl = bundle_template_service.get_by_code(db, code)
-    tpl_meta = tpl.metadata_json or {}
-    components = list(tpl.components_json or [])
+    tpl_id: Optional[str] = None
+    tpl_name: Optional[str] = None
+    tpl_meta: Dict[str, Any] = {}
+    components: List[Dict[str, Any]] = []
+    # Prefer published snapshot when provided (reproducible)
+    if bundle_template_version_id:
+        v = db.get(models.BundleTemplateVersion, str(bundle_template_version_id).strip())
+        if not v or getattr(v, "is_archived", False) or (v.version_status or "") != "published":
+            raise ValueError("套装模板发布版本不存在/未发布/已归档")
+        if str(getattr(v, "template_code", "") or "").strip().upper() != code:
+            raise ValueError("套装模板版本与交易规格中的套装编码不一致")
+        tpl_id = v.template_id
+        tpl_name = v.template_name
+        tpl_meta = v.metadata_json or {}
+        components = list(v.components_json or [])
+    else:
+        tpl = bundle_template_service.get_by_code(db, code)
+        tpl_id = tpl.id
+        tpl_name = tpl.name
+        tpl_meta = tpl.metadata_json or {}
+        components = list(tpl.components_json or [])
 
     # Optional bundle suffix:
     # - (B:CODE:A) / (BUNDLE:CODE:A) / "B:CODE:A"
@@ -976,8 +1025,10 @@ def generate_bom_by_spec(
     trace["bundle_code_legacy"] = f"BUNDLE:{code}"
     trace["bundle_prefix"] = prefix_letter
     trace["bundle_code_display"] = f"{prefix_letter}:{code}"
-    trace["bundle_template_id"] = tpl.id
-    trace["bundle_template_name"] = tpl.name
+    trace["bundle_template_id"] = tpl_id
+    trace["bundle_template_name"] = tpl_name
+    if bundle_template_version_id:
+        trace["bundle_template_version_id"] = str(bundle_template_version_id).strip()
     if phrase_trace:
         trace["phrase_presets"] = phrase_trace
     trace["parsed"] = spec_result  # overwrite parsed to be the original spec parse result

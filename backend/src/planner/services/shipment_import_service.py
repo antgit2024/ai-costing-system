@@ -356,7 +356,7 @@ def _generate_bom_snapshot(
             batch_id=batch.id,
             shipment_line_id=line.id,
             reason="SKU_NOT_BOUND",
-            message="SKU 未绑定已发布标准版本",
+            message="SKU 未绑定已发布版本",
             payload={"sku_code": sku},
         )
         return None

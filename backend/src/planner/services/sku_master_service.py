@@ -977,6 +977,10 @@ def _attach_parsed_fields(rows: List[models.SkuMaster]) -> None:
         r.bundle_template_id = meta.get("bundle_template_id")
         r.bundle_template_code = meta.get("bundle_template_code")
         r.bundle_preset_selector = meta.get("bundle_preset_selector")
+        # 套装模板发布版本（用于口径稳定：发布版本 → 套装模型版本）
+        r.bundle_template_version_id = meta.get("bundle_template_version_id")
+        r.bundle_template_version_label = meta.get("bundle_template_version_label")
+        r.bundle_model_version_id = meta.get("bundle_model_version_id")
         r.erp_spec_hash = meta.get("erp_spec_hash")
         r.erp_parser_version = meta.get("erp_parser_version")
         r.erp_dimensions = meta.get("erp_dimensions") or {}
@@ -2175,6 +2179,19 @@ def bind_sku_master_by_bundle_template(
     now_iso = _utcnow().isoformat()
     tcode = str(getattr(t, "code", "") or "").strip() or None
     selector = str(preset_selector or "").strip().upper() or None
+    if not selector:
+        raise ValueError("preset_selector 不能为空")
+
+    # Require a published bundle template version for reproducibility.
+    v = bundle_template_service.get_latest_published_version(db, template_id=tid)
+    if not v:
+        raise ValueError("套装模板尚未发布版本：请先在“套装模板”里点“发布为新版本”")
+    bundle_model_version = product_model_service.ensure_bundle_model_version(
+        db,
+        template_version=v,
+        preset_selector=selector,
+        requested_by=requested_by,
+    )
 
     for sid in ids:
         row = by_id.get(sid)
@@ -2186,11 +2203,43 @@ def bind_sku_master_by_bundle_template(
         if existing_tid and not allow_rebind:
             skipped_already_bound += 1
             continue
+        sku = (row.erp_sku_barcode or "").strip()
+        if not sku:
+            errors.append({"sku_master_id": sid, "error": "sku_code missing"})
+            continue
+        active = product_model_service.get_active_sku_binding(db, sku)
+        if active and not allow_rebind:
+            skipped_already_bound += 1
+            continue
+        if active and str(getattr(active, "model_version_id", "") or "") == str(bundle_model_version.id) and allow_rebind:
+            skipped_already_bound += 1
+            continue
+        # Bind SKU to bundle model version (single-exit)
+        product_model_service.bind_sku_to_version(
+            db,
+            sku_code=sku,
+            version_id=bundle_model_version.id,
+            source_system="sku_master_bundle_bind",
+            metadata={
+                "requested_by": requested_by,
+                "sku_master_id": row.id,
+                "binding_method": "manual_by_template_rebind" if allow_rebind else "manual_by_template",
+                "skip_prefix_check": True,
+                "bundle_template_id": tid,
+                "bundle_template_code": tcode,
+                "bundle_template_version_id": v.id,
+                "bundle_template_version_label": v.version_label,
+                "bundle_preset_selector": selector,
+            },
+        )
         meta.update(
             {
                 "bundle_template_id": tid,
                 "bundle_template_code": tcode,
                 "bundle_preset_selector": selector,
+                "bundle_template_version_id": v.id,
+                "bundle_template_version_label": v.version_label,
+                "bundle_model_version_id": bundle_model_version.id,
                 "bundle_bound_at": now_iso,
                 "bundle_bound_by": (requested_by or meta.get("requested_by") or None),
                 "bundle_binding_method": "manual_by_template_rebind" if allow_rebind else "manual_by_template",
@@ -2238,6 +2287,18 @@ def bind_sku_master_by_bundle_template_bulk(
         raise ValueError("套装模板不存在或已归档")
     tcode = str(getattr(t, "code", "") or "").strip() or None
     selector = str(preset_selector or "").strip().upper() or None
+    if not selector:
+        raise ValueError("preset_selector 不能为空")
+
+    v = bundle_template_service.get_latest_published_version(db, template_id=tid)
+    if not v:
+        raise ValueError("套装模板尚未发布版本：请先在“套装模板”里点“发布为新版本”")
+    bundle_model_version = product_model_service.ensure_bundle_model_version(
+        db,
+        template_version=v,
+        preset_selector=selector,
+        requested_by=requested_by,
+    )
 
     limit2 = max(min(int(limit or 200), 2000), 1)
     excluded_list = list(set([str(x) for x in (excluded_sku_master_ids or []) if str(x).strip()]))
@@ -2366,11 +2427,42 @@ def bind_sku_master_by_bundle_template_bulk(
         if existing_tid and not allow_rebind:
             skipped_already_bound += 1
             continue
+        sku = (row.erp_sku_barcode or "").strip()
+        if not sku:
+            errors.append({"sku_master_id": row.id, "error": "sku_code missing"})
+            continue
+        active = product_model_service.get_active_sku_binding(db, sku)
+        if active and not allow_rebind:
+            skipped_already_bound += 1
+            continue
+        if active and str(getattr(active, "model_version_id", "") or "") == str(bundle_model_version.id) and allow_rebind:
+            skipped_already_bound += 1
+            continue
+        product_model_service.bind_sku_to_version(
+            db,
+            sku_code=sku,
+            version_id=bundle_model_version.id,
+            source_system="sku_master_bundle_bind_bulk",
+            metadata={
+                "requested_by": requested_by,
+                "sku_master_id": row.id,
+                "binding_method": "manual_bulk_template_rebind" if allow_rebind else "manual_bulk_template",
+                "skip_prefix_check": True,
+                "bundle_template_id": tid,
+                "bundle_template_code": tcode,
+                "bundle_template_version_id": v.id,
+                "bundle_template_version_label": v.version_label,
+                "bundle_preset_selector": selector,
+            },
+        )
         meta.update(
             {
                 "bundle_template_id": tid,
                 "bundle_template_code": tcode,
                 "bundle_preset_selector": selector,
+                "bundle_template_version_id": v.id,
+                "bundle_template_version_label": v.version_label,
+                "bundle_model_version_id": bundle_model_version.id,
                 "bundle_bound_at": now_iso,
                 "bundle_bound_by": (requested_by or meta.get("requested_by") or None),
                 "bundle_binding_method": "manual_bulk_template_rebind" if allow_rebind else "manual_bulk_template",

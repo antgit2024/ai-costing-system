@@ -157,6 +157,7 @@ def generate_bom(
     if str(getattr(version, "version_kind", "") or "") == "bundle":
         meta_v = getattr(version, "metadata_json", None) or {}
         bt_vid = str(meta_v.get("bundle_template_version_id") or "").strip() or None
+        bt_sel = str(meta_v.get("bundle_preset_selector") or "").strip().upper() or None
         merged = generate_bom_by_spec(
             db,
             spec_text=spec_text,
@@ -164,6 +165,7 @@ def generate_bom(
             include_disabled_variants=include_disabled_variants,
             return_components=False,
             bundle_template_version_id=bt_vid,
+            bundle_preset_selector=bt_sel,
         )
         trace0 = merged.get("trace") if isinstance(merged.get("trace"), dict) else {}
         trace = dict(trace0 or {})
@@ -338,6 +340,7 @@ def generate_bom_by_spec(
     include_disabled_variants: bool = False,
     return_components: bool = False,
     bundle_template_version_id: Optional[str] = None,
+    bundle_preset_selector: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Generate BOM by spec_text tokens (high-priority, customer-facing).
@@ -359,40 +362,58 @@ def generate_bom_by_spec(
         ),
         None,
     )
-    if not bundle_token:
+    # Resolve bundle template code:
+    # - preferred: from customer-facing spec token (B:CODE / B-XXXXAA / Z-XXXXAA ...)
+    # - fallback (bundle-as-model): from published bundle template version id (SKU binding),
+    #   so bound bundle SKUs do NOT need to embed bundle codes inside spec_text.
+    bundle_v = None
+    if not bundle_token and bundle_template_version_id:
+        bundle_v = db.get(models.BundleTemplateVersion, str(bundle_template_version_id).strip())
+        if not bundle_v or getattr(bundle_v, "is_archived", False) or (bundle_v.version_status or "") != "published":
+            raise ValueError("套装模板发布版本不存在/未发布/已归档")
+        # Use template_code from the published version as the bundle code.
+        code = str(getattr(bundle_v, "template_code", "") or "").strip().upper()
+        if not code:
+            raise ValueError("套装编码非法")
+        # Default to B-mode when bundle code is not explicitly present in spec_text.
+        prefix_letter = "B"
+    elif not bundle_token:
         raise ValueError("交易规格未包含套装编码（B:CODE / BUNDLE:CODE / B-XXXXAA / Z-XXXXAA）")
-    # Accept:
-    # - "B:CODE" / "B:CODE:A" / "B:CODE:AA" / "BUNDLE:CODE" / "BUNDLE:CODE:A" / "BUNDLE:CODE:AA"
-    # - "B-CODE" / "B-CODE-A" / "B-CODE-AA"
-    # - "B-XXXX" / "B-XXXXAA" (new short form, CODE length fixed to 4; selector is 2 letters)
-    # Only CODE is used to load template;
-    # selector is parsed from spec_text below.
-    raw_bt = str(bundle_token).strip()
-    # Guardrail: spec parser may keep trailing text together with bundle token, e.g.
-    # "B-3U3PAF 雪尼尔..." => bundle_token becomes "B-3U3PAF 雪尼尔..."
-    # We only want the first whitespace-separated token for bundle parsing.
-    raw_bt = raw_bt.split()[0] if raw_bt else raw_bt
-    prefix_letter = "Z" if raw_bt.upper().startswith("Z") else "B"
-    if raw_bt.upper().startswith(("B-", "Z-")):
-        # Dash forms:
-        # - legacy: B-CODE / B-CODE-A / B-CODE-AA
-        # - new short: B-XXXX / B-XXXXAA (CODE length fixed to 4; selector 2 letters)
-        rest = raw_bt[2:].strip()  # after "B-"
-        if "-" in rest:
-            # B-CODE-A
-            code = rest.split("-", 1)[0].strip().upper()
+    if bundle_token:
+        # Accept:
+        # - "B:CODE" / "B:CODE:A" / "B:CODE:AA" / "BUNDLE:CODE" / "BUNDLE:CODE:A" / "BUNDLE:CODE:AA"
+        # - "B-CODE" / "B-CODE-A" / "B-CODE-AA"
+        # - "B-XXXX" / "B-XXXXAA" (new short form, CODE length fixed to 4; selector is 2 letters)
+        # Only CODE is used to load template;
+        # selector is parsed from spec_text below.
+        raw_bt = str(bundle_token).strip()
+        # Guardrail: spec parser may keep trailing text together with bundle token, e.g.
+        # "B-3U3PAF 雪尼尔..." => bundle_token becomes "B-3U3PAF 雪尼尔..."
+        # We only want the first whitespace-separated token for bundle parsing.
+        raw_bt = raw_bt.split()[0] if raw_bt else raw_bt
+        prefix_letter = "Z" if raw_bt.upper().startswith("Z") else "B"
+        if raw_bt.upper().startswith(("B-", "Z-")):
+            # Dash forms:
+            # - legacy: B-CODE / B-CODE-A / B-CODE-AA
+            # - new short: B-XXXX / B-XXXXAA (CODE length fixed to 4; selector 2 letters)
+            rest = raw_bt[2:].strip()  # after "B-"
+            if "-" in rest:
+                # B-CODE-A
+                code = rest.split("-", 1)[0].strip().upper()
+            else:
+                # B-XXXXAA: treat as CODE=first 4 if len==6.
+                # Also accept legacy 1-letter selector form (len==5) for backward compatibility.
+                code = (rest[:4] if len(rest) in (5, 6) else rest).strip().upper()
         else:
-            # B-XXXXAA: treat as CODE=first 4 if len==6.
-            # Also accept legacy 1-letter selector form (len==5) for backward compatibility.
-            code = (rest[:4] if len(rest) in (5, 6) else rest).strip().upper()
-    else:
-        # Colon forms: B:CODE(:A) / BUNDLE:CODE(:A)
-        prefix_raw = raw_bt.split(":", 1)[0].strip().upper() if ":" in raw_bt else ""
-        prefix_letter = "Z" if prefix_raw == "Z" else "B"
-        rest = raw_bt.split(":", 1)[1].strip()
-        code = rest.split(":", 1)[0].strip().upper()
-    if not code:
-        raise ValueError("套装编码非法")
+            # Colon forms: B:CODE(:A) / BUNDLE:CODE(:A)
+            prefix_raw = raw_bt.split(":", 1)[0].strip().upper() if ":" in raw_bt else ""
+            prefix_letter = "Z" if prefix_raw == "Z" else "B"
+            if ":" not in raw_bt:
+                raise ValueError("套装编码非法")
+            rest = raw_bt.split(":", 1)[1].strip()
+            code = rest.split(":", 1)[0].strip().upper()
+        if not code:
+            raise ValueError("套装编码非法")
 
     tpl_id: Optional[str] = None
     tpl_name: Optional[str] = None
@@ -400,7 +421,7 @@ def generate_bom_by_spec(
     components: List[Dict[str, Any]] = []
     # Prefer published snapshot when provided (reproducible)
     if bundle_template_version_id:
-        v = db.get(models.BundleTemplateVersion, str(bundle_template_version_id).strip())
+        v = bundle_v or db.get(models.BundleTemplateVersion, str(bundle_template_version_id).strip())
         if not v or getattr(v, "is_archived", False) or (v.version_status or "") != "published":
             raise ValueError("套装模板发布版本不存在/未发布/已归档")
         if str(getattr(v, "template_code", "") or "").strip().upper() != code:
@@ -465,6 +486,13 @@ def generate_bom_by_spec(
         forced_preset_index = ord(bundle_selector) - ord("A")
     elif bundle_selector and len(bundle_selector) == 2:
         forced_preset_selector = bundle_selector
+    # Bundle-as-model: selector can come from SKU binding (ProductModelVersion metadata).
+    if (forced_preset_selector is None and forced_preset_index is None) and bundle_preset_selector:
+        sel0 = str(bundle_preset_selector or "").strip().upper()
+        if sel0 and len(sel0) == 1 and "A" <= sel0 <= "Z":
+            forced_preset_index = ord(sel0) - ord("A")
+        elif sel0 and len(sel0) == 2:
+            forced_preset_selector = sel0
 
     # Strict token policy (B-parse):
     # - Only tokens that appear in the customer-facing spec_text are allowed to trigger variant rules.

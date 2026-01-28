@@ -2985,3 +2985,14 @@
     - `npm -C frontend run build`
     - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
     - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+
+- **本轮修复（套装=模型版本：绑定套装 SKU 生成快照不再要求交易规格包含 B-套装码）**：
+  - 最近校对（北京时间 GMT+8）：2026-01-28
+  - 背景：部分套装 SKU（如 `6001402915761`）交易规格只有 `Q...;枕套` 等对客文本，不包含 `B-DB9EAE`；但 SKU 已绑定到套装模型版本（bundle-as-model）。此前生成快照时报错：`交易规格未包含套装编码`，导致“处理所选（生成快照）”全失败。
+  - 变更：
+    - `generate_bom_by_spec()` 支持在缺少套装 token 时，**通过 `bundle_template_version_id`（来自绑定的套装模型版本）兜底**，不再强制要求交易规格携带 `B-...`。
+    - 同时把绑定的 `bundle_preset_selector` 透传进套装 BOM 生成，确保落到正确的二级预设。
+    - `compute_snapshot_for_shipment_line` 失败时返回最新异常 `reason/message`，便于前端直接定位失败原因。
+  - 关联文件：
+    - `backend/src/planner/services/bom_generation_service.py`
+    - `backend/src/planner/services/shipment_import_service.py`

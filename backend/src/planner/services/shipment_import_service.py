@@ -1594,12 +1594,26 @@ def compute_snapshot_for_shipment_line(
 
     snap2 = _generate_bom_snapshot(db, batch=batch, line=line, persist_snapshot=True, mode="2026")
     if not snap2:
-        # Exception was queued; surface a generic error for UI.
+        # Exception was queued; surface the latest reason/message for UI (more actionable than a generic error).
+        try:
+            last_exc = (
+                db.query(models.ShipmentExceptionQueue)
+                .filter(models.ShipmentExceptionQueue.shipment_line_id == line.id)
+                .order_by(models.ShipmentExceptionQueue.created_at.desc())
+                .first()
+            )
+            if last_exc and getattr(last_exc, "reason", None):
+                msg = str(getattr(last_exc, "message", "") or "").strip()
+                detail = f"{str(last_exc.reason)}{f'：{msg}' if msg else ''}"
+            else:
+                detail = "生成快照失败（已写入异常队列，请到异常处理查看原因）"
+        except Exception:
+            detail = "生成快照失败（已写入异常队列，请到异常处理查看原因）"
         return {
             "action": "failed",
             "shipment_line_id": str(line.id),
             "bom_snapshot_id": None,
-            "detail": "生成快照失败（已写入异常队列，请到异常处理查看原因）",
+            "detail": detail,
         }
 
     # resolve unresolved exceptions for this line (best-effort)

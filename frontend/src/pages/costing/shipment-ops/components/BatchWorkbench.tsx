@@ -10,6 +10,7 @@ import {
   fetchShipmentImportBatches,
   fetchShipmentExceptions,
   fetchShipmentBomSnapshots,
+  computeShipmentLineSnapshot,
   recomputeShipmentBomSnapshot,
   retryShipmentExceptions,
 } from '@/services/planner'
@@ -67,8 +68,17 @@ export default function BatchWorkbench(props: { onOpenImport: () => void }) {
   const [exceptionResolved, setExceptionResolved] = useState<'unresolved' | 'resolved' | 'all'>('unresolved')
   const [exceptionLimit, setExceptionLimit] = useState(200)
   const [operatorId, setOperatorId] = useState('planner_user')
+  const [excFilterShipmentNo, setExcFilterShipmentNo] = useState<string>('')
+  const [excFilterChannel, setExcFilterChannel] = useState<string>('')
+  const [excFilterSpecText, setExcFilterSpecText] = useState<string>('')
+  const [excSelectedRowKeys, setExcSelectedRowKeys] = useState<React.Key[]>([])
 
   const [snapshotLimit, setSnapshotLimit] = useState(200)
+  const [snapTargetKind, setSnapTargetKind] = useState<'any' | 'model' | 'bundle'>('any')
+  const [snapFilterShipmentNo, setSnapFilterShipmentNo] = useState<string>('')
+  const [snapFilterChannel, setSnapFilterChannel] = useState<string>('')
+  const [snapFilterSpecText, setSnapFilterSpecText] = useState<string>('')
+  const [snapSelectedRowKeys, setSnapSelectedRowKeys] = useState<React.Key[]>([])
   const bulkStopRef = useRef(false)
   const [bulkRunning, setBulkRunning] = useState(false)
 
@@ -154,6 +164,56 @@ export default function BatchWorkbench(props: { onOpenImport: () => void }) {
     },
   })
 
+  const bulkHandleSelectedExceptions = async () => {
+    const keys = excSelectedRowKeys as any[]
+    if (!keys.length) {
+      message.info('请先勾选要处理的异常行')
+      return
+    }
+    const rows = filteredExceptions.filter((r: any) => keys.includes(String(r.id)))
+    const ok = await new Promise<boolean>((resolve) => {
+      Modal.confirm({
+        title: `对所选异常生成快照/计价？（${rows.length}条）`,
+        content: '将按当前绑定与当前规则，对所选异常对应的发货行执行“只补齐缺失”。成功后异常会自动标记为已解决。',
+        okText: '确认执行',
+        cancelText: '取消',
+        onOk: () => resolve(true),
+        onCancel: () => resolve(false),
+      })
+    })
+    if (!ok) return
+
+    const key = 'bulk-handle-exc'
+    message.loading({ content: `处理中... 0/${rows.length}`, key, duration: 0 })
+    let okCount = 0
+    let failCount = 0
+    for (let i = 0; i < rows.length; i += 1) {
+      const r: any = rows[i]
+      const lid = safeString(r?.shipment_line_id).trim()
+      if (!lid) {
+        failCount += 1
+        continue
+      }
+      try {
+        const res = await computeShipmentLineSnapshot(lid, { overwrite: false, operator_id: operatorId.trim() || undefined })
+        if (res.action === 'failed') failCount += 1
+        else okCount += 1
+      } catch {
+        failCount += 1
+      }
+      message.loading({
+        content: `处理中... ${Math.min(i + 1, rows.length)}/${rows.length}（成功${okCount} 失败${failCount}）`,
+        key,
+        duration: 0,
+      })
+    }
+    message.destroy(key)
+    message.success(`处理完成：成功${okCount} 失败${failCount}`)
+    setExcSelectedRowKeys([])
+    exceptionsQuery.refetch()
+    queryClient.invalidateQueries({ queryKey: ['shipments', 'bom-snapshots'] })
+  }
+
   const runBulkRecomputeSnapshots = async () => {
     const rows = (snapshotsQuery.data ?? []) as BomSnapshot[]
     if (!rows.length) {
@@ -206,6 +266,51 @@ export default function BatchWorkbench(props: { onOpenImport: () => void }) {
     else message.success(`批量回填完成：成功${okCount} 失败${failCount}`)
   }
 
+  const filteredExceptions = useMemo(() => {
+    const rows = (exceptionsQuery.data ?? []) as ShipmentException[]
+    const qShipment = excFilterShipmentNo.trim()
+    const qChannel = excFilterChannel.trim()
+    const qSpec = excFilterSpecText.trim()
+    if (!qShipment && !qChannel && !qSpec) return rows
+    const inc = (src: unknown, q: string) => safeString(src).toLowerCase().includes(q.toLowerCase())
+    return rows.filter((r: any) => {
+      if (qShipment && !inc(r?.shipment_no, qShipment)) return false
+      if (qChannel && !inc(r?.channel, qChannel)) return false
+      if (qSpec && !inc(r?.spec_text, qSpec)) return false
+      return true
+    })
+  }, [exceptionsQuery.data, excFilterShipmentNo, excFilterChannel, excFilterSpecText])
+
+  const filteredSnapshots = useMemo(() => {
+    const rows = (snapshotsQuery.data ?? []) as BomSnapshot[]
+    const qShipment = snapFilterShipmentNo.trim()
+    const qChannel = snapFilterChannel.trim()
+    const qSpec = snapFilterSpecText.trim()
+    const inc = (src: unknown, q: string) => safeString(src).toLowerCase().includes(q.toLowerCase())
+    return rows.filter((r: any) => {
+      if (snapTargetKind !== 'any') {
+        const trace = (r as any)?.trace ?? {}
+        const isBundle = !!(trace?.sold_as_bundle || trace?.bundle)
+        if (snapTargetKind === 'bundle' && !isBundle) return false
+        if (snapTargetKind === 'model' && isBundle) return false
+      }
+      if (qShipment && !inc(r?.shipment_no, qShipment)) return false
+      if (qChannel && !inc(r?.channel, qChannel)) return false
+      if (qSpec && !inc(r?.spec_text, qSpec)) return false
+      return true
+    })
+  }, [snapshotsQuery.data, snapTargetKind, snapFilterShipmentNo, snapFilterChannel, snapFilterSpecText])
+
+  const batchSummary = useMemo(() => {
+    const b: any = selectedBatch ?? {}
+    const total = Number(b?.total_rows ?? 0) || 0
+    const inserted = Number(b?.inserted_rows ?? 0) || 0
+    const exc = Number(b?.exception_rows ?? 0) || 0
+    const snaps = (snapshotsQuery.data ?? []).length
+    const unresolved = (exceptionsQuery.data ?? []).filter((x: any) => !(x as any)?.resolved_at).length
+    return { total, inserted, exc, snaps, unresolved }
+  }, [selectedBatch, exceptionsQuery.data, snapshotsQuery.data])
+
   const batchColumns: ColumnsType<ShipmentImportBatch> = useMemo(
     () => [
       { title: '导入时间', dataIndex: 'created_at', width: 170, render: (v) => formatTime(v) },
@@ -229,34 +334,116 @@ export default function BatchWorkbench(props: { onOpenImport: () => void }) {
   const exceptionColumns: ColumnsType<ShipmentException> = useMemo(
     () => [
       { title: '行号', dataIndex: 'row_index', width: 80 },
-      { title: '发货单号', dataIndex: 'shipment_no', width: 160, ellipsis: true },
+      { title: '订单号', dataIndex: 'shipment_no', width: 160, ellipsis: true },
       { title: '渠道', dataIndex: 'channel', width: 140, ellipsis: true },
-      { title: 'SKU', dataIndex: 'sku_code', width: 160, ellipsis: true },
       {
-        title: '原因',
-        dataIndex: 'reason',
-        width: 180,
-        render: (v) => <Tag color="red">{formatExceptionReason(v)}</Tag>,
-      },
-      {
-        title: '详情',
-        dataIndex: 'message',
+        title: '交易规格',
+        dataIndex: 'spec_text',
         ellipsis: true,
         render: (v) => {
           const s = safeString(v)
           return s ? <Text ellipsis={{ tooltip: s }}>{s}</Text> : '-'
         },
       },
+      {
+        title: '模型/套装',
+        key: 'bound_target',
+        width: 220,
+        render: (_v, r: any) => {
+          const code = safeString(r?.bound_model_code).trim()
+          const name = safeString(r?.bound_model_name).trim()
+          if (!code) return <Tag>未绑定</Tag>
+          const isBundle = code.startsWith('B-') || code.startsWith('Z-')
+          return (
+            <span>
+              <Tag color={isBundle ? 'purple' : 'blue'}>{code}</Tag>
+              {name ? <span style={{ color: '#666' }}> {name}</span> : null}
+            </span>
+          )
+        },
+      },
+      {
+        title: '规格解析',
+        key: 'spec_parse',
+        width: 180,
+        render: (_v, r: any) => {
+          const ok = r?.spec_parsed === true || !!safeString(r?.spec_hash).trim()
+          if (!ok) return <Tag>未解析</Tag>
+          const w = safeString(r?.spec_width_cm).trim()
+          const h = safeString(r?.spec_height_cm).trim()
+          if (w && h) return <Tag color="green">宽{w}×高{h}cm</Tag>
+          return <Tag color="green">已解析</Tag>
+        },
+      },
+      {
+        title: '原因',
+        dataIndex: 'reason',
+        width: 180,
+        render: (v, r: any) => (
+          <Tag color="red" title={safeString(r?.message) ? `详情：${safeString(r?.message)}` : undefined}>
+            {formatExceptionReason(v)}
+          </Tag>
+        ),
+      },
     ],
     [],
   )
 
+  const bindingTextFromSnapshot = (r: any): { code: string; name?: string } | null => {
+    const trace = r?.trace ?? {}
+    const code =
+      safeString(trace?.sold_model_code).trim() ||
+      safeString(trace?.model_code).trim() ||
+      safeString(trace?.model?.model_code).trim() ||
+      ''
+    const name =
+      safeString(trace?.sold_model_name).trim() ||
+      safeString(trace?.model_name).trim() ||
+      safeString(trace?.model?.model_name).trim() ||
+      ''
+    if (!code) return null
+    return { code, name: name || undefined }
+  }
+
   const snapshotColumns: ColumnsType<BomSnapshot> = useMemo(
     () => [
       { title: '生成时间', dataIndex: 'created_at', width: 170, render: (v) => formatTime(v as any) },
-      { title: '发货单号', dataIndex: 'shipment_no', width: 160, ellipsis: true },
-      { title: 'SKU', dataIndex: 'sku_code', width: 160, ellipsis: true },
-      { title: 'spec_hash', dataIndex: 'spec_hash', width: 220, ellipsis: true },
+      { title: '订单号', dataIndex: 'shipment_no', width: 160, ellipsis: true },
+      {
+        title: '交易规格',
+        dataIndex: 'spec_text',
+        ellipsis: true,
+        render: (v) => {
+          const s = safeString(v)
+          return s ? <Text ellipsis={{ tooltip: s }}>{s}</Text> : '-'
+        },
+      },
+      {
+        title: '绑定',
+        key: 'binding',
+        width: 240,
+        render: (_v, r: any) => {
+          const hit = bindingTextFromSnapshot(r)
+          if (!hit) return '-'
+          const isBundle = hit.code.startsWith('B-') || hit.code.startsWith('Z-') || !!(r?.trace?.sold_as_bundle || r?.trace?.bundle)
+          return (
+            <span>
+              <Tag color={isBundle ? 'purple' : 'blue'}>{hit.code}</Tag>
+              {hit.name ? <span style={{ color: '#666' }}> {hit.name}</span> : null}
+            </span>
+          )
+        },
+      },
+      {
+        title: 'spec_hash',
+        dataIndex: 'spec_hash',
+        width: 220,
+        ellipsis: true,
+        render: (v) => {
+          const s = safeString(v)
+          return s ? <Text ellipsis={{ tooltip: '规格Hash：由交易规格文本计算的sha1，用于缓存/追溯' }}>{s}</Text> : '-'
+        },
+      },
       {
         title: '操作',
         key: 'ops',
@@ -353,17 +540,38 @@ export default function BatchWorkbench(props: { onOpenImport: () => void }) {
                     key: 'reconcile',
                     label: '对账（概览）',
                     children: (
-                      <Alert
-                        type="info"
-                        showIcon
-                        message="建议操作顺序"
-                        description={
-                          <div>
-                            <div>1) 先处理“待处理”里的未绑定/缺规格等问题（必要时去台账定位原始行）。</div>
-                            <div>2) 再做“快照”里的回填/重算（用于历史对账与洞察回算）。</div>
-                          </div>
-                        }
-                      />
+                      <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                        <Alert
+                          type="info"
+                          showIcon
+                          message="这页是做什么的？"
+                          description="对账（概览）用于快速判断：本批次是否还有“待处理”（未绑定/缺规格/BOM失败等），以及快照是否已生成。下一步该点“异常处理”还是“成本快照/回填”。"
+                        />
+                        <Card size="small" title="关键统计（本批次）">
+                          <Space size={8} wrap>
+                            <Tag>总行 {batchSummary.total}</Tag>
+                            <Tag color="green">写入 {batchSummary.inserted}</Tag>
+                            <Tag color={batchSummary.exc > 0 ? 'red' : 'default'}>异常 {batchSummary.exc}</Tag>
+                            <Tag color={batchSummary.snaps > 0 ? 'green' : 'default'}>快照 {batchSummary.snaps}</Tag>
+                            <Tag color={batchSummary.unresolved > 0 ? 'red' : 'default'}>待处理 {batchSummary.unresolved}</Tag>
+                          </Space>
+                        </Card>
+                        <Alert
+                          type="warning"
+                          showIcon
+                          message="推荐操作顺序（ERP任务流）"
+                          description={
+                            <div>
+                              <div>
+                                1) 先到 <b>待处理（异常）</b>：把“未绑定/缺规格/BOM失败”等处理掉，再点“批量重试（未解决）”。
+                              </div>
+                              <div style={{ marginTop: 6 }}>
+                                2) 再到 <b>已完成（成本快照）</b>：需要历史对账时用“回填/覆盖重算”（高风险）更新快照。
+                              </div>
+                            </div>
+                          }
+                        />
+                      </Space>
                     ),
                   },
                   {
@@ -398,18 +606,51 @@ export default function BatchWorkbench(props: { onOpenImport: () => void }) {
                             >
                               批量重试（未解决）
                             </Button>
+                            <Button type="primary" onClick={bulkHandleSelectedExceptions} disabled={!excSelectedRowKeys.length}>
+                              处理所选（生成快照）
+                            </Button>
                             <Button onClick={() => exceptionsQuery.refetch()} loading={exceptionsQuery.isFetching}>
                               刷新
                             </Button>
                           </Space>
                         }
                       >
+                        <div style={{ marginBottom: 8 }}>
+                          <Space wrap>
+                            <Input
+                              style={{ width: 180 }}
+                              placeholder="订单号"
+                              allowClear
+                              value={excFilterShipmentNo}
+                              onChange={(e) => setExcFilterShipmentNo(e.target.value)}
+                            />
+                            <Input
+                              style={{ width: 140 }}
+                              placeholder="渠道"
+                              allowClear
+                              value={excFilterChannel}
+                              onChange={(e) => setExcFilterChannel(e.target.value)}
+                            />
+                            <Input
+                              style={{ width: 260 }}
+                              placeholder="交易规格"
+                              allowClear
+                              value={excFilterSpecText}
+                              onChange={(e) => setExcFilterSpecText(e.target.value)}
+                            />
+                            <Text type="secondary">当前：{filteredExceptions.length} 条</Text>
+                          </Space>
+                        </div>
                         <Table
                           rowKey="id"
                           size="small"
                           loading={exceptionsQuery.isFetching}
                           columns={exceptionColumns}
-                          dataSource={(exceptionsQuery.data ?? []) as any}
+                          dataSource={filteredExceptions as any}
+                          rowSelection={{
+                            selectedRowKeys: excSelectedRowKeys,
+                            onChange: (keys) => setExcSelectedRowKeys(keys),
+                          }}
                           pagination={false}
                         />
                       </Card>
@@ -450,12 +691,51 @@ export default function BatchWorkbench(props: { onOpenImport: () => void }) {
                           </Space>
                         }
                       >
+                        <div style={{ marginBottom: 8 }}>
+                          <Space wrap>
+                            <Segmented
+                              value={snapTargetKind}
+                              onChange={(v) => setSnapTargetKind(v as any)}
+                              options={[
+                                { label: '全部', value: 'any' },
+                                { label: '标准模型', value: 'model' },
+                                { label: '套装', value: 'bundle' },
+                              ]}
+                            />
+                            <Input
+                              style={{ width: 180 }}
+                              placeholder="订单号"
+                              allowClear
+                              value={snapFilterShipmentNo}
+                              onChange={(e) => setSnapFilterShipmentNo(e.target.value)}
+                            />
+                            <Input
+                              style={{ width: 140 }}
+                              placeholder="渠道"
+                              allowClear
+                              value={snapFilterChannel}
+                              onChange={(e) => setSnapFilterChannel(e.target.value)}
+                            />
+                            <Input
+                              style={{ width: 260 }}
+                              placeholder="交易规格"
+                              allowClear
+                              value={snapFilterSpecText}
+                              onChange={(e) => setSnapFilterSpecText(e.target.value)}
+                            />
+                            <Text type="secondary">当前：{filteredSnapshots.length} 条</Text>
+                          </Space>
+                        </div>
                         <Table
                           rowKey="id"
                           size="small"
                           loading={snapshotsQuery.isFetching}
                           columns={snapshotColumns}
-                          dataSource={(snapshotsQuery.data ?? []) as any}
+                          dataSource={filteredSnapshots as any}
+                          rowSelection={{
+                            selectedRowKeys: snapSelectedRowKeys,
+                            onChange: (keys) => setSnapSelectedRowKeys(keys),
+                          }}
                           pagination={false}
                         />
                       </Card>

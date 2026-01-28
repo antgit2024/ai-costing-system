@@ -960,12 +960,56 @@ def list_exceptions(
     line_ids = [x.shipment_line_id for x in items if getattr(x, "shipment_line_id", None)]
     if not line_ids:
         return items
-    lines = (
-        db.query(models.ShipmentLine)
-        .filter(models.ShipmentLine.id.in_(list(set(line_ids))))
-        .all()
-    )
+    uniq_line_ids = list(set(line_ids))
+    lines = db.query(models.ShipmentLine).filter(models.ShipmentLine.id.in_(uniq_line_ids)).all()
     by_id = {l.id: l for l in lines}
+
+    # current binding (sku -> model) for “已重新关联”快速判断
+    sku_codes = list({str(getattr(l, "sku_code", "") or "").strip() for l in lines if getattr(l, "sku_code", None)})
+    sku_to_model: Dict[str, Tuple[Optional[str], Optional[str]]] = {}
+    if sku_codes:
+        bind_rows = (
+            db.query(
+                models.SkuModelVersionMapping.sku_code,
+                models.ProductModel.model_code,
+                models.ProductModel.model_name,
+            )
+            .select_from(models.SkuModelVersionMapping)
+            .join(
+                models.ProductModelVersion,
+                models.ProductModelVersion.id == models.SkuModelVersionMapping.model_version_id,
+            )
+            .join(
+                models.ProductModel,
+                models.ProductModel.id == models.ProductModelVersion.model_id,
+            )
+            .filter(
+                models.SkuModelVersionMapping.is_archived.is_(False),
+                models.SkuModelVersionMapping.is_active.is_(True),
+                models.SkuModelVersionMapping.sku_code.in_(sku_codes),
+                models.ProductModelVersion.is_archived.is_(False),
+                models.ProductModel.is_archived.is_(False),
+            )
+            .all()
+        )
+        for sku, mc, mn in bind_rows:
+            if sku:
+                sku_to_model[str(sku)] = (str(mc) if mc else None, str(mn) if mn else None)
+
+    # spec parse snapshot dims (spec_hash -> width/height)
+    spec_hashes = list({str(getattr(l, "spec_hash", "") or "").strip() for l in lines if getattr(l, "spec_hash", None)})
+    spec_dims: Dict[str, Tuple[Optional[Decimal], Optional[Decimal]]] = {}
+    if spec_hashes:
+        snaps = (
+            db.query(models.SpecParseSnapshot)
+            .filter(models.SpecParseSnapshot.spec_hash.in_(spec_hashes))
+            .all()
+        )
+        for s in snaps:
+            dims = getattr(s, "dimensions_json", None) or {}
+            w = _to_decimal(dims.get("width_cm")) if isinstance(dims, dict) else None
+            h = _to_decimal(dims.get("height_cm")) if isinstance(dims, dict) else None
+            spec_dims[str(s.spec_hash)] = (w, h)
     for exc in items:
         line = by_id.get(getattr(exc, "shipment_line_id", None))
         if not line:
@@ -978,6 +1022,18 @@ def list_exceptions(
         exc.sku_code = getattr(line, "sku_code", None)
         exc.spec_text = getattr(line, "spec_text", None)
         exc.spec_hash = getattr(line, "spec_hash", None)
+        sku = str(getattr(line, "sku_code", "") or "").strip()
+        mc, mn = sku_to_model.get(sku, (None, None))
+        exc.bound_model_code = mc
+        exc.bound_model_name = mn
+        sh = str(getattr(line, "spec_hash", "") or "").strip()
+        if sh:
+            exc.spec_parsed = True
+            w, h = spec_dims.get(sh, (None, None))
+            exc.spec_width_cm = w
+            exc.spec_height_cm = h
+        else:
+            exc.spec_parsed = False
         exc.qty = getattr(line, "qty", None)
         exc.revenue_amount = getattr(line, "revenue_amount", None)
     return items

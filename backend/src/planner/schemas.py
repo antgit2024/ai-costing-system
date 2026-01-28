@@ -2426,6 +2426,12 @@ class ShipmentExceptionRead(BaseModel):
     sku_code: Optional[str] = None
     spec_text: Optional[str] = None
     spec_hash: Optional[str] = None
+    # Current binding & parse cache hints (for “一目了然”的待处理列表)
+    bound_model_code: Optional[str] = None
+    bound_model_name: Optional[str] = None
+    spec_parsed: Optional[bool] = None
+    spec_width_cm: Optional[Decimal] = None
+    spec_height_cm: Optional[Decimal] = None
     qty: Optional[Decimal] = None
     revenue_amount: Optional[Decimal] = None
     reason: str

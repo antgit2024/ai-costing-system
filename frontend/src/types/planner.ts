@@ -1506,6 +1506,11 @@ export interface ShipmentException {
   sku_code?: string | null
   spec_text?: string | null
   spec_hash?: string | null
+  bound_model_code?: string | null
+  bound_model_name?: string | null
+  spec_parsed?: boolean | null
+  spec_width_cm?: string | null
+  spec_height_cm?: string | null
   qty?: string | null
   revenue_amount?: string | null
   reason: string

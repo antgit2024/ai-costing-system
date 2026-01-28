@@ -1862,6 +1862,8 @@ export const fetchModelInsightsSummary = async (params: {
   start: string
   end: string
   channel?: string
+  bundle_template_code?: string
+  bundle_preset_selector?: string
 }): Promise<ModelInsightsSummaryResponse> => {
   const response = await plannerClient.get('/analytics/models/summary', {
     params: sanitizeParams(params as Record<string, unknown>),
@@ -1875,6 +1877,8 @@ export const fetchModelInsightsDetail = async (params: {
   model_code: string
   channel?: string
   version_id?: string
+  bundle_template_code?: string
+  bundle_preset_selector?: string
 }): Promise<ModelInsightsDetailResponse> => {
   const response = await plannerClient.get('/analytics/models/detail', {
     params: sanitizeParams(params as Record<string, unknown>),

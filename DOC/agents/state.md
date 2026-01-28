@@ -358,6 +358,24 @@
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-27（模型分析支持套装筛选：先筛选不拆件，仍按模型聚合）
+  - 目标：对“模型分析”补齐套装锚点筛选（`bundle_template_code + bundle_preset_selector`），用于未来按套装模块对账/排查/看板；口径保持“按模型聚合”，暂不做组件拆解归因。
+  - 本轮产物（后端）：
+    - `backend/src/planner/routers/analytics.py`
+      - `GET /api/planner/analytics/models/summary` 与 `/api/planner/analytics/models/detail` 新增筛选参数：
+        - `bundle_template_code`
+        - `bundle_preset_selector`
+    - `backend/src/planner/services/analytics_service.py`
+      - `model_insights_summary/detail` 在 `shipment_lines.metadata_json` 上按 bundle 锚点过滤（与销售明细筛选口径一致）
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/ProfitInsightsPage.tsx`
+      - 筛选区新增“套装模板/套装二级”输入，并与查询条件一起记住/恢复
+    - `frontend/src/services/planner.ts`
+      - `fetchModelInsightsSummary/detail` 参数补齐 bundle 筛选项
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`cd backend && pytest -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-22（天猫SKU生成器：尺寸胶囊常显 + Z 规格同列不变色 + 检验补齐商家编码）
   - 本轮范围：对齐业务口径：检验用于校验“商品规格（网店）+ 商家编码”是否能命中系统编码/公式；尺寸展示与检验解绑；Z- 规格字样显示在“TOKEN/公式”列但不做红绿高亮。
   - 本轮产物：

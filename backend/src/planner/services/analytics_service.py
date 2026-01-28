@@ -2821,6 +2821,8 @@ def model_insights_summary(
     start: datetime,
     end: datetime,
     channel: Optional[str] = None,
+    bundle_template_code: Optional[str] = None,
+    bundle_preset_selector: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     模型分析（统计榜单）：
@@ -2842,6 +2844,18 @@ def model_insights_summary(
     )
     if channel:
         ship_q = ship_q.filter(models.ShipmentLine.channel == channel)
+    if bundle_template_code:
+        b = str(bundle_template_code or "").strip()
+        if b:
+            ship_q = ship_q.filter(
+                func.coalesce(models.ShipmentLine.metadata_json["bundle_template_code"].as_string(), "") == b
+            )
+    if bundle_preset_selector:
+        s = str(bundle_preset_selector or "").strip().upper()
+        if s:
+            ship_q = ship_q.filter(
+                func.coalesce(models.ShipmentLine.metadata_json["bundle_preset_selector"].as_string(), "") == s
+            )
     total_ship_lines = int(ship_q.count() or 0)
 
     res_sq = (
@@ -2903,6 +2917,14 @@ def model_insights_summary(
     )
     if channel:
         q = q.filter(models.ShipmentLine.channel == channel)
+    if bundle_template_code:
+        b = str(bundle_template_code or "").strip()
+        if b:
+            q = q.filter(func.coalesce(models.ShipmentLine.metadata_json["bundle_template_code"].as_string(), "") == b)
+    if bundle_preset_selector:
+        s = str(bundle_preset_selector or "").strip().upper()
+        if s:
+            q = q.filter(func.coalesce(models.ShipmentLine.metadata_json["bundle_preset_selector"].as_string(), "") == s)
     rows = q.all()
 
     refund_q = db.query(
@@ -2928,6 +2950,18 @@ def model_insights_summary(
     )
     if channel:
         refund_q = refund_q.filter(models.ShipmentLine.channel == channel)
+    if bundle_template_code:
+        b = str(bundle_template_code or "").strip()
+        if b:
+            refund_q = refund_q.filter(
+                func.coalesce(models.ShipmentLine.metadata_json["bundle_template_code"].as_string(), "") == b
+            )
+    if bundle_preset_selector:
+        s = str(bundle_preset_selector or "").strip().upper()
+        if s:
+            refund_q = refund_q.filter(
+                func.coalesce(models.ShipmentLine.metadata_json["bundle_preset_selector"].as_string(), "") == s
+            )
     refund_q = refund_q.group_by(models.ShipmentLine.id)
     refund_by_line = {
         str(r.shipment_line_id): {"refund_amount": _d(r.refund_amount), "returned_qty": _d(r.returned_qty)}
@@ -3099,6 +3133,8 @@ def model_insights_detail(
     model_code: str,
     channel: Optional[str] = None,
     version_id: Optional[str] = None,
+    bundle_template_code: Optional[str] = None,
+    bundle_preset_selector: Optional[str] = None,
 ) -> Dict[str, Any]:
     if start.tzinfo is None:
         start = start.replace(tzinfo=timezone.utc)
@@ -3173,6 +3209,14 @@ def model_insights_detail(
     )
     if channel:
         base_q = base_q.filter(models.ShipmentLine.channel == channel)
+    if bundle_template_code:
+        b = str(bundle_template_code or "").strip()
+        if b:
+            base_q = base_q.filter(func.coalesce(models.ShipmentLine.metadata_json["bundle_template_code"].as_string(), "") == b)
+    if bundle_preset_selector:
+        s = str(bundle_preset_selector or "").strip().upper()
+        if s:
+            base_q = base_q.filter(func.coalesce(models.ShipmentLine.metadata_json["bundle_preset_selector"].as_string(), "") == s)
     rows = base_q.all()
 
     ver_agg: Dict[str, Dict[str, Any]] = {}

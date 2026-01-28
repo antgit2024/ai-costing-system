@@ -199,6 +199,8 @@ def models_summary(
     start: str = Query(..., description="ISO datetime, e.g. 2025-01-01T00:00:00Z"),
     end: str = Query(..., description="ISO datetime, e.g. 2026-01-01T00:00:00Z"),
     channel: Optional[str] = None,
+    bundle_template_code: Optional[str] = None,
+    bundle_preset_selector: Optional[str] = None,
     db: Session = Depends(get_db_session),
 ):
     def parse_dt(s: str) -> datetime:
@@ -215,6 +217,8 @@ def models_summary(
         start=parse_dt(start),
         end=parse_dt(end),
         channel=channel,
+        bundle_template_code=bundle_template_code,
+        bundle_preset_selector=bundle_preset_selector,
     )
 
 
@@ -225,6 +229,8 @@ def models_detail(
     model_code: str = Query(..., description="model_code"),
     channel: Optional[str] = None,
     version_id: Optional[str] = None,
+    bundle_template_code: Optional[str] = None,
+    bundle_preset_selector: Optional[str] = None,
     db: Session = Depends(get_db_session),
 ):
     def parse_dt(s: str) -> datetime:
@@ -243,6 +249,8 @@ def models_detail(
         channel=channel,
         model_code=model_code,
         version_id=version_id,
+        bundle_template_code=bundle_template_code,
+        bundle_preset_selector=bundle_preset_selector,
     )
 
 

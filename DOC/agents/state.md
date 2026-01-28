@@ -97,6 +97,21 @@
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shipment_import_bom_snapshots_mvp.py -q`
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shipment_exception_retry_mvp.py -q`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-28（作业中心：异常队列一目了然（绑定/规格解析）+ 勾选后“处理所选”）
+  - 需求：运营希望在“待处理（异常）”里一眼看到：哪些已重新绑定模型/套装、哪些已完成规格解析（含尺寸），并能勾选后直接批量处理，避免依赖“详情”列。
+  - 本轮产物：
+    - 后端：`GET /api/planner/shipments/exceptions` 返回补齐
+      - `bound_model_code/bound_model_name`（当前生效绑定）
+      - `spec_parsed` + `spec_width_cm/spec_height_cm`（基于 spec_hash 的解析缓存）
+    - 前端：作业中心“异常队列（本批次）”
+      - 新增列：`模型/套装`、`规格解析`；去掉“详情”列（详情合并到原因 Tag tooltip）
+      - 将“订单号”列改为“货品条码”（更实用）
+      - 新增勾选 + 按钮：`处理所选（生成快照）`（逐条调用 compute-snapshot，只补齐缺失）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shipment_import_bom_snapshots_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shipment_exception_retry_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-26（线上深链接 404：BrowserRouter /costing/* Not Found 兜底）
   - 现象：直接访问 `https://<host>/costing/insights/models` 返回 `Not Found`（history 深链接无法回退到 SPA 入口）。
   - 根因：前端使用 `BrowserRouter`（history 模式），需要服务端对 `/costing/*` 做 `try_files ... /index.html` 回退。

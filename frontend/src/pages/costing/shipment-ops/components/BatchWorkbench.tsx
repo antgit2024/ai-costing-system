@@ -68,14 +68,14 @@ export default function BatchWorkbench(props: { onOpenImport: () => void }) {
   const [exceptionResolved, setExceptionResolved] = useState<'unresolved' | 'resolved' | 'all'>('unresolved')
   const [exceptionLimit, setExceptionLimit] = useState(200)
   const [operatorId, setOperatorId] = useState('planner_user')
-  const [excFilterShipmentNo, setExcFilterShipmentNo] = useState<string>('')
+  const [excFilterSkuCode, setExcFilterSkuCode] = useState<string>('')
   const [excFilterChannel, setExcFilterChannel] = useState<string>('')
   const [excFilterSpecText, setExcFilterSpecText] = useState<string>('')
   const [excSelectedRowKeys, setExcSelectedRowKeys] = useState<React.Key[]>([])
 
   const [snapshotLimit, setSnapshotLimit] = useState(200)
   const [snapTargetKind, setSnapTargetKind] = useState<'any' | 'model' | 'bundle'>('any')
-  const [snapFilterShipmentNo, setSnapFilterShipmentNo] = useState<string>('')
+  const [snapFilterSkuCode, setSnapFilterSkuCode] = useState<string>('')
   const [snapFilterChannel, setSnapFilterChannel] = useState<string>('')
   const [snapFilterSpecText, setSnapFilterSpecText] = useState<string>('')
   const [snapSelectedRowKeys, setSnapSelectedRowKeys] = useState<React.Key[]>([])
@@ -268,22 +268,22 @@ export default function BatchWorkbench(props: { onOpenImport: () => void }) {
 
   const filteredExceptions = useMemo(() => {
     const rows = (exceptionsQuery.data ?? []) as ShipmentException[]
-    const qShipment = excFilterShipmentNo.trim()
+    const qSku = excFilterSkuCode.trim()
     const qChannel = excFilterChannel.trim()
     const qSpec = excFilterSpecText.trim()
-    if (!qShipment && !qChannel && !qSpec) return rows
+    if (!qSku && !qChannel && !qSpec) return rows
     const inc = (src: unknown, q: string) => safeString(src).toLowerCase().includes(q.toLowerCase())
     return rows.filter((r: any) => {
-      if (qShipment && !inc(r?.shipment_no, qShipment)) return false
+      if (qSku && !inc(r?.sku_code, qSku)) return false
       if (qChannel && !inc(r?.channel, qChannel)) return false
       if (qSpec && !inc(r?.spec_text, qSpec)) return false
       return true
     })
-  }, [exceptionsQuery.data, excFilterShipmentNo, excFilterChannel, excFilterSpecText])
+  }, [exceptionsQuery.data, excFilterSkuCode, excFilterChannel, excFilterSpecText])
 
   const filteredSnapshots = useMemo(() => {
     const rows = (snapshotsQuery.data ?? []) as BomSnapshot[]
-    const qShipment = snapFilterShipmentNo.trim()
+    const qSku = snapFilterSkuCode.trim()
     const qChannel = snapFilterChannel.trim()
     const qSpec = snapFilterSpecText.trim()
     const inc = (src: unknown, q: string) => safeString(src).toLowerCase().includes(q.toLowerCase())
@@ -294,12 +294,12 @@ export default function BatchWorkbench(props: { onOpenImport: () => void }) {
         if (snapTargetKind === 'bundle' && !isBundle) return false
         if (snapTargetKind === 'model' && isBundle) return false
       }
-      if (qShipment && !inc(r?.shipment_no, qShipment)) return false
+      if (qSku && !inc(r?.sku_code, qSku)) return false
       if (qChannel && !inc(r?.channel, qChannel)) return false
       if (qSpec && !inc(r?.spec_text, qSpec)) return false
       return true
     })
-  }, [snapshotsQuery.data, snapTargetKind, snapFilterShipmentNo, snapFilterChannel, snapFilterSpecText])
+  }, [snapshotsQuery.data, snapTargetKind, snapFilterSkuCode, snapFilterChannel, snapFilterSpecText])
 
   const batchSummary = useMemo(() => {
     const b: any = selectedBatch ?? {}
@@ -334,7 +334,7 @@ export default function BatchWorkbench(props: { onOpenImport: () => void }) {
   const exceptionColumns: ColumnsType<ShipmentException> = useMemo(
     () => [
       { title: '行号', dataIndex: 'row_index', width: 80 },
-      { title: '订单号', dataIndex: 'shipment_no', width: 160, ellipsis: true },
+      { title: '货品条码', dataIndex: 'sku_code', width: 170, ellipsis: true },
       { title: '渠道', dataIndex: 'channel', width: 140, ellipsis: true },
       {
         title: '交易规格',
@@ -408,7 +408,7 @@ export default function BatchWorkbench(props: { onOpenImport: () => void }) {
   const snapshotColumns: ColumnsType<BomSnapshot> = useMemo(
     () => [
       { title: '生成时间', dataIndex: 'created_at', width: 170, render: (v) => formatTime(v as any) },
-      { title: '订单号', dataIndex: 'shipment_no', width: 160, ellipsis: true },
+      { title: '货品条码', dataIndex: 'sku_code', width: 170, ellipsis: true },
       {
         title: '交易规格',
         dataIndex: 'spec_text',
@@ -619,10 +619,10 @@ export default function BatchWorkbench(props: { onOpenImport: () => void }) {
                           <Space wrap>
                             <Input
                               style={{ width: 180 }}
-                              placeholder="订单号"
+                              placeholder="货品条码"
                               allowClear
-                              value={excFilterShipmentNo}
-                              onChange={(e) => setExcFilterShipmentNo(e.target.value)}
+                              value={excFilterSkuCode}
+                              onChange={(e) => setExcFilterSkuCode(e.target.value)}
                             />
                             <Input
                               style={{ width: 140 }}
@@ -704,10 +704,10 @@ export default function BatchWorkbench(props: { onOpenImport: () => void }) {
                             />
                             <Input
                               style={{ width: 180 }}
-                              placeholder="订单号"
+                              placeholder="货品条码"
                               allowClear
-                              value={snapFilterShipmentNo}
-                              onChange={(e) => setSnapFilterShipmentNo(e.target.value)}
+                              value={snapFilterSkuCode}
+                              onChange={(e) => setSnapFilterSkuCode(e.target.value)}
                             />
                             <Input
                               style={{ width: 140 }}

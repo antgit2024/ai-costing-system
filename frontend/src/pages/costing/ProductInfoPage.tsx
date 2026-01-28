@@ -423,7 +423,7 @@ export default function ProductInfoPage() {
                         setPage(1)
                       }}
                       // 运营常用：模型名较长，但这里主用于筛选，缩窄以给“版本”更多空间
-                      style={{ width: 240 }}
+                      style={{ width: 160 }}
                       filterOption={false}
                       loading={publishedModelsQuery.isFetching}
                     />
@@ -434,7 +434,7 @@ export default function ProductInfoPage() {
                         setPage(1)
                       }}
                       // 放大版本筛选，避免“二级：版本(全部)”挤压
-                      style={{ width: 220 }}
+                      style={{ width: 400 }}
                       options={[
                         { value: 'all', label: '二级：版本(全部)' },
                         { value: 'published', label: '二级：仅发布' },
@@ -456,7 +456,7 @@ export default function ProductInfoPage() {
                         setSelectedBundlePresetSelector(undefined)
                         setPage(1)
                       }}
-                      style={{ width: 240 }}
+                      style={{ width: 160 }}
                       filterOption={false}
                       loading={bundleTemplatesQuery.isFetching}
                     />
@@ -469,7 +469,7 @@ export default function ProductInfoPage() {
                         setSelectedBundlePresetSelector(v)
                         setPage(1)
                       }}
-                      style={{ width: 220 }}
+                      style={{ width: 400 }}
                       disabled={!selectedBundleTemplateId}
                     />
                   </>

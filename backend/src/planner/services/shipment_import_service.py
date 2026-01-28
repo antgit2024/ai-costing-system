@@ -399,6 +399,24 @@ def _generate_bom_snapshot(
         return None
 
     trace = dict(bom.get("trace") or {})
+    # Bundle anchors (Phase0): carry bundle binding from shipment line metadata into snapshot trace.
+    try:
+        meta_line = dict(getattr(line, "metadata_json", None) or {})
+        bt_code = meta_line.get("bundle_template_code")
+        bt_id = meta_line.get("bundle_template_id")
+        bt_sel = meta_line.get("bundle_preset_selector")
+        if bt_code not in (None, "") or bt_id not in (None, "") or bt_sel not in (None, ""):
+            trace.setdefault("bundle", {})
+            if isinstance(trace.get("bundle"), dict):
+                trace["bundle"].update(
+                    {
+                        "template_id": bt_id,
+                        "template_code": bt_code,
+                        "preset_selector": bt_sel,
+                    }
+                )
+    except Exception:
+        pass
     trace.update(
         {
             "bound_version_id": binding.model_version_id,
@@ -497,6 +515,16 @@ def _persist_deduction_artifacts(
             {
                 "inventory_warning_count": len(inv_warnings or []),
                 "inventory_warnings": list(inv_warnings or [])[:20],
+                # Bundle anchors for audits & analytics (Phase0).
+                "bundle_template_id": (line.metadata_json or {}).get("bundle_template_id")
+                if isinstance(line.metadata_json, dict)
+                else None,
+                "bundle_template_code": (line.metadata_json or {}).get("bundle_template_code")
+                if isinstance(line.metadata_json, dict)
+                else None,
+                "bundle_preset_selector": (line.metadata_json or {}).get("bundle_preset_selector")
+                if isinstance(line.metadata_json, dict)
+                else None,
             }
         ),
     )
@@ -631,6 +659,24 @@ def import_shipment_xlsx(
         )
         db.add(line)
         db.flush()
+
+        # Bundle anchor (Phase0): if SKU master has a bundle binding, carry it to shipment_lines metadata.
+        # This enables bundle-level auditing & analytics without recomputing historical snapshots.
+        try:
+            sm = sku_master_service.get_by_barcode(db, sku_code or "")
+            sm_meta = dict(getattr(sm, "metadata_json", None) or {}) if sm else {}
+            bt_code = sm_meta.get("bundle_template_code")
+            bt_id = sm_meta.get("bundle_template_id")
+            bt_sel = sm_meta.get("bundle_preset_selector")
+            if bt_code not in (None, "") or bt_id not in (None, "") or bt_sel not in (None, ""):
+                meta_line = dict(line.metadata_json or {})
+                meta_line.setdefault("bundle_template_id", bt_id)
+                meta_line.setdefault("bundle_template_code", bt_code)
+                meta_line.setdefault("bundle_preset_selector", bt_sel)
+                line.metadata_json = {k: v for k, v in meta_line.items() if v not in (None, "")}
+        except Exception:
+            # best-effort only; do not fail shipment import
+            pass
 
         # SKU master autobackfill (MVP): if barcode not in sku_master, create minimal record for next imports.
         sku_master_service.ensure_from_shipment(
@@ -1254,6 +1300,8 @@ def list_shipment_lines(
             or raw_row.get("platform_sku_id")
             or raw_row.get("platformSkuId")
         )
+        bundle_template_code = meta.get("bundle_template_code")
+        bundle_preset_selector = meta.get("bundle_preset_selector")
         items.append(
             {
                 "id": str(getattr(line, "id", "")),
@@ -1267,6 +1315,10 @@ def list_shipment_lines(
                 "sku_code": getattr(line, "sku_code", None),
                 "shop_spec_code": (str(shop_spec_code).strip() if shop_spec_code not in (None, "") else None),
                 "platform_sku_id": (str(platform_sku_id).strip() if platform_sku_id not in (None, "") else None),
+                "bundle_template_code": (str(bundle_template_code).strip() if bundle_template_code not in (None, "") else None),
+                "bundle_preset_selector": (
+                    str(bundle_preset_selector).strip().upper() if bundle_preset_selector not in (None, "") else None
+                ),
                 "spec_text": getattr(line, "spec_text", None),
                 "spec_hash": getattr(line, "spec_hash", None),
                 "qty": getattr(line, "qty", None),

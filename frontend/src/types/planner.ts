@@ -1905,6 +1905,8 @@ export interface SalesLineItem {
   logistics_company?: string | null
   logistics_no?: string | null
   mark?: string | null
+  bundle_template_code?: string | null
+  bundle_preset_selector?: string | null
   bom_snapshot_id?: string | null
   status: 'costed' | 'missing_snapshot' | 'missing_costing' | 'unknown'
   note?: string | null

@@ -2272,6 +2272,8 @@ def sales_lines(
     shipment_no: Optional[str] = None,
     order_no: Optional[str] = None,
     product_link_id: Optional[str] = None,
+    bundle_template_code: Optional[str] = None,
+    bundle_preset_selector: Optional[str] = None,
     include_missing: bool = True,
 ) -> Dict[str, Any]:
     """
@@ -2371,6 +2373,18 @@ def sales_lines(
         base_q = base_q.filter(models.ShipmentLine.order_no == order_no)
     if product_link_id:
         base_q = base_q.filter(models.ShipmentLine.product_link_id == product_link_id)
+    if bundle_template_code:
+        b = str(bundle_template_code or "").strip()
+        if b:
+            base_q = base_q.filter(
+                func.coalesce(models.ShipmentLine.metadata_json["bundle_template_code"].as_string(), "") == b
+            )
+    if bundle_preset_selector:
+        s = str(bundle_preset_selector or "").strip().upper()
+        if s:
+            base_q = base_q.filter(
+                func.coalesce(models.ShipmentLine.metadata_json["bundle_preset_selector"].as_string(), "") == s
+            )
 
     # When user requests "only costed", pagination total must match the rows we will return.
     # We define "costed" as having a costing result OR a legacy BOM snapshot.
@@ -2401,6 +2415,11 @@ def sales_lines(
         model_version_id,
         spec_hash,
     ) in rows:
+        meta_line = getattr(line, "metadata_json", None) or {}
+        if not isinstance(meta_line, dict):
+            meta_line = {}
+        bundle_code = str(meta_line.get("bundle_template_code") or "").strip() or None
+        bundle_sel = str(meta_line.get("bundle_preset_selector") or "").strip().upper() or None
         raw = getattr(line, "raw_row_json", None) or getattr(line, "raw_row", None) or {}
         payment_at = _guess(raw, ["付款时间", "支付时间", "pay_time", "paid_at", "付款日期", "payment_at", "payment_time"])
         sku_no = _guess(raw, ["货品编号", "商品编号", "货品编码", "goods_code", "sku_no", "product_code"])
@@ -2475,6 +2494,8 @@ def sales_lines(
                 "logistics_company": logistics_company,
                 "logistics_no": logistics_no,
                 "mark": mark,
+                "bundle_template_code": bundle_code,
+                "bundle_preset_selector": bundle_sel,
                 "bom_snapshot_id": str(bom_snapshot_id) if has_snap else None,
                 "status": status,
                 "note": note,

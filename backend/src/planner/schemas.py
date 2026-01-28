@@ -2293,6 +2293,9 @@ class ShipmentLineListItem(BaseModel):
     shop_spec_code: Optional[str] = None
     # 平台规格Id（网店）（若导出表提供）
     platform_sku_id: Optional[str] = None
+    # 套装锚点（Phase0：来自 sku-master 绑定并贯穿到发货行）
+    bundle_template_code: Optional[str] = None
+    bundle_preset_selector: Optional[str] = None
     spec_text: Optional[str] = None
     spec_hash: Optional[str] = None
     qty: Optional[Decimal] = None
@@ -3064,6 +3067,9 @@ class SalesLineItem(BaseModel):
     logistics_company: Optional[str] = None
     logistics_no: Optional[str] = None
     mark: Optional[str] = None
+    # 套装锚点（用于对账/排查/看板，不做组件拆解）
+    bundle_template_code: Optional[str] = None
+    bundle_preset_selector: Optional[str] = None
 
     bom_snapshot_id: Optional[str] = None
     status: str = "unknown"  # costed | missing_snapshot | missing_costing

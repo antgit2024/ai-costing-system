@@ -333,6 +333,31 @@
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-27（套装锚点贯穿：发货导入/计价/快照 + 销售分析可筛选）
+  - 背景：你确认“后期大部分都会用套装模板关联”，且将要导入大批量数据；为避免未来按套装维度对账/排查时需要回头重算历史快照，本轮先做“锚点贯通（不做组件拆解）”。
+  - 本轮产物（后端）：
+    - `backend/src/planner/services/shipment_import_service.py`
+      - 发货导入时从 `sku-master` 读取 `bundle_template_code + bundle_preset_selector`，写入 `shipment_lines.metadata_json`
+      - 计价结果 `shipment_costing_results.metadata_json` 同步写入 bundle 锚点
+      - 2026 模式的 `bom_snapshots.trace_json` 增加 `trace.bundle{template_id,template_code,preset_selector}`
+      - 台账接口 `/shipments/lines` 额外返回 `bundle_template_code/bundle_preset_selector`
+    - `backend/src/planner/services/analytics_service.py` + `backend/src/planner/routers/analytics.py`
+      - `GET /api/planner/analytics/sales/lines` 返回 bundle 锚点，并支持筛选参数：
+        - `bundle_template_code`
+        - `bundle_preset_selector`
+    - `backend/src/planner/schemas.py`
+      - `SalesLineItem`/`ShipmentLineListItem` 增加 `bundle_template_code/bundle_preset_selector`
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/SalesInsightsPage.tsx`
+      - 明细表新增“套装”列（`code-selector`）与两项筛选（套装模板/套装二级）
+    - `frontend/src/services/planner.ts` + `frontend/src/types/planner.ts`
+      - `fetchSalesLines` 支持 bundle 筛选参数，并补齐类型字段
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-22（天猫SKU生成器：尺寸胶囊常显 + Z 规格同列不变色 + 检验补齐商家编码）
   - 本轮范围：对齐业务口径：检验用于校验“商品规格（网店）+ 商家编码”是否能命中系统编码/公式；尺寸展示与检验解绑；Z- 规格字样显示在“TOKEN/公式”列但不做红绿高亮。
   - 本轮产物：

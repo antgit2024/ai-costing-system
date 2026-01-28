@@ -313,6 +313,8 @@ def sales_lines(
     shipment_no: Optional[str] = None,
     order_no: Optional[str] = None,
     product_link_id: Optional[str] = None,
+    bundle_template_code: Optional[str] = None,
+    bundle_preset_selector: Optional[str] = None,
     include_missing: bool = True,
     db: Session = Depends(get_db_session),
 ):
@@ -336,6 +338,8 @@ def sales_lines(
         shipment_no=shipment_no,
         order_no=order_no,
         product_link_id=product_link_id,
+        bundle_template_code=bundle_template_code,
+        bundle_preset_selector=bundle_preset_selector,
         include_missing=include_missing,
     )
 

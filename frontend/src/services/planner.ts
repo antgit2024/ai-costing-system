@@ -1944,6 +1944,8 @@ export const fetchSalesLines = async (params: {
   shipment_no?: string
   order_no?: string
   product_link_id?: string
+  bundle_template_code?: string
+  bundle_preset_selector?: string
   include_missing?: boolean
 }): Promise<SalesLinesResponse> => {
   const response = await plannerClient.get('/analytics/sales/lines', {

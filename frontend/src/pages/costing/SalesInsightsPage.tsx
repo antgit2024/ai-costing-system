@@ -86,6 +86,17 @@ const SalesInsightsPage = () => {
       { title: '货品名称', dataIndex: 'sku_name', width: 200, ellipsis: true, render: (v) => String(v ?? '-') },
       { title: '交易规格', dataIndex: 'spec_text', width: 260, ellipsis: true, render: (v) => String(v ?? '-') },
       { title: '货品条码', dataIndex: 'sku_code', width: 160, ellipsis: true, render: (v) => String(v ?? '-') },
+      {
+        title: '套装',
+        key: 'bundle',
+        width: 140,
+        render: (_v, r) => {
+          const code = String((r as any)?.bundle_template_code ?? '').trim()
+          const sel = String((r as any)?.bundle_preset_selector ?? '').trim().toUpperCase()
+          const s = [code, sel].filter(Boolean).join('-')
+          return s || '-'
+        },
+      },
       { title: '销售单价', dataIndex: 'sale_unit_price', width: 110, render: (v) => formatMoney(v) },
       { title: '数量', dataIndex: 'qty', width: 90, render: (v) => formatQty(v) },
       { title: '销售金额', dataIndex: 'revenue_amount', width: 110, render: (v) => formatMoney(v) },
@@ -131,6 +142,8 @@ const SalesInsightsPage = () => {
     sku_code?: string
     order_no?: string
     product_link_id?: string
+    bundle_template_code?: string
+    bundle_preset_selector?: string
     page: number
     page_size: number
   }) => {
@@ -167,6 +180,8 @@ const SalesInsightsPage = () => {
       sku_code: v.sku_code?.trim() || undefined,
       order_no: v.order_no?.trim() || undefined,
       product_link_id: v.product_link_id?.trim() || undefined,
+      bundle_template_code: v.bundle_template_code?.trim() || undefined,
+      bundle_preset_selector: v.bundle_preset_selector?.trim() || undefined,
     }
     setLastQuery(base)
     try {
@@ -342,6 +357,12 @@ const SalesInsightsPage = () => {
           </Form.Item>
           <Form.Item label="货品条码" name="sku_code">
             <Input placeholder="可选：barcode" style={{ width: 180 }} allowClear />
+          </Form.Item>
+          <Form.Item label="套装模板" name="bundle_template_code">
+            <Input placeholder="可选：bundle code" style={{ width: 160 }} allowClear />
+          </Form.Item>
+          <Form.Item label="套装二级" name="bundle_preset_selector">
+            <Input placeholder="可选：AA/AB" style={{ width: 120 }} allowClear />
           </Form.Item>
           <Form.Item label="原始单号" name="order_no">
             <Input placeholder="可选：order_no" style={{ width: 180 }} allowClear />

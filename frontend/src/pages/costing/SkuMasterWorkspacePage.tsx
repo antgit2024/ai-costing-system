@@ -106,7 +106,19 @@ const jsonPretty = (obj: unknown) => {
 
 const SkuMasterWorkspacePage = () => {
   const queryClient = useQueryClient()
-  const initFromUrlDoneRef = useRef(false)
+
+  const initialUrl = useMemo(() => {
+    try {
+      if (typeof window === 'undefined') return { search: '', tab: '' }
+      const p = new URLSearchParams(window.location.search)
+      return {
+        search: String(p.get('search') ?? '').trim(),
+        tab: String(p.get('tab') ?? '').trim(),
+      }
+    } catch {
+      return { search: '', tab: '' }
+    }
+  }, [])
 
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(() => {
@@ -119,13 +131,17 @@ const SkuMasterWorkspacePage = () => {
       return DEFAULT_PAGE_SIZE
     }
   })
-  const [search, setSearch] = useState<string>('')
+  const [search, setSearch] = useState<string>(initialUrl.search || '')
   const [includeTerms, setIncludeTerms] = useState<string>('')
   const [excludeTerms, setExcludeTerms] = useState<string>('')
   const [matchScope, setMatchScope] = useState<'spec' | 'name'>('spec')
   const [channel, setChannel] = useState<string | undefined>(undefined)
   const [matchStatus, setMatchStatus] = useState<string | undefined>(undefined)
-  const [listTab, setListTab] = useState<'all' | 'unbound' | 'bound'>('all')
+  const [listTab, setListTab] = useState<'all' | 'unbound' | 'bound'>(
+    initialUrl.tab === 'all' || initialUrl.tab === 'unbound' || initialUrl.tab === 'bound'
+      ? (initialUrl.tab as any)
+      : 'all',
+  )
   const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([])
 
   const [uploading, setUploading] = useState(false)
@@ -174,25 +190,7 @@ const SkuMasterWorkspacePage = () => {
     note?: string
   } | null>(null)
 
-  // Allow deep-linking from other pages (e.g. spec-matching "去重绑") by pre-filling filters.
-  useEffect(() => {
-    if (initFromUrlDoneRef.current) return
-    initFromUrlDoneRef.current = true
-    try {
-      const p = new URLSearchParams(window.location.search)
-      const q = String(p.get('search') ?? '').trim()
-      const tab = String(p.get('tab') ?? '').trim()
-      if (q) {
-        setSearch(q)
-        setPage(1)
-      }
-      if (tab === 'all' || tab === 'unbound' || tab === 'bound') {
-        setListTab(tab as any)
-      }
-    } catch {
-      // ignore
-    }
-  }, [])
+  // NOTE: URL 预填（search/tab）已在 useState 初始化阶段完成，避免“先显示→几秒后清空”的闪烁体验。
 
   useEffect(() => {
     try {
@@ -417,10 +415,21 @@ const SkuMasterWorkspacePage = () => {
         const preset = safeString(
           (record as any)?.bundle_preset_selector ?? (record.metadata_json as any)?.bundle_preset_selector,
         ).trim()
+        const bundleDisplay = (() => {
+          const code = bundleCode
+          const sel = preset
+          if (!code) return ''
+          const tpl = ((bundleTemplatesQuery.data ?? []) as any[]).find((t: any) => String(t?.id ?? '') === String((record as any)?.bundle_template_id ?? (record.metadata_json as any)?.bundle_template_id ?? ''))
+            ?? ((bundleTemplatesQuery.data ?? []) as any[]).find((t: any) => String(t?.code ?? '').trim() === code)
+          const presets = Array.isArray((tpl as any)?.phrase_presets) ? ((tpl as any).phrase_presets as any[]) : []
+          const p = presets.find((x: any) => String(x?.selector ?? '').trim().toUpperCase() === String(sel || '').trim().toUpperCase())
+          const mode = String((p as any)?.mode ?? '').trim()
+          const prefix = mode === 'force' ? 'Z' : 'B'
+          return sel ? `${prefix}-${code}${String(sel).trim().toUpperCase()}` : `${prefix}-${code}`
+        })()
         const bundleTag = bundleCode ? (
           <Tag color="purple">
-            套装 {bundleCode}
-            {preset ? `-${preset}` : ''}
+            套装 {bundleDisplay || bundleCode}
           </Tag>
         ) : null
         return (
@@ -1628,8 +1637,24 @@ const SkuMasterWorkspacePage = () => {
                       (detailQuery.data as any).bundle_preset_selector ??
                       (detailQuery.data.metadata_json as any)?.bundle_preset_selector ??
                       ''
-                    const s = [String(code || '').trim(), String(sel || '').trim().toUpperCase()].filter(Boolean).join('-')
-                    return s || '-'
+                    const bundleCode = String(code || '').trim()
+                    const preset = String(sel || '').trim().toUpperCase()
+                    if (!bundleCode) return '-'
+                    const tid = String(
+                      (detailQuery.data as any).bundle_template_id ??
+                        (detailQuery.data.metadata_json as any)?.bundle_template_id ??
+                        '',
+                    ).trim()
+                    const tpl =
+                      ((bundleTemplatesQuery.data ?? []) as any[]).find((t: any) => String(t?.id ?? '') === tid) ??
+                      ((bundleTemplatesQuery.data ?? []) as any[]).find((t: any) => String(t?.code ?? '').trim() === bundleCode)
+                    const presets = Array.isArray((tpl as any)?.phrase_presets) ? ((tpl as any).phrase_presets as any[]) : []
+                    const p = presets.find(
+                      (x: any) => String(x?.selector ?? '').trim().toUpperCase() === String(preset || '').trim().toUpperCase(),
+                    )
+                    const mode = String((p as any)?.mode ?? '').trim()
+                    const prefix = mode === 'force' ? 'Z' : 'B'
+                    return preset ? `${prefix}-${bundleCode}${preset}` : `${prefix}-${bundleCode}`
                   })()}
                 </Descriptions.Item>
                 <Descriptions.Item label="ERP匹配状态（网店↔ERP）">

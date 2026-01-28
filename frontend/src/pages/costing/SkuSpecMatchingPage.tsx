@@ -312,6 +312,45 @@ export default function SkuSpecMatchingPage() {
     return Math.max(items.length - anchoredItems.length, 0)
   }, [anchoredItems.length, items.length])
 
+  // 锚点变更识别：
+  // - 若预解析早于绑定时间（model_bound_at / bundle_bound_at），提示“需重算”
+  // - Z/force 套装：预解析缓存使用 "__BUNDLE_FORCE__:template_id:preset" 作为 spec_text_key；
+  //   若绑定发生变更，旧 key 会不匹配，需重算以标记最新锚点。
+  const isAnchorStale = useMemo(() => {
+    const parseIso = (v: any) => {
+      const s = safeString(v).trim()
+      const t = s ? Date.parse(s) : NaN
+      return Number.isFinite(t) ? t : NaN
+    }
+    const getMeta = (r: any) => (r?.metadata_json ?? {}) as any
+    const staleSet = new Set<string>()
+    for (const r of anchoredItems as any[]) {
+      const id = String(r?.id ?? '')
+      if (!id) continue
+      const meta = getMeta(r)
+      const preAt = parseIso(r?.preparse_saved_at ?? meta?.preparse_saved_at)
+      const modelAt = parseIso(meta?.model_bound_at)
+      const bundleAt = parseIso(meta?.bundle_bound_at)
+      const anchorAt = Math.max(Number.isFinite(modelAt) ? modelAt : 0, Number.isFinite(bundleAt) ? bundleAt : 0)
+      let stale = false
+      if (Number.isFinite(preAt) && anchorAt > 0 && preAt < anchorAt) stale = true
+
+      const preText = safeString(meta?.preparse_spec_text ?? r?.preparse_spec_text).trim()
+      if (preText.startsWith('__BUNDLE_FORCE__:')) {
+        const parts = preText.split(':')
+        const preTid = parts?.[1] || ''
+        const preSel = (parts?.[2] || '').toUpperCase()
+        const curTid = safeString(meta?.bundle_template_id ?? r?.bundle_template_id).trim()
+        const curSel = safeString(meta?.bundle_preset_selector ?? r?.bundle_preset_selector).trim().toUpperCase()
+        if (curTid && curSel && (preTid !== curTid || preSel !== curSel)) stale = true
+      }
+      if (stale) staleSet.add(id)
+    }
+    return staleSet
+  }, [anchoredItems])
+
+  const staleCount = useMemo(() => isAnchorStale.size, [isAnchorStale.size])
+
   const tableRows = isPreviewMode ? previewItems : anchoredItems
   const tableTotal = isPreviewMode ? previewItems.length : anchoredItems.length
 
@@ -814,6 +853,7 @@ export default function SkuSpecMatchingPage() {
           // 若两者同时存在：同一格里分两行展示，避免混淆口径
           return (
             <Space direction="vertical" size={2}>
+              {isAnchorStale.has(String((row as any)?.id ?? '')) ? <Tag color="orange">锚点已变更（需重算）</Tag> : null}
               {hasModel ? (
                 <span>
                   <Tag color="blue">{modelCode}</Tag>
@@ -1325,6 +1365,15 @@ export default function SkuSpecMatchingPage() {
                 showIcon
                 message={`已隐藏未绑定记录 ${droppedUnanchoredCount} 条（仅展示“已绑定模型或已绑定套装”的 SKU）`}
                 description="如需处理这些记录，请先去“商品关联（sku-master）”完成模型/套装锚点绑定后再回到本页解析。"
+              />
+            ) : null}
+            {!isPreviewMode && staleCount > 0 ? (
+              <Alert
+                style={{ marginBottom: 8 }}
+                type="info"
+                showIcon
+                message={`检测到 ${staleCount} 条记录：预解析早于绑定更新时间 / 或套装锚点已变更`}
+                description="建议勾选“强制覆盖”后重新执行“执行保存/一键跑完”，确保预解析缓存与最新锚点一致。"
               />
             ) : null}
             {!isPreviewMode ? (

@@ -467,6 +467,20 @@
       - 增加勾选框：`覆盖关联（允许重新绑定）`，并把 `allow_rebind` 传给模型/套装的单次/批量绑定接口。
   - **规格差异（解释）**：
     - `spec_mismatch` 表示：**ERP 主档里的 `spec_text` 与“最近一次发货回写看到的交易规格（last_shipment_spec_text）”不一致**（按原文比较），用于提醒主档规格可能已过时/渠道规格口径不一（非必然错误，但建议复核）。
+
+- **2026-01-28（规格解析：识别 sku-master 锚点更新并提示重算）**
+  - **诉求**：在 `sku-master` 更新过模型/套装绑定后，`spec-matching` 需要能自动识别并提示“需要重算”，避免用户不知道绑定已变更。
+  - **实现**：
+    - 后端 `sku-master` 绑定动作写入时间戳：
+      - `bind_sku_master_by_model` / `bind_sku_master_by_model_bulk` 写入 `metadata_json.model_bound_at/model_bound_by`
+      - 套装绑定已存在 `metadata_json.bundle_bound_at/bundle_bound_by`
+    - 前端 `spec-matching` 增加“锚点已变更（需重算）”判断：
+      - 若 `preparse_saved_at < max(model_bound_at, bundle_bound_at)` → 标记需重算
+      - 若 `preparse_spec_text` 是 `__BUNDLE_FORCE__:<template_id>:<preset>` 且当前绑定的 template/preset 不一致 → 标记需重算
+      - 页面顶部给出统计提示，并建议勾选“强制覆盖”后重跑
+  - **产物**：
+    - `backend/src/planner/services/sku_master_service.py`
+    - `frontend/src/pages/costing/SkuSpecMatchingPage.tsx`
   - **验收命令**：
     - 前端：`npm -C frontend run build`
     - 后端：按 `DOC/agents/commands.md`

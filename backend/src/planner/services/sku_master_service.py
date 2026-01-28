@@ -1869,6 +1869,7 @@ def bind_sku_master_by_model(
     skipped_already_bound = 0
     skipped_missing_barcode = 0
     errors: List[Dict[str, Any]] = []
+    now_iso = _utcnow().isoformat()
 
     for sid in sku_master_ids:
         row = by_id.get(sid)
@@ -1900,10 +1901,21 @@ def bind_sku_master_by_model(
                     "skip_prefix_check": True,
                 },
             )
+            # Record binding metadata on sku_master for downstream "spec-matching" anchor-change detection.
+            meta = dict(getattr(row, "metadata_json", None) or {})
+            meta.update(
+                {
+                    "model_bound_at": now_iso,
+                    "model_bound_by": (requested_by or meta.get("requested_by") or None),
+                    "model_binding_method": "manual_by_model_rebind" if allow_rebind else "manual_by_model",
+                }
+            )
+            row.metadata_json = meta
             bound_count += 1
         except Exception as exc:  # noqa: BLE001
             errors.append({"sku_master_id": row.id, "sku_code": sku, "error": str(exc)})
 
+    db.commit()
     return {
         "total_selected": total_selected,
         "bound_count": bound_count,
@@ -2071,6 +2083,7 @@ def bind_sku_master_by_model_bulk(
     skipped_already_bound = 0
     skipped_missing_barcode = 0
     errors: List[Dict[str, Any]] = []
+    now_iso = _utcnow().isoformat()
 
     for row in batch_rows:
         sku = (row.erp_sku_barcode or "").strip()
@@ -2097,10 +2110,20 @@ def bind_sku_master_by_model_bulk(
                     "skip_prefix_check": True,
                 },
             )
+            meta = dict(getattr(row, "metadata_json", None) or {})
+            meta.update(
+                {
+                    "model_bound_at": now_iso,
+                    "model_bound_by": (requested_by or meta.get("requested_by") or None),
+                    "model_binding_method": "manual_by_model_bulk_rebind" if allow_rebind else "manual_by_model_bulk",
+                }
+            )
+            row.metadata_json = meta
             bound_count += 1
         except Exception as exc:  # noqa: BLE001
             errors.append({"sku_master_id": row.id, "sku_code": sku, "error": str(exc)})
 
+    db.commit()
     return {
         "batch_candidates": len(batch_rows),
         "bound_count": bound_count,

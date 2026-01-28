@@ -385,6 +385,21 @@
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-28（规格解析工作台口径回归：仅展示已绑定锚点，避免未绑定误入）
+  - 现象：你反馈 spec-matching 列表里出现大量“未绑定模型/未绑套装”的行，违背“第一步必须先绑定锚点”的约定。
+  - 处理（前端兜底）：
+    - `frontend/src/pages/costing/SkuSpecMatchingPage.tsx`
+      - 列表展示侧增加“锚点准入”过滤：只展示满足其一的 SKU：
+        - 已绑定模型（`active_model_version_id`/`bound_model_*` 任一存在）
+        - 已绑定套装（`bundle_template_*` 或 `metadata_json.bundle_template_*` 任一存在）
+      - 新增列“已绑定套装”，避免“未绑定模型”被误解为“完全未绑定”
+      - 若本页拉到未绑定项：提示“已隐藏未绑定记录 X 条”，并引导先去 sku-master 绑定
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-27（商品关联 UI 优化：目标下拉同一行 + 套装二级 preset 绑定）
   - 需求：人工审核的“模型类型下拉 + 模型/套装下拉”合并为同一行；套装绑定改为二级（先选模板，再选 `preset_selector`，第二级才是最终绑定目标）。
   - 本轮产物：

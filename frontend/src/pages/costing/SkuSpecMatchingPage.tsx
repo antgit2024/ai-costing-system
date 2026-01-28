@@ -32,6 +32,8 @@ const safeString = (v: unknown): string => {
   return String(v)
 }
 
+const isFilled = (v: unknown): boolean => !!safeString(v).trim()
+
 const dimGet = (dims: any, key: string): string => {
   const v = dims?.[key]
   if (v === null || v === undefined || v === '') return '-'
@@ -275,8 +277,41 @@ export default function SkuSpecMatchingPage() {
 
   const items = (listQuery.data?.items ?? []) as SkuMaster[]
   const total = listQuery.data?.total ?? 0
-  const tableRows = isPreviewMode ? previewItems : items
-  const tableTotal = isPreviewMode ? previewItems.length : total
+
+  const hasModelAnchor = (row: any) =>
+    isFilled(row?.active_model_version_id) || isFilled(row?.bound_model_code) || isFilled(row?.bound_model_name)
+
+  const hasBundleAnchor = (row: any) => {
+    const meta = row?.metadata_json ?? {}
+    return (
+      isFilled(row?.bundle_template_id) ||
+      isFilled(row?.bundle_template_code) ||
+      isFilled(row?.bundle_preset_selector) ||
+      isFilled(meta?.bundle_template_id) ||
+      isFilled(meta?.bundle_template_code) ||
+      isFilled(meta?.bundle_preset_selector)
+    )
+  }
+
+  // 关键口径：规格解析工作台只展示“已绑定模型 或 已绑定套装”的 SKU。
+  // 说明：后端部署未覆盖/筛选条件过宽时，列表可能返回未绑定项；这里做前端兜底过滤，避免误操作与误解。
+  const anchoredItems = useMemo(() => {
+    return (items ?? []).filter((r: any) => {
+      const m = hasModelAnchor(r)
+      const b = hasBundleAnchor(r)
+      if (targetKind === 'model') return m
+      if (targetKind === 'bundle') return b
+      return m || b
+    })
+  }, [items, targetKind])
+
+  const droppedUnanchoredCount = useMemo(() => {
+    if (!items?.length) return 0
+    return Math.max(items.length - anchoredItems.length, 0)
+  }, [anchoredItems.length, items.length])
+
+  const tableRows = isPreviewMode ? previewItems : anchoredItems
+  const tableTotal = isPreviewMode ? previewItems.length : anchoredItems.length
 
   // 所有页勾选模式：默认“隐式全选本页（跨页）”，取消勾选=加入排除
   useEffect(() => {
@@ -736,6 +771,20 @@ export default function SkuSpecMatchingPage() {
           ) : (
             <Tag color="red">未绑定</Tag>
           ),
+      },
+      {
+        title: '已绑定套装',
+        dataIndex: 'bundle_template_code',
+        width: 180,
+        render: (_v, row) => {
+          const meta = (row as any)?.metadata_json ?? {}
+          const code = safeString((row as any)?.bundle_template_code ?? meta?.bundle_template_code).trim()
+          const sel = safeString((row as any)?.bundle_preset_selector ?? meta?.bundle_preset_selector)
+            .trim()
+            .toUpperCase()
+          if (!code) return <Tag>未绑定</Tag>
+          return <Tag color="purple">{sel ? `${code}-${sel}` : code}</Tag>
+        },
       },
       { title: '标准版本', dataIndex: 'bound_version_label', width: 120, render: (v) => safeString(v) || '-' },
       {
@@ -1239,6 +1288,15 @@ export default function SkuSpecMatchingPage() {
               </Space>
             }
           >
+            {!isPreviewMode && droppedUnanchoredCount > 0 ? (
+              <Alert
+                style={{ marginBottom: 8 }}
+                type="warning"
+                showIcon
+                message={`已隐藏未绑定记录 ${droppedUnanchoredCount} 条（仅展示“已绑定模型或已绑定套装”的 SKU）`}
+                description="如需处理这些记录，请先去“商品关联（sku-master）”完成模型/套装锚点绑定后再回到本页解析。"
+              />
+            ) : null}
             {!isPreviewMode ? (
               <Tabs
                 activeKey={listTab}

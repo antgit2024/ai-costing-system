@@ -74,6 +74,7 @@
     - 后端新增“报表快照”存储层（复用 `taxonomy_items` 做 KV，不引入迁移），按 `kind + params` 生成 key，落库保存 `data/params/computed_at`。
     - 前端洞察页默认走“缓存读数”，并提供 `刷新数据` 与 `切到实时/切到缓存`。
     - 时间范围默认 **近30天**；快捷仅保留 **近7/近30/近90**（移除近1年）。
+    - 兼容性：快照落库前统一做 JSON 可序列化转换（避免 Decimal/Datetime 等导致 500）。
   - 本轮产物（后端）：
     - `backend/src/planner/services/report_snapshot_service.py`：快照 key 生成 + get/upsert（落 `taxonomy_items`）
     - `backend/src/planner/routers/reports.py`：`GET/POST /api/planner/reports/*`（洞察快照读取/刷新）

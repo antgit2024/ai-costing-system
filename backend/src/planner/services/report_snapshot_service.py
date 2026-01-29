@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -108,6 +109,11 @@ def upsert_snapshot(
         "params": params or {},
         "data": data or {},
     }
+    # Ensure JSON-serializable payload for DB JSON column:
+    # - Decimal -> float
+    # - datetime/date -> isoformat
+    # - sets/tuples -> lists
+    meta = jsonable_encoder(meta)
 
     row = (
         db.query(models.TaxonomyItem)

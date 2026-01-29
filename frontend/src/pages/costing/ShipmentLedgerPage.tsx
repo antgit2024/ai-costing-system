@@ -166,10 +166,11 @@ const ShipmentLedgerPage = () => {
     },
     { title: '店铺', dataIndex: 'channel', width: 140, ellipsis: true },
     { title: '货品条码', dataIndex: 'sku_code', width: 170, ellipsis: true },
+    { title: '订单号', dataIndex: 'order_no', width: 170, ellipsis: true },
     {
       title: '模型/套装',
       key: 'bound_target',
-      width: 220,
+      width: 295,
       render: (_v, r: any) => {
         const code = safeString(r?.bound_model_code).trim()
         const name = safeString(r?.bound_model_name).trim()
@@ -183,7 +184,21 @@ const ShipmentLedgerPage = () => {
         )
       },
     },
-    { title: '标准版本', dataIndex: 'bound_version_label', width: 160, ellipsis: true, render: (v) => safeString(v) || '-' },
+    {
+      title: '标准版本',
+      dataIndex: 'bound_version_label',
+      width: 215,
+      ellipsis: true,
+      render: (v) => {
+        const s = safeString(v).trim()
+        if (!s) return '-'
+        return (
+          <Tooltip title={s}>
+            <span style={capsuleStyle}>{s}</span>
+          </Tooltip>
+        )
+      },
+    },
     {
       title: '交易规格',
       dataIndex: 'spec_text',
@@ -199,7 +214,35 @@ const ShipmentLedgerPage = () => {
       },
     },
     { title: '数量', dataIndex: 'qty', width: 90, render: (v) => safeString(v) || '-' },
-    { title: '金额', dataIndex: 'revenue_amount', width: 110, render: (v) => safeString(v) || '-' },
+    { title: '金额', dataIndex: 'revenue_amount', width: 110, render: (v) => formatMoney(v) },
+    {
+      title: '成本',
+      dataIndex: 'cost_total',
+      width: 110,
+      render: (v) => formatMoney(v),
+    },
+    {
+      title: '毛利',
+      key: 'profit_amount',
+      width: 110,
+      render: (_v, r: any) => {
+        const rev = Number(safeString(r?.revenue_amount).trim())
+        const cost = Number(safeString(r?.cost_total).trim())
+        if (!Number.isFinite(rev) || !Number.isFinite(cost)) return '-'
+        return formatMoney(rev - cost)
+      },
+    },
+    {
+      title: '毛利率',
+      key: 'profit_rate',
+      width: 100,
+      render: (_v, r: any) => {
+        const rev = Number(safeString(r?.revenue_amount).trim())
+        const cost = Number(safeString(r?.cost_total).trim())
+        if (!Number.isFinite(rev) || !Number.isFinite(cost) || rev === 0) return '-'
+        return formatPct((rev - cost) / rev)
+      },
+    },
     {
       title: '处理状态',
       key: 'status',
@@ -647,6 +690,31 @@ const ShipmentLedgerPage = () => {
       </Drawer>
     </div>
   )
+}
+
+const formatMoney = (v: unknown): string => {
+  const s = safeString(v).trim()
+  if (!s) return '-'
+  const n = Number(s)
+  if (!Number.isFinite(n)) return s
+  return n.toFixed(2)
+}
+
+const formatPct = (v: number | null): string => {
+  if (v === null || v === undefined || !Number.isFinite(v)) return '-'
+  return `${(v * 100).toFixed(2)}%`
+}
+
+const capsuleStyle: React.CSSProperties = {
+  display: 'inline-block',
+  padding: '0px 6px',
+  borderRadius: 6,
+  border: '1px solid color-mix(in srgb, var(--ant-color-success) 45%, var(--ant-color-border))',
+  background: 'color-mix(in srgb, var(--ant-color-success) 18%, var(--ant-color-fill-tertiary))',
+  fontSize: 11,
+  lineHeight: '18px',
+  color: 'var(--ant-color-success)',
+  whiteSpace: 'nowrap',
 }
 
 export default ShipmentLedgerPage

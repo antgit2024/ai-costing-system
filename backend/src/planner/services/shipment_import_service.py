@@ -1342,6 +1342,13 @@ def list_shipment_lines(
         .correlate(models.ShipmentLine)
         .scalar_subquery()
     )
+    cost_total_sq = (
+        db.query(models.ShipmentCostingResult.cost_total)
+        .filter(models.ShipmentCostingResult.shipment_line_id == models.ShipmentLine.id)
+        .limit(1)
+        .correlate(models.ShipmentLine)
+        .scalar_subquery()
+    )
     latest_snapshot_id_sq = (
         db.query(models.BomSnapshot.id)
         .filter(models.BomSnapshot.shipment_line_id == models.ShipmentLine.id)
@@ -1422,6 +1429,7 @@ def list_shipment_lines(
         unresolved_reason_sq.label("unresolved_reason"),
         unresolved_message_sq.label("unresolved_message"),
         cost_mode_sq.label("cost_mode"),
+        cost_total_sq.label("cost_total"),
         bound_model_code_sq.label("bound_model_code"),
         bound_model_name_sq.label("bound_model_name"),
         bound_version_label_sq.label("bound_version_label"),
@@ -1497,6 +1505,7 @@ def list_shipment_lines(
         unresolved_reason,
         unresolved_message,
         cost_mode,
+        cost_total,
         bound_model_code,
         bound_model_name,
         bound_version_label,
@@ -1546,6 +1555,7 @@ def list_shipment_lines(
                 "spec_hash": getattr(line, "spec_hash", None),
                 "qty": getattr(line, "qty", None),
                 "revenue_amount": getattr(line, "revenue_amount", None),
+                "cost_total": cost_total,
                 "bound_model_code": (str(bound_model_code).strip() if bound_model_code not in (None, "") else None),
                 "bound_model_name": (str(bound_model_name).strip() if bound_model_name not in (None, "") else None),
                 "bound_version_label": (

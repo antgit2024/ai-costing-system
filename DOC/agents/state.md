@@ -3017,3 +3017,19 @@
     - `npm -C frontend run build`
     - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
     - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+
+- **本轮补强（发货台账列表：订单号回归 + 版本胶囊 + 成本/毛利展示）**：
+  - 最近校对（北京时间 GMT+8）：2026-01-28
+  - 变更：
+    - 列表：订单号恢复显示在“货品条码”后；“模型/套装”“标准版本”列宽各加大约 1/3
+    - 标准版本：按指定胶囊风格展示版本号
+    - 成本/毛利：列表新增“成本/毛利/毛利率”（基于 `shipment_costing_results.cost_total` 轻量读取；避免依赖大快照 trace_json）
+  - 关联文件：
+    - `backend/src/planner/services/shipment_import_service.py`
+    - `backend/src/planner/schemas.py`
+    - `frontend/src/types/planner.ts`
+    - `frontend/src/pages/costing/ShipmentLedgerPage.tsx`
+  - 本轮验收命令（必须，均已通过）：
+    - `npm -C frontend run build`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`

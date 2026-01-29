@@ -1472,6 +1472,7 @@ export interface ShipmentLineListItem {
   spec_hash?: string | null
   qty?: string | null
   revenue_amount?: string | null
+  cost_total?: string | null
   bom_snapshot_id?: string | null
   status: ShipmentLineStatus
   processed_source?: ShipmentLineProcessedSource | null

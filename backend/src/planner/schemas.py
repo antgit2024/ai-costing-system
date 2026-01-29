@@ -2338,6 +2338,8 @@ class ShipmentLineListItem(BaseModel):
     spec_hash: Optional[str] = None
     qty: Optional[Decimal] = None
     revenue_amount: Optional[Decimal] = None
+    # 成本金额（优先读 shipment_costing_results.cost_total；为台账/毛利展示）
+    cost_total: Optional[Decimal] = None
     # latest snapshot id (if any) for bulk recompute
     bom_snapshot_id: Optional[str] = None
 

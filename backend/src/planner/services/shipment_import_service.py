@@ -1135,6 +1135,54 @@ def list_bom_snapshots(
     return items
 
 
+def get_bom_snapshot(db: Session, *, snapshot_id: str) -> Optional[models.BomSnapshot]:
+    sid = (snapshot_id or "").strip()
+    if not sid:
+        return None
+    snap = db.get(models.BomSnapshot, sid)
+    if not snap or getattr(snap, "is_archived", False):
+        return None
+    # Attach shipment line fields for readability (Excel-like columns)
+    line = db.get(models.ShipmentLine, getattr(snap, "shipment_line_id", None))
+    if line and not getattr(line, "is_archived", False):
+        snap.row_index = getattr(line, "row_index", None)
+        snap.shipment_no = getattr(line, "shipment_no", None)
+        snap.completed_at = getattr(line, "completed_at", None)
+        snap.channel = getattr(line, "channel", None)
+        snap.sku_code = getattr(line, "sku_code", None)
+        snap.spec_text = getattr(line, "spec_text", None)
+        snap.spec_hash = getattr(line, "spec_hash", None)
+        snap.qty = getattr(line, "qty", None)
+        snap.revenue_amount = getattr(line, "revenue_amount", None)
+    return snap
+
+
+def list_deduction_lines(db: Session, *, shipment_line_id: str) -> List[models.ShipmentInventoryDeductionLine]:
+    lid = (shipment_line_id or "").strip()
+    if not lid:
+        return []
+    return (
+        db.query(models.ShipmentInventoryDeductionLine)
+        .filter(
+            models.ShipmentInventoryDeductionLine.shipment_line_id == lid,
+        )
+        .order_by(models.ShipmentInventoryDeductionLine.material_code.asc().nullslast())
+        .all()
+    )
+
+
+def get_costing_result(db: Session, *, shipment_line_id: str) -> Optional[models.ShipmentCostingResult]:
+    lid = (shipment_line_id or "").strip()
+    if not lid:
+        return None
+    return (
+        db.query(models.ShipmentCostingResult)
+        .filter(models.ShipmentCostingResult.shipment_line_id == lid)
+        .order_by(models.ShipmentCostingResult.created_at.desc())
+        .first()
+    )
+
+
 def list_profit_lines_by_batch(
     db: Session,
     *,

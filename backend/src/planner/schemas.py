@@ -2501,6 +2501,38 @@ class BomSnapshotRead(BaseModel):
         allow_population_by_field_name = True
 
 
+class ShipmentInventoryDeductionLineRead(BaseModel):
+    id: str
+    shipment_line_id: str
+    material_code: Optional[str] = None
+    material_name: Optional[str] = None
+    unit_of_measure: Optional[str] = None
+    quantity: Optional[Decimal] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict, alias="metadata_json")
+
+    class Config:
+        orm_mode = True
+        allow_population_by_field_name = True
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ShipmentCostingResultRead(BaseModel):
+    id: str
+    shipment_line_id: str
+    mode: str
+    qty: Optional[Decimal] = None
+    cost_total: Optional[Decimal] = None
+    cost_material_total: Optional[Decimal] = None
+    cost_process_total: Optional[Decimal] = None
+    cost_overhead_total: Optional[Decimal] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict, alias="metadata_json")
+
+    class Config:
+        orm_mode = True
+        allow_population_by_field_name = True
+        json_encoders = {Decimal: _decimal_to_str}
+
+
 class BomSnapshotRecomputeRequest(BaseModel):
     operator_id: Optional[str] = Field(None, max_length=64)
 

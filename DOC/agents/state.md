@@ -3047,3 +3047,24 @@
     - `npm -C frontend run build`
     - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
     - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+
+- **本轮补强（发货台账抽屉：直接展示 BOM 物料/扣库/成本拆分，避免“盲盒”）**：
+  - 最近校对（北京时间 GMT+8）：2026-01-28
+  - 变更：
+    - 抽屉新增 Tab：`BOM物料 / 成本拆分 / 扣库行`，可直接核对解析是否正确（不再只能看结果字段）
+    - 台账列表“交易规格”改为完整换行展示（不截断）
+    - 后端新增只读接口：
+      - `GET /shipments/bom-snapshots/{snapshot_id}`：获取单条快照（含 `final_material_lines` 与 trace）
+      - `GET /shipments/lines/{shipment_line_id}/costing`：获取计价结果（成本拆分）
+      - `GET /shipments/lines/{shipment_line_id}/deductions`：获取扣库行
+  - 关联文件：
+    - `backend/src/planner/routers/shipments.py`
+    - `backend/src/planner/services/shipment_import_service.py`
+    - `backend/src/planner/schemas.py`
+    - `frontend/src/pages/costing/ShipmentLedgerPage.tsx`
+    - `frontend/src/services/planner.ts`
+    - `frontend/src/types/planner.ts`
+  - 本轮验收命令（必须，均已通过）：
+    - `npm -C frontend run build`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`

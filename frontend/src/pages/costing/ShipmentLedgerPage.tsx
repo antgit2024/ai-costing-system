@@ -10,6 +10,7 @@ import {
   Modal,
   Select,
   Space,
+  Tabs as AntTabs,
   Table,
   Tabs,
   Tag,
@@ -23,7 +24,16 @@ import { useMemo, useState } from 'react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 
-import { fetchBundleTemplates, fetchPublishedStandardModels, fetchProductModelVersions, fetchShipmentLines, fetchSkuMasterByBarcode } from '@/services/planner'
+import {
+  fetchBundleTemplates,
+  fetchPublishedStandardModels,
+  fetchProductModelVersions,
+  fetchShipmentBomSnapshotDetail,
+  fetchShipmentLineCosting,
+  fetchShipmentLineDeductions,
+  fetchShipmentLines,
+  fetchSkuMasterByBarcode,
+} from '@/services/planner'
 import type { ShipmentLineListItem, ShipmentLineListResponse } from '@/types/planner'
 
 const { Title, Text } = Typography
@@ -140,6 +150,27 @@ const ShipmentLedgerPage = () => {
   const specImageUrl = skuMasterId ? `/api/planner/sku-master/${encodeURIComponent(skuMasterId)}/images/spec` : ''
   const productImageUrl = skuMasterId ? `/api/planner/sku-master/${encodeURIComponent(skuMasterId)}/images/product` : ''
 
+  const snapshotId = safeString((detailRow as any)?.bom_snapshot_id).trim()
+  const shipmentLineId = safeString((detailRow as any)?.id).trim()
+  const bomSnapshotQuery = useQuery({
+    queryKey: ['shipments', 'ledger', 'bom-snapshot', snapshotId],
+    queryFn: () => fetchShipmentBomSnapshotDetail(snapshotId),
+    enabled: detailOpen && !!snapshotId,
+    placeholderData: keepPreviousData,
+  })
+  const costingQuery = useQuery({
+    queryKey: ['shipments', 'ledger', 'costing', shipmentLineId],
+    queryFn: () => fetchShipmentLineCosting(shipmentLineId),
+    enabled: detailOpen && !!shipmentLineId,
+    placeholderData: keepPreviousData,
+  })
+  const deductionsQuery = useQuery({
+    queryKey: ['shipments', 'ledger', 'deductions', shipmentLineId],
+    queryFn: () => fetchShipmentLineDeductions(shipmentLineId),
+    enabled: detailOpen && !!shipmentLineId,
+    placeholderData: keepPreviousData,
+  })
+
   const shipmentLinesQuery = useQuery({
     queryKey: ['shipments', 'lines', ledgerTab, ledgerPage, ledgerPageSize, ledgerRange, ledgerFilters],
     queryFn: () =>
@@ -202,14 +233,12 @@ const ShipmentLedgerPage = () => {
     {
       title: '交易规格',
       dataIndex: 'spec_text',
-      ellipsis: true,
+      ellipsis: false,
       render: (v) => {
         const s = safeString(v)
         if (!s) return '-'
         return (
-          <Text ellipsis={{ tooltip: s }} style={{ maxWidth: 520, display: 'inline-block' }}>
-            {s}
-          </Text>
+          <div style={{ whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.2, maxWidth: 560 }}>{s}</div>
         )
       },
     },
@@ -626,9 +655,104 @@ const ShipmentLedgerPage = () => {
                 </Descriptions.Item>
                 <Descriptions.Item label="标准版本">{safeString((detailRow as any)?.bound_version_label) || '-'}</Descriptions.Item>
                 <Descriptions.Item label="交易规格" span={2}>
-                  <div style={{ whiteSpace: 'normal', wordBreak: 'break-word' }}>{safeString((detailRow as any)?.spec_text) || '-'}</div>
+                  <div style={{ whiteSpace: 'normal', wordBreak: 'break-word' }}>
+                    {safeString((detailRow as any)?.spec_text) || '-'}
+                  </div>
                 </Descriptions.Item>
               </Descriptions>
+            </Card>
+
+            <Card size="small" title="BOM / 扣库（非盲盒，可直接核对）">
+              <AntTabs
+                items={[
+                  {
+                    key: 'bom',
+                    label: 'BOM物料',
+                    children: (
+                      <>
+                        {!snapshotId ? (
+                          <Alert type="info" showIcon message="该行暂无 BOM 快照（未计价/未落快照）" />
+                        ) : bomSnapshotQuery.isError ? (
+                          <Alert
+                            type="error"
+                            showIcon
+                            message="BOM快照加载失败"
+                            description={String((bomSnapshotQuery.error as any)?.response?.data?.detail ?? (bomSnapshotQuery.error as any)?.message ?? 'unknown')}
+                          />
+                        ) : (
+                          <Table
+                            size="small"
+                            rowKey={(r: any, i) => String(r?.line_index ?? i)}
+                            pagination={false}
+                            loading={bomSnapshotQuery.isFetching}
+                            dataSource={((bomSnapshotQuery.data as any)?.final_material_lines ?? []) as any[]}
+                            columns={[
+                              { title: '编码', dataIndex: 'material_code', width: 110, ellipsis: true },
+                              { title: '名称', dataIndex: 'material_name', width: 180, ellipsis: true },
+                              { title: '数量', dataIndex: 'computed_quantity', width: 110, render: (v) => safeString(v) || '-' },
+                              { title: '单位', dataIndex: 'unit_of_measure', width: 70, render: (v) => safeString(v) || '-' },
+                              { title: '单价', dataIndex: 'bom_unit_price', width: 90, render: (v) => formatMoney(v) },
+                              { title: '行成本', dataIndex: 'line_cost', width: 90, render: (v) => formatMoney(v) },
+                              {
+                                title: '来源',
+                                key: 'src',
+                                width: 160,
+                                render: (_v, r: any) => safeString(r?.metadata?.source_module_name || r?.metadata?.source_module_code || ''),
+                              },
+                            ]}
+                          />
+                        )}
+                      </>
+                    ),
+                  },
+                  {
+                    key: 'costing',
+                    label: '成本拆分',
+                    children: (
+                      <Table
+                        size="small"
+                        rowKey="k"
+                        pagination={false}
+                        loading={costingQuery.isFetching}
+                        dataSource={[
+                          { k: 'material', name: '材料成本', v: (costingQuery.data as any)?.cost_material_total },
+                          { k: 'process', name: '工序成本', v: (costingQuery.data as any)?.cost_process_total },
+                          { k: 'overhead', name: '管理费/间接费', v: (costingQuery.data as any)?.cost_overhead_total },
+                          { k: 'total', name: '总成本', v: (costingQuery.data as any)?.cost_total },
+                        ]}
+                        columns={[
+                          { title: '项', dataIndex: 'name', width: 180 },
+                          { title: '金额', dataIndex: 'v', render: (v) => formatMoney(v) },
+                        ]}
+                      />
+                    ),
+                  },
+                  {
+                    key: 'deduct',
+                    label: '扣库行',
+                    children: (
+                      <Table
+                        size="small"
+                        rowKey="id"
+                        pagination={false}
+                        loading={deductionsQuery.isFetching}
+                        dataSource={(deductionsQuery.data ?? []) as any}
+                        columns={[
+                          { title: '物料编码', dataIndex: 'material_code', width: 120, ellipsis: true },
+                          { title: '物料名称', dataIndex: 'material_name', width: 220, ellipsis: true },
+                          { title: '数量', dataIndex: 'quantity', width: 120, render: (v) => safeString(v) || '-' },
+                          { title: '单位', dataIndex: 'unit_of_measure', width: 80, render: (v) => safeString(v) || '-' },
+                          {
+                            title: '来源',
+                            key: 'sources',
+                            render: (_v, r: any) => safeString(r?.metadata?.sources ? JSON.stringify(r.metadata.sources) : ''),
+                          },
+                        ]}
+                      />
+                    ),
+                  },
+                ]}
+              />
             </Card>
 
             <Card size="small" title="更多字段（抽屉）">

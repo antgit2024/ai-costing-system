@@ -98,6 +98,8 @@ import type {
   BomGenerateRequest,
   BomGenerateResponse,
   BomSnapshot,
+  ShipmentCostingResult,
+  ShipmentInventoryDeductionLine,
   ShipmentException,
   ShipmentExceptionRetryRequest,
   ShipmentExceptionRetryResponse,
@@ -1850,6 +1852,24 @@ export const fetchShipmentBomSnapshots = async (
   } = {},
 ): Promise<BomSnapshot[]> => {
   const response = await plannerClient.get('/shipments/bom-snapshots', { params: sanitizeParams(params) })
+  return response.data
+}
+
+export const fetchShipmentBomSnapshotDetail = async (snapshot_id: string): Promise<BomSnapshot> => {
+  const id = String(snapshot_id || '').trim()
+  const response = await plannerClient.get(`/shipments/bom-snapshots/${encodeURIComponent(id)}`)
+  return response.data
+}
+
+export const fetchShipmentLineCosting = async (shipment_line_id: string): Promise<ShipmentCostingResult> => {
+  const id = String(shipment_line_id || '').trim()
+  const response = await plannerClient.get(`/shipments/lines/${encodeURIComponent(id)}/costing`)
+  return response.data
+}
+
+export const fetchShipmentLineDeductions = async (shipment_line_id: string): Promise<ShipmentInventoryDeductionLine[]> => {
+  const id = String(shipment_line_id || '').trim()
+  const response = await plannerClient.get(`/shipments/lines/${encodeURIComponent(id)}/deductions`)
   return response.data
 }
 

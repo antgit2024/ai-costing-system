@@ -1497,6 +1497,28 @@ export interface ShipmentLineComputeSnapshotResponse {
   detail?: string | null
 }
 
+export interface ShipmentCostingResult {
+  id: string
+  shipment_line_id: string
+  mode: string
+  qty?: string | null
+  cost_total?: string | null
+  cost_material_total?: string | null
+  cost_process_total?: string | null
+  cost_overhead_total?: string | null
+  metadata?: Record<string, unknown>
+}
+
+export interface ShipmentInventoryDeductionLine {
+  id: string
+  shipment_line_id: string
+  material_code?: string | null
+  material_name?: string | null
+  unit_of_measure?: string | null
+  quantity?: string | null
+  metadata?: Record<string, unknown>
+}
+
 export interface ShipmentException {
   id: string
   batch_id: string

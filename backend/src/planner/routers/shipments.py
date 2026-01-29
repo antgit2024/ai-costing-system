@@ -20,6 +20,8 @@ from ..schemas import (
     ShipmentExceptionRetryResponse,
     ShipmentImportBatchRead,
     ShipmentProfitLinesResponse,
+    ShipmentCostingResultRead,
+    ShipmentInventoryDeductionLineRead,
 )
 from ..services import shipment_import_service
 
@@ -158,6 +160,27 @@ def list_bom_snapshots(
         spec_hash=spec_hash,
         limit=limit,
     )
+
+
+@router.get("/bom-snapshots/{snapshot_id}", response_model=BomSnapshotRead)
+def get_bom_snapshot(snapshot_id: str, db: Session = Depends(get_db_session)):
+    snap = shipment_import_service.get_bom_snapshot(db, snapshot_id=snapshot_id)
+    if not snap:
+        raise HTTPException(status_code=404, detail="BOM快照不存在")
+    return snap
+
+
+@router.get("/lines/{shipment_line_id}/costing", response_model=ShipmentCostingResultRead)
+def get_costing_result(shipment_line_id: str, db: Session = Depends(get_db_session)):
+    row = shipment_import_service.get_costing_result(db, shipment_line_id=shipment_line_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="计价结果不存在")
+    return row
+
+
+@router.get("/lines/{shipment_line_id}/deductions", response_model=list[ShipmentInventoryDeductionLineRead])
+def list_deduction_lines(shipment_line_id: str, db: Session = Depends(get_db_session)):
+    return shipment_import_service.list_deduction_lines(db, shipment_line_id=shipment_line_id)
 
 
 @router.post("/bom-snapshots/{snapshot_id}/recompute", response_model=BomSnapshotRead)

@@ -22,8 +22,14 @@ import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
 
-import { fetchSalesLines, fetchSalesProfitDashboard } from '@/services/planner'
+import {
+  fetchSalesLines,
+  fetchSalesProfitDashboard,
+  fetchSalesProfitDashboardSnapshot,
+  refreshSalesProfitDashboardSnapshot,
+} from '@/services/planner'
 import type { SalesLineItem, SalesLinesResponse, SalesProfitDashboardResponse, SalesProfitDashboardTopModelItem, SalesProfitDashboardTopSkuItem } from '@/types/planner'
 
 const STORAGE_KEY = 'insights.sales.lastQuery.v1'
@@ -52,9 +58,14 @@ const formatDateToDay = (raw?: string | null) => {
   return d.format('YYYY-MM-DD')
 }
 
-const SalesInsightsPage = () => {
+type SalesInsightsPageProps = {
+  embedded?: boolean
+}
+
+const SalesInsightsPage = (props: SalesInsightsPageProps) => {
+  const embedded = !!props.embedded
+  const navigate = useNavigate()
   const [form] = Form.useForm()
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'detail'>('dashboard')
   const [dashboardGroupBy, setDashboardGroupBy] = useState<'week' | 'month'>('week')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -63,6 +74,9 @@ const SalesInsightsPage = () => {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [shopOptions, setShopOptions] = useState<string[]>([])
+  const [useSnapshot, setUseSnapshot] = useState(true)
+  const [quickDays, setQuickDays] = useState<7 | 30 | 90>(30)
+  const [dashboardComputedAt, setDashboardComputedAt] = useState<string | null>(null)
   const [lastQuery, setLastQuery] = useState<{
     start: string
     end: string
@@ -82,20 +96,71 @@ const SalesInsightsPage = () => {
 
   const dashboardQuery = useQuery({
     queryKey: ['sales', 'profit-dashboard', rangeStartIso, rangeEndIso, watchedShop, dashboardGroupBy],
-    queryFn: () =>
-      fetchSalesProfitDashboard(
+    queryFn: async () => {
+      const channel = watchedShop?.trim() || undefined
+      if (useSnapshot) {
+        try {
+          const snap = await fetchSalesProfitDashboardSnapshot({ range_days: quickDays, group_by: dashboardGroupBy, channel })
+          setDashboardComputedAt(String((snap as any)?.computed_at ?? '') || null)
+          return snap.data as SalesProfitDashboardResponse
+        } catch (e: any) {
+          // If cache missing, fall back to live.
+          if (Number(e?.response?.status) !== 404) {
+            setDashboardComputedAt(null)
+          }
+        }
+      }
+      setDashboardComputedAt(null)
+      return fetchSalesProfitDashboard(
         {
           start: String(rangeStartIso),
           end: String(rangeEndIso),
           group_by: dashboardGroupBy,
-          channel: watchedShop?.trim() || undefined,
+          channel,
           top_n: 12,
         },
         { timeoutMs: 60000 },
-      ),
-    enabled: activeTab === 'dashboard' && !!rangeStartIso && !!rangeEndIso,
+      )
+    },
+    enabled: !embedded && !!rangeStartIso && !!rangeEndIso,
     placeholderData: keepPreviousData,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
   })
+
+  const refreshDashboardSnapshotNow = async () => {
+    const channel = watchedShop?.trim() || undefined
+    try {
+      await refreshSalesProfitDashboardSnapshot({
+        range_days: quickDays,
+        group_by: dashboardGroupBy,
+        channel,
+        operator_id: 'planner-ui',
+      })
+      await dashboardQuery.refetch()
+      message.success('已刷新（使用缓存）')
+    } catch (e: any) {
+      message.error(`刷新失败：${e?.response?.data?.detail ?? e?.message ?? 'unknown error'}`)
+    }
+  }
+
+  const navigateToShipmentsProcessed = (params: { sku_code?: string; bundle_template_code?: string; bundle_preset_selector?: string }) => {
+    const qp = new URLSearchParams()
+    qp.set('tab', 'processed')
+    if (rangeStartIso) qp.set('start', String(rangeStartIso))
+    if (rangeEndIso) qp.set('end', String(rangeEndIso))
+    const shop = String(watchedShop ?? '').trim()
+    if (shop) qp.set('channel', shop)
+    if (params.sku_code) qp.set('sku_code', String(params.sku_code))
+    if (params.bundle_template_code) {
+      qp.set('bound_target_kind', 'bundle')
+      qp.set('bundle_template_code', String(params.bundle_template_code))
+      if (params.bundle_preset_selector) qp.set('bundle_preset_selector', String(params.bundle_preset_selector))
+    }
+    qp.set('sort', 'profit_rate')
+    qp.set('order', 'ascend')
+    navigate(`/costing/shipments?${qp.toString()}`)
+  }
 
   const columns = useMemo<ColumnsType<SalesLineItem>>(
     () => [
@@ -241,17 +306,19 @@ const SalesInsightsPage = () => {
     } catch {
       // ignore storage errors (private mode / quota)
     }
-    if (activeTab === 'detail') {
+    if (embedded) {
       await runQuery({ ...base, page: 1, page_size: pageSize })
-    } else {
-      dashboardQuery.refetch().then((res) => {
-        const status = (res as any)?.error?.response?.status
-        if (status === 404) message.warning('后端尚未部署销售利润看板接口（/api/planner/analytics/sales/profit-dashboard）。')
-      })
+      return
     }
+    dashboardQuery.refetch().then((res) => {
+      const status = (res as any)?.error?.response?.status
+      if (status === 404) message.warning('后端尚未部署销售利润看板接口（/api/planner/analytics/sales/profit-dashboard）。')
+    })
   }
 
   const applyQuickRange = async (days: number) => {
+    const d = days === 7 || days === 30 || days === 90 ? (days as 7 | 30 | 90) : 30
+    setQuickDays(d)
     const range: [dayjs.Dayjs, dayjs.Dayjs] = [dayjs().subtract(days, 'day'), dayjs()]
     form.setFieldsValue({ range })
     await onQuery()
@@ -341,25 +408,29 @@ const SalesInsightsPage = () => {
   }
 
   return (
-    <div style={{ padding: 16 }}>
-      <Typography.Title level={3} style={{ margin: '0 0 12px' }}>
-        数据洞察 / 销售分析
-      </Typography.Title>
+    <div style={{ padding: embedded ? 0 : 16 }}>
+      {!embedded ? (
+        <>
+          <Typography.Title level={3} style={{ margin: '0 0 12px' }}>
+            数据洞察 / 销售分析
+          </Typography.Title>
 
-      <Alert
-        type="info"
-        showIcon
-        style={{ marginBottom: 12 }}
-        message="说明（利润看板）"
-        description={
-          <div>
-            <div>
-              本页默认展示“利润看板”，帮运营快速识别<strong>赚钱</strong>与<strong>亏钱</strong>的货品/模型（避免“卖一个亏一个”）。
-            </div>
-            <div>为避免缺成本导致利润虚高：毛利/毛利率仅在“已计价行”上计算，并单独展示成本覆盖率。</div>
-          </div>
-        }
-      />
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message="说明（利润看板）"
+            description={
+              <div>
+                <div>
+                  本页默认展示“利润看板”，帮运营快速识别<strong>赚钱</strong>与<strong>亏钱</strong>的货品/模型（避免“卖一个亏一个”）。
+                </div>
+                <div>为避免缺成本导致利润虚高：毛利/毛利率仅在“已计价行”上计算，并单独展示成本覆盖率。</div>
+              </div>
+            }
+          />
+        </>
+      ) : null}
 
       <Card size="small" style={{ marginBottom: 12 }}>
         <Form
@@ -383,9 +454,6 @@ const SalesInsightsPage = () => {
               </Button>
               <Button size="small" onClick={() => applyQuickRange(90)}>
                 近90天
-              </Button>
-              <Button size="small" onClick={() => applyQuickRange(365)}>
-                近1年
               </Button>
             </Space>
           </Form.Item>
@@ -425,8 +493,18 @@ const SalesInsightsPage = () => {
                 ]}
               />
               <Button type="primary" onClick={() => onQuery()} loading={loading || dashboardQuery.isFetching}>
-                {activeTab === 'detail' ? '查询明细' : '刷新看板'}
+                {embedded ? '查询明细' : '刷新看板'}
               </Button>
+              {!embedded ? (
+                <>
+                  <Button onClick={refreshDashboardSnapshotNow} disabled={!useSnapshot} loading={dashboardQuery.isFetching}>
+                    刷新数据
+                  </Button>
+                  <Button onClick={() => setUseSnapshot((v) => !v)} disabled={dashboardQuery.isFetching || loading}>
+                    {useSnapshot ? '切到实时' : '切到缓存'}
+                  </Button>
+                </>
+              ) : null}
               <Button
                 onClick={() => {
                   form.resetFields()
@@ -452,32 +530,66 @@ const SalesInsightsPage = () => {
           message="当前范围暂无数据"
           description={
             <Space wrap>
-              <span>建议点“近90天/近1年”确认数据范围，或检查是否已导入发货单。</span>
+              <span>建议点“近30天/近90天”确认数据范围，或检查是否已导入发货单。</span>
+              <Button size="small" onClick={() => applyQuickRange(30)}>
+                近30天
+              </Button>
               <Button size="small" onClick={() => applyQuickRange(90)}>
                 近90天
-              </Button>
-              <Button size="small" onClick={() => applyQuickRange(365)}>
-                近1年
               </Button>
             </Space>
           }
         />
       ) : null}
 
+      {!embedded && useSnapshot && dashboardComputedAt ? (
+        <Alert
+          type="success"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="利润看板（缓存）"
+          description={<span>数据更新时间：{dashboardComputedAt}</span>}
+        />
+      ) : null}
+
       <Card size="small">
-        <Tabs
-          activeKey={activeTab}
-          onChange={(k) => {
-            const next = k as 'dashboard' | 'detail'
-            setActiveTab(next)
-            if (next === 'detail' && !data && !loading) onQuery()
-          }}
-          items={[
-            {
-              key: 'dashboard',
-              label: '利润看板（赚钱/亏钱）',
-              children: (
-                <>
+        {embedded ? (
+          <>
+            {data ? (
+              <Alert
+                type={data.lines_with_bom_snapshots > 0 ? 'success' : 'warning'}
+                showIcon
+                style={{ marginBottom: 12 }}
+                message="成本覆盖率（明细范围内）"
+                description={
+                  <div>
+                    <div>
+                      有 BOM/计价行：{data.lines_with_bom_snapshots}；缺成本字段行：{data.lines_missing_costing}
+                    </div>
+                    <div style={{ color: '#888' }}>{data.note || ''}</div>
+                  </div>
+                }
+              />
+            ) : null}
+            <Table
+              rowKey="shipment_line_id"
+              size="small"
+              loading={loading}
+              columns={columns}
+              dataSource={data?.items ?? []}
+              pagination={pagination}
+              scroll={{ x: 2100 }}
+            />
+          </>
+        ) : (
+          <Tabs
+            activeKey="dashboard"
+            items={[
+              {
+                key: 'dashboard',
+                label: '利润看板（赚钱/亏钱）',
+                children: (
+                  <>
                   <div style={{ marginBottom: 12 }}>
                     <Space wrap>
                       <Select
@@ -579,10 +691,10 @@ const SalesInsightsPage = () => {
                             },
                           ]}
                           onRow={(r: SalesProfitDashboardTopSkuItem) => ({
-                            onClick: async () => {
-                              form.setFieldsValue({ sku_code: r.sku_code })
-                              setActiveTab('detail')
-                              await onQuery()
+                            onClick: () => {
+                              const sku = String(r?.sku_code ?? '').trim()
+                              if (!sku) return
+                              navigateToShipmentsProcessed({ sku_code: sku })
                             },
                           })}
                         />
@@ -617,10 +729,10 @@ const SalesInsightsPage = () => {
                             },
                           ]}
                           onRow={(r: SalesProfitDashboardTopSkuItem) => ({
-                            onClick: async () => {
-                              form.setFieldsValue({ sku_code: r.sku_code })
-                              setActiveTab('detail')
-                              await onQuery()
+                            onClick: () => {
+                              const sku = String(r?.sku_code ?? '').trim()
+                              if (!sku) return
+                              navigateToShipmentsProcessed({ sku_code: sku })
                             },
                           })}
                         />
@@ -688,6 +800,17 @@ const SalesInsightsPage = () => {
                               render: (v: any) => (v == null ? '-' : `${(Number(v) * 100).toFixed(2)}%`),
                             },
                           ]}
+                          onRow={(r: SalesProfitDashboardTopModelItem) => ({
+                            onClick: () => {
+                              const mc = String((r as any)?.model_code ?? '').trim()
+                              const isBundle = mc.startsWith('B-') || mc.startsWith('Z-')
+                              if (!isBundle) return
+                              const tpl = String((r as any)?.bundle_template_code ?? '').trim().toUpperCase()
+                              const sel = String((r as any)?.bundle_preset_selector ?? '').trim().toUpperCase()
+                              if (!tpl) return
+                              navigateToShipmentsProcessed({ bundle_template_code: tpl, bundle_preset_selector: sel || undefined })
+                            },
+                          })}
                         />
                       </Card>
                     </Col>
@@ -750,6 +873,17 @@ const SalesInsightsPage = () => {
                               render: (v: any) => (v == null ? '-' : `${(Number(v) * 100).toFixed(2)}%`),
                             },
                           ]}
+                          onRow={(r: SalesProfitDashboardTopModelItem) => ({
+                            onClick: () => {
+                              const mc = String((r as any)?.model_code ?? '').trim()
+                              const isBundle = mc.startsWith('B-') || mc.startsWith('Z-')
+                              if (!isBundle) return
+                              const tpl = String((r as any)?.bundle_template_code ?? '').trim().toUpperCase()
+                              const sel = String((r as any)?.bundle_preset_selector ?? '').trim().toUpperCase()
+                              if (!tpl) return
+                              navigateToShipmentsProcessed({ bundle_template_code: tpl, bundle_preset_selector: sel || undefined })
+                            },
+                          })}
                         />
                       </Card>
                     </Col>
@@ -757,41 +891,9 @@ const SalesInsightsPage = () => {
                 </>
               ),
             },
-            {
-              key: 'detail',
-              label: '销售明细',
-              children: (
-                <>
-                  {data ? (
-                    <Alert
-                      type={data.lines_with_bom_snapshots > 0 ? 'success' : 'warning'}
-                      showIcon
-                      style={{ marginBottom: 12 }}
-                      message="成本覆盖率（明细范围内）"
-                      description={
-                        <div>
-                          <div>
-                            有 BOM/计价行：{data.lines_with_bom_snapshots}；缺成本字段行：{data.lines_missing_costing}
-                          </div>
-                          <div style={{ color: '#888' }}>{data.note || ''}</div>
-                        </div>
-                      }
-                    />
-                  ) : null}
-                  <Table
-                    rowKey="shipment_line_id"
-                    size="small"
-                    loading={loading}
-                    columns={columns}
-                    dataSource={data?.items ?? []}
-                    pagination={pagination}
-                    scroll={{ x: 2100 }}
-                  />
-                </>
-              ),
-            },
           ]}
-        />
+          />
+        )}
       </Card>
     </div>
   )

@@ -3,7 +3,14 @@ import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { fetchProfitByChannel, fetchReturnsRateByChannel } from '@/services/planner'
+import {
+  fetchProfitByChannel,
+  fetchReturnsRateByChannel,
+  fetchProfitByChannelSnapshot,
+  fetchReturnsRateByChannelSnapshot,
+  refreshProfitByChannelSnapshot,
+  refreshReturnsRateByChannelSnapshot,
+} from '@/services/planner'
 import type {
   ProfitByChannelItem,
   ProfitByChannelResponse,
@@ -51,6 +58,9 @@ const ShopInsightsPage = () => {
   const [dataReturns, setDataReturns] = useState<ReturnsRateByChannelResponse | null>(null)
   const [onlyFullCoverage, setOnlyFullCoverage] = useState(false)
   const didInitRef = useRef(false)
+  const [useSnapshot, setUseSnapshot] = useState(true)
+  const [quickDays, setQuickDays] = useState<7 | 30 | 90>(30)
+  const [computedAt, setComputedAt] = useState<string | null>(null)
 
   const profitColumns = useMemo<ColumnsType<ProfitByChannelItem>>(
     () => [
@@ -111,22 +121,33 @@ const ShopInsightsPage = () => {
       } catch {
         // ignore storage errors
       }
+      const channel = v.channel?.trim() || undefined
+      if (useSnapshot) {
+        try {
+          if (activeTab === 'profit') {
+            const snap = await fetchProfitByChannelSnapshot({ range_days: quickDays, group_by: groupBy, channel })
+            setComputedAt(String((snap as any)?.computed_at ?? '') || null)
+            setDataProfit(snap.data as any)
+            setDataReturns(null)
+          } else {
+            const snap = await fetchReturnsRateByChannelSnapshot({ range_days: quickDays, group_by: groupBy, channel })
+            setComputedAt(String((snap as any)?.computed_at ?? '') || null)
+            setDataReturns(snap.data as any)
+            setDataProfit(null)
+          }
+          setLoading(false)
+          return
+        } catch (e: any) {
+          // Cache miss -> fall back to live query
+          setComputedAt(null)
+        }
+      }
       if (activeTab === 'profit') {
-        const resp = await fetchProfitByChannel({
-          start,
-          end,
-          group_by: groupBy,
-          channel: v.channel?.trim() || undefined,
-        })
+        const resp = await fetchProfitByChannel({ start, end, group_by: groupBy, channel })
         setDataProfit(resp)
         setDataReturns(null)
       } else {
-        const resp = await fetchReturnsRateByChannel({
-          start,
-          end,
-          group_by: groupBy,
-          channel: v.channel?.trim() || undefined,
-        })
+        const resp = await fetchReturnsRateByChannel({ start, end, group_by: groupBy, channel })
         setDataReturns(resp)
         setDataProfit(null)
       }
@@ -175,9 +196,30 @@ const ShopInsightsPage = () => {
   }, [])
 
   const applyQuickRange = async (days: number) => {
+    const d = days === 7 || days === 30 || days === 90 ? (days as 7 | 30 | 90) : 30
+    setQuickDays(d)
     const range: [dayjs.Dayjs, dayjs.Dayjs] = [dayjs().subtract(days, 'day'), dayjs()]
     form.setFieldsValue({ range })
     await onQuery()
+  }
+
+  const refreshSnapshotNow = async () => {
+    const v = await form.validateFields()
+    const groupBy = v.group_by as GroupBy
+    const channel = v.channel?.trim() || undefined
+    setLoading(true)
+    try {
+      if (activeTab === 'profit') {
+        await refreshProfitByChannelSnapshot({ range_days: quickDays, group_by: groupBy, channel, operator_id: 'planner-ui' })
+      } else {
+        await refreshReturnsRateByChannelSnapshot({ range_days: quickDays, group_by: groupBy, channel, operator_id: 'planner-ui' })
+      }
+      await onQuery()
+    } catch (e: any) {
+      setError(String(e?.response?.data?.detail ?? e?.message ?? e))
+    } finally {
+      setLoading(false)
+    }
   }
 
   const filteredProfitItems = useMemo(() => {
@@ -229,9 +271,6 @@ const ShopInsightsPage = () => {
               <Button size="small" onClick={() => applyQuickRange(90)}>
                 近90天
               </Button>
-              <Button size="small" onClick={() => applyQuickRange(365)}>
-                近1年
-              </Button>
             </Space>
           </Form.Item>
           <Form.Item label="粒度" name="group_by">
@@ -244,6 +283,12 @@ const ShopInsightsPage = () => {
             <Space>
               <Button type="primary" onClick={onQuery} loading={loading}>
                 查询
+              </Button>
+              <Button onClick={refreshSnapshotNow} disabled={!useSnapshot} loading={loading}>
+                刷新数据
+              </Button>
+              <Button onClick={() => setUseSnapshot((v) => !v)} disabled={loading}>
+                {useSnapshot ? '切到实时' : '切到缓存'}
               </Button>
               <Button
                 onClick={() => {
@@ -261,6 +306,16 @@ const ShopInsightsPage = () => {
       </Card>
 
       {error ? <Alert type="error" showIcon message="查询失败" description={error} style={{ marginBottom: 12 }} /> : null}
+
+      {useSnapshot && computedAt ? (
+        <Alert
+          type="success"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="当前数据来自夜间缓存"
+          description={<span>数据更新时间：{computedAt}</span>}
+        />
+      ) : null}
 
       <Card size="small">
         <Tabs
@@ -280,12 +335,12 @@ const ShopInsightsPage = () => {
                       message="当前范围暂无数据"
                       description={
                         <Space wrap>
-                          <span>建议先点右上“近90天/近1年”查看是否有数据。</span>
+                          <span>建议先点右上“近30天/近90天”查看是否有数据。</span>
+                          <Button size="small" onClick={() => applyQuickRange(30)}>
+                            近30天
+                          </Button>
                           <Button size="small" onClick={() => applyQuickRange(90)}>
                             近90天
-                          </Button>
-                          <Button size="small" onClick={() => applyQuickRange(365)}>
-                            近1年
                           </Button>
                         </Space>
                       }
@@ -336,12 +391,12 @@ const ShopInsightsPage = () => {
                       message="当前范围暂无数据"
                       description={
                         <Space wrap>
-                          <span>建议先点右上“近90天/近1年”查看是否有数据。</span>
+                          <span>建议先点右上“近30天/近90天”查看是否有数据。</span>
+                          <Button size="small" onClick={() => applyQuickRange(30)}>
+                            近30天
+                          </Button>
                           <Button size="small" onClick={() => applyQuickRange(90)}>
                             近90天
-                          </Button>
-                          <Button size="small" onClick={() => applyQuickRange(365)}>
-                            近1年
                           </Button>
                         </Space>
                       }

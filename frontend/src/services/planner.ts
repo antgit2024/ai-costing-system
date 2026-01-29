@@ -1561,6 +1561,109 @@ export const exportTmallSkuTemplateXlsx = async (payload: TmallSkuTemplateReques
   return resp.data as Blob
 }
 
+// -----------------------------
+// Report snapshots (nightly precompute + manual refresh)
+// -----------------------------
+
+export type ReportSnapshotEnvelope<TData = any> = {
+  key: string
+  computed_at: string
+  params: Record<string, any>
+  data: TData
+}
+
+export const fetchModelsSummarySnapshot = async (params: { range_days?: number; channel?: string } = {}): Promise<ReportSnapshotEnvelope<any>> => {
+  const resp = await plannerClient.get('/reports/insights/models-summary', { params: sanitizeParams(params as any) })
+  return resp.data
+}
+
+export const refreshModelsSummarySnapshot = async (params: {
+  range_days?: number
+  channel?: string
+  operator_id?: string
+} = {}): Promise<{ key: string; computed_at: string; params: Record<string, any> }> => {
+  const resp = await plannerClient.post('/reports/insights/models-summary/refresh', null, { params: sanitizeParams(params as any) })
+  return resp.data
+}
+
+export const fetchSalesProfitDashboardSnapshot = async (params: {
+  range_days?: number
+  group_by?: 'week' | 'month'
+  channel?: string
+} = {}): Promise<ReportSnapshotEnvelope<any>> => {
+  const resp = await plannerClient.get('/reports/insights/sales-profit-dashboard', { params: sanitizeParams(params as any) })
+  return resp.data
+}
+
+export const refreshSalesProfitDashboardSnapshot = async (params: {
+  range_days?: number
+  group_by?: 'week' | 'month'
+  channel?: string
+  operator_id?: string
+} = {}): Promise<{ key: string; computed_at: string; params: Record<string, any> }> => {
+  const resp = await plannerClient.post('/reports/insights/sales-profit-dashboard/refresh', null, { params: sanitizeParams(params as any) })
+  return resp.data
+}
+
+export const fetchAfterSalesDashboardSnapshot = async (params: {
+  range_days?: number
+  group_by?: 'week' | 'month'
+  view?: 'factory' | 'ops'
+  channel?: string
+} = {}): Promise<ReportSnapshotEnvelope<any>> => {
+  const resp = await plannerClient.get('/reports/insights/after-sales-dashboard', { params: sanitizeParams(params as any) })
+  return resp.data
+}
+
+export const refreshAfterSalesDashboardSnapshot = async (params: {
+  range_days?: number
+  group_by?: 'week' | 'month'
+  view?: 'factory' | 'ops'
+  channel?: string
+  operator_id?: string
+} = {}): Promise<{ key: string; computed_at: string; params: Record<string, any> }> => {
+  const resp = await plannerClient.post('/reports/insights/after-sales-dashboard/refresh', null, { params: sanitizeParams(params as any) })
+  return resp.data
+}
+
+export const fetchProfitByChannelSnapshot = async (params: {
+  range_days?: number
+  group_by?: 'day' | 'month'
+  channel?: string
+} = {}): Promise<ReportSnapshotEnvelope<any>> => {
+  const resp = await plannerClient.get('/reports/insights/shops/profit-by-channel', { params: sanitizeParams(params as any) })
+  return resp.data
+}
+
+export const refreshProfitByChannelSnapshot = async (params: {
+  range_days?: number
+  group_by?: 'day' | 'month'
+  channel?: string
+  operator_id?: string
+} = {}): Promise<{ key: string; computed_at: string; params: Record<string, any> }> => {
+  const resp = await plannerClient.post('/reports/insights/shops/profit-by-channel/refresh', null, { params: sanitizeParams(params as any) })
+  return resp.data
+}
+
+export const fetchReturnsRateByChannelSnapshot = async (params: {
+  range_days?: number
+  group_by?: 'day' | 'month'
+  channel?: string
+} = {}): Promise<ReportSnapshotEnvelope<any>> => {
+  const resp = await plannerClient.get('/reports/insights/shops/returns-rate-by-channel', { params: sanitizeParams(params as any) })
+  return resp.data
+}
+
+export const refreshReturnsRateByChannelSnapshot = async (params: {
+  range_days?: number
+  group_by?: 'day' | 'month'
+  channel?: string
+  operator_id?: string
+} = {}): Promise<{ key: string; computed_at: string; params: Record<string, any> }> => {
+  const resp = await plannerClient.post('/reports/insights/shops/returns-rate-by-channel/refresh', null, { params: sanitizeParams(params as any) })
+  return resp.data
+}
+
 export const fetchProductModelMaterials = async (
   modelId: string,
 ): Promise<Array<Record<string, any>>> => {

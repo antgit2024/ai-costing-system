@@ -66,6 +66,34 @@
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-29（夜间预处理 + 冷热分层：洞察页“先读缓存”+ 手动刷新）
+  - 背景：
+    - “数据洞察”类页面（利润/售后/店铺/销售）在数据量上来后，实时聚合会越来越慢；多人同时使用会放大 DB 压力与请求排队。
+    - 目标是把“重计算”从用户点击时剥离出去：**夜间预处理（落库）** → 白天默认读缓存；用户需要即时口径时再手动刷新。
+  - 口径（MVP）：
+    - 后端新增“报表快照”存储层（复用 `taxonomy_items` 做 KV，不引入迁移），按 `kind + params` 生成 key，落库保存 `data/params/computed_at`。
+    - 前端洞察页默认走“缓存读数”，并提供 `刷新数据` 与 `切到实时/切到缓存`。
+    - 时间范围默认 **近30天**；快捷仅保留 **近7/近30/近90**（移除近1年）。
+  - 本轮产物（后端）：
+    - `backend/src/planner/services/report_snapshot_service.py`：快照 key 生成 + get/upsert（落 `taxonomy_items`）
+    - `backend/src/planner/routers/reports.py`：`GET/POST /api/planner/reports/*`（洞察快照读取/刷新）
+    - `backend/src/planner/router.py`：挂载 `reports` router
+  - 本轮产物（前端）：
+    - `frontend/src/services/planner.ts`：新增 `fetch*/refresh*Snapshot` 调用
+    - `frontend/src/pages/costing/ProfitInsightsPage.tsx`：模型榜单支持缓存/刷新/切换，展示“数据更新时间”
+    - `frontend/src/pages/costing/SalesInsightsPage.tsx`：利润看板支持缓存/刷新/切换，展示“数据更新时间”
+    - `frontend/src/pages/costing/AfterSalesInsightsPage.tsx`：售后仪表盘支持缓存/刷新/切换，展示“数据更新时间”
+    - `frontend/src/pages/costing/ShopInsightsPage.tsx`：店铺利润/退货率支持缓存/刷新/切换，展示“数据更新时间”
+  - 夜间刷新脚本（可用于 cron/systemd timer）：
+    - `ops/nightly_refresh_reports.sh`（默认 `RANGE_DAYS=30`，可通过 `BASE_URL/OPERATOR_ID` 覆盖）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+  - 下一步（仍未闭环）：
+    - 发货台账“问题订单（需核对）”的重计算提示（issue hints）进一步 **落库/预计算**（避免实时解析规格/追快照链路的成本），并补一个“刷新问题提示”入口。
+
 - **最近校对（北京时间 GMT+8）**：2026-01-27（数据洞察：首屏不再“空白”，默认轻量查询 + 记住筛选）
   - 现象：`/costing/insights/after-sales`、`/costing/insights/sales`、`/costing/insights/models` 进入页面首屏为空，必须点“查询”才有内容，体验弱于常见 ERP 报表页。
   - 处理策略（不新增重复列表，只让原列表首屏有真实数据）：

@@ -23,6 +23,7 @@ from .routers import (
     processes,
     product_models,
     product_model_versions,
+    reports,
     scenarios,
     shipping_rules,
     shipments,
@@ -54,6 +55,7 @@ router.include_router(processes.router)
 router.include_router(ai.router)
 router.include_router(product_models.router)
 router.include_router(product_model_versions.router)
+router.include_router(reports.router)
 router.include_router(line_variants.router)
 router.include_router(shipping_rules.router)
 router.include_router(shipments.router)

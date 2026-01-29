@@ -31,6 +31,8 @@ import {
   fetchAfterSalesImportBatches,
   fetchAfterSalesLines,
   fetchAfterSalesDashboard,
+  fetchAfterSalesDashboardSnapshot,
+  refreshAfterSalesDashboardSnapshot,
   fetchReturnsRateBySku,
   importAfterSalesXlsx,
 } from '@/services/planner'
@@ -72,6 +74,9 @@ const AfterSalesInsightsPage = () => {
   const [dashboardGroupBy, setDashboardGroupBy] = useState<'week' | 'month'>('week')
   const [dashboardView, setDashboardView] = useState<'ops' | 'factory'>('factory')
   const [dashboardAutoLoad, setDashboardAutoLoad] = useState(false)
+  const [dashboardUseSnapshot, setDashboardUseSnapshot] = useState(true)
+  const [dashboardQuickDays, setDashboardQuickDays] = useState<7 | 30 | 90>(30)
+  const [dashboardComputedAt, setDashboardComputedAt] = useState<string | null>(null)
   const opsStroke = 'var(--ant-color-primary, #1677ff)'
   const factoryStroke = 'var(--ant-color-success, #52c41a)'
 
@@ -109,20 +114,39 @@ const AfterSalesInsightsPage = () => {
 
   const dashboardQuery = useQuery({
     queryKey: ['after-sales', 'dashboard', rangeStartIso, rangeEndIso, watchedChannel, dashboardGroupBy, dashboardView],
-    queryFn: () =>
-      fetchAfterSalesDashboard(
+    queryFn: async () => {
+      const channel = watchedChannel?.trim() || undefined
+      if (dashboardUseSnapshot) {
+        try {
+          const snap = await fetchAfterSalesDashboardSnapshot({
+            range_days: dashboardQuickDays,
+            group_by: dashboardGroupBy,
+            view: dashboardView,
+            channel,
+          })
+          setDashboardComputedAt(String((snap as any)?.computed_at ?? '') || null)
+          return snap.data as any
+        } catch (e: any) {
+          if (Number(e?.response?.status) !== 404) setDashboardComputedAt(null)
+        }
+      }
+      setDashboardComputedAt(null)
+      return fetchAfterSalesDashboard(
         {
           start: String(rangeStartIso),
           end: String(rangeEndIso),
           group_by: dashboardGroupBy,
-          channel: watchedChannel?.trim() || undefined,
+          channel,
           top_n: 12,
           view: dashboardView,
         },
         { timeoutMs: 60000 },
-      ),
+      )
+    },
     enabled: activeTab === 'dashboard' && dashboardAutoLoad && !!rangeStartIso && !!rangeEndIso,
     placeholderData: keepPreviousData,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
   })
 
   const dashboardHttpStatus = (dashboardQuery.error as any)?.response?.status as number | undefined
@@ -307,11 +331,30 @@ const AfterSalesInsightsPage = () => {
   }, [])
 
   const applyQuickRange = async (days: number) => {
+    const d = days === 7 || days === 30 || days === 90 ? (days as 7 | 30 | 90) : 30
+    setDashboardQuickDays(d)
     const range: [dayjs.Dayjs, dayjs.Dayjs] = [dayjs().subtract(days, 'day'), dayjs()]
     form.setFieldsValue({ range })
     if (activeTab === 'detail') await onQueryDetail(1, detailPageSize)
     else if (activeTab === 'rate') await onQuery()
     else if (dashboardAutoLoad) await dashboardQuery.refetch()
+  }
+
+  const refreshDashboardSnapshotNow = async () => {
+    const channel = watchedChannel?.trim() || undefined
+    try {
+      await refreshAfterSalesDashboardSnapshot({
+        range_days: dashboardQuickDays,
+        group_by: dashboardGroupBy,
+        view: dashboardView,
+        channel,
+        operator_id: 'planner-ui',
+      })
+      await dashboardQuery.refetch()
+      message.success('已刷新（使用缓存）')
+    } catch (e: any) {
+      message.error(`刷新失败：${e?.response?.data?.detail ?? e?.message ?? 'unknown error'}`)
+    }
   }
 
   const activeTabColor = opsStroke
@@ -364,9 +407,6 @@ const AfterSalesInsightsPage = () => {
               </Button>
               <Button size="small" onClick={() => applyQuickRange(90)}>
                 近90天
-              </Button>
-              <Button size="small" onClick={() => applyQuickRange(365)}>
-                近1年
               </Button>
             </Space>
           </Form.Item>
@@ -426,6 +466,12 @@ const AfterSalesInsightsPage = () => {
                       加载仪表盘
                     </Button>
                   ) : null}
+                  <Button onClick={refreshDashboardSnapshotNow} disabled={!dashboardUseSnapshot || !dashboardAutoLoad} loading={dashboardQuery.isFetching}>
+                    刷新数据
+                  </Button>
+                  <Button onClick={() => setDashboardUseSnapshot((v) => !v)} disabled={dashboardQuery.isFetching}>
+                    {dashboardUseSnapshot ? '切到实时' : '切到缓存'}
+                  </Button>
                 </>
               ) : (
                 <Button type="primary" onClick={onQuery} loading={loading}>
@@ -531,6 +577,11 @@ const AfterSalesInsightsPage = () => {
                           ? '运营口径：退货按“申请期全量”统计；不要求能匹配到发货行。'
                           : '工厂口径：退货先按强关联键归因到发货行，再归因到发货周/月。'}
                       </Typography.Text>
+                      {dashboardUseSnapshot && dashboardComputedAt ? (
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          数据更新时间：{dashboardComputedAt}
+                        </Typography.Text>
+                      ) : null}
                     </Space>
                   </div>
 

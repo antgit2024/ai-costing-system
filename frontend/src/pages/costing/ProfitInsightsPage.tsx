@@ -3,7 +3,12 @@ import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { fetchModelInsightsDetail, fetchModelInsightsSummary } from '@/services/planner'
+import {
+  fetchModelInsightsDetail,
+  fetchModelInsightsSummary,
+  fetchModelsSummarySnapshot,
+  refreshModelsSummarySnapshot,
+} from '@/services/planner'
 import type {
   ModelInsightsDetailResponse,
   ModelInsightsSummaryItem,
@@ -56,6 +61,9 @@ const ProfitInsightsPage = () => {
   const [selectedModelCode, setSelectedModelCode] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const didInitRef = useRef(false)
+  const [useSnapshot, setUseSnapshot] = useState(true)
+  const [quickDays, setQuickDays] = useState<7 | 30 | 90>(30)
+  const [computedAt, setComputedAt] = useState<string | null>(null)
 
   const shopOptions = useMemo(() => {
     const s = new Set<string>()
@@ -77,12 +85,31 @@ const ProfitInsightsPage = () => {
 
     setLoadingSummary(true)
     try {
-      const resp = await fetchModelInsightsSummary({
-        start,
-        end,
-        channel: v.channel?.trim() || undefined,
-      })
-      setSummary(resp)
+      const channel = v.channel?.trim() || undefined
+      if (useSnapshot) {
+        try {
+          const snap = await fetchModelsSummarySnapshot({ range_days: quickDays, channel })
+          setSummary(snap.data as any)
+          setComputedAt(String((snap as any)?.computed_at ?? '') || null)
+        } catch (e: any) {
+          const status = Number(e?.response?.status)
+          if (status === 404) {
+            await refreshModelsSummarySnapshot({ range_days: quickDays, channel, operator_id: 'planner-ui' })
+            const snap2 = await fetchModelsSummarySnapshot({ range_days: quickDays, channel })
+            setSummary(snap2.data as any)
+            setComputedAt(String((snap2 as any)?.computed_at ?? '') || null)
+          } else {
+            // fallback to live query if cache path fails
+            const resp = await fetchModelInsightsSummary({ start, end, channel })
+            setSummary(resp)
+            setComputedAt(null)
+          }
+        }
+      } else {
+        const resp = await fetchModelInsightsSummary({ start, end, channel })
+        setSummary(resp)
+        setComputedAt(null)
+      }
       // reset selection when query changes
       setSelectedModelCode(null)
       setDetail(null)
@@ -108,9 +135,28 @@ const ProfitInsightsPage = () => {
   }
 
   const applyQuickRange = async (days: number) => {
+    const d = days === 7 || days === 30 || days === 90 ? (days as 7 | 30 | 90) : 30
+    setQuickDays(d)
     const range: [dayjs.Dayjs, dayjs.Dayjs] = [dayjs().subtract(days, 'day'), dayjs()]
     form.setFieldsValue({ range })
     await onQuerySummary()
+  }
+
+  const refreshSnapshotNow = async () => {
+    setError(null)
+    const v = await form.validateFields()
+    const channel = v.channel?.trim() || undefined
+    setLoadingSummary(true)
+    try {
+      await refreshModelsSummarySnapshot({ range_days: quickDays, channel, operator_id: 'planner-ui' })
+      const snap = await fetchModelsSummarySnapshot({ range_days: quickDays, channel })
+      setSummary(snap.data as any)
+      setComputedAt(String((snap as any)?.computed_at ?? '') || null)
+    } catch (e: any) {
+      setError(String(e?.response?.data?.detail ?? e?.message ?? e))
+    } finally {
+      setLoadingSummary(false)
+    }
   }
 
   useEffect(() => {
@@ -517,15 +563,19 @@ const ProfitInsightsPage = () => {
                     <Button size="small" onClick={() => applyQuickRange(90)}>
                       近90天
                     </Button>
-                    <Button size="small" onClick={() => applyQuickRange(365)}>
-                      近1年
-                    </Button>
+                    <Tag color={useSnapshot ? 'green' : 'default'}>{useSnapshot ? '夜间缓存' : '实时计算'}</Tag>
                   </Space>
                 </Col>
                 <Col span={24}>
                   <Space>
                     <Button type="primary" onClick={onQuerySummary} loading={loadingSummary}>
                       查询
+                    </Button>
+                    <Button onClick={refreshSnapshotNow} disabled={!useSnapshot} loading={loadingSummary}>
+                      刷新数据
+                    </Button>
+                    <Button onClick={() => setUseSnapshot((v) => !v)} disabled={loadingSummary}>
+                      {useSnapshot ? '切到实时' : '切到缓存'}
                     </Button>
                     <Button
                       onClick={() => {
@@ -553,16 +603,22 @@ const ProfitInsightsPage = () => {
                 message="当前范围暂无数据"
                 description={
                   <Space wrap>
-                    <span>建议点“近90天/近1年”确认数据范围；若仍为空，通常是发货数据未导入或完成时间不在该范围内。</span>
+                    <span>建议点“近30天/近90天”确认数据范围；若仍为空，通常是发货数据未导入或完成时间不在该范围内。</span>
+                    <Button size="small" onClick={() => applyQuickRange(30)}>
+                      近30天
+                    </Button>
                     <Button size="small" onClick={() => applyQuickRange(90)}>
                       近90天
-                    </Button>
-                    <Button size="small" onClick={() => applyQuickRange(365)}>
-                      近1年
                     </Button>
                   </Space>
                 }
               />
+            ) : null}
+
+            {computedAt ? (
+              <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 8, fontSize: 12 }}>
+                数据更新时间：{computedAt}
+              </Typography.Text>
             ) : null}
 
             {summary ? (

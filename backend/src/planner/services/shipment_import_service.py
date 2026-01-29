@@ -1282,6 +1282,9 @@ def list_shipment_lines(
     product_link_id: Optional[str] = None,
     status: Optional[str] = None,  # processed | pending | None
     spec_text: Optional[str] = None,
+    bound_target_kind: Optional[str] = None,  # any | model | bundle
+    bound_model_code: Optional[str] = None,
+    bound_version_label: Optional[str] = None,
     unresolved_reason: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
@@ -1393,6 +1396,23 @@ def list_shipment_lines(
         .correlate(models.ShipmentLine)
         .scalar_subquery()
     )
+    bound_version_label_sq = (
+        db.query(models.ProductModelVersion.version_label)
+        .select_from(models.SkuModelVersionMapping)
+        .join(
+            models.ProductModelVersion,
+            models.ProductModelVersion.id == models.SkuModelVersionMapping.model_version_id,
+        )
+        .filter(
+            models.SkuModelVersionMapping.is_archived.is_(False),
+            models.SkuModelVersionMapping.is_active.is_(True),
+            models.SkuModelVersionMapping.sku_code == models.ShipmentLine.sku_code,
+            models.ProductModelVersion.is_archived.is_(False),
+        )
+        .limit(1)
+        .correlate(models.ShipmentLine)
+        .scalar_subquery()
+    )
 
     q = db.query(
         models.ShipmentLine,
@@ -1404,6 +1424,7 @@ def list_shipment_lines(
         cost_mode_sq.label("cost_mode"),
         bound_model_code_sq.label("bound_model_code"),
         bound_model_name_sq.label("bound_model_name"),
+        bound_version_label_sq.label("bound_version_label"),
     ).filter(
         models.ShipmentLine.is_archived.is_(False),
         models.ShipmentLine.is_active.is_(True),
@@ -1427,6 +1448,27 @@ def list_shipment_lines(
     if spec_text:
         pat = f"%{str(spec_text).strip()}%"
         q = q.filter(models.ShipmentLine.spec_text.ilike(pat))
+
+    # Binding filters (current effective binding on SKU).
+    if bound_model_code:
+        pat = f"%{str(bound_model_code).strip()}%"
+        q = q.filter(bound_model_code_sq.ilike(pat))
+    if bound_version_label:
+        vlab = str(bound_version_label).strip()
+        if vlab:
+            q = q.filter(bound_version_label_sq == vlab)
+    if bound_target_kind:
+        k = str(bound_target_kind).strip().lower()
+        if k in ("bundle", "bundles"):
+            q = q.filter(or_(bound_model_code_sq.ilike("B-%"), bound_model_code_sq.ilike("Z-%")))
+        elif k in ("model", "models", "standard"):
+            q = q.filter(
+                and_(
+                    bound_model_code_sq.isnot(None),
+                    ~bound_model_code_sq.ilike("B-%"),
+                    ~bound_model_code_sq.ilike("Z-%"),
+                )
+            )
 
     if st == "processed":
         q = q.filter(processed_pred)
@@ -1457,6 +1499,7 @@ def list_shipment_lines(
         cost_mode,
         bound_model_code,
         bound_model_name,
+        bound_version_label,
     ) in rows:
         processed = bool(has_bom_snapshot or has_costing_result)
         processed_source = "bom_snapshot" if has_bom_snapshot else ("costing_result" if has_costing_result else None)
@@ -1505,6 +1548,9 @@ def list_shipment_lines(
                 "revenue_amount": getattr(line, "revenue_amount", None),
                 "bound_model_code": (str(bound_model_code).strip() if bound_model_code not in (None, "") else None),
                 "bound_model_name": (str(bound_model_name).strip() if bound_model_name not in (None, "") else None),
+                "bound_version_label": (
+                    str(bound_version_label).strip() if bound_version_label not in (None, "") else None
+                ),
                 "bom_snapshot_id": (str(bom_snapshot_id).strip() if bom_snapshot_id not in (None, "") else None),
                 "status": "processed" if processed else "pending",
                 "processed_source": processed_source,

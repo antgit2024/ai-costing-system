@@ -1,11 +1,29 @@
-import { Alert, Button, Card, DatePicker, Form, Input, Modal, Select, Space, Table, Tabs, Tag, Tooltip, Typography } from 'antd'
+import {
+  Alert,
+  Button,
+  Card,
+  DatePicker,
+  Drawer,
+  Form,
+  Image,
+  Input,
+  Modal,
+  Select,
+  Space,
+  Table,
+  Tabs,
+  Tag,
+  Tooltip,
+  Typography,
+  Descriptions,
+} from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 
-import { fetchShipmentLines } from '@/services/planner'
+import { fetchBundleTemplates, fetchPublishedStandardModels, fetchProductModelVersions, fetchShipmentLines, fetchSkuMasterByBarcode } from '@/services/planner'
 import type { ShipmentLineListItem, ShipmentLineListResponse } from '@/types/planner'
 
 const { Title, Text } = Typography
@@ -43,11 +61,84 @@ const ShipmentLedgerPage = () => {
     product_link_id?: string
     spec_text?: string
     unresolved_reason?: string
+    bound_target_kind?: 'any' | 'model' | 'bundle'
+    bound_model_code?: string
+    bound_version_label?: string
   }>({})
 
   const [bulkModalOpen, setBulkModalOpen] = useState(false)
   const [bulkOverwrite, setBulkOverwrite] = useState(false)
   const [bulkLimit, setBulkLimit] = useState(200)
+
+  // Filter helpers (binding dropdowns)
+  const [boundKind, setBoundKind] = useState<'any' | 'model' | 'bundle'>('any')
+  const [modelSearch, setModelSearch] = useState('')
+  const [bundleSearch, setBundleSearch] = useState('')
+  const [selectedModelId, setSelectedModelId] = useState<string | undefined>(undefined)
+
+  const publishedModelsQuery = useQuery({
+    queryKey: ['shipments', 'ledger', 'published-models', modelSearch],
+    queryFn: () => fetchPublishedStandardModels({ search: modelSearch || undefined, limit: 50 }),
+    enabled: boundKind === 'model',
+    placeholderData: keepPreviousData,
+  })
+  const modelOptions = useMemo(() => {
+    const items = (publishedModelsQuery.data as any)?.items ?? []
+    return (items as any[])
+      .map((m: any) => ({
+        label: `${String(m?.model_code ?? '').trim()} ${String(m?.model_name ?? '').trim()}`.trim(),
+        value: String(m?.model_id ?? '').trim(),
+        code: String(m?.model_code ?? '').trim(),
+      }))
+      .filter((x: any) => x.value && x.code)
+  }, [publishedModelsQuery.data])
+
+  const modelVersionsQuery = useQuery({
+    queryKey: ['shipments', 'ledger', 'model-versions', selectedModelId],
+    queryFn: () => fetchProductModelVersions(String(selectedModelId), {}),
+    enabled: boundKind === 'model' && !!selectedModelId,
+    placeholderData: keepPreviousData,
+  })
+  const versionOptions = useMemo(() => {
+    const items = (modelVersionsQuery.data ?? []) as any[]
+    return items
+      .filter((v: any) => String(v?.version_status ?? '').trim() === 'published')
+      .map((v: any) => ({
+        label: String(v?.version_label ?? '').trim(),
+        value: String(v?.version_label ?? '').trim(),
+      }))
+      .filter((x: any) => x.value)
+  }, [modelVersionsQuery.data])
+
+  const bundleTemplatesQuery = useQuery({
+    queryKey: ['shipments', 'ledger', 'bundle-templates', bundleSearch],
+    queryFn: () => fetchBundleTemplates({ search: bundleSearch || undefined, page: 1, page_size: 50 }),
+    enabled: boundKind === 'bundle',
+    placeholderData: keepPreviousData,
+  })
+  const bundleTemplateOptions = useMemo(() => {
+    const items = (bundleTemplatesQuery.data as any)?.items ?? []
+    return (items as any[])
+      .map((t: any) => ({
+        label: `${String(t?.template_code ?? '').trim()} ${String(t?.name ?? '').trim()}`.trim(),
+        value: String(t?.template_code ?? '').trim(),
+      }))
+      .filter((x: any) => x.value)
+  }, [bundleTemplatesQuery.data])
+
+  // Drawer (details)
+  const [detailOpen, setDetailOpen] = useState(false)
+  const [detailRow, setDetailRow] = useState<ShipmentLineListItem | null>(null)
+
+  const skuMasterQuery = useQuery({
+    queryKey: ['shipments', 'ledger', 'sku-master-by-barcode', detailRow?.sku_code, detailRow?.channel],
+    queryFn: () => fetchSkuMasterByBarcode(String(detailRow?.sku_code ?? ''), { channel: detailRow?.channel ?? undefined, limit: 10 }),
+    enabled: detailOpen && !!safeString(detailRow?.sku_code).trim(),
+    placeholderData: keepPreviousData,
+  })
+  const skuMasterId = safeString((skuMasterQuery.data as any)?.sku_master?.id).trim()
+  const specImageUrl = skuMasterId ? `/api/planner/sku-master/${encodeURIComponent(skuMasterId)}/images/spec` : ''
+  const productImageUrl = skuMasterId ? `/api/planner/sku-master/${encodeURIComponent(skuMasterId)}/images/product` : ''
 
   const shipmentLinesQuery = useQuery({
     queryKey: ['shipments', 'lines', ledgerTab, ledgerPage, ledgerPageSize, ledgerRange, ledgerFilters],
@@ -73,27 +164,10 @@ const ShipmentLedgerPage = () => {
         return d.isValid() ? d.format('YYYY-MM-DD') : (safeString(v) || '-')
       },
     },
-    { title: '订单号', dataIndex: 'order_no', width: 160, ellipsis: true },
+    { title: '店铺', dataIndex: 'channel', width: 140, ellipsis: true },
+    { title: '货品条码', dataIndex: 'sku_code', width: 170, ellipsis: true },
     {
-      title: '链接ID',
-      dataIndex: 'product_link_id',
-      width: 140,
-      render: (v) => {
-        const id = safeString(v).trim()
-        if (!id) return '-'
-        const href = `https://detail.tmall.com/item.htm?id=${encodeURIComponent(id)}`
-        return (
-          <a href={href} target="_blank" rel="noreferrer">
-            {id}
-          </a>
-        )
-      },
-    },
-    { title: '渠道', dataIndex: 'channel', width: 140, ellipsis: true },
-    { title: 'SKU', dataIndex: 'sku_code', width: 160, ellipsis: true },
-    { title: '商家编码', dataIndex: 'shop_spec_code', width: 160, ellipsis: true },
-    {
-      title: '绑定目标',
+      title: '模型/套装',
       key: 'bound_target',
       width: 220,
       render: (_v, r: any) => {
@@ -109,6 +183,7 @@ const ShipmentLedgerPage = () => {
         )
       },
     },
+    { title: '标准版本', dataIndex: 'bound_version_label', width: 160, ellipsis: true, render: (v) => safeString(v) || '-' },
     {
       title: '交易规格',
       dataIndex: 'spec_text',
@@ -154,7 +229,6 @@ const ShipmentLedgerPage = () => {
         return <Text style={{ color: '#b26a00' }}>待处理</Text>
       },
     },
-    { title: '批次', dataIndex: 'batch_id', width: 220, ellipsis: true },
   ]
 
   const data = shipmentLinesQuery.data as ShipmentLineListResponse | undefined
@@ -277,7 +351,32 @@ const ShipmentLedgerPage = () => {
                 <Form
                   form={ledgerForm}
                   layout="inline"
+                  onValuesChange={(changed) => {
+                    if ('bound_target_kind' in changed) {
+                      const k = String((changed as any).bound_target_kind ?? 'any') as any
+                      const kk: 'any' | 'model' | 'bundle' = k === 'model' || k === 'bundle' ? k : 'any'
+                      setBoundKind(kk)
+                      setSelectedModelId(undefined)
+                      ledgerForm.setFieldsValue({ bound_model_id: undefined, bound_version_label: undefined, bundle_template_code: undefined, bundle_selector: undefined })
+                    }
+                  }}
                   onFinish={(values) => {
+                    const k0 = String(values.bound_target_kind ?? '').trim()
+                    const kind: 'any' | 'model' | 'bundle' = k0 === 'model' || k0 === 'bundle' ? k0 : 'any'
+                    const bundleTpl = String(values.bundle_template_code ?? '').trim().toUpperCase() || undefined
+                    const bundleSel = String(values.bundle_selector ?? '').trim().toUpperCase() || undefined
+                    const modelId = String(values.bound_model_id ?? '').trim() || undefined
+                    const modelHit = modelOptions.find((x: any) => x.value === modelId)
+                    const modelCode = modelHit?.code || undefined
+                    const versionLabel = String(values.bound_version_label ?? '').trim() || undefined
+
+                    // Compose `bound_model_code`:
+                    // - model: use 3-letter model code (e.g. OZU)
+                    // - bundle: use B-<template_code><selector?> (e.g. B-DB9EAE)
+                    let boundModelCode: string | undefined = undefined
+                    if (kind === 'model') boundModelCode = modelCode
+                    if (kind === 'bundle' && bundleTpl) boundModelCode = `B-${bundleTpl}${bundleSel ?? ''}`
+
                     const next = {
                       channel: values.channel ? String(values.channel).trim() : undefined,
                       sku_code: values.sku_code ? String(values.sku_code).trim() : undefined,
@@ -285,23 +384,87 @@ const ShipmentLedgerPage = () => {
                       product_link_id: values.product_link_id ? String(values.product_link_id).trim() : undefined,
                       spec_text: values.spec_text ? String(values.spec_text).trim() : undefined,
                       unresolved_reason: values.unresolved_reason ? String(values.unresolved_reason).trim() : undefined,
+                      bound_target_kind: kind === 'any' ? undefined : kind,
+                      bound_model_code: boundModelCode || undefined,
+                      bound_version_label: kind === 'model' ? versionLabel : undefined,
                     }
                     setLedgerFilters(next)
                     setLedgerPage(1)
                   }}
                 >
                   <Form.Item name="sku_code">
-                    <Input style={{ width: 140 }} placeholder="SKU" allowClear />
-                  </Form.Item>
-                  <Form.Item name="order_no">
-                    <Input style={{ width: 150 }} placeholder="订单号" allowClear />
-                  </Form.Item>
-                  <Form.Item name="product_link_id">
-                    <Input style={{ width: 150 }} placeholder="链接ID" allowClear />
+                    <Input style={{ width: 160 }} placeholder="货品条码" allowClear />
                   </Form.Item>
                   <Form.Item name="spec_text">
                     <Input style={{ width: 220 }} placeholder="交易规格" allowClear />
                   </Form.Item>
+                  <Form.Item name="bound_target_kind" initialValue="any">
+                    <Select
+                      style={{ width: 140 }}
+                      options={[
+                        { value: 'any', label: '模型/套装(全部)' },
+                        { value: 'model', label: '标准模型' },
+                        { value: 'bundle', label: '套装' },
+                      ]}
+                    />
+                  </Form.Item>
+                  {boundKind === 'model' ? (
+                    <>
+                      <Form.Item name="bound_model_id">
+                        <Select
+                          showSearch
+                          allowClear
+                          style={{ width: 180 }}
+                          placeholder="一级：模型"
+                          filterOption={false}
+                          onSearch={(s) => setModelSearch(String(s || ''))}
+                          options={modelOptions as any}
+                          onChange={(v) => {
+                            const id = String(v ?? '').trim() || undefined
+                            setSelectedModelId(id)
+                            ledgerForm.setFieldsValue({ bound_version_label: undefined })
+                          }}
+                        />
+                      </Form.Item>
+                      <Form.Item name="bound_version_label">
+                        <Select
+                          showSearch
+                          allowClear
+                          style={{ width: 220 }}
+                          placeholder="二级：标准版本"
+                          filterOption={(input, option) =>
+                            String((option as any)?.value ?? '')
+                              .toLowerCase()
+                              .includes(String(input || '').toLowerCase())
+                          }
+                          options={versionOptions as any}
+                        />
+                      </Form.Item>
+                    </>
+                  ) : null}
+                  {boundKind === 'bundle' ? (
+                    <>
+                      <Form.Item name="bundle_template_code">
+                        <Select
+                          showSearch
+                          allowClear
+                          style={{ width: 180 }}
+                          placeholder="一级：套装模板"
+                          filterOption={false}
+                          onSearch={(s) => setBundleSearch(String(s || ''))}
+                          options={bundleTemplateOptions as any}
+                        />
+                      </Form.Item>
+                      <Form.Item name="bundle_selector">
+                        <Select
+                          mode="tags"
+                          maxTagCount={1}
+                          style={{ width: 160 }}
+                          placeholder="二级：selector(可填AE)"
+                        />
+                      </Form.Item>
+                    </>
+                  ) : null}
                   <Form.Item name="unresolved_reason">
                     <Select
                       allowClear
@@ -315,7 +478,7 @@ const ShipmentLedgerPage = () => {
                     />
                   </Form.Item>
                   <Form.Item name="channel">
-                    <Input style={{ width: 120 }} placeholder="渠道" allowClear />
+                    <Input style={{ width: 120 }} placeholder="店铺" allowClear />
                   </Form.Item>
                   <Button type="primary" onClick={() => ledgerForm.submit()} loading={shipmentLinesQuery.isFetching}>
                     查询
@@ -364,9 +527,124 @@ const ShipmentLedgerPage = () => {
               setLedgerPageSize(Number(p?.pageSize) || 50)
             }}
             columns={columns}
+            onRow={(record) => ({
+              onClick: () => {
+                setDetailRow(record)
+                setDetailOpen(true)
+              },
+            })}
           />
         </Card>
       </div>
+
+      <Drawer
+        width={760}
+        open={detailOpen}
+        onClose={() => setDetailOpen(false)}
+        title={
+          <Space size={8} wrap>
+            <span>发货行详情</span>
+            {safeString(detailRow?.sku_code).trim() ? <Tag>货品条码：{safeString(detailRow?.sku_code).trim()}</Tag> : null}
+            {safeString(detailRow?.channel).trim() ? <Tag color="blue">店铺：{safeString(detailRow?.channel).trim()}</Tag> : null}
+          </Space>
+        }
+      >
+        {!detailRow ? (
+          <Alert type="info" showIcon message="未选择记录" />
+        ) : (
+          <Space direction="vertical" style={{ width: '100%' }} size={12}>
+            <Card size="small" title="关键信息">
+              <Descriptions size="small" column={2}>
+                <Descriptions.Item label="发货日期">
+                  {detailRow.completed_at ? dayjs(detailRow.completed_at).format('YYYY-MM-DD') : '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="处理状态">
+                  {safeString((detailRow as any)?.status) === 'processed' ? (
+                    <Tag color="green">已处理</Tag>
+                  ) : (
+                    <Tag color="red">{safeString((detailRow as any)?.unresolved_reason) || '待处理'}</Tag>
+                  )}
+                </Descriptions.Item>
+                <Descriptions.Item label="模型/套装">
+                  {safeString((detailRow as any)?.bound_model_code) ? (
+                    <span>
+                      <Tag color={String((detailRow as any)?.bound_model_code).startsWith('B-') || String((detailRow as any)?.bound_model_code).startsWith('Z-') ? 'purple' : 'blue'}>
+                        {safeString((detailRow as any)?.bound_model_code)}
+                      </Tag>
+                      {safeString((detailRow as any)?.bound_model_name) ? <span style={{ color: '#666' }}> {safeString((detailRow as any)?.bound_model_name)}</span> : null}
+                    </span>
+                  ) : (
+                    '-'
+                  )}
+                </Descriptions.Item>
+                <Descriptions.Item label="标准版本">{safeString((detailRow as any)?.bound_version_label) || '-'}</Descriptions.Item>
+                <Descriptions.Item label="交易规格" span={2}>
+                  <div style={{ whiteSpace: 'normal', wordBreak: 'break-word' }}>{safeString((detailRow as any)?.spec_text) || '-'}</div>
+                </Descriptions.Item>
+              </Descriptions>
+            </Card>
+
+            <Card size="small" title="更多字段（抽屉）">
+              <Descriptions size="small" column={2}>
+                <Descriptions.Item label="订单号">{safeString((detailRow as any)?.order_no) || '-'}</Descriptions.Item>
+                <Descriptions.Item label="批次ID">{safeString((detailRow as any)?.batch_id) || '-'}</Descriptions.Item>
+                <Descriptions.Item label="链接ID">
+                  {safeString((detailRow as any)?.product_link_id) ? (
+                    <a
+                      href={`https://detail.tmall.com/item.htm?id=${encodeURIComponent(String((detailRow as any)?.product_link_id))}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {safeString((detailRow as any)?.product_link_id)}
+                    </a>
+                  ) : (
+                    '-'
+                  )}
+                </Descriptions.Item>
+                <Descriptions.Item label="商家编码">{safeString((detailRow as any)?.shop_spec_code) || '-'}</Descriptions.Item>
+                <Descriptions.Item label="平台规格Id">{safeString((detailRow as any)?.platform_sku_id) || '-'}</Descriptions.Item>
+                <Descriptions.Item label="套装锚点">
+                  {safeString((detailRow as any)?.bundle_template_code) ? (
+                    <Space size={6}>
+                      <Tag color="purple">{safeString((detailRow as any)?.bundle_template_code)}</Tag>
+                      {safeString((detailRow as any)?.bundle_preset_selector) ? <Tag>{safeString((detailRow as any)?.bundle_preset_selector)}</Tag> : null}
+                    </Space>
+                  ) : (
+                    '-'
+                  )}
+                </Descriptions.Item>
+                <Descriptions.Item label="spec_hash">{safeString((detailRow as any)?.spec_hash) || '-'}</Descriptions.Item>
+                <Descriptions.Item label="快照ID">{safeString((detailRow as any)?.bom_snapshot_id) || '-'}</Descriptions.Item>
+              </Descriptions>
+            </Card>
+
+            <Card size="small" title="规格图（来自商品关联/SKU主档）">
+              {!safeString(detailRow?.sku_code).trim() ? (
+                <Alert type="info" showIcon message="缺货品条码，无法取图" />
+              ) : (
+                <Space size={12} wrap>
+                  <div>
+                    <div style={{ marginBottom: 6, color: '#666' }}>规格图</div>
+                    {specImageUrl ? (
+                      <Image width={240} src={specImageUrl} />
+                    ) : (
+                      <Text type="secondary">未找到SKU主档/规格图</Text>
+                    )}
+                  </div>
+                  <div>
+                    <div style={{ marginBottom: 6, color: '#666' }}>商品图</div>
+                    {productImageUrl ? (
+                      <Image width={240} src={productImageUrl} />
+                    ) : (
+                      <Text type="secondary">未找到SKU主档/商品图</Text>
+                    )}
+                  </div>
+                </Space>
+              )}
+            </Card>
+          </Space>
+        )}
+      </Drawer>
     </div>
   )
 }

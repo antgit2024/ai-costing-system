@@ -2996,3 +2996,24 @@
   - 关联文件：
     - `backend/src/planner/services/bom_generation_service.py`
     - `backend/src/planner/services/shipment_import_service.py`
+
+- **本轮补强（发货台账：交易规格搜索 + 模型/套装（一级/二级）筛选 + 抽屉展示规格图）**：
+  - 最近校对（北京时间 GMT+8）：2026-01-28
+  - 变更：
+    - 台账筛选新增“模型/套装(全部/标准模型/套装)”与“一级/二级”：
+      - 标准模型：一级=模型，二级=已发布标准版本（按当前 SKU 绑定过滤）
+      - 套装：一级=套装模板，二级=selector（组合成 `B-模板码selector` 过滤）
+    - 台账列表列精简：`SKU` 改名为 **货品条码**；把批次/链接ID/商家编码等移入抽屉
+    - 新增“发货行详情”抽屉：展示批次、链接ID、商家编码、平台规格Id、套装锚点、spec_hash、快照ID，并通过 SKU 主档展示**规格图/商品图**
+  - 后端：`GET /shipments/lines` 增加筛选参数 `bound_target_kind/bound_model_code/bound_version_label`，并返回 `bound_version_label`
+  - 关联文件：
+    - `backend/src/planner/routers/shipments.py`
+    - `backend/src/planner/services/shipment_import_service.py`
+    - `backend/src/planner/schemas.py`
+    - `frontend/src/pages/costing/ShipmentLedgerPage.tsx`
+    - `frontend/src/services/planner.ts`
+    - `frontend/src/types/planner.ts`
+  - 本轮验收命令（必须，均已通过）：
+    - `npm -C frontend run build`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`

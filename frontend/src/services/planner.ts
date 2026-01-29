@@ -1688,6 +1688,9 @@ export const fetchShipmentLines = async (
     order_no?: string
     product_link_id?: string
     spec_text?: string
+    bound_target_kind?: 'any' | 'model' | 'bundle'
+    bound_model_code?: string
+    bound_version_label?: string
     unresolved_reason?: string
   } = {},
 ): Promise<ShipmentLineListResponse> => {

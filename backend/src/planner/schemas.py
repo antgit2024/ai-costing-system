@@ -2332,6 +2332,8 @@ class ShipmentLineListItem(BaseModel):
     # 绑定目标（当前生效绑定；BundleAsModel 也会以 model_code="B-XXXXYY" 的形式体现）
     bound_model_code: Optional[str] = None
     bound_model_name: Optional[str] = None
+    # 二级：标准版本 / 套装版本（用于筛选与抽屉展示）
+    bound_version_label: Optional[str] = None
     spec_text: Optional[str] = None
     spec_hash: Optional[str] = None
     qty: Optional[Decimal] = None

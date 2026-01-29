@@ -1467,6 +1467,7 @@ export interface ShipmentLineListItem {
   bundle_preset_selector?: string | null
   bound_model_code?: string | null
   bound_model_name?: string | null
+  bound_version_label?: string | null
   spec_text?: string | null
   spec_hash?: string | null
   qty?: string | null

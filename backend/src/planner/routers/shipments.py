@@ -205,6 +205,9 @@ def list_shipment_lines(
     order_no: str | None = None,
     product_link_id: str | None = None,
     spec_text: str | None = None,
+    bound_target_kind: str | None = Query(None, description="any | model | bundle"),
+    bound_model_code: str | None = None,
+    bound_version_label: str | None = None,
     unresolved_reason: str | None = Query(None, description="例如：SKU_NOT_BOUND / SPEC_EMPTY / BOM_GENERATION_FAILED"),
     db: Session = Depends(get_db_session),
 ):
@@ -231,6 +234,9 @@ def list_shipment_lines(
             product_link_id=product_link_id,
             status=status,
             spec_text=spec_text,
+            bound_target_kind=bound_target_kind,
+            bound_model_code=bound_model_code,
+            bound_version_label=bound_version_label,
             unresolved_reason=unresolved_reason,
         )
         return payload

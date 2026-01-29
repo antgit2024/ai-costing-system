@@ -166,7 +166,7 @@ const ShipmentLedgerPage = () => {
     },
     { title: '店铺', dataIndex: 'channel', width: 140, ellipsis: true },
     { title: '货品条码', dataIndex: 'sku_code', width: 170, ellipsis: true },
-    { title: '订单号', dataIndex: 'order_no', width: 170, ellipsis: true },
+    { title: '订单号', dataIndex: 'order_no', width: 215, ellipsis: true },
     {
       title: '模型/套装',
       key: 'bound_target',
@@ -226,8 +226,10 @@ const ShipmentLedgerPage = () => {
       key: 'profit_amount',
       width: 110,
       render: (_v, r: any) => {
+        const costRaw = safeString(r?.cost_total).trim()
+        if (!costRaw || costRaw === '-') return '-'
         const rev = Number(safeString(r?.revenue_amount).trim())
-        const cost = Number(safeString(r?.cost_total).trim())
+        const cost = Number(costRaw)
         if (!Number.isFinite(rev) || !Number.isFinite(cost)) return '-'
         return formatMoney(rev - cost)
       },
@@ -237,8 +239,10 @@ const ShipmentLedgerPage = () => {
       key: 'profit_rate',
       width: 100,
       render: (_v, r: any) => {
+        const costRaw = safeString(r?.cost_total).trim()
+        if (!costRaw || costRaw === '-') return '-'
         const rev = Number(safeString(r?.revenue_amount).trim())
-        const cost = Number(safeString(r?.cost_total).trim())
+        const cost = Number(costRaw)
         if (!Number.isFinite(rev) || !Number.isFinite(cost) || rev === 0) return '-'
         return formatPct((rev - cost) / rev)
       },

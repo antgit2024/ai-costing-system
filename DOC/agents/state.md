@@ -3033,3 +3033,17 @@
     - `npm -C frontend run build`
     - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
     - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+
+- **本轮补强（台账成本兜底 + 订单号列加宽 + 毛利显示口径）**：
+  - 最近校对（北京时间 GMT+8）：2026-01-28
+  - 变更：
+    - 成本兜底：若 `shipment_costing_results.cost_total` 为空，则对当前页记录按 `bom_snapshot_id` 回查快照 `trace.costing.total_cost` 填充（只影响单页，避免全表慢）。
+    - 毛利/毛利率：当成本显示为 `-` 时，毛利与毛利率也强制显示为 `-`。
+    - 订单号列：列表列宽加宽约 1/4，保证完整可读。
+  - 关联文件：
+    - `backend/src/planner/services/shipment_import_service.py`
+    - `frontend/src/pages/costing/ShipmentLedgerPage.tsx`
+  - 本轮验收命令（必须，均已通过）：
+    - `npm -C frontend run build`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`

@@ -1496,6 +1496,58 @@ def list_shipment_lines(
         .all()
     )
 
+    # Fallback for legacy rows: if costing_results is missing, try reading latest snapshot trace.costing.total_cost
+    def _d2(v: Any) -> Decimal:
+        if v in (None, ""):
+            return Decimal("0")
+        if isinstance(v, Decimal):
+            return v
+        try:
+            return Decimal(str(v))
+        except Exception:
+            return Decimal("0")
+
+    def _extract_total_cost2(trace_json: Any) -> Optional[Decimal]:
+        trace = (trace_json or {}) if isinstance(trace_json, dict) else {}
+        costing = (trace.get("costing") or {}) if isinstance(trace.get("costing"), dict) else {}
+        total_cost = costing.get("total_cost")
+        if total_cost in (None, ""):
+            total_cost = _d2(costing.get("material_cost_total")) + _d2(costing.get("process_cost_total")) + _d2(costing.get("overhead_cost"))
+        cost = _d2(total_cost)
+        if cost == 0 and total_cost in (None, "", 0):
+            return None
+        return cost
+
+    snap_ids_need: List[str] = []
+    for (
+        _line0,
+        _has_bom_snapshot0,
+        _has_costing_result0,
+        _bom_snapshot_id0,
+        _unresolved_reason0,
+        _unresolved_message0,
+        _cost_mode0,
+        _cost_total0,
+        _bound_model_code0,
+        _bound_model_name0,
+        _bound_version_label0,
+    ) in rows:
+        sid = str(_bom_snapshot_id0 or "").strip()
+        if sid and _cost_total0 in (None, ""):
+            snap_ids_need.append(sid)
+
+    snap_cost: Dict[str, Decimal] = {}
+    if snap_ids_need:
+        snaps = (
+            db.query(models.BomSnapshot.id, models.BomSnapshot.trace_json)
+            .filter(models.BomSnapshot.id.in_(list(set(snap_ids_need))))
+            .all()
+        )
+        for sid, tjson in snaps:
+            c = _extract_total_cost2(tjson)
+            if c is not None:
+                snap_cost[str(sid)] = c
+
     items: List[Dict[str, Any]] = []
     for (
         line,
@@ -1534,6 +1586,11 @@ def list_shipment_lines(
         )
         bundle_template_code = meta.get("bundle_template_code")
         bundle_preset_selector = meta.get("bundle_preset_selector")
+        # fill missing cost_total from snapshot trace (legacy rows)
+        if cost_total in (None, "") and bom_snapshot_id not in (None, ""):
+            sid = str(bom_snapshot_id).strip()
+            if sid and sid in snap_cost:
+                cost_total = snap_cost[sid]
         items.append(
             {
                 "id": str(getattr(line, "id", "")),

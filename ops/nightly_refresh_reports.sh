@@ -37,5 +37,8 @@ curl_json "${BASE_URL}/reports/insights/after-sales-dashboard/refresh?range_days
 curl_json "${BASE_URL}/reports/insights/shops/profit-by-channel/refresh?range_days=${RANGE_DAYS}&group_by=month&operator_id=${OPERATOR_ID}"
 curl_json "${BASE_URL}/reports/insights/shops/returns-rate-by-channel/refresh?range_days=${RANGE_DAYS}&group_by=month&operator_id=${OPERATOR_ID}"
 
+# Shipment ledger "issues" snapshot (top 200)
+curl_json "${BASE_URL}/reports/shipments/issues/refresh?range_days=${RANGE_DAYS}&limit=200&operator_id=${OPERATOR_ID}"
+
 echo "[done] range_days=${RANGE_DAYS}"
 

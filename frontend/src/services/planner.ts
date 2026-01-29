@@ -1664,6 +1664,28 @@ export const refreshReturnsRateByChannelSnapshot = async (params: {
   return resp.data
 }
 
+export const fetchShipmentsIssuesSnapshot = async (
+  params: { range_days?: number; channel?: string; limit?: number } = {},
+  opts: PlannerRequestOptions = {},
+): Promise<ReportSnapshotEnvelope<{ total: number; items: any[] }>> => {
+  const resp = await plannerClient.get('/reports/shipments/issues', {
+    params: sanitizeParams(params as any),
+    signal: opts.signal,
+    timeout: opts.timeoutMs,
+  })
+  return resp.data
+}
+
+export const refreshShipmentsIssuesSnapshot = async (params: {
+  range_days?: number
+  channel?: string
+  limit?: number
+  operator_id?: string
+} = {}): Promise<{ key: string; computed_at: string; params: Record<string, any> }> => {
+  const resp = await plannerClient.post('/reports/shipments/issues/refresh', null, { params: sanitizeParams(params as any) })
+  return resp.data
+}
+
 export const fetchProductModelMaterials = async (
   modelId: string,
 ): Promise<Array<Record<string, any>>> => {

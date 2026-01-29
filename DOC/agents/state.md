@@ -78,12 +78,16 @@
     - `backend/src/planner/services/report_snapshot_service.py`：快照 key 生成 + get/upsert（落 `taxonomy_items`）
     - `backend/src/planner/routers/reports.py`：`GET/POST /api/planner/reports/*`（洞察快照读取/刷新）
     - `backend/src/planner/router.py`：挂载 `reports` router
+    - `GET/POST /api/planner/reports/shipments/issues`：发货台账“问题订单（需核对）”快照（可夜间预处理/手动刷新）
   - 本轮产物（前端）：
     - `frontend/src/services/planner.ts`：新增 `fetch*/refresh*Snapshot` 调用
     - `frontend/src/pages/costing/ProfitInsightsPage.tsx`：模型榜单支持缓存/刷新/切换，展示“数据更新时间”
     - `frontend/src/pages/costing/SalesInsightsPage.tsx`：利润看板支持缓存/刷新/切换，展示“数据更新时间”
     - `frontend/src/pages/costing/AfterSalesInsightsPage.tsx`：售后仪表盘支持缓存/刷新/切换，展示“数据更新时间”
     - `frontend/src/pages/costing/ShopInsightsPage.tsx`：店铺利润/退货率支持缓存/刷新/切换，展示“数据更新时间”
+    - `frontend/src/pages/costing/ShipmentLedgerPage.tsx`：
+      - 台账默认近30天，并补齐快捷：近7/近30/近90
+      - “问题订单（需核对）”默认读快照（仅渠道筛选/快捷范围时），提供“刷新问题提示”与更新时间展示
   - 夜间刷新脚本（可用于 cron/systemd timer）：
     - `ops/nightly_refresh_reports.sh`（默认 `RANGE_DAYS=30`，可通过 `BASE_URL/OPERATOR_ID` 覆盖）
   - 验收命令（必须，全部 0 退出码）：
@@ -92,7 +96,7 @@
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
   - 下一步（仍未闭环）：
-    - 发货台账“问题订单（需核对）”的重计算提示（issue hints）进一步 **落库/预计算**（避免实时解析规格/追快照链路的成本），并补一个“刷新问题提示”入口。
+    - 进一步把 issue hints 做成 **行级落库**（而非仅“问题列表快照”落库），让“问题提示”成为可复用字段：用于排序/筛选/导出/历史追溯，并减少每次扫描时的规格解析/快照 trace 拉取成本。
 
 - **最近校对（北京时间 GMT+8）**：2026-01-27（数据洞察：首屏不再“空白”，默认轻量查询 + 记住筛选）
   - 现象：`/costing/insights/after-sales`、`/costing/insights/sales`、`/costing/insights/models` 进入页面首屏为空，必须点“查询”才有内容，体验弱于常见 ERP 报表页。

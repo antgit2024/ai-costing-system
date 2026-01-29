@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from ..dependencies import get_db_session
 from ..services import analytics_service
 from ..services import report_snapshot_service
+from ..services import shipment_import_service
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
 
@@ -28,6 +29,47 @@ def _bj_day_range(days: int) -> tuple[datetime, datetime]:
     start_bj = (now_bj - timedelta(days=n)).replace(hour=0, minute=0, second=0, microsecond=0)
     end_bj = now_bj.replace(hour=23, minute=59, second=59, microsecond=999000)
     return start_bj.astimezone(timezone.utc), end_bj.astimezone(timezone.utc)
+
+
+def _safe_float(v: Any) -> Optional[float]:
+    try:
+        if v is None:
+            return None
+        s = str(v).strip()
+        if not s or s == "-":
+            return None
+        n = float(s)
+        if n != n:  # NaN
+            return None
+        return n
+    except Exception:
+        return None
+
+
+def _is_issue_row(row: Dict[str, Any], *, low_margin_threshold: float = 0.10) -> bool:
+    """
+    Mirror frontend tags in ShipmentLedgerPage:
+    - negative profit
+    - suspected mismatch
+    - low margin (<10%)
+    - suspected size anomaly
+    """
+    suspected = bool(row.get("suspected_mismatch"))
+    size_bad = bool(row.get("suspected_size_anomaly"))
+    if suspected or size_bad:
+        return True
+    rev = _safe_float(row.get("revenue_amount"))
+    cost = _safe_float(row.get("cost_total"))
+    if rev is None or cost is None:
+        return False
+    profit = rev - cost
+    if profit < 0:
+        return True
+    if rev > 0:
+        margin = profit / rev
+        if 0 <= margin < float(low_margin_threshold):
+            return True
+    return False
 
 
 @router.get("/insights/models-summary")
@@ -228,6 +270,67 @@ def refresh_returns_rate_by_channel_snapshot(
     params = {"range_days": int(range_days), "group_by": group_by, "channel": (channel or "").strip() or None}
     payload = analytics_service.returns_rate_by_channel(db, start=start, end=end, group_by=group_by, channel=params["channel"])
     key = report_snapshot_service.snapshot_key("insights.shops.returns_rate_by_channel", params)
+    snap = report_snapshot_service.upsert_snapshot(db, key=key, data=payload, params=params, operator_id=operator_id)
+    return {"key": snap.key, "computed_at": snap.computed_at.isoformat(), "params": snap.params}
+
+
+@router.get("/shipments/issues")
+def get_shipments_issues_snapshot(
+    range_days: int = Query(30, ge=1, le=365, description="近N天（按北京时间日界）"),
+    channel: Optional[str] = Query(None),
+    limit: int = Query(200, ge=1, le=500, description="最多返回多少条问题订单"),
+    db: Session = Depends(get_db_session),
+):
+    params = {"range_days": int(range_days), "channel": (channel or "").strip() or None, "limit": int(limit)}
+    key = report_snapshot_service.snapshot_key("shipments.issues", params)
+    snap = report_snapshot_service.get_snapshot(db, key=key)
+    if not snap:
+        raise HTTPException(status_code=404, detail="缓存不存在")
+    return {"key": snap.key, "computed_at": snap.computed_at.isoformat(), "params": snap.params, "data": snap.data}
+
+
+@router.post("/shipments/issues/refresh")
+def refresh_shipments_issues_snapshot(
+    range_days: int = Query(30, ge=1, le=365),
+    channel: Optional[str] = Query(None),
+    limit: int = Query(200, ge=1, le=500),
+    operator_id: Optional[str] = Query(None),
+    db: Session = Depends(get_db_session),
+):
+    try:
+        start, end = _bj_day_range(range_days)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    chan = (channel or "").strip() or None
+    issues: list[Dict[str, Any]] = []
+    page = 1
+    page_size = 200
+    max_pages = 50
+    while len(issues) < int(limit) and page <= max_pages:
+        resp = shipment_import_service.list_shipment_lines(
+            db,
+            page=page,
+            page_size=page_size,
+            start=start,
+            end=end,
+            channel=chan,
+            status="processed",
+            include_issue_hints=True,
+        )
+        items = list((resp or {}).get("items") or [])
+        if not items:
+            break
+        for it in items:
+            if _is_issue_row(it):
+                issues.append(it)
+                if len(issues) >= int(limit):
+                    break
+        page += 1
+
+    payload = {"total": len(issues), "items": issues}
+    params = {"range_days": int(range_days), "channel": chan, "limit": int(limit)}
+    key = report_snapshot_service.snapshot_key("shipments.issues", params)
     snap = report_snapshot_service.upsert_snapshot(db, key=key, data=payload, params=params, operator_id=operator_id)
     return {"key": snap.key, "computed_at": snap.computed_at.isoformat(), "params": snap.params}
 

@@ -34,6 +34,8 @@ import {
   fetchShipmentLineDeductions,
   fetchShipmentLineProcesses,
   fetchShipmentLines,
+  fetchShipmentsIssuesSnapshot,
+  refreshShipmentsIssuesSnapshot,
   fetchSkuMasterByBarcode,
 } from '@/services/planner'
 import type { ShipmentLineListItem, ShipmentLineListResponse } from '@/types/planner'
@@ -191,10 +193,13 @@ const ShipmentLedgerPage = () => {
   const [ledgerPage, setLedgerPage] = useState(1)
   const [ledgerPageSize, setLedgerPageSize] = useState(50)
   const [ledgerRange, setLedgerRange] = useState<[any, any]>(() => [
-    // 默认给足范围，避免“有数据但首屏看不到”造成误判（尤其是历史导入/回补数据）
-    dayjs().subtract(89, 'day').startOf('day'),
+    // 默认近30天（企业级：避免默认范围过大拖垮首屏）
+    dayjs().subtract(29, 'day').startOf('day'),
     dayjs().add(1, 'day').startOf('day'),
   ])
+  const [ledgerQuickDays, setLedgerQuickDays] = useState<7 | 30 | 90 | null>(30)
+  const [useIssuesSnapshot, setUseIssuesSnapshot] = useState(true)
+  const [issuesComputedAt, setIssuesComputedAt] = useState<string | null>(null)
   const [ledgerFilters, setLedgerFilters] = useState<{
     channel?: string
     sku_code?: string
@@ -207,6 +212,17 @@ const ShipmentLedgerPage = () => {
     bound_version_label?: string
     bundle_preset_selector?: string
   }>({})
+
+  const hasExtraLedgerFilters = useMemo(() => {
+    const f: any = ledgerFilters || {}
+    return Object.entries(f).some(([k, v]) => k !== 'channel' && v !== null && v !== undefined && String(v).trim() !== '')
+  }, [ledgerFilters])
+
+  const applyQuickLedgerRange = (days: 7 | 30 | 90) => {
+    setLedgerQuickDays(days)
+    setLedgerRange([dayjs().subtract(days - 1, 'day').startOf('day'), dayjs().add(1, 'day').startOf('day')] as any)
+    setLedgerPage(1)
+  }
 
   const [bulkModalOpen, setBulkModalOpen] = useState(false)
   const [bulkOverwrite, setBulkOverwrite] = useState(false)
@@ -353,16 +369,37 @@ const ShipmentLedgerPage = () => {
 
   const shipmentLinesQuery = useQuery({
     queryKey: ['shipments', 'lines', ledgerTab, ledgerPage, ledgerPageSize, ledgerRange, ledgerFilters],
-    queryFn: ({ signal }) =>
-      fetchShipmentLines({
-        page: ledgerTab === 'issues' ? 1 : ledgerPage,
-        page_size: ledgerTab === 'issues' ? 200 : ledgerPageSize,
-        start: ledgerRange?.[0]?.toISOString?.() ?? undefined,
-        end: ledgerRange?.[1]?.toISOString?.() ?? undefined,
-        status: ledgerTab === 'processed' || ledgerTab === 'pending' ? ledgerTab : ledgerTab === 'issues' ? 'processed' : undefined,
-        include_issue_hints: ledgerTab === 'issues',
-        ...ledgerFilters,
-      }, { signal }),
+    queryFn: async ({ signal }) => {
+      if (ledgerTab === 'issues' && useIssuesSnapshot && ledgerQuickDays && !hasExtraLedgerFilters) {
+        try {
+          const snap = await fetchShipmentsIssuesSnapshot(
+            {
+              range_days: ledgerQuickDays,
+              channel: (ledgerFilters as any)?.channel,
+              limit: 200,
+            },
+            { signal, timeoutMs: 60_000 },
+          )
+          setIssuesComputedAt(String((snap as any)?.computed_at ?? '') || null)
+          return snap.data as any
+        } catch (e: any) {
+          // cache miss -> fall back to live query
+        }
+      }
+      setIssuesComputedAt(null)
+      return fetchShipmentLines(
+        {
+          page: ledgerTab === 'issues' ? 1 : ledgerPage,
+          page_size: ledgerTab === 'issues' ? 200 : ledgerPageSize,
+          start: ledgerRange?.[0]?.toISOString?.() ?? undefined,
+          end: ledgerRange?.[1]?.toISOString?.() ?? undefined,
+          status: ledgerTab === 'processed' || ledgerTab === 'pending' ? ledgerTab : ledgerTab === 'issues' ? 'processed' : undefined,
+          include_issue_hints: ledgerTab === 'issues',
+          ...ledgerFilters,
+        },
+        { signal },
+      )
+    },
     placeholderData: keepPreviousData,
     enabled: ledgerTab !== 'sales',
     staleTime: ledgerTab === 'issues' ? 10_000 : 30_000,
@@ -716,11 +753,49 @@ const ShipmentLedgerPage = () => {
                   value={ledgerRange as any}
                   onChange={(v) => {
                     if (v && v[0] && v[1]) setLedgerRange(v as any)
+                    setLedgerQuickDays(null)
                     setLedgerPage(1)
                   }}
                   allowClear={false}
                   format="YYYY-MM-DD"
                 />
+                <Space size={6} wrap>
+                  <Button size="small" onClick={() => applyQuickLedgerRange(7)}>
+                    近7天
+                  </Button>
+                  <Button size="small" onClick={() => applyQuickLedgerRange(30)}>
+                    近30天
+                  </Button>
+                  <Button size="small" onClick={() => applyQuickLedgerRange(90)}>
+                    近90天
+                  </Button>
+                </Space>
+                {ledgerTab === 'issues' ? (
+                  <Space size={6} wrap>
+                    <Tag color={useIssuesSnapshot ? 'green' : 'default'}>{useIssuesSnapshot ? '问题提示：缓存' : '问题提示：实时'}</Tag>
+                    <Button
+                      size="small"
+                      onClick={async () => {
+                        const days = ledgerQuickDays || 30
+                        await refreshShipmentsIssuesSnapshot({
+                          range_days: days,
+                          channel: (ledgerFilters as any)?.channel,
+                          limit: 200,
+                          operator_id: 'planner-ui',
+                        })
+                        shipmentLinesQuery.refetch()
+                      }}
+                      disabled={!useIssuesSnapshot}
+                      loading={shipmentLinesQuery.isFetching}
+                    >
+                      刷新问题提示
+                    </Button>
+                    <Button size="small" onClick={() => setUseIssuesSnapshot((v) => !v)} disabled={shipmentLinesQuery.isFetching}>
+                      {useIssuesSnapshot ? '切到实时' : '切到缓存'}
+                    </Button>
+                    {useIssuesSnapshot && issuesComputedAt ? <Text type="secondary">更新于：{issuesComputedAt}</Text> : null}
+                  </Space>
+                ) : null}
                 <Form
                   form={ledgerForm}
                   layout="inline"
@@ -885,7 +960,7 @@ const ShipmentLedgerPage = () => {
               showIcon
               style={{ marginBottom: 12 }}
               message="当前筛选范围内无记录"
-              description="已默认查询最近 90 天。若你确认库里有数据，请扩大日期范围（左上角）或清空筛选条件后再查。"
+              description="已默认查询最近 30 天。若你确认库里有数据，请扩大日期范围（左上角）或清空筛选条件后再查。"
             />
           ) : null}
 

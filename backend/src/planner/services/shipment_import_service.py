@@ -1183,6 +1183,147 @@ def get_costing_result(db: Session, *, shipment_line_id: str) -> Optional[models
     )
 
 
+def list_process_cost_lines(db: Session, *, shipment_line_id: str) -> List[Dict[str, Any]]:
+    """
+    工序明细（用于台账抽屉核对）：
+    - 以“该发货行最新 BOM 快照”为准（尺寸来源：snapshot.trace.parsed；数量来源：shipment_lines.qty）
+    - 工序来源：当前版本配置的 model_version_processes
+    - 计算口径：与 bom_generation_service._compute_process_costing 一致（计时/计件）
+    """
+    lid = (shipment_line_id or "").strip()
+    if not lid:
+        return []
+
+    snap = (
+        db.query(models.BomSnapshot)
+        .filter(models.BomSnapshot.shipment_line_id == lid)
+        .order_by(models.BomSnapshot.created_at.desc())
+        .first()
+    )
+    line = db.get(models.ShipmentLine, lid)
+    if not snap or not line or getattr(snap, "is_archived", False) or getattr(line, "is_archived", False):
+        return []
+
+    trace = snap.trace_json if isinstance(snap.trace_json, dict) else {}
+    parsed = trace.get("parsed") if isinstance(trace.get("parsed"), dict) else {}
+
+    # version id: snapshot -> trace -> costing_result fallback
+    version_id = (
+        str(getattr(snap, "model_version_id", "") or "").strip()
+        or str(parsed.get("model_version_id") or "").strip()
+        or str(trace.get("model_version_id") or "").strip()
+    )
+    if not version_id:
+        cr = get_costing_result(db, shipment_line_id=lid)
+        version_id = str(getattr(cr, "model_version_id", "") or "").strip() if cr else ""
+    if not version_id:
+        return []
+
+    qty = getattr(line, "qty", None)
+    try:
+        quantity = Decimal(str(qty)) if qty not in (None, "") else Decimal("1")
+    except Exception:  # noqa: BLE001
+        quantity = Decimal("1")
+
+    def _d(v: Any) -> Optional[Decimal]:
+        if v in (None, ""):
+            return None
+        if isinstance(v, Decimal):
+            return v
+        try:
+            return Decimal(str(v))
+        except Exception:  # noqa: BLE001
+            return None
+
+    width_cm = _d(parsed.get("width_cm"))
+    height_cm = _d(parsed.get("height_cm"))
+    area_m2 = _d(parsed.get("area_m2"))
+    perimeter_m = _d(parsed.get("perimeter_m"))
+
+    # best-effort compute from width/height if missing
+    if area_m2 is None and width_cm is not None and height_cm is not None:
+        try:
+            area_m2 = (width_cm * height_cm) / Decimal("10000")
+        except Exception:  # noqa: BLE001
+            area_m2 = None
+    if perimeter_m is None and width_cm is not None and height_cm is not None:
+        try:
+            perimeter_m = (Decimal("2") * (width_cm + height_cm)) / Decimal("100")
+        except Exception:  # noqa: BLE001
+            perimeter_m = None
+
+    vps = product_model_service.list_version_process_lines(db, version_id)
+
+    out: List[Dict[str, Any]] = []
+    for row in vps or []:
+        meta = row.metadata_json or {}
+        proc = db.get(models.Process, row.process_id) if getattr(row, "process_id", None) else None
+
+        pricing_method = str(meta.get("pricing_method") or "count")
+        pricing_method = pricing_method if pricing_method in ("fixed", "count", "area", "perimeter", "width", "height") else "count"
+
+        # measure qty (unit follows pricing_method):
+        # - count: 件数
+        # - area: ㎡
+        # - perimeter/width/height: 米
+        if pricing_method == "fixed":
+            measure_qty = Decimal("1")
+        elif pricing_method == "area":
+            measure_qty = (area_m2 or Decimal("0")) * quantity
+        elif pricing_method == "perimeter":
+            measure_qty = (perimeter_m or Decimal("0")) * quantity
+        elif pricing_method == "width":
+            measure_qty = ((width_cm or Decimal("0")) / Decimal("100")) * quantity
+        elif pricing_method == "height":
+            measure_qty = ((height_cm or Decimal("0")) / Decimal("100")) * quantity
+        else:
+            measure_qty = quantity
+
+        cost_type = str(meta.get("cost_type") or "").strip() or None
+        base_minutes = _d(meta.get("base_minutes")) or Decimal("0")
+        unit_minutes = _d(meta.get("unit_minutes")) or Decimal("0")
+        rate = _d(meta.get("rate_per_minute"))
+        piece = _d(meta.get("piece_rate"))
+
+        if cost_type not in ("time", "piece"):
+            cost_type = "piece" if (piece is not None and piece > 0) else "time"
+
+        warnings: List[str] = []
+        total_minutes: Optional[Decimal] = None
+        total_cost: Optional[Decimal] = None
+        if cost_type == "time":
+            total_minutes = base_minutes + (unit_minutes * measure_qty)
+            if rate is not None and rate > 0:
+                total_cost = total_minutes * rate
+            else:
+                warnings.append("未配置分钟单价（rate_per_minute）")
+        else:
+            if piece is not None and piece > 0:
+                total_cost = measure_qty * piece
+            else:
+                warnings.append("未配置计件单价（piece_rate）")
+
+        out.append(
+            {
+                "process_code": getattr(proc, "process_code", None) if proc else None,
+                "process_name": getattr(proc, "process_name", None) if proc else None,
+                "team_name": (meta.get("team_name") or (getattr(proc, "team_name", None) if proc else None)),
+                "pricing_method": pricing_method,
+                "measure_quantity": measure_qty,
+                "cost_type": cost_type,
+                "base_minutes": base_minutes,
+                "unit_minutes": unit_minutes,
+                "rate_per_minute": rate,
+                "piece_rate": piece,
+                "total_minutes": total_minutes,
+                "total_cost": total_cost,
+                "warnings": warnings,
+            }
+        )
+
+    return out
+
+
 def list_profit_lines_by_batch(
     db: Session,
     *,

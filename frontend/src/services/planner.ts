@@ -100,6 +100,7 @@ import type {
   BomSnapshot,
   ShipmentCostingResult,
   ShipmentInventoryDeductionLine,
+  ShipmentProcessCostLine,
   ShipmentException,
   ShipmentExceptionRetryRequest,
   ShipmentExceptionRetryResponse,
@@ -1870,6 +1871,12 @@ export const fetchShipmentLineCosting = async (shipment_line_id: string): Promis
 export const fetchShipmentLineDeductions = async (shipment_line_id: string): Promise<ShipmentInventoryDeductionLine[]> => {
   const id = String(shipment_line_id || '').trim()
   const response = await plannerClient.get(`/shipments/lines/${encodeURIComponent(id)}/deductions`)
+  return response.data
+}
+
+export const fetchShipmentLineProcesses = async (shipment_line_id: string): Promise<ShipmentProcessCostLine[]> => {
+  const id = String(shipment_line_id || '').trim()
+  const response = await plannerClient.get(`/shipments/lines/${encodeURIComponent(id)}/processes`)
   return response.data
 }
 

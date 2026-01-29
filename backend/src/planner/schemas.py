@@ -2533,6 +2533,27 @@ class ShipmentCostingResultRead(BaseModel):
         json_encoders = {Decimal: _decimal_to_str}
 
 
+class ShipmentProcessCostLineRead(BaseModel):
+    process_code: Optional[str] = None
+    process_name: Optional[str] = None
+    team_name: Optional[str] = None
+    pricing_method: Optional[str] = None
+    measure_quantity: Optional[Decimal] = None
+    cost_type: Optional[str] = None
+    base_minutes: Optional[Decimal] = None
+    unit_minutes: Optional[Decimal] = None
+    rate_per_minute: Optional[Decimal] = None
+    piece_rate: Optional[Decimal] = None
+    total_minutes: Optional[Decimal] = None
+    total_cost: Optional[Decimal] = None
+    warnings: List[str] = Field(default_factory=list)
+
+    class Config:
+        orm_mode = True
+        allow_population_by_field_name = True
+        json_encoders = {Decimal: _decimal_to_str}
+
+
 class BomSnapshotRecomputeRequest(BaseModel):
     operator_id: Optional[str] = Field(None, max_length=64)
 

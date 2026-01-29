@@ -22,6 +22,7 @@ from ..schemas import (
     ShipmentProfitLinesResponse,
     ShipmentCostingResultRead,
     ShipmentInventoryDeductionLineRead,
+    ShipmentProcessCostLineRead,
 )
 from ..services import shipment_import_service
 
@@ -181,6 +182,11 @@ def get_costing_result(shipment_line_id: str, db: Session = Depends(get_db_sessi
 @router.get("/lines/{shipment_line_id}/deductions", response_model=list[ShipmentInventoryDeductionLineRead])
 def list_deduction_lines(shipment_line_id: str, db: Session = Depends(get_db_session)):
     return shipment_import_service.list_deduction_lines(db, shipment_line_id=shipment_line_id)
+
+
+@router.get("/lines/{shipment_line_id}/processes", response_model=list[ShipmentProcessCostLineRead])
+def list_process_cost_lines(shipment_line_id: str, db: Session = Depends(get_db_session)):
+    return shipment_import_service.list_process_cost_lines(db, shipment_line_id=shipment_line_id)
 
 
 @router.post("/bom-snapshots/{snapshot_id}/recompute", response_model=BomSnapshotRead)

@@ -3068,3 +3068,13 @@
     - `npm -C frontend run build`
     - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
     - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+
+- **本轮补强（发货台账抽屉：补齐工序明细；列表列宽收紧）**：
+  - 最近校对（北京时间 GMT+8）：2026-01-28
+  - 变更：
+    - 抽屉新增“工序明细”Tab：按发货行的最新 BOM 快照（尺寸/数量）+ 当前版本工序配置，生成工序计价明细，便于核对工序成本口径
+    - 台账列表列宽收紧：数量约缩 1/3；金额/成本/毛利/毛利率约缩 1/5
+    - 新增接口：`GET /shipments/lines/{shipment_line_id}/processes`
+  - 本轮验收命令（必须，均已通过）：
+    - `npm -C frontend run build`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`

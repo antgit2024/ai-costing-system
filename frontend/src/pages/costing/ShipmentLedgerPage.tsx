@@ -31,6 +31,7 @@ import {
   fetchShipmentBomSnapshotDetail,
   fetchShipmentLineCosting,
   fetchShipmentLineDeductions,
+  fetchShipmentLineProcesses,
   fetchShipmentLines,
   fetchSkuMasterByBarcode,
 } from '@/services/planner'
@@ -170,6 +171,12 @@ const ShipmentLedgerPage = () => {
     enabled: detailOpen && !!shipmentLineId,
     placeholderData: keepPreviousData,
   })
+  const processesQuery = useQuery({
+    queryKey: ['shipments', 'ledger', 'processes', shipmentLineId],
+    queryFn: () => fetchShipmentLineProcesses(shipmentLineId),
+    enabled: detailOpen && !!shipmentLineId,
+    placeholderData: keepPreviousData,
+  })
 
   const shipmentLinesQuery = useQuery({
     queryKey: ['shipments', 'lines', ledgerTab, ledgerPage, ledgerPageSize, ledgerRange, ledgerFilters],
@@ -242,18 +249,18 @@ const ShipmentLedgerPage = () => {
         )
       },
     },
-    { title: '数量', dataIndex: 'qty', width: 90, render: (v) => safeString(v) || '-' },
-    { title: '金额', dataIndex: 'revenue_amount', width: 110, render: (v) => formatMoney(v) },
+    { title: '数量', dataIndex: 'qty', width: 60, render: (v) => safeString(v) || '-' },
+    { title: '金额', dataIndex: 'revenue_amount', width: 88, render: (v) => formatMoney(v) },
     {
       title: '成本',
       dataIndex: 'cost_total',
-      width: 110,
+      width: 88,
       render: (v) => formatMoney(v),
     },
     {
       title: '毛利',
       key: 'profit_amount',
-      width: 110,
+      width: 88,
       render: (_v, r: any) => {
         const costRaw = safeString(r?.cost_total).trim()
         if (!costRaw || costRaw === '-') return '-'
@@ -266,7 +273,7 @@ const ShipmentLedgerPage = () => {
     {
       title: '毛利率',
       key: 'profit_rate',
-      width: 100,
+      width: 80,
       render: (_v, r: any) => {
         const costRaw = safeString(r?.cost_total).trim()
         if (!costRaw || costRaw === '-') return '-'
@@ -725,6 +732,53 @@ const ShipmentLedgerPage = () => {
                           { title: '金额', dataIndex: 'v', render: (v) => formatMoney(v) },
                         ]}
                       />
+                    ),
+                  },
+                  {
+                    key: 'process',
+                    label: '工序明细',
+                    children: (
+                      <>
+                        {processesQuery.isError ? (
+                          <Alert
+                            type="error"
+                            showIcon
+                            message="工序明细加载失败"
+                            description={String((processesQuery.error as any)?.response?.data?.detail ?? (processesQuery.error as any)?.message ?? 'unknown')}
+                          />
+                        ) : (processesQuery.data ?? []).length === 0 ? (
+                          <Alert type="info" showIcon message="该发货行未查到工序明细（可能版本未配置工序，或该行暂无BOM快照）" />
+                        ) : (
+                          <Table
+                            size="small"
+                            rowKey={(_r: any, i) => String(i)}
+                            pagination={false}
+                            loading={processesQuery.isFetching}
+                            dataSource={(processesQuery.data ?? []) as any}
+                            columns={[
+                              { title: '工序编码', dataIndex: 'process_code', width: 120, ellipsis: true },
+                              { title: '工序名称', dataIndex: 'process_name', width: 160, ellipsis: true },
+                              { title: '班组', dataIndex: 'team_name', width: 120, ellipsis: true },
+                              { title: '计价维度', dataIndex: 'pricing_method', width: 90, render: (v) => safeString(v) || '-' },
+                              { title: '计价量', dataIndex: 'measure_quantity', width: 110, render: (v) => safeString(v) || '-' },
+                              { title: '类型', dataIndex: 'cost_type', width: 70, render: (v) => safeString(v) || '-' },
+                              { title: '分钟单价', dataIndex: 'rate_per_minute', width: 90, render: (v) => safeString(v) || '-' },
+                              { title: '计件单价', dataIndex: 'piece_rate', width: 90, render: (v) => safeString(v) || '-' },
+                              { title: '总分钟', dataIndex: 'total_minutes', width: 90, render: (v) => safeString(v) || '-' },
+                              { title: '工序成本', dataIndex: 'total_cost', width: 90, render: (v) => formatMoney(v) },
+                              {
+                                title: '提示',
+                                key: 'warnings',
+                                render: (_v, r: any) => {
+                                  const ws = Array.isArray(r?.warnings) ? (r.warnings as any[]).map((x) => String(x)) : []
+                                  const s = ws.filter(Boolean).join('；')
+                                  return s ? <Tooltip title={s}><Tag color="orange">注意</Tag></Tooltip> : '-'
+                                },
+                              },
+                            ]}
+                          />
+                        )}
+                      </>
                     ),
                   },
                   {

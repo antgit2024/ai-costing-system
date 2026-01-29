@@ -1519,6 +1519,22 @@ export interface ShipmentInventoryDeductionLine {
   metadata?: Record<string, unknown>
 }
 
+export interface ShipmentProcessCostLine {
+  process_code?: string | null
+  process_name?: string | null
+  team_name?: string | null
+  pricing_method?: string | null
+  measure_quantity?: string | null
+  cost_type?: string | null
+  base_minutes?: string | null
+  unit_minutes?: string | null
+  rate_per_minute?: string | null
+  piece_rate?: string | null
+  total_minutes?: string | null
+  total_cost?: string | null
+  warnings?: string[]
+}
+
 export interface ShipmentException {
   id: string
   batch_id: string

@@ -51,6 +51,21 @@
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-29（企业级交互：TAB 切换可中止请求 + 短期缓存）
+  - 背景：台账/作业中心是高频页面；用户快速切换 TAB、频繁点“查询/刷新”时，如果每次都新开请求且不取消，会造成后端排队与前端“越切越卡”。
+  - 处理策略：
+    - 前端：对 `fetchShipmentLines`、台账详情抽屉相关查询（快照/计价/扣库/工序）接入 AbortSignal，让 React Query 在 key 变化/组件卸载时**真正中止请求**。
+    - 前端：给台账/作业中心查询增加短期缓存（`staleTime`），减少“来回切 TAB”重复打后端。
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/ShipmentLedgerPage.tsx`
+    - `frontend/src/pages/costing/shipment-ops/components/BatchWorkbench.tsx`
+    - `frontend/src/pages/costing/shipment-ops/components/BulkCostingTab.tsx`
+    - `frontend/src/services/planner.ts`
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-27（数据洞察：首屏不再“空白”，默认轻量查询 + 记住筛选）
   - 现象：`/costing/insights/after-sales`、`/costing/insights/sales`、`/costing/insights/models` 进入页面首屏为空，必须点“查询”才有内容，体验弱于常见 ERP 报表页。
   - 处理策略（不新增重复列表，只让原列表首屏有真实数据）：

@@ -1676,6 +1676,7 @@ export const fetchShipmentImportBatches = async (
 const SHIPMENTS_PREVIEW_TIMEOUT_MS = 5 * 60 * 1000
 const SHIPMENTS_EXECUTE_TIMEOUT_MS = 30 * 60 * 1000
 const SHIPMENTS_LINES_TIMEOUT_MS = 60 * 1000
+const SHIPMENTS_DETAIL_TIMEOUT_MS = 30 * 1000
 const AFTER_SALES_IMPORT_TIMEOUT_MS = 10 * 60 * 1000
 const ANALYTICS_QUERY_TIMEOUT_MS = 60 * 1000
 
@@ -1875,27 +1876,51 @@ export const fetchShipmentBomSnapshots = async (
   return response.data
 }
 
-export const fetchShipmentBomSnapshotDetail = async (snapshot_id: string): Promise<BomSnapshot> => {
+export const fetchShipmentBomSnapshotDetail = async (
+  snapshot_id: string,
+  opts: PlannerRequestOptions = {},
+): Promise<BomSnapshot> => {
   const id = String(snapshot_id || '').trim()
-  const response = await plannerClient.get(`/shipments/bom-snapshots/${encodeURIComponent(id)}`)
+  const response = await plannerClient.get(`/shipments/bom-snapshots/${encodeURIComponent(id)}`, {
+    timeout: opts.timeoutMs ?? SHIPMENTS_DETAIL_TIMEOUT_MS,
+    signal: opts.signal,
+  })
   return response.data
 }
 
-export const fetchShipmentLineCosting = async (shipment_line_id: string): Promise<ShipmentCostingResult> => {
+export const fetchShipmentLineCosting = async (
+  shipment_line_id: string,
+  opts: PlannerRequestOptions = {},
+): Promise<ShipmentCostingResult> => {
   const id = String(shipment_line_id || '').trim()
-  const response = await plannerClient.get(`/shipments/lines/${encodeURIComponent(id)}/costing`)
+  const response = await plannerClient.get(`/shipments/lines/${encodeURIComponent(id)}/costing`, {
+    timeout: opts.timeoutMs ?? SHIPMENTS_DETAIL_TIMEOUT_MS,
+    signal: opts.signal,
+  })
   return response.data
 }
 
-export const fetchShipmentLineDeductions = async (shipment_line_id: string): Promise<ShipmentInventoryDeductionLine[]> => {
+export const fetchShipmentLineDeductions = async (
+  shipment_line_id: string,
+  opts: PlannerRequestOptions = {},
+): Promise<ShipmentInventoryDeductionLine[]> => {
   const id = String(shipment_line_id || '').trim()
-  const response = await plannerClient.get(`/shipments/lines/${encodeURIComponent(id)}/deductions`)
+  const response = await plannerClient.get(`/shipments/lines/${encodeURIComponent(id)}/deductions`, {
+    timeout: opts.timeoutMs ?? SHIPMENTS_DETAIL_TIMEOUT_MS,
+    signal: opts.signal,
+  })
   return response.data
 }
 
-export const fetchShipmentLineProcesses = async (shipment_line_id: string): Promise<ShipmentProcessCostLine[]> => {
+export const fetchShipmentLineProcesses = async (
+  shipment_line_id: string,
+  opts: PlannerRequestOptions = {},
+): Promise<ShipmentProcessCostLine[]> => {
   const id = String(shipment_line_id || '').trim()
-  const response = await plannerClient.get(`/shipments/lines/${encodeURIComponent(id)}/processes`)
+  const response = await plannerClient.get(`/shipments/lines/${encodeURIComponent(id)}/processes`, {
+    timeout: opts.timeoutMs ?? SHIPMENTS_DETAIL_TIMEOUT_MS,
+    signal: opts.signal,
+  })
   return response.data
 }
 

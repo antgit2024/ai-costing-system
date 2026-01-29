@@ -293,27 +293,35 @@ const ShipmentLedgerPage = () => {
   const shipmentLineId = safeString((detailRow as any)?.id).trim()
   const bomSnapshotQuery = useQuery({
     queryKey: ['shipments', 'ledger', 'bom-snapshot', snapshotId],
-    queryFn: () => fetchShipmentBomSnapshotDetail(snapshotId),
+    queryFn: ({ signal }) => fetchShipmentBomSnapshotDetail(snapshotId, { signal }),
     enabled: detailOpen && !!snapshotId,
     placeholderData: keepPreviousData,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
   })
   const costingQuery = useQuery({
     queryKey: ['shipments', 'ledger', 'costing', shipmentLineId],
-    queryFn: () => fetchShipmentLineCosting(shipmentLineId),
+    queryFn: ({ signal }) => fetchShipmentLineCosting(shipmentLineId, { signal }),
     enabled: detailOpen && !!shipmentLineId,
     placeholderData: keepPreviousData,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
   })
   const deductionsQuery = useQuery({
     queryKey: ['shipments', 'ledger', 'deductions', shipmentLineId],
-    queryFn: () => fetchShipmentLineDeductions(shipmentLineId),
+    queryFn: ({ signal }) => fetchShipmentLineDeductions(shipmentLineId, { signal }),
     enabled: detailOpen && !!shipmentLineId,
     placeholderData: keepPreviousData,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
   })
   const processesQuery = useQuery({
     queryKey: ['shipments', 'ledger', 'processes', shipmentLineId],
-    queryFn: () => fetchShipmentLineProcesses(shipmentLineId),
+    queryFn: ({ signal }) => fetchShipmentLineProcesses(shipmentLineId, { signal }),
     enabled: detailOpen && !!shipmentLineId,
     placeholderData: keepPreviousData,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
   })
 
   const parsedDims = useMemo(() => parseDimsFromSpecText((detailRow as any)?.spec_text), [detailRow])
@@ -345,7 +353,7 @@ const ShipmentLedgerPage = () => {
 
   const shipmentLinesQuery = useQuery({
     queryKey: ['shipments', 'lines', ledgerTab, ledgerPage, ledgerPageSize, ledgerRange, ledgerFilters],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       fetchShipmentLines({
         page: ledgerTab === 'issues' ? 1 : ledgerPage,
         page_size: ledgerTab === 'issues' ? 200 : ledgerPageSize,
@@ -354,9 +362,12 @@ const ShipmentLedgerPage = () => {
         status: ledgerTab === 'processed' || ledgerTab === 'pending' ? ledgerTab : ledgerTab === 'issues' ? 'processed' : undefined,
         include_issue_hints: ledgerTab === 'issues',
         ...ledgerFilters,
-      }),
+      }, { signal }),
     placeholderData: keepPreviousData,
     enabled: ledgerTab !== 'sales',
+    staleTime: ledgerTab === 'issues' ? 10_000 : 30_000,
+    refetchOnWindowFocus: false,
+    retry: 1,
   })
 
   const LOW_MARGIN_THRESHOLD = 0.1

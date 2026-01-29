@@ -1,7 +1,7 @@
 import { Alert, Button, Card, Checkbox, Input, Space, Table, Tag, Typography, message, Modal } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 
 import { computeShipmentLineSnapshot, fetchShipmentLines } from '@/services/planner'
@@ -38,6 +38,19 @@ export default function BulkCostingTab() {
   const [running, setRunning] = useState(false)
   const stopRef = useRef(false)
   const [items, setItems] = useState<ShipmentLineListItem[]>([])
+  const previewAbortRef = useRef<AbortController | null>(null)
+
+  useEffect(() => {
+    return () => {
+      try {
+        previewAbortRef.current?.abort()
+      } catch {
+        // ignore
+      } finally {
+        previewAbortRef.current = null
+      }
+    }
+  }, [])
 
   const filters = useMemo(() => {
     const start = pick(sp, 'start')
@@ -62,6 +75,14 @@ export default function BulkCostingTab() {
   const preview = async () => {
     setLoading(true)
     try {
+      // Cancel any in-flight preview request (avoid piling up)
+      try {
+        previewAbortRef.current?.abort()
+      } catch {
+        // ignore
+      }
+      previewAbortRef.current = new AbortController()
+
       const pageSize = Math.min(Math.max(Math.floor(limit || 200), 1), 500)
       const resp = await fetchShipmentLines({
         page: 1,
@@ -75,10 +96,13 @@ export default function BulkCostingTab() {
         product_link_id: filters.product_link_id,
         spec_text: filters.spec_text,
         unresolved_reason: filters.unresolved_reason,
-      })
+      }, { signal: previewAbortRef.current.signal })
       setItems((resp.items ?? []) as any)
       message.success(`已加载 ${Math.min(resp.items?.length ?? 0, pageSize)} 条（上限 ${pageSize}）`)
     } catch (err: any) {
+      // If request was canceled due to new preview/unmount, do nothing.
+      const code = String(err?.code ?? '')
+      if (code === 'ERR_CANCELED' || code === 'ECONNABORTED') return
       message.error(`加载失败：${err?.response?.data?.detail ?? err?.message ?? 'unknown error'}`)
     } finally {
       setLoading(false)

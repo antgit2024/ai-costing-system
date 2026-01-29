@@ -187,7 +187,7 @@ export default function BatchWorkbench(props: { onOpenImport: () => void }) {
       readyFilterChannel,
       readyFilterSpecText,
     ],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       fetchShipmentLines({
         page: 1,
         page_size: Math.min(Math.max(Math.floor(readyLimit || 200), 1), 500),
@@ -197,8 +197,10 @@ export default function BatchWorkbench(props: { onOpenImport: () => void }) {
         sku_code: readyFilterSkuCode.trim() || undefined,
         channel: readyFilterChannel.trim() || undefined,
         spec_text: readyFilterSpecText.trim() || undefined,
-      }),
+      }, { signal }),
     enabled: !!selectedBatchId,
+    staleTime: 15_000,
+    refetchOnWindowFocus: false,
   })
 
   const rebuildLinesQuery = useQuery({
@@ -215,7 +217,7 @@ export default function BatchWorkbench(props: { onOpenImport: () => void }) {
       rebuildBoundModelCode,
       rebuildFilterSpecText,
     ],
-    queryFn: () => {
+    queryFn: ({ signal }) => {
       const start = rebuildDateRange?.[0]?.startOf('day')
       const end = rebuildDateRange?.[1]?.endOf('day')
       return fetchShipmentLines({
@@ -231,10 +233,12 @@ export default function BatchWorkbench(props: { onOpenImport: () => void }) {
         bound_target_kind: rebuildBoundTargetKind === 'any' ? 'any' : rebuildBoundTargetKind,
         bound_model_code: rebuildBoundModelCode.trim() || undefined,
         spec_text: rebuildFilterSpecText.trim() || undefined,
-      })
+      }, { signal })
     },
     enabled: !!selectedBatchId,
     placeholderData: keepPreviousData,
+    staleTime: 15_000,
+    refetchOnWindowFocus: false,
   })
 
   const rebuildLines = (rebuildLinesQuery.data?.items ?? []) as ShipmentLineListItem[]

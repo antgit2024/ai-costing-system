@@ -20,6 +20,24 @@
 
 > 注：若需要对外一句话解释本项目——“以 SKU 绑定已发布标准版本为入口，在发货导入时解析交易规格并生成可追溯的 BOM 快照，用异常队列兜底，支撑扣库与成本核算对账”。
 
+- **最近校对（北京时间 GMT+8）**：2026-01-29（发货作业中心：快照重建 TAB 重构 + 多维筛选）
+  - 背景：`/costing/shipments/ops` 的“快照重建（清空→再生成）”此前直接展示“本批次所有快照”，与“已完成（成本快照）”几乎重复；同时难以定位“已解绑但仍有快照”等真实问题行。
+  - 口径（重新梳理）：
+    - **已完成（成本快照）**：用于“查询/核对快照 + 单条回填 + 批量覆盖重算（高风险）”，面向“已经有快照”的记录。
+    - **快照重建（清空→再生成）**：用于“找出需要处理的发货行（绑定变更/解绑/已清空待重建）→ 定向清空（让报表忽略旧快照）→ 修好绑定后回到待生成生成新快照”，面向“需要把快照从业务口径里先剔除再重建”的场景。
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/shipment-ops/components/BatchWorkbench.tsx`
+      - “快照重建”TAB 改为基于 `GET /api/planner/shipments/lines` 的 **发货行列表**（而非快照列表），并提供：
+        - 范围切换：`需重建（绑定变更/解绑）`（`need_rebuild_snapshot=true`）/ `已清空待重建`（`unresolved_reason=SNAPSHOT_CLEARED`）
+        - 筛选：日期区间（`start/end`）、绑定类型（模型/套装）、绑定关键字、交易规格模糊、商家编码下拉、重建原因下拉（含“解绑但仍有快照”）
+        - 操作：`清空所选`（标记 `SNAPSHOT_CLEARED`，不删历史快照）/ `覆盖重算所选`（按当前绑定覆盖重算）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+  - 下一步：
+    - 若需要“商家编码/交易规格”的下拉候选做成**全量可搜索**（不依赖当前页数据），建议后端补一个轻量 options 接口（按 batch_id + 时间范围聚合 distinct 值）。
+
 - **最近校对（北京时间 GMT+8）**：2026-01-27（数据洞察：首屏不再“空白”，默认轻量查询 + 记住筛选）
   - 现象：`/costing/insights/after-sales`、`/costing/insights/sales`、`/costing/insights/models` 进入页面首屏为空，必须点“查询”才有内容，体验弱于常见 ERP 报表页。
   - 处理策略（不新增重复列表，只让原列表首屏有真实数据）：

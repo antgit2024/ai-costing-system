@@ -89,6 +89,8 @@ import type {
   SkuModelVersionMappingCreatePayload,
   SkuModelVersionMappingRead,
   PaginatedProductModelVersionResponse,
+  SkuMasterUnbindResponse,
+  SkuMasterGeneratePreparseAndSnapshotsResponse,
   SpecParseRequest,
   SpecParseResponse,
   LineVariantCreateRequest,
@@ -121,6 +123,7 @@ import type {
   ShipmentLineListResponse,
   ShipmentLineComputeSnapshotRequest,
   ShipmentLineComputeSnapshotResponse,
+  ShipmentLineClearSnapshotsResponse,
   AfterSalesImportBatch,
   AfterSalesModelOptionsResponse,
   AfterSalesReasonOptionsResponse,
@@ -133,6 +136,8 @@ import type {
   SkuMasterListResponse,
   PublishedStandardModelCandidateListResponse,
   SkuMasterBindByModelResponse,
+  SkuMasterBindPreviewResponse,
+  SkuMasterBindPreviewBulkResponse,
   SkuMasterAutoBindPreviewResponse,
   SkuMasterAutoBindExecuteResponse,
   RecognitionKeywordsValidateResponse,
@@ -1670,6 +1675,7 @@ export const fetchShipmentImportBatches = async (
 // Note: execute may take much longer than preview (it writes lines + generates BOM snapshots).
 const SHIPMENTS_PREVIEW_TIMEOUT_MS = 5 * 60 * 1000
 const SHIPMENTS_EXECUTE_TIMEOUT_MS = 30 * 60 * 1000
+const SHIPMENTS_LINES_TIMEOUT_MS = 60 * 1000
 const AFTER_SALES_IMPORT_TIMEOUT_MS = 10 * 60 * 1000
 const ANALYTICS_QUERY_TIMEOUT_MS = 60 * 1000
 
@@ -1684,6 +1690,7 @@ export const fetchShipmentLines = async (
     page_size?: number
     start?: string
     end?: string
+    batch_id?: string
     status?: 'processed' | 'pending'
     channel?: string
     sku_code?: string
@@ -1694,11 +1701,21 @@ export const fetchShipmentLines = async (
     bound_target_kind?: 'any' | 'model' | 'bundle'
     bound_model_code?: string
     bound_version_label?: string
+    bundle_preset_selector?: string
     unresolved_reason?: string
+    suspected_mismatch?: boolean
+    include_issue_hints?: boolean
+    ready_to_generate?: boolean
+    need_rebuild_snapshot?: boolean
   } = {},
+  opts: PlannerRequestOptions = {},
 ): Promise<ShipmentLineListResponse> => {
   try {
-    const response = await plannerClient.get('/shipments/lines', { params: sanitizeParams(params as any) })
+    const response = await plannerClient.get('/shipments/lines', {
+      params: sanitizeParams(params as any),
+      timeout: opts.timeoutMs ?? SHIPMENTS_LINES_TIMEOUT_MS,
+      signal: opts.signal,
+    })
     return response.data
   } catch (err: any) {
     // Backward-compat: some deployments may not have /shipments/lines yet.
@@ -1721,6 +1738,8 @@ export const fetchShipmentLines = async (
         product_link_id: params.product_link_id,
         include_missing: includeMissing,
       } as any),
+      timeout: opts.timeoutMs ?? SHIPMENTS_LINES_TIMEOUT_MS,
+      signal: opts.signal,
     })
     const data = resp.data as any
     const items = (data?.items ?? []).map((r: any) => {
@@ -1900,6 +1919,15 @@ export const computeShipmentLineSnapshot = async (
 ): Promise<ShipmentLineComputeSnapshotResponse> => {
   const id = String(shipment_line_id || '').trim()
   const response = await plannerClient.post(`/shipments/lines/${id}/compute-snapshot`, payload)
+  return response.data
+}
+
+export const clearShipmentLineSnapshots = async (payload: {
+  shipment_line_ids: string[]
+  operator_id?: string
+  reason?: string
+}): Promise<ShipmentLineClearSnapshotsResponse> => {
+  const response = await plannerClient.post('/shipments/lines/clear-snapshots', payload)
   return response.data
 }
 
@@ -2244,6 +2272,52 @@ export const bindSkuMastersByModel = async (
   return response.data
 }
 
+export const unbindSkuMasters = async (
+  payload: {
+    sku_master_ids: string[]
+    requested_by?: string
+  },
+  opts: PlannerRequestOptions = {},
+): Promise<SkuMasterUnbindResponse> => {
+  const response = await plannerClient.post('/sku-master/unbind', payload, {
+    timeout: opts.timeoutMs,
+    signal: opts.signal,
+  })
+  return response.data
+}
+
+export const generateSkuMasterPreparseAndSnapshots = async (
+  payload: {
+    sku_master_ids: string[]
+    operator_id?: string
+    limit_per_sku?: number
+    overwrite?: boolean
+  },
+  opts: PlannerRequestOptions = {},
+): Promise<SkuMasterGeneratePreparseAndSnapshotsResponse> => {
+  const response = await plannerClient.post('/sku-master/generate-preparse-and-snapshots', payload, {
+    timeout: opts.timeoutMs,
+    signal: opts.signal,
+  })
+  return response.data
+}
+
+export const previewBindSkuMastersByModel = async (
+  payload: {
+    model_id: string
+    sku_master_ids: string[]
+    requested_by?: string
+    allow_rebind?: boolean
+  },
+  opts: PlannerRequestOptions = {},
+): Promise<SkuMasterBindPreviewResponse> => {
+  const response = await plannerClient.post('/sku-master/bind-by-model/preview', payload, {
+    timeout: opts.timeoutMs,
+    signal: opts.signal,
+  })
+  return response.data
+}
+
 export const bindSkuMastersByModelBulk = async (
   payload: {
     model_id: string
@@ -2277,6 +2351,35 @@ export const bindSkuMastersByModelBulk = async (
   return response.data
 }
 
+export const previewBindSkuMastersByModelBulk = async (
+  payload: {
+    model_id: string
+    requested_by?: string
+    limit?: number
+    bound_state?: 'unbound' | 'bound' | 'all'
+    allow_rebind?: boolean
+    search?: string
+    channel?: string
+    match_status?: string
+    spec_mismatch?: boolean
+    preparse_state?: string
+    include_terms?: string
+    exclude_terms?: string
+    match_scope?: 'spec' | 'name' | 'auto' | 'spec_or_name'
+    bound_model_id?: string
+    bound_model_code?: string
+    bound_version_id?: string
+    excluded_sku_master_ids?: string[]
+  },
+  opts: PlannerRequestOptions = {},
+): Promise<SkuMasterBindPreviewBulkResponse> => {
+  const response = await plannerClient.post('/sku-master/bind-by-model/preview/bulk', payload, {
+    timeout: opts.timeoutMs,
+    signal: opts.signal,
+  })
+  return response.data
+}
+
 export const bindSkuMastersByBundleTemplate = async (
   payload: {
     template_id: string
@@ -2293,6 +2396,23 @@ export const bindSkuMastersByBundleTemplate = async (
   errors: Array<Record<string, unknown>>
 }> => {
   const response = await plannerClient.post('/sku-master/bind-by-bundle', payload, {
+    timeout: opts.timeoutMs,
+    signal: opts.signal,
+  })
+  return response.data
+}
+
+export const previewBindSkuMastersByBundleTemplate = async (
+  payload: {
+    template_id: string
+    preset_selector?: string
+    sku_master_ids: string[]
+    requested_by?: string
+    allow_rebind?: boolean
+  },
+  opts: PlannerRequestOptions = {},
+): Promise<SkuMasterBindPreviewResponse> => {
+  const response = await plannerClient.post('/sku-master/bind-by-bundle/preview', payload, {
     timeout: opts.timeoutMs,
     signal: opts.signal,
   })
@@ -2330,6 +2450,36 @@ export const bindSkuMastersByBundleTemplateBulk = async (
   has_more: boolean
 }> => {
   const response = await plannerClient.post('/sku-master/bind-by-bundle/bulk', payload, {
+    timeout: opts.timeoutMs,
+    signal: opts.signal,
+  })
+  return response.data
+}
+
+export const previewBindSkuMastersByBundleTemplateBulk = async (
+  payload: {
+    template_id: string
+    preset_selector?: string
+    requested_by?: string
+    limit?: number
+    bound_state?: 'unbound' | 'bound' | 'all'
+    allow_rebind?: boolean
+    search?: string
+    channel?: string
+    match_status?: string
+    spec_mismatch?: boolean
+    preparse_state?: string
+    include_terms?: string
+    exclude_terms?: string
+    match_scope?: 'spec' | 'name' | 'auto' | 'spec_or_name'
+    bound_model_id?: string
+    bound_model_code?: string
+    bound_version_id?: string
+    excluded_sku_master_ids?: string[]
+  },
+  opts: PlannerRequestOptions = {},
+): Promise<SkuMasterBindPreviewBulkResponse> => {
+  const response = await plannerClient.post('/sku-master/bind-by-bundle/preview/bulk', payload, {
     timeout: opts.timeoutMs,
     signal: opts.signal,
   })

@@ -38,6 +38,19 @@
   - 下一步：
     - 若需要“商家编码/交易规格”的下拉候选做成**全量可搜索**（不依赖当前页数据），建议后端补一个轻量 options 接口（按 batch_id + 时间范围聚合 distinct 值）。
 
+- **最近校对（北京时间 GMT+8）**：2026-01-29（发货台账：提升加载稳定性（超时与重计算解耦））
+  - 背景：`/costing/shipments/` 的“问题订单（需核对）”与台账列表在数据量/并发下容易出现浏览器请求 `timeout of 20000ms exceeded`，导致页面卡住或加载失败。
+  - 处理策略（两层兜底）：
+    - 前端：`fetchShipmentLines` 单独提高 timeout（默认 60s），避免 20s 的假失败。
+    - 后端：`GET /api/planner/shipments/lines` 增加参数 `include_issue_hints`，默认不计算“疑似绑错/尺寸异常”等重计算字段；仅在台账“问题订单（需核对）”TAB 打开时开启。
+  - 本轮产物：
+    - 前端：`frontend/src/services/planner.ts`、`frontend/src/pages/costing/ShipmentLedgerPage.tsx`
+    - 后端：`backend/src/planner/routers/shipments.py`、`backend/src/planner/services/shipment_import_service.py`
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-27（数据洞察：首屏不再“空白”，默认轻量查询 + 记住筛选）
   - 现象：`/costing/insights/after-sales`、`/costing/insights/sales`、`/costing/insights/models` 进入页面首屏为空，必须点“查询”才有内容，体验弱于常见 ERP 报表页。
   - 处理策略（不新增重复列表，只让原列表首屏有真实数据）：

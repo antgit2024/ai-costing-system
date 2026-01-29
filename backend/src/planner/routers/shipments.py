@@ -15,6 +15,8 @@ from ..schemas import (
     ShipmentImportExecuteRequest,
     ShipmentLineComputeSnapshotRequest,
     ShipmentLineComputeSnapshotResponse,
+    ShipmentLineClearSnapshotsRequest,
+    ShipmentLineClearSnapshotsResponse,
     ShipmentExceptionRead,
     ShipmentExceptionRetryRequest,
     ShipmentExceptionRetryResponse,
@@ -227,6 +229,7 @@ def list_shipment_lines(
     page_size: int = 50,
     start: str | None = Query(None, description="ISO datetime, e.g. 2026-01-01T00:00:00Z"),
     end: str | None = Query(None, description="ISO datetime, e.g. 2026-02-01T00:00:00Z"),
+    batch_id: str | None = Query(None, description="导入批次ID（发货作业中心用）"),
     status: str | None = Query(None, description="processed | pending"),
     channel: str | None = None,
     sku_code: str | None = None,
@@ -237,7 +240,12 @@ def list_shipment_lines(
     bound_target_kind: str | None = Query(None, description="any | model | bundle"),
     bound_model_code: str | None = None,
     bound_version_label: str | None = None,
+    bundle_preset_selector: str | None = Query(None, description="套装二级 selector（例如 AE）"),
     unresolved_reason: str | None = Query(None, description="例如：SKU_NOT_BOUND / SPEC_EMPTY / BOM_GENERATION_FAILED"),
+    suspected_mismatch: bool | None = Query(None, description="仅疑似绑错（软提示）"),
+    include_issue_hints: bool | None = Query(None, description="是否返回“疑似绑错/尺寸异常”等核对提示（较慢）"),
+    ready_to_generate: bool | None = Query(None, description="仅返回“可生成快照”的待处理行（本批次常用）"),
+    need_rebuild_snapshot: bool | None = Query(None, description="仅返回“需要覆盖重算快照”的已处理行（绑定变更/清空后常用）"),
     db: Session = Depends(get_db_session),
 ):
     def parse_dt(s: str) -> datetime:
@@ -256,6 +264,7 @@ def list_shipment_lines(
             page_size=page_size,
             start=parse_dt(start) if start else None,
             end=parse_dt(end) if end else None,
+            batch_id=batch_id,
             channel=channel,
             sku_code=sku_code,
             shipment_no=shipment_no,
@@ -266,7 +275,12 @@ def list_shipment_lines(
             bound_target_kind=bound_target_kind,
             bound_model_code=bound_model_code,
             bound_version_label=bound_version_label,
+            bundle_preset_selector=bundle_preset_selector,
             unresolved_reason=unresolved_reason,
+            suspected_mismatch=suspected_mismatch,
+            include_issue_hints=include_issue_hints,
+            ready_to_generate=ready_to_generate,
+            need_rebuild_snapshot=need_rebuild_snapshot,
         )
         return payload
     except ValueError as exc:
@@ -285,6 +299,22 @@ def compute_snapshot_for_shipment_line(
             shipment_line_id=shipment_line_id,
             operator_id=payload.operator_id,
             overwrite=bool(payload.overwrite),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/lines/clear-snapshots", response_model=ShipmentLineClearSnapshotsResponse)
+def clear_shipment_line_snapshots(
+    payload: ShipmentLineClearSnapshotsRequest,
+    db: Session = Depends(get_db_session),
+):
+    try:
+        return shipment_import_service.clear_shipment_line_snapshots(
+            db,
+            shipment_line_ids=payload.shipment_line_ids,
+            operator_id=payload.operator_id,
+            reason=payload.reason,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

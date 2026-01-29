@@ -10,7 +10,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from openpyxl import load_workbook
 from openpyxl.utils.datetime import from_excel
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import joinedload
 
@@ -1464,6 +1464,7 @@ def list_shipment_lines(
     page_size: int = 50,
     start: Optional[datetime] = None,
     end: Optional[datetime] = None,
+    batch_id: Optional[str] = None,
     channel: Optional[str] = None,
     sku_code: Optional[str] = None,
     shipment_no: Optional[str] = None,
@@ -1474,7 +1475,12 @@ def list_shipment_lines(
     bound_target_kind: Optional[str] = None,  # any | model | bundle
     bound_model_code: Optional[str] = None,
     bound_version_label: Optional[str] = None,
+    bundle_preset_selector: Optional[str] = None,
     unresolved_reason: Optional[str] = None,
+    suspected_mismatch: Optional[bool] = None,
+    include_issue_hints: Optional[bool] = None,
+    ready_to_generate: Optional[bool] = None,
+    need_rebuild_snapshot: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """
     Shipment daily ledger (line-level) across batches.
@@ -1489,6 +1495,24 @@ def list_shipment_lines(
     if st not in (None, "processed", "pending"):
         raise ValueError("status 仅支持 processed / pending / 空")
 
+    # "snapshot_cleared" (soft invalidation): if set, treat line as pending and exclude from analytics until rebuilt.
+    cleared_pred = func.nullif(
+        func.trim(func.coalesce(models.ShipmentLine.metadata_json["snapshot_cleared_at"].as_string(), "")),
+        "",
+    ).isnot(None)
+
+    # Backward-compat: older frontend used to concatenate bundle selector into bound_model_code,
+    # e.g. "B-DB9EAEAE" (template DB9EAE + selector AE).
+    # If caller didn't pass bundle_preset_selector, try split last 2 letters.
+    if not bundle_preset_selector and bound_target_kind:
+        k0 = str(bound_target_kind or "").strip().lower()
+        if k0 in ("bundle", "bundles"):
+            raw = str(bound_model_code or "").strip().upper()
+            m2 = re.match(r"^([BZ]-[A-Z0-9]{4,32})([A-Z]{2})$", raw)
+            if m2:
+                bound_model_code = m2.group(1)
+                bundle_preset_selector = m2.group(2)
+
     # Correlated EXISTS predicates (fast with indexes on shipment_line_id).
     has_bom = (
         db.query(models.BomSnapshot.id)
@@ -1500,7 +1524,7 @@ def list_shipment_lines(
         .filter(models.ShipmentCostingResult.shipment_line_id == models.ShipmentLine.id)
         .exists()
     )
-    processed_pred = or_(has_bom, has_costing)
+    processed_pred = and_(or_(has_bom, has_costing), ~cleared_pred)
 
     unresolved_reason_sq = (
         db.query(models.ShipmentExceptionQueue.reason)
@@ -1546,86 +1570,137 @@ def list_shipment_lines(
         .correlate(models.ShipmentLine)
         .scalar_subquery()
     )
+    latest_snapshot_model_version_id_sq = (
+        db.query(models.BomSnapshot.model_version_id)
+        .filter(models.BomSnapshot.shipment_line_id == models.ShipmentLine.id)
+        .order_by(models.BomSnapshot.created_at.desc())
+        .limit(1)
+        .correlate(models.ShipmentLine)
+        .scalar_subquery()
+    )
 
     # Active SKU -> model binding (BundleAsModel is represented as model_code like "B-XXXXYY").
-    bound_model_code_sq = (
-        db.query(models.ProductModel.model_code)
-        .select_from(models.SkuModelVersionMapping)
-        .join(
-            models.ProductModelVersion,
-            models.ProductModelVersion.id == models.SkuModelVersionMapping.model_version_id,
+    #
+    # Root-cause fix for slow queries:
+    # - Avoid correlated scalar_subquery() per row
+    # - Build ONE binding subquery and LEFT JOIN it on shipment_lines.sku_code
+    m = models.SkuModelVersionMapping
+    v = models.ProductModelVersion
+    pm = models.ProductModel
+    binding_sq = (
+        db.query(
+            m.sku_code.label("sku_code"),
+            m.model_version_id.label("model_version_id"),
+            pm.model_code.label("bound_model_code"),
+            pm.model_name.label("bound_model_name"),
+            v.version_label.label("bound_version_label"),
+            func.nullif(
+                func.upper(func.coalesce(v.metadata_json["bundle_preset_selector"].as_string(), "")),
+                "",
+            ).label("bundle_preset_selector"),
+            func.row_number()
+            .over(
+                partition_by=m.sku_code,
+                order_by=(m.updated_at.desc(), m.created_at.desc()),
+            )
+            .label("rn"),
         )
-        .join(
-            models.ProductModel,
-            models.ProductModel.id == models.ProductModelVersion.model_id,
-        )
+        .select_from(m)
+        .join(v, v.id == m.model_version_id)
+        .join(pm, pm.id == v.model_id)
         .filter(
-            models.SkuModelVersionMapping.is_archived.is_(False),
-            models.SkuModelVersionMapping.is_active.is_(True),
-            models.SkuModelVersionMapping.sku_code == models.ShipmentLine.sku_code,
-            models.ProductModelVersion.is_archived.is_(False),
-            models.ProductModel.is_archived.is_(False),
+            m.is_archived.is_(False),
+            m.is_active.is_(True),
+            v.is_archived.is_(False),
+            pm.is_archived.is_(False),
         )
-        .limit(1)
-        .correlate(models.ShipmentLine)
-        .scalar_subquery()
-    )
-    bound_model_name_sq = (
-        db.query(models.ProductModel.model_name)
-        .select_from(models.SkuModelVersionMapping)
-        .join(
-            models.ProductModelVersion,
-            models.ProductModelVersion.id == models.SkuModelVersionMapping.model_version_id,
-        )
-        .join(
-            models.ProductModel,
-            models.ProductModel.id == models.ProductModelVersion.model_id,
-        )
-        .filter(
-            models.SkuModelVersionMapping.is_archived.is_(False),
-            models.SkuModelVersionMapping.is_active.is_(True),
-            models.SkuModelVersionMapping.sku_code == models.ShipmentLine.sku_code,
-            models.ProductModelVersion.is_archived.is_(False),
-            models.ProductModel.is_archived.is_(False),
-        )
-        .limit(1)
-        .correlate(models.ShipmentLine)
-        .scalar_subquery()
-    )
-    bound_version_label_sq = (
-        db.query(models.ProductModelVersion.version_label)
-        .select_from(models.SkuModelVersionMapping)
-        .join(
-            models.ProductModelVersion,
-            models.ProductModelVersion.id == models.SkuModelVersionMapping.model_version_id,
-        )
-        .filter(
-            models.SkuModelVersionMapping.is_archived.is_(False),
-            models.SkuModelVersionMapping.is_active.is_(True),
-            models.SkuModelVersionMapping.sku_code == models.ShipmentLine.sku_code,
-            models.ProductModelVersion.is_archived.is_(False),
-        )
-        .limit(1)
-        .correlate(models.ShipmentLine)
-        .scalar_subquery()
+        .subquery()
     )
 
-    q = db.query(
+    q = (
+        db.query(
         models.ShipmentLine,
         has_bom.label("has_bom_snapshot"),
         has_costing.label("has_costing_result"),
+        cleared_pred.label("snapshot_cleared"),
         latest_snapshot_id_sq.label("bom_snapshot_id"),
+        latest_snapshot_model_version_id_sq.label("snapshot_model_version_id"),
         unresolved_reason_sq.label("unresolved_reason"),
         unresolved_message_sq.label("unresolved_message"),
         cost_mode_sq.label("cost_mode"),
         cost_total_sq.label("cost_total"),
-        bound_model_code_sq.label("bound_model_code"),
-        bound_model_name_sq.label("bound_model_name"),
-        bound_version_label_sq.label("bound_version_label"),
-    ).filter(
+        binding_sq.c.model_version_id.label("bound_model_version_id"),
+        binding_sq.c.bound_model_code.label("bound_model_code"),
+        binding_sq.c.bound_model_name.label("bound_model_name"),
+        binding_sq.c.bound_version_label.label("bound_version_label"),
+        binding_sq.c.bundle_preset_selector.label("bundle_preset_selector"),
+        )
+        .outerjoin(
+            binding_sq,
+            and_(
+                binding_sq.c.sku_code == models.ShipmentLine.sku_code,
+                binding_sq.c.rn == 1,
+            ),
+        )
+        .filter(
         models.ShipmentLine.is_archived.is_(False),
         models.ShipmentLine.is_active.is_(True),
         models.ShipmentLine.completed_at.isnot(None),
+        )
+    )
+    if batch_id:
+        bid = str(batch_id).strip()
+        if bid:
+            q = q.filter(models.ShipmentLine.batch_id == bid)
+
+    # "疑似绑错" heuristic (SQL-side filter for pagination correctness).
+    # NOTE: This is intentionally a SOFT guardrail; it may contain false positives.
+    def _has_any(col, keys: List[str]):
+        col2 = func.coalesce(col, "")
+        return or_(*[col2.ilike(f"%{k}%") for k in (keys or []) if str(k).strip()])
+
+    sample_siquan_dian = _has_any(models.ShipmentLine.spec_text, ["丝圈", "地垫"])
+    sample_baozhen = _has_any(models.ShipmentLine.spec_text, ["抱枕", "枕套"])
+    sample_ditan = _has_any(models.ShipmentLine.spec_text, ["地毯"])
+    sample_zhuodian = _has_any(models.ShipmentLine.spec_text, ["桌垫"])
+    sample_zhuangshihua = _has_any(models.ShipmentLine.spec_text, ["装饰画", "画框", "挂画"])
+    sample_any = or_(sample_siquan_dian, sample_baozhen, sample_ditan, sample_zhuodian, sample_zhuangshihua)
+
+    # Target hits: check both model_name and model_code (some users only remember codes)
+    target_siquan_dian = or_(
+        _has_any(binding_sq.c.bound_model_name, ["丝圈", "地垫"]),
+        _has_any(binding_sq.c.bound_model_code, ["丝圈", "地垫"]),
+    )
+    target_baozhen = or_(
+        _has_any(binding_sq.c.bound_model_name, ["抱枕", "枕套"]),
+        _has_any(binding_sq.c.bound_model_code, ["抱枕", "枕套"]),
+    )
+    target_ditan = or_(_has_any(binding_sq.c.bound_model_name, ["地毯"]), _has_any(binding_sq.c.bound_model_code, ["地毯"]))
+    target_zhuodian = or_(_has_any(binding_sq.c.bound_model_name, ["桌垫"]), _has_any(binding_sq.c.bound_model_code, ["桌垫"]))
+    target_zhuangshihua = or_(
+        _has_any(binding_sq.c.bound_model_name, ["装饰画", "画框", "挂画"]),
+        _has_any(binding_sq.c.bound_model_code, ["装饰画", "画框", "挂画"]),
+    )
+    target_any = or_(target_siquan_dian, target_baozhen, target_ditan, target_zhuodian, target_zhuangshihua)
+
+    has_target_binding = or_(
+        binding_sq.c.bound_model_code.isnot(None),
+        binding_sq.c.bound_model_name.isnot(None),
+    )
+    suspected_mismatch_pred = and_(
+        has_target_binding,
+        or_(
+            and_(sample_siquan_dian, target_baozhen),
+            and_(sample_baozhen, target_siquan_dian),
+            and_(sample_zhuangshihua, target_baozhen),
+            and_(sample_baozhen, target_zhuangshihua),
+            and_(sample_zhuodian, target_baozhen),
+            and_(sample_baozhen, target_zhuodian),
+            and_(sample_ditan, target_baozhen),
+            and_(sample_baozhen, target_ditan),
+            # Softer case (align with sku-master preview): sample hits a category but target contains none.
+            and_(sample_any, ~target_any),
+        ),
     )
 
     if start is not None:
@@ -1649,21 +1724,25 @@ def list_shipment_lines(
     # Binding filters (current effective binding on SKU).
     if bound_model_code:
         pat = f"%{str(bound_model_code).strip()}%"
-        q = q.filter(bound_model_code_sq.ilike(pat))
+        q = q.filter(func.coalesce(binding_sq.c.bound_model_code, "").ilike(pat))
     if bound_version_label:
         vlab = str(bound_version_label).strip()
         if vlab:
-            q = q.filter(bound_version_label_sq == vlab)
+            q = q.filter(binding_sq.c.bound_version_label == vlab)
+    if bundle_preset_selector:
+        sel = str(bundle_preset_selector).strip().upper()
+        if sel:
+            q = q.filter(binding_sq.c.bundle_preset_selector == sel)
     if bound_target_kind:
         k = str(bound_target_kind).strip().lower()
         if k in ("bundle", "bundles"):
-            q = q.filter(or_(bound_model_code_sq.ilike("B-%"), bound_model_code_sq.ilike("Z-%")))
+            q = q.filter(or_(binding_sq.c.bound_model_code.ilike("B-%"), binding_sq.c.bound_model_code.ilike("Z-%")))
         elif k in ("model", "models", "standard"):
             q = q.filter(
                 and_(
-                    bound_model_code_sq.isnot(None),
-                    ~bound_model_code_sq.ilike("B-%"),
-                    ~bound_model_code_sq.ilike("Z-%"),
+                    binding_sq.c.bound_model_code.isnot(None),
+                    ~binding_sq.c.bound_model_code.ilike("B-%"),
+                    ~binding_sq.c.bound_model_code.ilike("Z-%"),
                 )
             )
 
@@ -1671,10 +1750,30 @@ def list_shipment_lines(
         q = q.filter(processed_pred)
     elif st == "pending":
         q = q.filter(~processed_pred)
+
+    if ready_to_generate is True:
+        # “待生成”口径：当前为待处理，且已具备生成快照所需的最小条件（有条码、有规格、有有效绑定）
+        q = q.filter(
+            ~processed_pred,
+            binding_sq.c.model_version_id.isnot(None),
+            func.nullif(func.trim(func.coalesce(models.ShipmentLine.sku_code, "")), "").isnot(None),
+            func.nullif(func.trim(func.coalesce(models.ShipmentLine.spec_text, "")), "").isnot(None),
+        )
+    if need_rebuild_snapshot is True:
+        # “需重建”口径：已有快照（已处理），但快照记录的 model_version_id 与当前绑定不一致（包含“已清空绑定但有快照”）
+        q = q.filter(
+            has_bom,
+            func.coalesce(binding_sq.c.model_version_id, "") != func.coalesce(latest_snapshot_model_version_id_sq, ""),
+        )
     if unresolved_reason:
         rr = str(unresolved_reason).strip()
         if rr:
             q = q.filter(unresolved_reason_sq == rr)
+
+    if suspected_mismatch is True:
+        q = q.filter(suspected_mismatch_pred)
+    elif suspected_mismatch is False:
+        q = q.filter(~suspected_mismatch_pred)
 
     total = q.with_entities(func.count(models.ShipmentLine.id)).scalar() or 0
 
@@ -1712,14 +1811,18 @@ def list_shipment_lines(
         _line0,
         _has_bom_snapshot0,
         _has_costing_result0,
+        _snapshot_cleared0,
         _bom_snapshot_id0,
+        _snapshot_model_version_id0,
         _unresolved_reason0,
         _unresolved_message0,
         _cost_mode0,
         _cost_total0,
+        _bound_model_version_id0,
         _bound_model_code0,
         _bound_model_name0,
         _bound_version_label0,
+        _bound_bundle_preset_selector0,
     ) in rows:
         sid = str(_bom_snapshot_id0 or "").strip()
         if sid and _cost_total0 in (None, ""):
@@ -1737,21 +1840,60 @@ def list_shipment_lines(
             if c is not None:
                 snap_cost[str(sid)] = c
 
+    # Snapshot trace for "尺寸疑似异常" check (need latest snapshot measurement_mm for snapshot ids on page).
+    snap_trace: Dict[str, Dict[str, Any]] = {}
+    if bool(include_issue_hints):
+        snap_ids_all: List[str] = []
+        for (
+            _line0,
+            _has_bom_snapshot0,
+            _has_costing_result0,
+            _snapshot_cleared0,
+            _bom_snapshot_id0,
+            _snapshot_model_version_id0,
+            _unresolved_reason0,
+            _unresolved_message0,
+            _cost_mode0,
+            _cost_total0,
+            _bound_model_version_id0,
+            _bound_model_code0,
+            _bound_model_name0,
+            _bound_version_label0,
+            _bound_bundle_preset_selector0,
+        ) in rows:
+            sid = str(_bom_snapshot_id0 or "").strip()
+            if sid:
+                snap_ids_all.append(sid)
+        if snap_ids_all:
+            snaps = (
+                db.query(models.BomSnapshot.id, models.BomSnapshot.trace_json)
+                .filter(models.BomSnapshot.id.in_(list(set(snap_ids_all))))
+                .all()
+            )
+            for sid, tjson in snaps:
+                if sid:
+                    snap_trace[str(sid)] = (tjson or {}) if isinstance(tjson, dict) else {}
+
     items: List[Dict[str, Any]] = []
     for (
         line,
         has_bom_snapshot,
         has_costing_result,
+        snapshot_cleared,
         bom_snapshot_id,
+        snapshot_model_version_id,
         unresolved_reason,
         unresolved_message,
         cost_mode,
         cost_total,
+        bound_model_version_id,
         bound_model_code,
         bound_model_name,
         bound_version_label,
+        bound_bundle_preset_selector,
     ) in rows:
-        processed = bool(has_bom_snapshot or has_costing_result)
+        cleared = bool(snapshot_cleared)
+        processed = bool((has_bom_snapshot or has_costing_result) and not cleared)
         processed_source = "bom_snapshot" if has_bom_snapshot else ("costing_result" if has_costing_result else None)
         mode = "2026" if has_bom_snapshot else (str(cost_mode) if cost_mode else None)
         meta = dict(getattr(line, "metadata_json", None) or {})
@@ -1774,12 +1916,75 @@ def list_shipment_lines(
             or raw_row.get("platformSkuId")
         )
         bundle_template_code = meta.get("bundle_template_code")
-        bundle_preset_selector = meta.get("bundle_preset_selector")
+        bundle_preset_selector = meta.get("bundle_preset_selector") or bound_bundle_preset_selector
         # fill missing cost_total from snapshot trace (legacy rows)
         if cost_total in (None, "") and bom_snapshot_id not in (None, ""):
             sid = str(bom_snapshot_id).strip()
             if sid and sid in snap_cost:
                 cost_total = snap_cost[sid]
+
+        # Soft guardrails are expensive (normalize/parse spec per row, inspect snapshot trace).
+        # Only compute them when explicitly requested by UI.
+        include_hints = bool(include_issue_hints)
+        norm_spec = ""
+        mismatch_warnings: List[str] = []
+        suspected = False
+        suspected_size_anomaly = False
+        size_anomaly_detail: Optional[str] = None
+
+        if include_hints:
+            # Soft warning: "疑似绑错" (keyword mismatch between transaction spec and bound target label).
+            # Use the SAME keyword groups as sku-master bind preview to keep behavior consistent.
+            target_label = f"{str(bound_model_code or '').strip()} {str(bound_model_name or '').strip()}".strip()
+            try:
+                norm_spec = spec_parser_service.normalize_tx_spec_text(getattr(line, "spec_text", None))
+            except Exception:  # noqa: BLE001
+                norm_spec = getattr(line, "spec_text", None)
+            norm_spec = str(norm_spec or "").strip()
+            if norm_spec and target_label:
+                try:
+                    mismatch_warnings = sku_master_service._mismatch_warnings_by_keywords(  # noqa: SLF001
+                        sample_text=norm_spec,
+                        sku_spec_text=None,
+                        product_name=None,
+                        target_label=target_label,
+                    )
+                except Exception:  # noqa: BLE001
+                    mismatch_warnings = []
+            suspected = bool(mismatch_warnings)
+
+            # Soft warning: "尺寸疑似异常" (parsed spec area vs snapshot measurement area).
+            area_m2: Optional[float] = None
+            try:
+                parsed2 = spec_parser_service.parse_spec(norm_spec or getattr(line, "spec_text", None) or "")
+                area_m2_raw = parsed2.get("area_m2")
+                area_m2 = float(area_m2_raw) if area_m2_raw not in (None, "") else None
+            except Exception:  # noqa: BLE001
+                area_m2 = None
+
+            snap_area_m2: Optional[float] = None
+            mm_w: Optional[float] = None
+            mm_h: Optional[float] = None
+            sid = str(bom_snapshot_id or "").strip()
+            if sid and sid in snap_trace:
+                mm = (snap_trace.get(sid) or {}).get("measurement_mm") or {}
+                if isinstance(mm, dict):
+                    try:
+                        mm_w = float(str(mm.get("width_mm") or "").strip())
+                        mm_h = float(str(mm.get("height_mm") or "").strip())
+                    except Exception:  # noqa: BLE001
+                        mm_w = None
+                        mm_h = None
+                if mm_w and mm_h and mm_w > 0 and mm_h > 0:
+                    snap_area_m2 = (mm_w * mm_h) / 1_000_000.0
+
+            if area_m2 and snap_area_m2 and area_m2 > 0 and snap_area_m2 > 0:
+                ratio = snap_area_m2 / area_m2 if area_m2 else None
+                # Heuristic: flag large mismatch (e.g. 0.36㎡ vs ~1.00㎡ => ratio≈2.78)
+                if ratio and (ratio >= 1.8 or ratio <= 0.55):
+                    suspected_size_anomaly = True
+                    wh = f"{int(mm_w)}×{int(mm_h)}mm" if mm_w and mm_h else "-"
+                    size_anomaly_detail = f"解析面积≈{area_m2:.2f}㎡；计价面积≈{snap_area_m2:.2f}㎡（{wh}）"
         items.append(
             {
                 "id": str(getattr(line, "id", "")),
@@ -1802,6 +2007,12 @@ def list_shipment_lines(
                 "qty": getattr(line, "qty", None),
                 "revenue_amount": getattr(line, "revenue_amount", None),
                 "cost_total": cost_total,
+                "bound_model_version_id": (str(bound_model_version_id).strip() if bound_model_version_id not in (None, "") else None),
+                "snapshot_model_version_id": (str(snapshot_model_version_id).strip() if snapshot_model_version_id not in (None, "") else None),
+                "needs_rebuild_snapshot": bool(
+                    has_bom_snapshot
+                    and str(bound_model_version_id or "").strip() != str(snapshot_model_version_id or "").strip()
+                ),
                 "bound_model_code": (str(bound_model_code).strip() if bound_model_code not in (None, "") else None),
                 "bound_model_name": (str(bound_model_name).strip() if bound_model_name not in (None, "") else None),
                 "bound_version_label": (
@@ -1811,8 +2022,16 @@ def list_shipment_lines(
                 "status": "processed" if processed else "pending",
                 "processed_source": processed_source,
                 "mode": mode,
-                "unresolved_reason": unresolved_reason,
-                "unresolved_message": unresolved_message,
+                "unresolved_reason": "SNAPSHOT_CLEARED" if cleared else unresolved_reason,
+                "unresolved_message": (
+                    "已强制清空快照：销售分析已忽略，等待重新绑定后重建快照"
+                    if cleared
+                    else unresolved_message
+                ),
+                "suspected_mismatch": suspected,
+                "mismatch_warnings": mismatch_warnings,
+                "suspected_size_anomaly": bool(suspected_size_anomaly),
+                "size_anomaly_detail": size_anomaly_detail,
             }
         )
 
@@ -1840,6 +2059,12 @@ def compute_snapshot_for_shipment_line(
     if not line or getattr(line, "is_archived", False):
         raise ValueError("发货行不存在或已归档")
 
+    # If user force-cleared snapshot for this line, treat it as "pending" even if historical snapshot exists.
+    # This flag will be removed once we successfully create/recompute a snapshot.
+    meta_line = dict(getattr(line, "metadata_json", None) or {})
+    cleared_at = str(meta_line.get("snapshot_cleared_at") or "").strip()
+    is_cleared = bool(cleared_at)
+
     # If not overwriting, skip processed rows (either snapshot or costing result).
     if not overwrite:
         has_bom = (
@@ -1856,7 +2081,7 @@ def compute_snapshot_for_shipment_line(
             .first()
             is not None
         )
-        if has_bom or has_costing:
+        if (has_bom or has_costing) and not is_cleared:
             return {
                 "action": "skipped",
                 "shipment_line_id": str(line.id),
@@ -1875,6 +2100,17 @@ def compute_snapshot_for_shipment_line(
 
     if overwrite and latest_id:
         snap = recompute_bom_snapshot(db, snapshot_id=latest_id, operator_id=operator_id)
+        # clear snapshot_cleared flag on success
+        try:
+            meta2 = dict(getattr(line, "metadata_json", None) or {})
+            for k in ("snapshot_cleared_at", "snapshot_cleared_by", "snapshot_cleared_reason"):
+                if k in meta2:
+                    meta2.pop(k, None)
+            line.metadata_json = meta2
+            db.add(line)
+            db.commit()
+        except Exception:
+            db.rollback()
         # resolve unresolved exceptions for this line (best-effort)
         try:
             db.query(models.ShipmentExceptionQueue).filter(
@@ -1920,6 +2156,13 @@ def compute_snapshot_for_shipment_line(
 
     # resolve unresolved exceptions for this line (best-effort)
     try:
+        # clear snapshot_cleared flag on success
+        meta2 = dict(getattr(line, "metadata_json", None) or {})
+        for k in ("snapshot_cleared_at", "snapshot_cleared_by", "snapshot_cleared_reason"):
+            if k in meta2:
+                meta2.pop(k, None)
+        line.metadata_json = meta2
+        db.add(line)
         db.query(models.ShipmentExceptionQueue).filter(
             models.ShipmentExceptionQueue.shipment_line_id == line.id,
             models.ShipmentExceptionQueue.resolved_at.is_(None),
@@ -1929,6 +2172,81 @@ def compute_snapshot_for_shipment_line(
         db.rollback()
 
     return {"action": "created", "shipment_line_id": str(line.id), "bom_snapshot_id": str(snap2.id), "detail": None}
+
+
+def clear_shipment_line_snapshots(
+    db: Session,
+    *,
+    shipment_line_ids: List[str],
+    operator_id: Optional[str],
+    reason: Optional[str],
+) -> Dict[str, Any]:
+    """
+    Soft-clear snapshots for shipment lines:
+    - Do NOT delete historical bom_snapshot rows (audit trail).
+    - Mark shipment_line.metadata.snapshot_cleared_* so analytics/ledger treats it as "pending" and ignores cost.
+    - User can later rebuild snapshot after re-binding.
+    """
+    ids = [str(x).strip() for x in (shipment_line_ids or []) if str(x).strip()]
+    total_selected = len(ids)
+    if total_selected <= 0:
+        return {
+            "total_selected": 0,
+            "cleared_count": 0,
+            "skipped_not_found": 0,
+            "skipped_already_cleared": 0,
+            "skipped_missing_barcode": 0,
+            "errors": [],
+        }
+    op = (operator_id or "").strip() or None
+    why = (reason or "").strip() or "force_clear_snapshot"
+    now_iso = _utcnow().isoformat()
+
+    rows = (
+        db.query(models.ShipmentLine)
+        .filter(models.ShipmentLine.id.in_(list(set(ids))), models.ShipmentLine.is_archived.is_(False))
+        .all()
+    )
+    by_id = {str(r.id): r for r in rows}
+
+    cleared_count = 0
+    skipped_not_found = 0
+    skipped_already_cleared = 0
+    skipped_missing_barcode = 0
+    errors: List[Dict[str, Any]] = []
+
+    for lid in ids:
+        line = by_id.get(lid)
+        if not line:
+            skipped_not_found += 1
+            continue
+        sku = str(getattr(line, "sku_code", "") or "").strip()
+        if not sku:
+            skipped_missing_barcode += 1
+            continue
+        meta = dict(getattr(line, "metadata_json", None) or {})
+        if str(meta.get("snapshot_cleared_at") or "").strip():
+            skipped_already_cleared += 1
+            continue
+        meta.update(
+            {
+                "snapshot_cleared_at": now_iso,
+                "snapshot_cleared_by": op,
+                "snapshot_cleared_reason": why,
+            }
+        )
+        line.metadata_json = meta
+        db.add(line)
+        cleared_count += 1
+    db.commit()
+    return {
+        "total_selected": total_selected,
+        "cleared_count": cleared_count,
+        "skipped_not_found": skipped_not_found,
+        "skipped_already_cleared": skipped_already_cleared,
+        "skipped_missing_barcode": skipped_missing_barcode,
+        "errors": errors,
+    }
 
 
 def recompute_bom_snapshot(db: Session, *, snapshot_id: str, operator_id: Optional[str]) -> models.BomSnapshot:

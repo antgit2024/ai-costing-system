@@ -20,10 +20,11 @@ import {
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 
+import SalesInsightsPage from '@/pages/costing/SalesInsightsPage'
 import {
   fetchBundleTemplates,
   fetchPublishedStandardModels,
@@ -44,6 +45,111 @@ const safeString = (v: unknown): string => {
   return String(v)
 }
 
+// Display-only normalization for transaction spec:
+// - unify delimiters to Chinese semicolon "；"
+// - strip attribute labels like "颜色分类:" / "地毯尺寸:" / "尺寸:" ... (generic `xxx:` prefix segments)
+const normalizeTxSpecForDisplay = (raw: unknown): string => {
+  let s = safeString(raw).trim()
+  if (!s) return ''
+  s = s.replace(/;/g, '；')
+  // Remove label prefixes at start or after delimiter: "<label>:" => ""
+  // e.g. "颜色分类:AAA；尺寸:BBB" -> "AAA；BBB"
+  s = s.replace(/(^|；\s*)([^；]{1,32}?)\s*:\s*/g, '$1')
+  s = s.replace(/；\s*；+/g, '；')
+  s = s.replace(/\s+/g, ' ').trim()
+  s = s.replace(/^；+/, '').replace(/；+$/, '')
+  return s
+}
+
+type ParsedDims = {
+  width_cm?: number
+  height_cm?: number
+  diameter_cm?: number
+}
+
+const parseDimsFromSpecText = (raw: unknown): ParsedDims => {
+  const s0 = normalizeTxSpecForDisplay(raw)
+  const s = s0.replace(/CM\b/gi, 'cm').replace(/厘米/g, 'cm')
+  // Prefer explicit diameter markers
+  const mDia = s.match(/(?:直径|Φ|φ)\s*([0-9]+(?:\.[0-9]+)?)\s*cm?/i)
+  if (mDia?.[1]) {
+    const d = Number(mDia[1])
+    if (Number.isFinite(d) && d > 0 && d <= 1000) return { diameter_cm: d }
+  }
+  // width x height patterns: "60CM*60CM" / "45X45" / "约64.5*64.5"
+  const mWH = s.match(/([0-9]+(?:\.[0-9]+)?)\s*(?:cm)?\s*[xX*×]\s*([0-9]+(?:\.[0-9]+)?)\s*(?:cm)?/i)
+  if (mWH?.[1] && mWH?.[2]) {
+    const w = Number(mWH[1])
+    const h = Number(mWH[2])
+    if (Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0 && w <= 2000 && h <= 2000) {
+      return { width_cm: w, height_cm: h }
+    }
+  }
+  return {}
+}
+
+const formatDimsText = (d: ParsedDims): string => {
+  const w = d.width_cm
+  const h = d.height_cm
+  const dia = d.diameter_cm
+  if (Number.isFinite(dia as any) && (dia as any) > 0) return `直径≈${Number(dia).toFixed(1).replace(/\.0$/, '')}cm`
+  if (Number.isFinite(w as any) && Number.isFinite(h as any) && (w as any) > 0 && (h as any) > 0) {
+    const ww = Number(w).toFixed(1).replace(/\.0$/, '')
+    const hh = Number(h).toFixed(1).replace(/\.0$/, '')
+    return `宽≈${ww}cm；高≈${hh}cm`
+  }
+  return '-'
+}
+
+const inferAreaFromBomLines = (lines: any[]): number | null => {
+  const items = Array.isArray(lines) ? lines : []
+  const unitOk = (u: string) => {
+    const x = (u || '').toLowerCase()
+    return x.includes('㎡') || x.includes('平米') || x.includes('平方米') || x.includes('m2')
+  }
+  let best: number | null = null
+  for (const r of items) {
+    const u = safeString(r?.unit_of_measure).trim()
+    if (!u || !unitOk(u)) continue
+    const q = Number(safeString(r?.computed_quantity).trim())
+    if (!Number.isFinite(q) || q <= 0) continue
+    if (best === null || q > best) best = q
+  }
+  return best
+}
+
+const inferPrimaryAreaLine = (
+  lines: any[],
+): { qty_m2: number; uom: string; material_code?: string; material_name?: string; extra_width_mm?: number; extra_height_mm?: number } | null => {
+  const items = Array.isArray(lines) ? lines : []
+  const unitOk = (u: string) => {
+    const x = (u || '').toLowerCase()
+    return x.includes('㎡') || x.includes('平米') || x.includes('平方米') || x.includes('m2')
+  }
+  let best: any | null = null
+  for (const r of items) {
+    const u = safeString(r?.unit_of_measure).trim()
+    if (!u || !unitOk(u)) continue
+    const q = Number(safeString(r?.computed_quantity).trim())
+    if (!Number.isFinite(q) || q <= 0) continue
+    if (!best || q > Number(safeString(best?.computed_quantity).trim())) best = r
+  }
+  if (!best) return null
+  const qty = Number(safeString(best?.computed_quantity).trim())
+  if (!Number.isFinite(qty) || qty <= 0) return null
+  const md = best?.metadata && typeof best.metadata === 'object' ? best.metadata : {}
+  const ew = Number(safeString((md as any)?.extra_width_mm).trim())
+  const eh = Number(safeString((md as any)?.extra_height_mm).trim())
+  return {
+    qty_m2: qty,
+    uom: safeString(best?.unit_of_measure).trim(),
+    material_code: safeString(best?.material_code).trim() || undefined,
+    material_name: safeString(best?.material_name).trim() || undefined,
+    extra_width_mm: Number.isFinite(ew) ? ew : undefined,
+    extra_height_mm: Number.isFinite(eh) ? eh : undefined,
+  }
+}
+
 const reasonLabel = (reason: string): string => {
   const r = String(reason || '').trim()
   if (!r) return ''
@@ -57,7 +163,31 @@ const ShipmentLedgerPage = () => {
   const navigate = useNavigate()
   const [ledgerForm] = Form.useForm()
 
-  const [ledgerTab, setLedgerTab] = useState<'all' | 'processed' | 'pending'>('all')
+  const initialUrl = useMemo(() => {
+    try {
+      if (typeof window === 'undefined') return {} as any
+      const p = new URLSearchParams(window.location.search)
+      return {
+        tab: String(p.get('tab') ?? '').trim(),
+        start: String(p.get('start') ?? '').trim(),
+        end: String(p.get('end') ?? '').trim(),
+        channel: String(p.get('channel') ?? '').trim(),
+        sku_code: String(p.get('sku_code') ?? '').trim(),
+        bound_target_kind: String(p.get('bound_target_kind') ?? '').trim(),
+        bundle_template_code: String(p.get('bundle_template_code') ?? '').trim(),
+        bundle_preset_selector: String(p.get('bundle_preset_selector') ?? '').trim(),
+        sort: String(p.get('sort') ?? '').trim(),
+        order: String(p.get('order') ?? '').trim(),
+      }
+    } catch {
+      return {} as any
+    }
+  }, [])
+
+  const [ledgerTab, setLedgerTab] = useState<'all' | 'processed' | 'pending' | 'sales' | 'issues'>(() => {
+    const t = String((initialUrl as any)?.tab ?? '').trim()
+    return t === 'processed' || t === 'pending' || t === 'sales' || t === 'issues' ? (t as any) : 'all'
+  })
   const [ledgerPage, setLedgerPage] = useState(1)
   const [ledgerPageSize, setLedgerPageSize] = useState(50)
   const [ledgerRange, setLedgerRange] = useState<[any, any]>(() => [
@@ -75,11 +205,19 @@ const ShipmentLedgerPage = () => {
     bound_target_kind?: 'any' | 'model' | 'bundle'
     bound_model_code?: string
     bound_version_label?: string
+    bundle_preset_selector?: string
   }>({})
 
   const [bulkModalOpen, setBulkModalOpen] = useState(false)
   const [bulkOverwrite, setBulkOverwrite] = useState(false)
   const [bulkLimit, setBulkLimit] = useState(200)
+
+  const [tableSort, setTableSort] = useState<{ field?: string; order?: 'ascend' | 'descend' }>(() => {
+    const f = String((initialUrl as any)?.sort ?? '').trim()
+    const o = String((initialUrl as any)?.order ?? '').trim()
+    const ord = o === 'ascend' || o === 'descend' ? (o as any) : undefined
+    return f ? { field: f, order: ord } : {}
+  })
 
   // Filter helpers (binding dropdowns)
   const [boundKind, setBoundKind] = useState<'any' | 'model' | 'bundle'>('any')
@@ -178,19 +316,122 @@ const ShipmentLedgerPage = () => {
     placeholderData: keepPreviousData,
   })
 
+  const parsedDims = useMemo(() => parseDimsFromSpecText((detailRow as any)?.spec_text), [detailRow])
+  const parsedAreaM2 = useMemo(() => {
+    if (parsedDims.width_cm && parsedDims.height_cm) return (parsedDims.width_cm / 100) * (parsedDims.height_cm / 100)
+    if (parsedDims.diameter_cm) {
+      const r = parsedDims.diameter_cm / 100 / 2
+      return Math.PI * r * r
+    }
+    return null
+  }, [parsedDims])
+  const bomAreaM2 = useMemo(
+    () => inferAreaFromBomLines(((bomSnapshotQuery.data as any)?.final_material_lines ?? []) as any[]),
+    [bomSnapshotQuery.data],
+  )
+  const bomPrimaryAreaLine = useMemo(
+    () => inferPrimaryAreaLine(((bomSnapshotQuery.data as any)?.final_material_lines ?? []) as any[]),
+    [bomSnapshotQuery.data],
+  )
+  const snapshotMeasureMm = useMemo(() => {
+    const t = (bomSnapshotQuery.data as any)?.trace
+    const mm = t?.measurement_mm
+    if (!mm || typeof mm !== 'object') return null
+    const w = Number(safeString((mm as any)?.width_mm).trim())
+    const h = Number(safeString((mm as any)?.height_mm).trim())
+    if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return null
+    return { width_mm: w, height_mm: h }
+  }, [bomSnapshotQuery.data])
+
   const shipmentLinesQuery = useQuery({
     queryKey: ['shipments', 'lines', ledgerTab, ledgerPage, ledgerPageSize, ledgerRange, ledgerFilters],
     queryFn: () =>
       fetchShipmentLines({
-        page: ledgerPage,
-        page_size: ledgerPageSize,
+        page: ledgerTab === 'issues' ? 1 : ledgerPage,
+        page_size: ledgerTab === 'issues' ? 200 : ledgerPageSize,
         start: ledgerRange?.[0]?.toISOString?.() ?? undefined,
         end: ledgerRange?.[1]?.toISOString?.() ?? undefined,
-        status: ledgerTab === 'all' ? undefined : (ledgerTab as any),
+        status: ledgerTab === 'processed' || ledgerTab === 'pending' ? ledgerTab : ledgerTab === 'issues' ? 'processed' : undefined,
+        include_issue_hints: ledgerTab === 'issues',
         ...ledgerFilters,
       }),
     placeholderData: keepPreviousData,
+    enabled: ledgerTab !== 'sales',
   })
+
+  const LOW_MARGIN_THRESHOLD = 0.1
+  const calcProfit = (r: any): number | null => {
+    const costRaw = safeString(r?.cost_total).trim()
+    if (!costRaw || costRaw === '-') return null
+    const rev = Number(safeString(r?.revenue_amount).trim())
+    const cost = Number(costRaw)
+    if (!Number.isFinite(rev) || !Number.isFinite(cost)) return null
+    return rev - cost
+  }
+  const calcMargin = (r: any): number | null => {
+    const profit = calcProfit(r)
+    if (profit === null) return null
+    const rev = Number(safeString(r?.revenue_amount).trim())
+    if (!Number.isFinite(rev) || rev === 0) return null
+    return profit / rev
+  }
+  const issueTags = (r: any): Array<{ key: string; label: string; color: string; tooltip?: string }> => {
+    const tags: Array<{ key: string; label: string; color: string; tooltip?: string }> = []
+    const profit = calcProfit(r)
+    const margin = calcMargin(r)
+    const suspected = Boolean((r as any)?.suspected_mismatch)
+    const reasons = (((r as any)?.mismatch_warnings ?? []) as any[]).map((x) => safeString(x)).filter(Boolean)
+    const sizeBad = Boolean((r as any)?.suspected_size_anomaly)
+    const sizeDetail = safeString((r as any)?.size_anomaly_detail).trim()
+    if (profit !== null && profit < 0) tags.push({ key: 'neg_profit', label: '毛利为负', color: 'volcano' })
+    if (suspected) tags.push({ key: 'suspected_mismatch', label: '疑似绑错', color: 'red', tooltip: reasons.join('\n') || '疑似绑错（软提示）' })
+    if (margin !== null && margin >= 0 && margin < LOW_MARGIN_THRESHOLD) {
+      tags.push({ key: 'low_margin', label: `利润过低(<${Math.round(LOW_MARGIN_THRESHOLD * 100)}%)`, color: 'gold' })
+    }
+    if (sizeBad) tags.push({ key: 'size_anomaly', label: '尺寸疑似异常', color: 'orange', tooltip: sizeDetail || '解析尺寸与计价尺寸/面积差异过大（软提示）' })
+    return tags
+  }
+  const isIssueRow = (r: any): boolean => issueTags(r).length > 0
+
+  useEffect(() => {
+    const kind0 = String((initialUrl as any)?.bound_target_kind ?? '').trim()
+    const kind: 'any' | 'model' | 'bundle' = kind0 === 'model' || kind0 === 'bundle' ? (kind0 as any) : 'any'
+    const tpl = String((initialUrl as any)?.bundle_template_code ?? '').trim().toUpperCase() || undefined
+    const sel = String((initialUrl as any)?.bundle_preset_selector ?? '').trim().toUpperCase() || undefined
+    const channel0 = String((initialUrl as any)?.channel ?? '').trim() || undefined
+    const sku0 = String((initialUrl as any)?.sku_code ?? '').trim() || undefined
+    const start0 = String((initialUrl as any)?.start ?? '').trim()
+    const end0 = String((initialUrl as any)?.end ?? '').trim()
+    if (start0 && end0) {
+      const s = dayjs(start0)
+      const e = dayjs(end0)
+      if (s.isValid() && e.isValid()) setLedgerRange([s, e] as any)
+    }
+    if (channel0 || sku0) {
+      ledgerForm.setFieldsValue({ channel: channel0, sku_code: sku0 })
+      setLedgerFilters((prev) => ({ ...prev, channel: channel0, sku_code: sku0 }))
+      setLedgerPage(1)
+    }
+    if (kind === 'bundle' && tpl) {
+      setBoundKind('bundle')
+      ledgerForm.setFieldsValue({
+        bound_target_kind: 'bundle',
+        bundle_template_code: tpl,
+        bundle_selector: sel ? [sel] : undefined,
+        channel: channel0,
+        sku_code: sku0,
+      })
+      setLedgerFilters({
+        bound_target_kind: 'bundle',
+        bound_model_code: `B-${tpl}`,
+        bundle_preset_selector: sel,
+        channel: channel0,
+        sku_code: sku0,
+      })
+      setLedgerPage(1)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const columns: ColumnsType<ShipmentLineListItem> = [
     {
@@ -205,6 +446,24 @@ const ShipmentLedgerPage = () => {
     { title: '店铺', dataIndex: 'channel', width: 140, ellipsis: true },
     { title: '货品条码', dataIndex: 'sku_code', width: 170, ellipsis: true },
     { title: '订单号', dataIndex: 'order_no', width: 215, ellipsis: true },
+    {
+      title: '问题标记',
+      key: 'issue_tags',
+      width: 210,
+      render: (_v, r: any) => {
+        const tags = issueTags(r)
+        if (!tags.length) return '-'
+        return (
+          <Space size={4} wrap>
+            {tags.map((t) => (
+              <Tooltip key={t.key} title={t.tooltip}>
+                <Tag color={t.color}>{t.label}</Tag>
+              </Tooltip>
+            ))}
+          </Space>
+        )
+      },
+    },
     {
       title: '模型/套装',
       key: 'bound_target',
@@ -240,12 +499,14 @@ const ShipmentLedgerPage = () => {
     {
       title: '交易规格',
       dataIndex: 'spec_text',
-      ellipsis: false,
+      ellipsis: true,
       render: (v) => {
-        const s = safeString(v)
+        const s = normalizeTxSpecForDisplay(v)
         if (!s) return '-'
         return (
-          <div style={{ whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.2, maxWidth: 560 }}>{s}</div>
+          <Text ellipsis={{ tooltip: s }} style={{ maxWidth: 660, display: 'inline-block', lineHeight: 1.2 }}>
+            {s}
+          </Text>
         )
       },
     },
@@ -261,6 +522,15 @@ const ShipmentLedgerPage = () => {
       title: '毛利',
       key: 'profit_amount',
       width: 88,
+      sorter: (a: any, b: any) => {
+        const va = calcProfit(a)
+        const vb = calcProfit(b)
+        if (va === null && vb === null) return 0
+        if (va === null) return 1
+        if (vb === null) return -1
+        return va - vb
+      },
+      sortOrder: tableSort.field === 'profit_amount' ? tableSort.order : undefined,
       render: (_v, r: any) => {
         const costRaw = safeString(r?.cost_total).trim()
         if (!costRaw || costRaw === '-') return '-'
@@ -274,6 +544,15 @@ const ShipmentLedgerPage = () => {
       title: '毛利率',
       key: 'profit_rate',
       width: 80,
+      sorter: (a: any, b: any) => {
+        const va = calcMargin(a)
+        const vb = calcMargin(b)
+        if (va === null && vb === null) return 0
+        if (va === null) return 1
+        if (vb === null) return -1
+        return va - vb
+      },
+      sortOrder: tableSort.field === 'profit_rate' ? tableSort.order : undefined,
       render: (_v, r: any) => {
         const costRaw = safeString(r?.cost_total).trim()
         if (!costRaw || costRaw === '-') return '-'
@@ -421,7 +700,7 @@ const ShipmentLedgerPage = () => {
               setLedgerPage(1)
             }}
             tabBarExtraContent={
-              <Space wrap>
+              ledgerTab === 'sales' ? null : <Space wrap>
                 <DatePicker.RangePicker
                   value={ledgerRange as any}
                   onChange={(v) => {
@@ -447,7 +726,11 @@ const ShipmentLedgerPage = () => {
                     const k0 = String(values.bound_target_kind ?? '').trim()
                     const kind: 'any' | 'model' | 'bundle' = k0 === 'model' || k0 === 'bundle' ? k0 : 'any'
                     const bundleTpl = String(values.bundle_template_code ?? '').trim().toUpperCase() || undefined
-                    const bundleSel = String(values.bundle_selector ?? '').trim().toUpperCase() || undefined
+                    const bundleSel = (() => {
+                      const v = (values as any).bundle_selector
+                      if (Array.isArray(v)) return String(v?.[0] ?? '').trim().toUpperCase() || undefined
+                      return String(v ?? '').trim().toUpperCase() || undefined
+                    })()
                     const modelId = String(values.bound_model_id ?? '').trim() || undefined
                     const modelHit = modelOptions.find((x: any) => x.value === modelId)
                     const modelCode = modelHit?.code || undefined
@@ -455,10 +738,10 @@ const ShipmentLedgerPage = () => {
 
                     // Compose `bound_model_code`:
                     // - model: use 3-letter model code (e.g. OZU)
-                    // - bundle: use B-<template_code><selector?> (e.g. B-DB9EAE)
+                    // - bundle: use B-<template_code> (e.g. B-DB9EAE). Selector is filtered separately.
                     let boundModelCode: string | undefined = undefined
                     if (kind === 'model') boundModelCode = modelCode
-                    if (kind === 'bundle' && bundleTpl) boundModelCode = `B-${bundleTpl}${bundleSel ?? ''}`
+                    if (kind === 'bundle' && bundleTpl) boundModelCode = `B-${bundleTpl}`
 
                     const next = {
                       channel: values.channel ? String(values.channel).trim() : undefined,
@@ -470,6 +753,7 @@ const ShipmentLedgerPage = () => {
                       bound_target_kind: kind === 'any' ? undefined : kind,
                       bound_model_code: boundModelCode || undefined,
                       bound_version_label: kind === 'model' ? versionLabel : undefined,
+                      bundle_preset_selector: kind === 'bundle' ? bundleSel : undefined,
                     }
                     setLedgerFilters(next)
                     setLedgerPage(1)
@@ -573,6 +857,8 @@ const ShipmentLedgerPage = () => {
               { key: 'all', label: '全部发货' },
               { key: 'processed', label: '已处理（已计价/已落快照）' },
               { key: 'pending', label: '待处理（未计价/异常）' },
+              { key: 'issues', label: '问题订单（需核对）' },
+              { key: 'sales', label: '销售分析（干净列表）' },
             ]}
           />
 
@@ -582,7 +868,7 @@ const ShipmentLedgerPage = () => {
             </Text>
           </div>
 
-          {isEmpty ? (
+          {ledgerTab !== 'sales' && isEmpty ? (
             <Alert
               type="info"
               showIcon
@@ -592,36 +878,48 @@ const ShipmentLedgerPage = () => {
             />
           ) : null}
 
-          <Table
-            rowKey="id"
-            size="small"
-            loading={shipmentLinesQuery.isFetching}
-            dataSource={data?.items ?? []}
-            pagination={{
-              current: ledgerPage,
-              pageSize: ledgerPageSize,
-              total: data?.total ?? 0,
-              showSizeChanger: true,
-              showTotal: (t) => `共 ${t} 条`,
-            }}
-            onChange={(pagination) => {
-              const p = pagination as any
-              setLedgerPage(Number(p?.current) || 1)
-              setLedgerPageSize(Number(p?.pageSize) || 50)
-            }}
-            columns={columns}
-            onRow={(record) => ({
-              onClick: () => {
-                setDetailRow(record)
-                setDetailOpen(true)
-              },
-            })}
-          />
+          {ledgerTab === 'sales' ? (
+            <SalesInsightsPage embedded />
+          ) : (
+            <Table
+              rowKey="id"
+              size="small"
+              loading={shipmentLinesQuery.isFetching}
+              dataSource={ledgerTab === 'issues' ? (data?.items ?? []).filter((x: any) => isIssueRow(x)) : (data?.items ?? [])}
+              pagination={
+                ledgerTab === 'issues'
+                  ? false
+                  : {
+                      current: ledgerPage,
+                      pageSize: ledgerPageSize,
+                      total: data?.total ?? 0,
+                      showSizeChanger: true,
+                      showTotal: (t) => `共 ${t} 条`,
+                    }
+              }
+              onChange={(pagination, _filters, sorter) => {
+                const p = pagination as any
+                setLedgerPage(Number(p?.current) || 1)
+                setLedgerPageSize(Number(p?.pageSize) || 50)
+                const s: any = Array.isArray(sorter) ? sorter[0] : sorter
+                const field = String(s?.columnKey ?? s?.field ?? '').trim()
+                const order = s?.order === 'ascend' || s?.order === 'descend' ? s.order : undefined
+                setTableSort(field ? { field, order } : {})
+              }}
+              columns={columns}
+              onRow={(record) => ({
+                onClick: () => {
+                  setDetailRow(record)
+                  setDetailOpen(true)
+                },
+              })}
+            />
+          )}
         </Card>
       </div>
 
       <Drawer
-        width={760}
+        width={880}
         open={detailOpen}
         onClose={() => setDetailOpen(false)}
         title={
@@ -662,9 +960,36 @@ const ShipmentLedgerPage = () => {
                 </Descriptions.Item>
                 <Descriptions.Item label="标准版本">{safeString((detailRow as any)?.bound_version_label) || '-'}</Descriptions.Item>
                 <Descriptions.Item label="交易规格" span={2}>
-                  <div style={{ whiteSpace: 'normal', wordBreak: 'break-word' }}>
-                    {safeString((detailRow as any)?.spec_text) || '-'}
-                  </div>
+                  {(() => {
+                    const s = normalizeTxSpecForDisplay((detailRow as any)?.spec_text)
+                    if (!s) return '-'
+                    return (
+                      <Text ellipsis={{ tooltip: s }} style={{ maxWidth: 900, display: 'inline-block' }}>
+                        {s}
+                      </Text>
+                    )
+                  })()}
+                </Descriptions.Item>
+                <Descriptions.Item label="解析尺寸（从交易规格）">
+                  {formatDimsText(parsedDims)}
+                </Descriptions.Item>
+                <Descriptions.Item label="推导面积（解析/物料）">
+                  <span>
+                    <Text type="secondary">解析≈</Text>
+                    {parsedAreaM2 ? `${parsedAreaM2.toFixed(2)}㎡` : '-'}
+                    <Text type="secondary">；物料≈</Text>
+                    {bomAreaM2 ? `${bomAreaM2.toFixed(2)}㎡` : '-'}
+                    {(() => {
+                      const ew = bomPrimaryAreaLine?.extra_width_mm
+                      const eh = bomPrimaryAreaLine?.extra_height_mm
+                      const mm = snapshotMeasureMm
+                      if (!ew && !eh && !mm) return null
+                      const parts: string[] = []
+                      if (mm) parts.push(`计价尺寸：${Math.round(mm.width_mm)}×${Math.round(mm.height_mm)}mm`)
+                      if (ew || eh) parts.push(`余量：+${ew ?? 0}mm×+${eh ?? 0}mm`)
+                      return <Text type="secondary">（{parts.join('；')}）</Text>
+                    })()}
+                  </span>
                 </Descriptions.Item>
               </Descriptions>
             </Card>

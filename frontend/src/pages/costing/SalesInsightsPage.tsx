@@ -73,16 +73,13 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
   const embedded = !!props.embedded
   const navigate = useNavigate()
   const [form] = Form.useForm()
-  const [dashboardGroupBy, setDashboardGroupBy] = useState<'week' | 'month'>('week')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [data, setData] = useState<SalesLinesResponse | null>(null)
-  const [includeMissing, setIncludeMissing] = useState(true)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [shopOptions, setShopOptions] = useState<string[]>([])
-  const [useSnapshot, setUseSnapshot] = useState(true)
-  const [quickDays, setQuickDays] = useState<7 | 30 | 90>(30)
+  const [useSnapshot] = useState(true)
   const [dashboardComputedAt, setDashboardComputedAt] = useState<string | null>(null)
   const [periodMode, setPeriodMode] = useState<SalesPeriodMode>('day')
   const [anchorDate, setAnchorDate] = useState(() => dayjs().subtract(1, 'day').startOf('day'))
@@ -140,6 +137,8 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
   const rangeStartIso = computedRange?.[0]?.toISOString?.()
   const rangeEndIso = computedRange?.[1]?.toISOString?.()
 
+  const dashboardGroupBy: 'week' | 'month' = periodMode === 'month' ? 'month' : 'week'
+
   useEffect(() => {
     // Keep form range in sync for downstream list queries.
     if (periodMode !== 'custom') {
@@ -154,7 +153,12 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
       const channel = watchedShop?.trim() || undefined
       if (useSnapshot) {
         try {
-          const snap = await fetchSalesProfitDashboardSnapshot({ range_days: quickDays, group_by: dashboardGroupBy, channel })
+          const snap = await fetchSalesProfitDashboardSnapshot({
+            start: String(rangeStartIso),
+            end: String(rangeEndIso),
+            group_by: dashboardGroupBy,
+            channel,
+          })
           setDashboardComputedAt(String((snap as any)?.computed_at ?? '') || null)
           return snap.data as SalesProfitDashboardResponse
         } catch (e: any) {
@@ -186,7 +190,8 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
     const channel = watchedShop?.trim() || undefined
     try {
       await refreshSalesProfitDashboardSnapshot({
-        range_days: quickDays,
+        start: String(rangeStartIso),
+        end: String(rangeEndIso),
         group_by: dashboardGroupBy,
         channel,
         operator_id: 'planner-ui',
@@ -338,7 +343,7 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
     const base = {
       start: range[0].startOf('day').toISOString(),
       end: range[1].endOf('day').toISOString(),
-      include_missing: includeMissing,
+      include_missing: true,
       channel: v.shop?.trim() || undefined,
       sku_code: v.sku_code?.trim() || undefined,
       order_no: v.order_no?.trim() || undefined,
@@ -355,7 +360,7 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
             // keep only minimal "tmall-like" memory; avoid sticky barcode etc.
             start: base.start,
             end: base.end,
-            include_missing: base.include_missing,
+            include_missing: true,
             channel: base.channel,
             page_size: pageSize,
           }),
@@ -376,8 +381,6 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
 
   const applyQuickRange = async (days: number) => {
     // legacy helper: keep for empty-state buttons; switch to custom range
-    const d = days === 7 || days === 30 || days === 90 ? (days as 7 | 30 | 90) : 30
-    setQuickDays(d)
     setPeriodMode('custom')
     const range: [dayjs.Dayjs, dayjs.Dayjs] = [dayjs().subtract(days, 'day'), dayjs()]
     form.setFieldsValue({ range })
@@ -400,10 +403,8 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
         const start = String(saved?.start ?? '').trim()
         const end = String(saved?.end ?? '').trim()
         const nextPageSize = Number(saved?.page_size)
-        const nextIncludeMissing = saved?.include_missing !== false
-
         if (Number.isFinite(nextPageSize) && nextPageSize > 0) setPageSize(nextPageSize)
-        setIncludeMissing(nextIncludeMissing)
+        // include_missing is fixed to true (no toggle)
 
         const range: [dayjs.Dayjs, dayjs.Dayjs] = [
           dayjs(start || dayjs().subtract(30, 'day').startOf('day').toISOString()),
@@ -421,7 +422,7 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
         const base = {
           start: range[0].startOf('day').toISOString(),
           end: range[1].endOf('day').toISOString(),
-          include_missing: nextIncludeMissing,
+          include_missing: true,
           channel: String(saved?.channel ?? '').trim() || undefined,
           sku_code: undefined,
           order_no: undefined,
@@ -449,7 +450,7 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
     const fallback = {
       start: computedRange?.[0]?.startOf?.('day')?.toISOString?.() ?? dayjs().startOf('day').toISOString(),
       end: computedRange?.[1]?.endOf?.('day')?.toISOString?.() ?? dayjs().endOf('day').toISOString(),
-      include_missing: includeMissing,
+      include_missing: true,
       channel: v.shop?.trim() || undefined,
       sku_code: v.sku_code?.trim() || undefined,
       order_no: v.order_no?.trim() || undefined,
@@ -583,12 +584,9 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
           <Form.Item>
             <Space>
               <Segmented
-                value={includeMissing ? 'all' : 'costed'}
-                onChange={(v) => setIncludeMissing(v === 'all')}
-                options={[
-                  { label: '含未计价', value: 'all' },
-                  { label: '仅已计价', value: 'costed' },
-                ]}
+                options={[{ label: '仅已计价（固定）', value: 'costed' }]}
+                value="costed"
+                disabled
               />
               <Button type="primary" onClick={() => onQuery()} loading={loading || dashboardQuery.isFetching}>
                 {embedded ? '查询明细' : '刷新看板'}
@@ -597,9 +595,6 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
                 <>
                   <Button onClick={refreshDashboardSnapshotNow} disabled={!useSnapshot} loading={dashboardQuery.isFetching}>
                     刷新数据
-                  </Button>
-                  <Button onClick={() => setUseSnapshot((v) => !v)} disabled={dashboardQuery.isFetching || loading}>
-                    {useSnapshot ? '切到实时' : '切到缓存'}
                   </Button>
                 </>
               ) : null}
@@ -690,15 +685,6 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
                   <>
                   <div style={{ marginBottom: 12 }}>
                     <Space wrap>
-                      <Select
-                        value={dashboardGroupBy}
-                        style={{ width: 120 }}
-                        onChange={(v) => setDashboardGroupBy(v)}
-                        options={[
-                          { value: 'week', label: '按周（默认）' },
-                          { value: 'month', label: '按月' },
-                        ]}
-                      />
                       <Typography.Text type="secondary">时间口径：按发货完成时间（成本口径一致）</Typography.Text>
                     </Space>
                   </div>

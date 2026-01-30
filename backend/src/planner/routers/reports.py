@@ -31,6 +31,23 @@ def _bj_day_range(days: int) -> tuple[datetime, datetime]:
     return start_bj.astimezone(timezone.utc), end_bj.astimezone(timezone.utc)
 
 
+def _parse_dt(v: Optional[str]) -> Optional[datetime]:
+    if v is None:
+        return None
+    s = str(v).strip()
+    if not s:
+        return None
+    try:
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        d = datetime.fromisoformat(s)
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=timezone.utc)
+        return d.astimezone(timezone.utc)
+    except Exception:
+        raise ValueError("时间格式错误（需 ISO8601，如 2026-01-29T00:00:00+08:00）")
+
+
 def _safe_float(v: Any) -> Optional[float]:
     try:
         if v is None:
@@ -114,11 +131,21 @@ def refresh_models_summary_snapshot(
 @router.get("/insights/sales-profit-dashboard")
 def get_sales_profit_dashboard_snapshot(
     range_days: int = Query(30, ge=1, le=365),
+    start: Optional[str] = Query(None, description="可选：显式开始时间（ISO8601，UTC 或含时区）"),
+    end: Optional[str] = Query(None, description="可选：显式结束时间（ISO8601，UTC 或含时区）"),
     group_by: Literal["week", "month"] = Query("week"),
     channel: Optional[str] = Query(None),
     db: Session = Depends(get_db_session),
 ):
-    params = {"range_days": int(range_days), "group_by": group_by, "channel": (channel or "").strip() or None}
+    st = _parse_dt(start)
+    ed = _parse_dt(end)
+    params = {
+        "range_days": int(range_days) if not (st and ed) else None,
+        "start": st.isoformat() if st else None,
+        "end": ed.isoformat() if ed else None,
+        "group_by": group_by,
+        "channel": (channel or "").strip() or None,
+    }
     key = report_snapshot_service.snapshot_key("insights.sales_profit_dashboard", params)
     snap = report_snapshot_service.get_snapshot(db, key=key)
     if not snap:
@@ -129,20 +156,33 @@ def get_sales_profit_dashboard_snapshot(
 @router.post("/insights/sales-profit-dashboard/refresh")
 def refresh_sales_profit_dashboard_snapshot(
     range_days: int = Query(30, ge=1, le=365),
+    start: Optional[str] = Query(None),
+    end: Optional[str] = Query(None),
     group_by: Literal["week", "month"] = Query("week"),
     channel: Optional[str] = Query(None),
     operator_id: Optional[str] = Query(None),
     db: Session = Depends(get_db_session),
 ):
     try:
-        start, end = _bj_day_range(range_days)
+        st = _parse_dt(start)
+        ed = _parse_dt(end)
+        if st and ed:
+            start_dt, end_dt = st, ed
+        else:
+            start_dt, end_dt = _bj_day_range(range_days)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    params = {"range_days": int(range_days), "group_by": group_by, "channel": (channel or "").strip() or None}
+    params = {
+        "range_days": int(range_days) if not (st and ed) else None,
+        "start": st.isoformat() if st else None,
+        "end": ed.isoformat() if ed else None,
+        "group_by": group_by,
+        "channel": (channel or "").strip() or None,
+    }
     payload = analytics_service.sales_profit_dashboard(
         db,
-        start=start,
-        end=end,
+        start=start_dt,
+        end=end_dt,
         group_by=group_by,
         channel=params["channel"],
         top_n=12,

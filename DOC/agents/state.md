@@ -124,6 +124,16 @@
   - 影响文件：
     - `frontend/src/pages/costing/SalesInsightsPage.tsx`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-30（销售洞察：按天猫口径简化控件 + 周/月按自然周期快照）
+  - 调整点：
+    - 移除“按周（默认）/按月”下拉与旁边口径提示（口径已固定：按发货完成时间）。
+    - 移除“含未计价/仅已计价”开关与“切到实时”按钮：默认走缓存 + 手动刷新；仅自定义范围再走实时（fallback）。
+    - 报表快照接口支持 `start/end` 参数，周/月可按自然周一~周日/整月做预处理与缓存对齐天猫心智。
+  - 影响文件：
+    - `backend/src/planner/routers/reports.py`
+    - `frontend/src/services/planner.ts`
+    - `frontend/src/pages/costing/SalesInsightsPage.tsx`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-27（数据洞察：首屏不再“空白”，默认轻量查询 + 记住筛选）
   - 现象：`/costing/insights/after-sales`、`/costing/insights/sales`、`/costing/insights/models` 进入页面首屏为空，必须点“查询”才有内容，体验弱于常见 ERP 报表页。
   - 处理策略（不新增重复列表，只让原列表首屏有真实数据）：

@@ -1588,6 +1588,8 @@ export const refreshModelsSummarySnapshot = async (params: {
 
 export const fetchSalesProfitDashboardSnapshot = async (params: {
   range_days?: number
+  start?: string
+  end?: string
   group_by?: 'week' | 'month'
   channel?: string
 } = {}): Promise<ReportSnapshotEnvelope<any>> => {
@@ -1597,6 +1599,8 @@ export const fetchSalesProfitDashboardSnapshot = async (params: {
 
 export const refreshSalesProfitDashboardSnapshot = async (params: {
   range_days?: number
+  start?: string
+  end?: string
   group_by?: 'week' | 'month'
   channel?: string
   operator_id?: string

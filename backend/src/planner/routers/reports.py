@@ -133,7 +133,7 @@ def get_sales_profit_dashboard_snapshot(
     range_days: int = Query(30, ge=1, le=365),
     start: Optional[str] = Query(None, description="可选：显式开始时间（ISO8601，UTC 或含时区）"),
     end: Optional[str] = Query(None, description="可选：显式结束时间（ISO8601，UTC 或含时区）"),
-    group_by: Literal["week", "month"] = Query("week"),
+    group_by: Literal["day", "week", "month"] = Query("week"),
     top_n: int = Query(12, ge=5, le=200, description="Top 排名条数（影响 top_skus/top_models）"),
     channel: Optional[str] = Query(None),
     db: Session = Depends(get_db_session),
@@ -160,7 +160,7 @@ def refresh_sales_profit_dashboard_snapshot(
     range_days: int = Query(30, ge=1, le=365),
     start: Optional[str] = Query(None),
     end: Optional[str] = Query(None),
-    group_by: Literal["week", "month"] = Query("week"),
+    group_by: Literal["day", "week", "month"] = Query("week"),
     top_n: int = Query(12, ge=5, le=200),
     channel: Optional[str] = Query(None),
     operator_id: Optional[str] = Query(None),
@@ -199,13 +199,19 @@ def refresh_sales_profit_dashboard_snapshot(
 @router.get("/insights/after-sales-dashboard")
 def get_after_sales_dashboard_snapshot(
     range_days: int = Query(30, ge=1, le=365),
+    start: Optional[str] = Query(None, description="可选：显式开始时间（ISO8601，UTC 或含时区）"),
+    end: Optional[str] = Query(None, description="可选：显式结束时间（ISO8601，UTC 或含时区）"),
     group_by: Literal["day", "week", "month"] = Query("week"),
     view: Literal["factory", "ops"] = Query("factory"),
     channel: Optional[str] = Query(None),
     db: Session = Depends(get_db_session),
 ):
+    st = _parse_dt(start)
+    ed = _parse_dt(end)
     params: Dict[str, Any] = {
-        "range_days": int(range_days),
+        "range_days": int(range_days) if not (st and ed) else None,
+        "start": st.isoformat() if st else None,
+        "end": ed.isoformat() if ed else None,
         "group_by": group_by,
         "view": view,
         "channel": (channel or "").strip() or None,
@@ -220,6 +226,8 @@ def get_after_sales_dashboard_snapshot(
 @router.post("/insights/after-sales-dashboard/refresh")
 def refresh_after_sales_dashboard_snapshot(
     range_days: int = Query(30, ge=1, le=365),
+    start: Optional[str] = Query(None),
+    end: Optional[str] = Query(None),
     group_by: Literal["day", "week", "month"] = Query("week"),
     view: Literal["factory", "ops"] = Query("factory"),
     channel: Optional[str] = Query(None),
@@ -227,19 +235,26 @@ def refresh_after_sales_dashboard_snapshot(
     db: Session = Depends(get_db_session),
 ):
     try:
-        start, end = _bj_day_range(range_days)
+        st = _parse_dt(start)
+        ed = _parse_dt(end)
+        if st and ed:
+            start_dt, end_dt = st, ed
+        else:
+            start_dt, end_dt = _bj_day_range(range_days)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     params: Dict[str, Any] = {
-        "range_days": int(range_days),
+        "range_days": int(range_days) if not (st and ed) else None,
+        "start": st.isoformat() if st else None,
+        "end": ed.isoformat() if ed else None,
         "group_by": group_by,
         "view": view,
         "channel": (channel or "").strip() or None,
     }
     payload = analytics_service.after_sales_dashboard(
         db,
-        start=start,
-        end=end,
+        start=start_dt,
+        end=end_dt,
         group_by=group_by,
         channel=params["channel"],
         top_n=12,

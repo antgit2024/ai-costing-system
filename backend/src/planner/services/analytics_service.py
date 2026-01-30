@@ -2667,7 +2667,7 @@ def sales_profit_dashboard(
     *,
     start: datetime,
     end: datetime,
-    group_by: Literal["week", "month"] = "week",
+    group_by: Literal["day", "week", "month"] = "week",
     channel: Optional[str] = None,
     top_n: int = 12,
 ) -> Dict[str, Any]:
@@ -2686,10 +2686,11 @@ def sales_profit_dashboard(
     end = end.astimezone(timezone.utc)
 
     def _period_label(dt: datetime) -> str:
-        if group_by == "month":
-            d = _utc_date(dt)
-            return d.strftime("%Y-%m")
         d = _utc_date(dt)
+        if group_by == "day":
+            return d.strftime("%Y-%m-%d")
+        if group_by == "month":
+            return d.strftime("%Y-%m")
         start_date = d - timedelta(days=d.weekday())  # Monday
         end_date = start_date + timedelta(days=6)
         return f"{start_date.strftime('%Y-%m-%d')}~{end_date.strftime('%Y-%m-%d')}"

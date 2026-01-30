@@ -840,6 +840,9 @@
         - 筛选升级：使用 `BoundTargetPicker`（可搜索下拉，先选目标类型再选目标对象），并接入后端 `bound_model_code` 过滤
         - 销售明细 Top100 排行补齐“模型/套装”列（基于 active mapping 回填；套装额外展示 template/selector/phrase）；看板 Top12 货品不展示该列（避免重复）
         - 视图状态写入 URL（`tab/view`），浏览器后退优先在销售分析页内回退（不再直接跳走）
+        - 利润看板 4 个 KPI 卡片增加趋势 Sparkline（近7点/近12点）
+        - 时间选择修复：周/月选择展示“所选周期本身”，避免出现“选12月但显示11月导致销售额=0”的冲突
+        - 销售看板接口支持 `group_by=day`（用于按日趋势）
       - `frontend/src/types/planner.ts`：`SalesLineItem` 增加 `bound_model_code/bound_model_name`
     - 后端：
       - `backend/src/planner/services/analytics_service.py`：`sales_lines` 通过 `sku_code -> active mapping` 回填 `bound_model_code/bound_model_name`
@@ -853,13 +856,16 @@
   - 本轮产物：
     - 前端：`frontend/src/pages/costing/AfterSalesInsightsPage.tsx`
       - KPI 卡片下方新增轻量 `Sparkline`（SVG），不引入新依赖
+      - 复用销售分析的“统计时间（日/周/月/自定义）+ 翻期箭头 + 更多筛选（高级筛选）”交互
       - 仪表盘 `group_by` 增加 `day` 选项，并据此截取近 7/12 个点渲染曲线
     - 前端类型：`frontend/src/types/planner.ts`、`frontend/src/services/planner.ts`
       - `AfterSalesDashboardResponse.group_by` 扩展为 `day|week|month`
       - `AfterSalesDashboardSeriesItem` 增加 `model_mapped_rate`（工厂口径覆盖率趋势）等可选字段
     - 后端：`backend/src/planner/services/analytics_service.py`、`backend/src/planner/routers/analytics.py`、`backend/src/planner/routers/reports.py`、`backend/src/planner/schemas.py`
       - `after_sales_dashboard` 支持 `group_by=day`，并在 series 中补齐 `model_mapped_rate`（工厂口径）
-      - 快照接口 `/reports/insights/after-sales-dashboard` 同步支持 `group_by=day`
+      - 快照接口 `/reports/insights/after-sales-dashboard` 同步支持 `group_by=day`，并支持 `start/end` 显式范围（与销售分析一致）
+    - 运维：`ops/nightly_refresh_reports.sh`
+      - 追加刷新：销售/售后曲线所需的 `group_by=day`，以及销售 Top100（`top_n=100`）快照
   - 验收命令（必须，全部 0 退出码）：
     - Frontend：`npm -C frontend run build`
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`

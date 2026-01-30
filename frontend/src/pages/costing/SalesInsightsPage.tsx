@@ -73,6 +73,52 @@ const formatDateTime = (raw?: string | null) => {
   return d.format('YYYY-MM-DD HH:mm:ss')
 }
 
+const Sparkline = ({
+  values,
+  height = 34,
+  stroke = 'var(--ant-color-primary, #1677ff)',
+}: {
+  values: Array<number | null | undefined>
+  height?: number
+  stroke?: string
+}) => {
+  const cleaned = (values ?? []).map((v) => (v == null || !Number.isFinite(Number(v)) ? null : Number(v)))
+  const points = cleaned.map((v, idx) => ({ idx, v })).filter((x) => x.v != null) as Array<{ idx: number; v: number }>
+  if (points.length <= 1) return <div style={{ height }} />
+
+  const min = Math.min(...points.map((p) => p.v))
+  const max = Math.max(...points.map((p) => p.v))
+  const span = Math.max(max - min, 1e-9)
+
+  const width = 100
+  const padX = 2
+  const padY = 2
+  const w = width - padX * 2
+  const h = height - padY * 2
+
+  const xOf = (i: number) => padX + (w * i) / Math.max((cleaned.length - 1) || 1, 1)
+  const yOf = (v: number) => padY + h - (h * (v - min)) / span
+
+  const poly = cleaned
+    .map((v, i) => (v == null ? null : `${xOf(i).toFixed(2)},${yOf(v).toFixed(2)}`))
+    .filter(Boolean)
+    .join(' ')
+
+  const firstIdx = cleaned.findIndex((v) => v != null)
+  const lastIdx = cleaned.length - 1 - [...cleaned].reverse().findIndex((v) => v != null)
+  const area =
+    firstIdx >= 0 && lastIdx >= 0
+      ? `${xOf(firstIdx).toFixed(2)},${(padY + h).toFixed(2)} ${poly} ${xOf(lastIdx).toFixed(2)},${(padY + h).toFixed(2)}`
+      : ''
+
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} width="100%" height={height} preserveAspectRatio="none">
+      {area ? <polyline points={area} fill={stroke} opacity={0.12} stroke="none" /> : null}
+      <polyline points={poly} fill="none" stroke={stroke} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  )
+}
+
 type SalesInsightsPageProps = {
   embedded?: boolean
 }
@@ -123,18 +169,8 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
     }
     const a = anchorDate || dayjs().subtract(1, 'day').startOf('day')
     if (periodMode === 'day') return [a.startOf('day'), a.endOf('day')] as const
-    if (periodMode === 'week') {
-      // 上一完整周（按周一~周日）；以 anchorDate 所在周为“本周”，取本周开始日前一周
-      const wkStart = a.startOf('isoWeek')
-      const prevEnd = wkStart.subtract(1, 'day').endOf('day')
-      const prevStart = wkStart.subtract(7, 'day').startOf('day')
-      return [prevStart, prevEnd] as const
-    }
-    // month: 上一完整月
-    const mStart = a.startOf('month')
-    const prevEnd = mStart.subtract(1, 'day').endOf('day')
-    const prevStart = mStart.subtract(1, 'month').startOf('month').startOf('day')
-    return [prevStart, prevEnd] as const
+    if (periodMode === 'week') return [a.startOf('isoWeek'), a.endOf('isoWeek')] as const
+    return [a.startOf('month'), a.endOf('month')] as const
   }, [anchorDate, periodMode, watchedRange])
 
   const shiftAnchorDate = (dir: -1 | 1) => {
@@ -144,16 +180,17 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
       return
     }
     if (periodMode === 'week') {
-      setAnchorDate((d) => d.add(dir, 'week').startOf('day'))
+      setAnchorDate((d) => d.add(dir, 'week').startOf('isoWeek'))
       return
     }
-    setAnchorDate((d) => d.add(dir, 'month').startOf('day'))
+    setAnchorDate((d) => d.add(dir, 'month').startOf('month'))
   }
 
   const rangeStartIso = computedRange?.[0]?.toISOString?.()
   const rangeEndIso = computedRange?.[1]?.toISOString?.()
 
-  const dashboardGroupBy: 'week' | 'month' = periodMode === 'month' ? 'month' : 'week'
+  const dashboardGroupBy: 'day' | 'week' | 'month' =
+    periodMode === 'day' ? 'day' : periodMode === 'month' ? 'month' : 'week'
 
   useEffect(() => {
     // Keep form range in sync for downstream list queries.
@@ -202,6 +239,21 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
     staleTime: 30_000,
     refetchOnWindowFocus: false,
   })
+
+  const { revenueSpark, costedRevenueSpark, grossProfitSpark, coverageSpark } = useMemo(() => {
+    const dashPointsN = dashboardGroupBy === 'month' ? 12 : 7
+    const dashSeries = (((dashboardQuery.data as any)?.series ?? []) as any[]).slice(-dashPointsN)
+    const revenue = dashSeries.map((x) => Number(x?.revenue_amount ?? 0))
+    const costedRevenue = dashSeries.map((x) => Number(x?.costed_revenue_amount ?? 0))
+    const gp = dashSeries.map((x) => Number(x?.gross_profit ?? 0))
+    const cov = dashSeries.map((x) => {
+      const rev = Number(x?.revenue_amount ?? 0)
+      const costed = Number(x?.costed_revenue_amount ?? 0)
+      if (!Number.isFinite(rev) || rev <= 0) return 0
+      return (costed / rev) * 100
+    })
+    return { revenueSpark: revenue, costedRevenueSpark: costedRevenue, grossProfitSpark: gp, coverageSpark: cov }
+  }, [dashboardGroupBy, dashboardQuery.data])
 
   const refreshDashboardSnapshotNow = async () => {
     const channel = watchedShop?.trim() || undefined
@@ -683,7 +735,10 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
                   picker={periodMode === 'week' ? 'week' : periodMode === 'month' ? 'month' : 'date'}
                   value={anchorDate as any}
                   onChange={(v) => {
-                    if (v) setAnchorDate(v.startOf('day'))
+                    if (!v) return
+                    if (periodMode === 'week') setAnchorDate(v.startOf('isoWeek'))
+                    else if (periodMode === 'month') setAnchorDate(v.startOf('month'))
+                    else setAnchorDate(v.startOf('day'))
                   }}
                   allowClear={false}
                   format={periodMode === 'month' ? 'YYYY-MM' : 'YYYY-MM-DD'}
@@ -691,7 +746,13 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
               )}
               <Segmented<SalesPeriodMode>
                 value={periodMode}
-                onChange={(v) => setPeriodMode(v as SalesPeriodMode)}
+                onChange={(v) => {
+                  const next = v as SalesPeriodMode
+                  setPeriodMode(next)
+                  if (next === 'day') setAnchorDate(dayjs().subtract(1, 'day').startOf('day'))
+                  if (next === 'week') setAnchorDate(dayjs().subtract(1, 'week').startOf('isoWeek'))
+                  if (next === 'month') setAnchorDate(dayjs().subtract(1, 'month').startOf('month'))
+                }}
                 options={[
                   { label: '日', value: 'day' },
                   { label: '周', value: 'week' },
@@ -884,6 +945,7 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
                           title="销售额（全部）"
                           value={formatMoney((dashboardQuery.data as SalesProfitDashboardResponse | undefined)?.kpis?.revenue_amount)}
                         />
+                        <Sparkline values={revenueSpark} />
                       </Card>
                     </Col>
                     <Col xs={24} lg={6}>
@@ -892,6 +954,7 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
                           title="已计价销售额"
                           value={formatMoney((dashboardQuery.data as SalesProfitDashboardResponse | undefined)?.kpis?.costed_revenue_amount)}
                         />
+                        <Sparkline values={costedRevenueSpark} stroke="var(--ant-color-success, #52c41a)" />
                       </Card>
                     </Col>
                     <Col xs={24} lg={6}>
@@ -903,6 +966,7 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
                             color: Number((dashboardQuery.data as any)?.kpis?.gross_profit ?? 0) < 0 ? 'var(--ant-color-error)' : undefined,
                           }}
                         />
+                        <Sparkline values={grossProfitSpark} stroke="var(--ant-color-warning, #faad14)" />
                       </Card>
                     </Col>
                     <Col xs={24} lg={6}>
@@ -914,6 +978,7 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
                             strokeColor="var(--ant-color-primary, #1677ff)"
                             format={(p) => `${p ?? 0}%`}
                           />
+                          <Sparkline values={coverageSpark} height={28} stroke="var(--ant-color-primary, #1677ff)" />
                           <Typography.Text type="secondary">
                             缺成本行：{Number((dashboardQuery.data as any)?.kpis?.lines_missing_costing ?? 0)} /{' '}
                             {Number((dashboardQuery.data as any)?.kpis?.shipment_lines_total ?? 0)}

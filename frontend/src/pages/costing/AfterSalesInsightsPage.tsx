@@ -25,7 +25,7 @@ import dayjs from 'dayjs'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import { InfoCircleOutlined, ReloadOutlined } from '@ant-design/icons'
+import { InfoCircleOutlined, LeftOutlined, ReloadOutlined, RightOutlined } from '@ant-design/icons'
 
 import {
   fetchAfterSalesImportBatches,
@@ -42,6 +42,8 @@ import type {
   AfterSalesDashboardResponse,
   PaginatedAfterSalesLinesResponse,
 } from '@/types/planner'
+import BoundTargetPicker from '@/components/common/BoundTargetPicker'
+import type { BoundTargetPickerFilters, BoundTargetPickerValue } from '@/components/common/BoundTargetPicker'
 
 type GroupBy = 'day' | 'month'
 
@@ -118,14 +120,15 @@ const Sparkline = ({
 const AfterSalesInsightsPage = () => {
   const [form] = Form.useForm()
   const [activeTab, setActiveTab] = useState<'dashboard' | 'rate' | 'detail'>('dashboard')
-  const [dashboardGroupBy, setDashboardGroupBy] = useState<'day' | 'week' | 'month'>('week')
+  const [periodMode, setPeriodMode] = useState<'day' | 'week' | 'month' | 'custom'>('week')
+  const [anchorDate, setAnchorDate] = useState(() => dayjs().subtract(1, 'week').startOf('isoWeek'))
   const [dashboardView, setDashboardView] = useState<'ops' | 'factory'>('factory')
   const [dashboardAutoLoad, setDashboardAutoLoad] = useState(false)
   const [dashboardUseSnapshot, setDashboardUseSnapshot] = useState(true)
-  const [dashboardQuickDays, setDashboardQuickDays] = useState<7 | 30 | 90>(30)
   const [dashboardComputedAt, setDashboardComputedAt] = useState<string | null>(null)
   const opsStroke = 'var(--ant-color-primary, #1677ff)'
   const factoryStroke = 'var(--ant-color-success, #52c41a)'
+  const [showAdvanced, setShowAdvanced] = useState(false)
 
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState<ReturnsRateBySkuResponse | null>(null)
@@ -140,6 +143,8 @@ const AfterSalesInsightsPage = () => {
   const didInitRef = useRef(false)
   const [uploadDrawerOpen, setUploadDrawerOpen] = useState(false)
   const [batchesDrawerOpen, setBatchesDrawerOpen] = useState(false)
+  const [boundTarget, setBoundTarget] = useState<BoundTargetPickerValue>({ kind: 'any' })
+  const [boundTargetFilters, setBoundTargetFilters] = useState<BoundTargetPickerFilters>({})
 
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState<string | null>(null)
@@ -156,8 +161,52 @@ const AfterSalesInsightsPage = () => {
   const watchedRange = Form.useWatch('range', form) as [dayjs.Dayjs, dayjs.Dayjs] | undefined
   const watchedChannel = Form.useWatch('channel', form) as string | undefined
 
-  const rangeStartIso = watchedRange?.[0]?.startOf('day')?.toISOString?.()
-  const rangeEndIso = watchedRange?.[1]?.endOf('day')?.toISOString?.()
+  const computedRange = useMemo(() => {
+    if (periodMode === 'custom') {
+      const r = watchedRange
+      if (r && r[0] && r[1]) return [r[0].startOf('day'), r[1].endOf('day')] as const
+      return [dayjs().subtract(30, 'day').startOf('day'), dayjs().endOf('day')] as const
+    }
+    const a = anchorDate || dayjs().subtract(1, 'week').startOf('isoWeek')
+    if (periodMode === 'day') return [a.startOf('day'), a.endOf('day')] as const
+    if (periodMode === 'week') return [a.startOf('isoWeek'), a.endOf('isoWeek')] as const
+    return [a.startOf('month'), a.endOf('month')] as const
+  }, [anchorDate, periodMode, watchedRange])
+
+  const shiftAnchorDate = (dir: -1 | 1) => {
+    if (periodMode === 'custom') return
+    if (periodMode === 'day') {
+      setAnchorDate((d) => d.add(dir, 'day').startOf('day'))
+      return
+    }
+    if (periodMode === 'week') {
+      setAnchorDate((d) => d.add(dir, 'week').startOf('isoWeek'))
+      return
+    }
+    setAnchorDate((d) => d.add(dir, 'month').startOf('month'))
+  }
+
+  const rangeStartIso = computedRange?.[0]?.toISOString?.()
+  const rangeEndIso = computedRange?.[1]?.toISOString?.()
+
+  const dashboardGroupBy: 'day' | 'week' | 'month' = useMemo(() => {
+    if (periodMode === 'day') return 'day'
+    if (periodMode === 'month') return 'month'
+    if (periodMode === 'custom') {
+      const days = computedRange[1].diff(computedRange[0], 'day') + 1
+      if (days <= 35) return 'day'
+      if (days <= 180) return 'week'
+      return 'month'
+    }
+    return 'week'
+  }, [computedRange, periodMode])
+
+  useEffect(() => {
+    if (periodMode !== 'custom') {
+      form.setFieldsValue({ range: [computedRange[0], computedRange[1]] })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [periodMode, anchorDate])
 
   const dashboardQuery = useQuery({
     queryKey: ['after-sales', 'dashboard', rangeStartIso, rangeEndIso, watchedChannel, dashboardGroupBy, dashboardView],
@@ -166,7 +215,8 @@ const AfterSalesInsightsPage = () => {
       if (dashboardUseSnapshot) {
         try {
           const snap = await fetchAfterSalesDashboardSnapshot({
-            range_days: dashboardQuickDays,
+            start: String(rangeStartIso),
+            end: String(rangeEndIso),
             group_by: dashboardGroupBy,
             view: dashboardView,
             channel,
@@ -327,6 +377,20 @@ const AfterSalesInsightsPage = () => {
 
     setDetailLoading(true)
     try {
+      const modelCodeFromPicker = (() => {
+        const kind = (boundTargetFilters as any)?.bound_target_kind
+        if (kind === 'model') {
+          const mc = String((boundTargetFilters as any)?.bound_model_code ?? '').trim()
+          return mc || undefined
+        }
+        if (kind === 'bundle') {
+          const tpl = String((boundTargetFilters as any)?.bundle_template_code ?? '').trim().toUpperCase()
+          const sel = String((boundTargetFilters as any)?.bundle_preset_selector ?? '').trim().toUpperCase()
+          if (!tpl) return undefined
+          return sel ? `B-${tpl}${sel}` : `B-${tpl}`
+        }
+        return undefined
+      })()
       const resp = await fetchAfterSalesLines(
         {
           start,
@@ -337,7 +401,7 @@ const AfterSalesInsightsPage = () => {
           sku_code: v.sku_code?.trim() || undefined,
           product_link_id: v.product_link_id?.trim() || undefined,
           reason: v.reason || undefined,
-          model_code: v.model_code || undefined,
+          model_code: modelCodeFromPicker || v.model_code || undefined,
         },
         { timeoutMs: 60000 },
       )
@@ -388,21 +452,12 @@ const AfterSalesInsightsPage = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const applyQuickRange = async (days: number) => {
-    const d = days === 7 || days === 30 || days === 90 ? (days as 7 | 30 | 90) : 30
-    setDashboardQuickDays(d)
-    const range: [dayjs.Dayjs, dayjs.Dayjs] = [dayjs().subtract(days, 'day'), dayjs()]
-    form.setFieldsValue({ range })
-    if (activeTab === 'detail') await onQueryDetail(1, detailPageSize)
-    else if (activeTab === 'rate') await onQuery()
-    else if (dashboardAutoLoad) await dashboardQuery.refetch()
-  }
-
   const refreshDashboardSnapshotNow = async () => {
     const channel = watchedChannel?.trim() || undefined
     try {
       await refreshAfterSalesDashboardSnapshot({
-        range_days: dashboardQuickDays,
+        start: String(rangeStartIso),
+        end: String(rangeEndIso),
         group_by: dashboardGroupBy,
         view: dashboardView,
         channel,
@@ -452,30 +507,54 @@ const AfterSalesInsightsPage = () => {
             range: [dayjs().subtract(30, 'day'), dayjs()],
           }}
         >
-          <Form.Item label="时间范围" name="range" rules={[{ required: true, message: '请选择时间范围' }]}>
-            <DatePicker.RangePicker allowClear={false} />
-          </Form.Item>
-          <Form.Item label="快捷">
-            <Space size={6} wrap>
-              <Button size="small" onClick={() => applyQuickRange(7)}>
-                近7天
+          <Form.Item label="统计时间">
+            <Space size={8} wrap>
+              {periodMode === 'custom' ? (
+                <Form.Item name="range" rules={[{ required: true, message: '请选择时间范围' }]} style={{ marginBottom: 0 }}>
+                  <DatePicker.RangePicker allowClear={false} />
+                </Form.Item>
+              ) : (
+                <DatePicker
+                  picker={periodMode === 'week' ? 'week' : periodMode === 'month' ? 'month' : 'date'}
+                  value={anchorDate as any}
+                  onChange={(v) => {
+                    if (!v) return
+                    if (periodMode === 'week') setAnchorDate(v.startOf('isoWeek'))
+                    else if (periodMode === 'month') setAnchorDate(v.startOf('month'))
+                    else setAnchorDate(v.startOf('day'))
+                  }}
+                  allowClear={false}
+                  format={periodMode === 'month' ? 'YYYY-MM' : 'YYYY-MM-DD'}
+                />
+              )}
+              <Segmented
+                value={periodMode}
+                onChange={(v) => {
+                  const next = v as any
+                  setPeriodMode(next)
+                  if (next === 'day') setAnchorDate(dayjs().subtract(1, 'day').startOf('day'))
+                  if (next === 'week') setAnchorDate(dayjs().subtract(1, 'week').startOf('isoWeek'))
+                  if (next === 'month') setAnchorDate(dayjs().subtract(1, 'month').startOf('month'))
+                }}
+                options={[
+                  { label: '日', value: 'day' },
+                  { label: '周', value: 'week' },
+                  { label: '月', value: 'month' },
+                ]}
+              />
+              <Button size="small" onClick={() => shiftAnchorDate(-1)} disabled={periodMode === 'custom'}>
+                <LeftOutlined />
               </Button>
-              <Button size="small" onClick={() => applyQuickRange(30)}>
-                近30天
+              <Button size="small" onClick={() => shiftAnchorDate(1)} disabled={periodMode === 'custom'}>
+                <RightOutlined />
               </Button>
-              <Button size="small" onClick={() => applyQuickRange(90)}>
-                近90天
+              <Button size="small" type={periodMode === 'custom' ? 'primary' : 'default'} onClick={() => setPeriodMode('custom')}>
+                自定义模块
               </Button>
+              <Typography.Text type="secondary">
+                {computedRange?.[0]?.format?.('YYYY-MM-DD')} ~ {computedRange?.[1]?.format?.('YYYY-MM-DD')}
+              </Typography.Text>
             </Space>
-          </Form.Item>
-          <Form.Item label="粒度" name="group_by">
-            <Select
-              style={{ width: 100 }}
-              options={[
-                { value: 'month', label: '按月' },
-                { value: 'day', label: '按日' },
-              ]}
-            />
           </Form.Item>
           <Form.Item label="渠道" name="channel">
             <Input placeholder="可选：店铺/渠道" style={{ width: 180 }} allowClear />
@@ -483,10 +562,37 @@ const AfterSalesInsightsPage = () => {
           <Form.Item label="货品条码" name="sku_code">
             <Input placeholder="可选：barcode" style={{ width: 180 }} allowClear />
           </Form.Item>
-          <Form.Item label="链接ID" name="product_link_id">
-            <Input placeholder="可选：product_link_id（明细/钻取）" style={{ width: 220 }} allowClear />
+          <Form.Item>
+            <Button size="small" onClick={() => setShowAdvanced((v) => !v)}>
+              {showAdvanced ? '收起筛选' : '更多筛选'}
+            </Button>
           </Form.Item>
-          {/* 隐藏高级筛选：原因/模型（仍支持图表点击下钻到明细） */}
+          {showAdvanced ? (
+            <>
+              <Form.Item label="模型/套装">
+                <BoundTargetPicker
+                  value={boundTarget}
+                  onChange={(next, filters) => {
+                    setBoundTarget(next)
+                    setBoundTargetFilters(filters)
+                  }}
+                />
+              </Form.Item>
+              <Form.Item label="链接ID" name="product_link_id">
+                <Input placeholder="可选：product_link_id（明细/钻取）" style={{ width: 220 }} allowClear />
+              </Form.Item>
+              <Form.Item label="退货率粒度" name="group_by">
+                <Select
+                  style={{ width: 120 }}
+                  options={[
+                    { value: 'month', label: '按月' },
+                    { value: 'day', label: '按日' },
+                  ]}
+                />
+              </Form.Item>
+            </>
+          ) : null}
+          {/* 隐藏：原因/模型（仍支持仪表盘点击下钻到明细） */}
           <Form.Item name="reason" hidden>
             <Input />
           </Form.Item>
@@ -497,16 +603,6 @@ const AfterSalesInsightsPage = () => {
             <Space size={8} wrap>
               {activeTab === 'dashboard' ? (
                 <>
-                  <Select
-                    value={dashboardGroupBy}
-                    style={{ width: 120 }}
-                    onChange={(v) => setDashboardGroupBy(v)}
-                    options={[
-                      { value: 'day', label: '按日（近7点）' },
-                      { value: 'week', label: '按周（近7点）' },
-                      { value: 'month', label: '按月（近12点）' },
-                    ]}
-                  />
                   {!dashboardAutoLoad ? (
                     <Button
                       type="primary"

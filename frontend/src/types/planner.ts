@@ -2066,7 +2066,7 @@ export interface SalesProfitDashboardTopModelItem {
 }
 
 export interface SalesProfitDashboardResponse {
-  group_by: 'week' | 'month'
+  group_by: 'day' | 'week' | 'month'
   start: string
   end: string
   channel?: string | null

@@ -24,12 +24,18 @@ curl_json() {
 curl_json "${BASE_URL}/reports/insights/models-summary/refresh?range_days=${RANGE_DAYS}&operator_id=${OPERATOR_ID}"
 
 # Sales profit dashboard (insights/sales)
-curl_json "${BASE_URL}/reports/insights/sales-profit-dashboard/refresh?range_days=${RANGE_DAYS}&group_by=week&operator_id=${OPERATOR_ID}"
-curl_json "${BASE_URL}/reports/insights/sales-profit-dashboard/refresh?range_days=${RANGE_DAYS}&group_by=month&operator_id=${OPERATOR_ID}"
+curl_json "${BASE_URL}/reports/insights/sales-profit-dashboard/refresh?range_days=${RANGE_DAYS}&group_by=day&top_n=12&operator_id=${OPERATOR_ID}"
+curl_json "${BASE_URL}/reports/insights/sales-profit-dashboard/refresh?range_days=${RANGE_DAYS}&group_by=week&top_n=12&operator_id=${OPERATOR_ID}"
+curl_json "${BASE_URL}/reports/insights/sales-profit-dashboard/refresh?range_days=${RANGE_DAYS}&group_by=month&top_n=12&operator_id=${OPERATOR_ID}"
+curl_json "${BASE_URL}/reports/insights/sales-profit-dashboard/refresh?range_days=${RANGE_DAYS}&group_by=day&top_n=100&operator_id=${OPERATOR_ID}"
+curl_json "${BASE_URL}/reports/insights/sales-profit-dashboard/refresh?range_days=${RANGE_DAYS}&group_by=week&top_n=100&operator_id=${OPERATOR_ID}"
+curl_json "${BASE_URL}/reports/insights/sales-profit-dashboard/refresh?range_days=${RANGE_DAYS}&group_by=month&top_n=100&operator_id=${OPERATOR_ID}"
 
 # After-sales dashboard (insights/after-sales)
+curl_json "${BASE_URL}/reports/insights/after-sales-dashboard/refresh?range_days=${RANGE_DAYS}&group_by=day&view=factory&operator_id=${OPERATOR_ID}"
 curl_json "${BASE_URL}/reports/insights/after-sales-dashboard/refresh?range_days=${RANGE_DAYS}&group_by=week&view=factory&operator_id=${OPERATOR_ID}"
 curl_json "${BASE_URL}/reports/insights/after-sales-dashboard/refresh?range_days=${RANGE_DAYS}&group_by=month&view=factory&operator_id=${OPERATOR_ID}"
+curl_json "${BASE_URL}/reports/insights/after-sales-dashboard/refresh?range_days=${RANGE_DAYS}&group_by=day&view=ops&operator_id=${OPERATOR_ID}"
 curl_json "${BASE_URL}/reports/insights/after-sales-dashboard/refresh?range_days=${RANGE_DAYS}&group_by=week&view=ops&operator_id=${OPERATOR_ID}"
 curl_json "${BASE_URL}/reports/insights/after-sales-dashboard/refresh?range_days=${RANGE_DAYS}&group_by=month&view=ops&operator_id=${OPERATOR_ID}"
 

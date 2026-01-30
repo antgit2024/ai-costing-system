@@ -3324,7 +3324,7 @@ class SalesProfitDashboardTopModelItem(BaseModel):
 
 
 class SalesProfitDashboardResponse(BaseModel):
-    group_by: Literal["week", "month"]
+    group_by: Literal["day", "week", "month"]
     start: str
     end: str
     channel: Optional[str] = None

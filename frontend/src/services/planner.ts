@@ -1590,7 +1590,7 @@ export const fetchSalesProfitDashboardSnapshot = async (params: {
   range_days?: number
   start?: string
   end?: string
-  group_by?: 'week' | 'month'
+  group_by?: 'day' | 'week' | 'month'
   top_n?: number
   channel?: string
 } = {}): Promise<ReportSnapshotEnvelope<any>> => {
@@ -1602,7 +1602,7 @@ export const refreshSalesProfitDashboardSnapshot = async (params: {
   range_days?: number
   start?: string
   end?: string
-  group_by?: 'week' | 'month'
+  group_by?: 'day' | 'week' | 'month'
   top_n?: number
   channel?: string
   operator_id?: string
@@ -1613,6 +1613,8 @@ export const refreshSalesProfitDashboardSnapshot = async (params: {
 
 export const fetchAfterSalesDashboardSnapshot = async (params: {
   range_days?: number
+  start?: string
+  end?: string
   group_by?: 'day' | 'week' | 'month'
   view?: 'factory' | 'ops'
   channel?: string
@@ -1623,6 +1625,8 @@ export const fetchAfterSalesDashboardSnapshot = async (params: {
 
 export const refreshAfterSalesDashboardSnapshot = async (params: {
   range_days?: number
+  start?: string
+  end?: string
   group_by?: 'day' | 'week' | 'month'
   view?: 'factory' | 'ops'
   channel?: string
@@ -2233,7 +2237,7 @@ export const fetchSalesProfitDashboard = async (
   params: {
     start: string
     end: string
-    group_by?: 'week' | 'month'
+    group_by?: 'day' | 'week' | 'month'
     channel?: string
     top_n?: number
   },

@@ -254,6 +254,38 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
     setError(null)
   }
 
+  const openSkuInLinesList = async (sku_code: string) => {
+    const sku = String(sku_code ?? '').trim()
+    if (!sku) return
+    setActiveTab('lines')
+    setLinesView('list')
+    setError(null)
+    setPage(1)
+
+    // Keep filters consistent with "analyze here" flow.
+    form.setFieldsValue({
+      sku_code: sku,
+      order_no: undefined,
+      product_link_id: undefined,
+      bundle_template_code: undefined,
+      bundle_preset_selector: undefined,
+    })
+
+    const range = computedRange as unknown as [dayjs.Dayjs, dayjs.Dayjs]
+    const base = {
+      start: range[0].startOf('day').toISOString(),
+      end: range[1].endOf('day').toISOString(),
+      include_missing: true,
+      channel: watchedShop?.trim() || undefined,
+      sku_code: sku,
+      order_no: undefined,
+      product_link_id: undefined,
+      bundle_template_code: undefined,
+      bundle_preset_selector: undefined,
+    }
+    await runQuery({ ...base, page: 1, page_size: pageSize })
+  }
+
   const navigateToShipmentsProcessed = (params: { sku_code?: string; bundle_template_code?: string; bundle_preset_selector?: string }) => {
     const qp = new URLSearchParams()
     qp.set('tab', 'processed')
@@ -871,7 +903,7 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
                             onClick: () => {
                               const sku = String(r?.sku_code ?? '').trim()
                               if (!sku) return
-                              navigateToShipmentsProcessed({ sku_code: sku })
+                              openSkuInLinesList(sku)
                             },
                           })}
                         />
@@ -923,7 +955,7 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
                             onClick: () => {
                               const sku = String(r?.sku_code ?? '').trim()
                               if (!sku) return
-                              navigateToShipmentsProcessed({ sku_code: sku })
+                              openSkuInLinesList(sku)
                             },
                           })}
                         />
@@ -1096,7 +1128,7 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
                           message={linesView === 'rank_profit' ? 'Top 赚钱货品（前100，按毛利额）' : 'Top 亏损货品（前100，按毛利额）'}
                           description={
                             <Space wrap>
-                              <span>点击行可下钻到发货台账（已处理）</span>
+                              <span>点击行查看该 SKU 的销售明细（本页内分析）</span>
                               <Button
                                 size="small"
                                 onClick={() => {
@@ -1139,12 +1171,45 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
                               width: 110,
                               render: (v: any) => (v == null ? '-' : `${(Number(v) * 100).toFixed(2)}%`),
                             },
+                            {
+                              title: '操作',
+                              key: 'ops',
+                              width: 170,
+                              render: (_v: any, r: SalesProfitDashboardTopSkuItem) => {
+                                const sku = String(r?.sku_code ?? '').trim()
+                                return (
+                                  <Space>
+                                    <Button
+                                      size="small"
+                                      onClick={(e) => {
+                                        e?.stopPropagation?.()
+                                        if (!sku) return
+                                        openSkuInLinesList(sku)
+                                      }}
+                                    >
+                                      查看明细
+                                    </Button>
+                                    <Button
+                                      size="small"
+                                      type="link"
+                                      onClick={(e) => {
+                                        e?.stopPropagation?.()
+                                        if (!sku) return
+                                        navigateToShipmentsProcessed({ sku_code: sku })
+                                      }}
+                                    >
+                                      去台账
+                                    </Button>
+                                  </Space>
+                                )
+                              },
+                            },
                           ]}
                           onRow={(r) => ({
                             onClick: () => {
                               const sku = String(r?.sku_code ?? '').trim()
                               if (!sku) return
-                              navigateToShipmentsProcessed({ sku_code: sku })
+                              openSkuInLinesList(sku)
                             },
                           })}
                         />

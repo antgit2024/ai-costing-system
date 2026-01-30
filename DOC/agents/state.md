@@ -907,6 +907,7 @@
         - 趋势/Top模型/Top货品&链接 在运营看板下也展示退货率（可能>100%时以红字提示）
       - `backend/src/planner/services/after_sales_import_service.py`
         - 修复：支持解析 Excel 序列号类型的“申请时间”(applied_at)，避免申请期统计被低估
+        - 修复：售后明细/筛选改为按 `coalesce(applied_at, occurred_at)` 口径，避免 applied_at 缺失导致“明细只有 11 条”与看板不一致
       - `backend/tests/planner/test_after_sales_import_mvp.py`
         - 新增回归用例：applied_at 为 excel 数值时可正确解析落库
       - `model_insights_summary/detail` 在 `shipment_lines.metadata_json` 上按 bundle 锚点过滤（与销售明细筛选口径一致）

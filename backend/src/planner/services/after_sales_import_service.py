@@ -528,8 +528,10 @@ def search_lines(
 ) -> Tuple[int, List[Dict[str, Any]]]:
     """
     List after-sales lines (detail view) with best-effort model binding info.
-    Filters are applied on AfterSalesLine.applied_at (申请日期).
+    Filters are applied on coalesce(applied_at, occurred_at) for robustness:
+    some ERP exports miss applied_at or provide excel serial numbers.
     """
+    applied_time_expr = func.coalesce(models.AfterSalesLine.applied_at, models.AfterSalesLine.occurred_at)
     mapping_on = and_(
         models.SkuModelVersionMapping.is_archived.is_(False),
         models.SkuModelVersionMapping.is_active.is_(True),
@@ -547,9 +549,9 @@ def search_lines(
     )
 
     if start is not None:
-        q = q.filter(models.AfterSalesLine.applied_at.isnot(None), models.AfterSalesLine.applied_at >= start)
+        q = q.filter(applied_time_expr.isnot(None), applied_time_expr >= start)
     if end is not None:
-        q = q.filter(models.AfterSalesLine.applied_at.isnot(None), models.AfterSalesLine.applied_at < end)
+        q = q.filter(applied_time_expr.isnot(None), applied_time_expr < end)
     if channel:
         q = q.filter(models.AfterSalesLine.channel == channel)
     if sku_code:
@@ -570,7 +572,7 @@ def search_lines(
             models.ProductModel.model_name.label("bound_model_name"),
             models.ProductModelVersion.version_label.label("bound_version_label"),
         )
-        .order_by(models.AfterSalesLine.applied_at.desc().nullslast(), models.AfterSalesLine.created_at.desc())
+        .order_by(applied_time_expr.desc().nullslast(), models.AfterSalesLine.created_at.desc())
         .offset((max(page, 1) - 1) * max(page_size, 1))
         .limit(max(page_size, 1))
         .all()
@@ -585,7 +587,8 @@ def search_lines(
                 "row_index": line.row_index,
                 "after_sales_no": line.after_sales_no,
                 "occurred_at": line.occurred_at,
-                "applied_at": line.applied_at,
+                # For UI readability: show applied date if present, else fallback to occurred_at.
+                "applied_at": line.applied_at or line.occurred_at,
                 "channel": line.channel,
                 "reason": line.reason,
                 "bound_model_code": bmc,
@@ -623,6 +626,7 @@ def reason_options(
     model_code: Optional[str],
     limit: int = 200,
 ) -> List[Dict[str, Any]]:
+    applied_time_expr = func.coalesce(models.AfterSalesLine.applied_at, models.AfterSalesLine.occurred_at)
     mapping_on = and_(
         models.SkuModelVersionMapping.is_archived.is_(False),
         models.SkuModelVersionMapping.is_active.is_(True),
@@ -640,9 +644,9 @@ def reason_options(
         .filter(models.AfterSalesLine.reason.isnot(None), func.length(func.trim(models.AfterSalesLine.reason)) > 0)
     )
     if start is not None:
-        q = q.filter(models.AfterSalesLine.applied_at.isnot(None), models.AfterSalesLine.applied_at >= start)
+        q = q.filter(applied_time_expr.isnot(None), applied_time_expr >= start)
     if end is not None:
-        q = q.filter(models.AfterSalesLine.applied_at.isnot(None), models.AfterSalesLine.applied_at < end)
+        q = q.filter(applied_time_expr.isnot(None), applied_time_expr < end)
     if channel:
         q = q.filter(models.AfterSalesLine.channel == channel)
     if sku_code:
@@ -669,6 +673,7 @@ def model_options(
     reason: Optional[str],
     limit: int = 200,
 ) -> List[Dict[str, Any]]:
+    applied_time_expr = func.coalesce(models.AfterSalesLine.applied_at, models.AfterSalesLine.occurred_at)
     mapping_on = and_(
         models.SkuModelVersionMapping.is_archived.is_(False),
         models.SkuModelVersionMapping.is_active.is_(True),
@@ -690,9 +695,9 @@ def model_options(
         .filter(models.ProductModel.model_code.isnot(None), func.length(func.trim(models.ProductModel.model_code)) > 0)
     )
     if start is not None:
-        q = q.filter(models.AfterSalesLine.applied_at.isnot(None), models.AfterSalesLine.applied_at >= start)
+        q = q.filter(applied_time_expr.isnot(None), applied_time_expr >= start)
     if end is not None:
-        q = q.filter(models.AfterSalesLine.applied_at.isnot(None), models.AfterSalesLine.applied_at < end)
+        q = q.filter(applied_time_expr.isnot(None), applied_time_expr < end)
     if channel:
         q = q.filter(models.AfterSalesLine.channel == channel)
     if sku_code:

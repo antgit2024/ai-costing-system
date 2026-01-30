@@ -234,6 +234,7 @@ const ShipmentLedgerPage = () => {
   })
 
   const [boundTarget, setBoundTarget] = useState<BoundTargetPickerValue>({ kind: 'any' })
+  const [showAdvancedBinding, setShowAdvancedBinding] = useState(false)
 
   const boundTargetFilters = useMemo(() => {
     if (boundTarget.kind === 'model') {
@@ -262,6 +263,22 @@ const ShipmentLedgerPage = () => {
       bound_version_label: undefined,
       bundle_preset_selector: undefined,
     }
+  }, [boundTarget])
+
+  const boundTargetSummary = useMemo(() => {
+    if (boundTarget.kind === 'model') {
+      const code = String(boundTarget.model_code ?? '').trim()
+      if (!code) return null
+      const label = String(boundTarget.published_version_label ?? '').trim()
+      return label ? `${code}（${label}）` : code
+    }
+    if (boundTarget.kind === 'bundle') {
+      const tpl = String(boundTarget.bundle_template_code ?? '').trim().toUpperCase()
+      if (!tpl) return null
+      const sel = String(boundTarget.bundle_preset_selector ?? '').trim().toUpperCase()
+      return sel ? `B-${tpl}-${sel}` : `B-${tpl}`
+    }
+    return null
   }, [boundTarget])
 
   // Drawer (details)
@@ -785,13 +802,19 @@ const ShipmentLedgerPage = () => {
                   <Form.Item name="spec_text">
                     <Input style={{ width: 220 }} placeholder="交易规格" allowClear />
                   </Form.Item>
-                  <BoundTargetPicker
-                    value={boundTarget}
-                    onChange={(v) => {
-                      setBoundTarget(v)
-                      // if user uses advanced filtering, they will click "查询"
-                    }}
-                  />
+                  <Button size="small" onClick={() => setShowAdvancedBinding((v) => !v)}>
+                    {showAdvancedBinding ? '收起高级筛选' : '高级筛选'}
+                  </Button>
+                  {!showAdvancedBinding && boundTargetSummary ? <Tag>{boundTargetSummary}</Tag> : null}
+                  {showAdvancedBinding ? (
+                    <BoundTargetPicker
+                      value={boundTarget}
+                      onChange={(v) => {
+                        setBoundTarget(v)
+                        // user still needs to click "查询" to apply
+                      }}
+                    />
+                  ) : null}
                   <Form.Item name="unresolved_reason">
                     <Select
                       allowClear

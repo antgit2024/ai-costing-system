@@ -2721,6 +2721,11 @@ class AfterSalesDashboardKpis(BaseModel):
     refund_rate: Optional[Decimal] = None
     model_mapped_shipped_qty: Decimal = Decimal("0")
     model_mapped_rate: Optional[Decimal] = None
+    # model mapping coverage (does NOT affect shipped/returned totals)
+    model_unmapped_shipped_qty: Decimal = Decimal("0")
+    model_mapped_returned_qty: Decimal = Decimal("0")
+    model_unmapped_returned_qty: Decimal = Decimal("0")
+    model_mapped_returned_rate: Optional[Decimal] = None
     # attribution quality
     # 1) within selected shipment window (for lag distribution readiness)
     matched_return_lines: int = 0

@@ -795,6 +795,18 @@ const AfterSalesInsightsPage = () => {
                           ? '运营口径：退货按“申请期全量”统计；不要求能匹配到发货行。'
                           : '工厂口径：退货先按强关联键归因到发货行，再归因到发货周/月。'}
                       </Typography.Text>
+                      {(() => {
+                        const k = (dashboardQuery.data as AfterSalesDashboardResponse | undefined)?.kpis as any
+                        const unmShip = k?.model_unmapped_shipped_qty
+                        const unmRet = k?.model_unmapped_returned_qty
+                        const has = unmShip != null || unmRet != null
+                        if (!has) return null
+                        return (
+                          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                            模型未绑定（不影响发货/退货总数，仅影响Top模型归因）：发货 {formatQty(unmShip as any)}，退货 {formatQty(unmRet as any)}
+                          </Typography.Text>
+                        )
+                      })()}
                       {dashboardUseSnapshot && dashboardComputedAt ? (
                         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                           数据更新时间：{dashboardComputedAt}

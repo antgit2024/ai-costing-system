@@ -898,6 +898,11 @@
         - `bundle_preset_selector`
     - `backend/src/planner/services/analytics_service.py`
         - 售后看板“发货数量”口径与台账对齐：仅统计 `shipment_lines.is_active = true` 的有效行（避免修订/替换导致统计偏差）
+        - 售后看板新增“未绑定模型”提示：不影响发货/退货总数，仅影响 Top 模型归因（发货/退货各给出未映射数量）
+      - `backend/src/planner/schemas.py` / `frontend/src/types/planner.ts`
+        - 补齐 `AfterSalesDashboardKpis`：`model_unmapped_shipped_qty` / `model_mapped_returned_qty` / `model_unmapped_returned_qty` / `model_mapped_returned_rate`
+      - `frontend/src/pages/costing/AfterSalesInsightsPage.tsx`
+        - 售后看板顶部增加一行“模型未绑定”摘要（发货/退货），避免误解“未绑定就不计入售后”
       - `model_insights_summary/detail` 在 `shipment_lines.metadata_json` 上按 bundle 锚点过滤（与销售明细筛选口径一致）
   - 本轮产物（前端）：
     - `frontend/src/pages/costing/ProfitInsightsPage.tsx`

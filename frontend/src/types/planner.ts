@@ -2143,6 +2143,10 @@ export interface AfterSalesDashboardKpis {
   refund_rate?: string | null
   model_mapped_shipped_qty: string
   model_mapped_rate?: string | null
+  model_unmapped_shipped_qty: string
+  model_mapped_returned_qty: string
+  model_unmapped_returned_qty: string
+  model_mapped_returned_rate?: string | null
   matched_return_lines: number
   matched_return_lines_with_applied_at: number
   after_sales_lines_total: number

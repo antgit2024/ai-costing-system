@@ -198,6 +198,57 @@ def after_sales_dashboard(
         return_rate_total = (returned_qty_total / shipped_qty_total) if shipped_qty_total > 0 else None
         refund_rate_total = (refund_amount_total / shipped_amount_total) if shipped_amount_total > 0 else None
 
+        # model mapping coverage (does NOT affect shipped/returned totals)
+        mapping_ship_on = and_(
+            models.SkuModelVersionMapping.is_archived.is_(False),
+            models.SkuModelVersionMapping.is_active.is_(True),
+            models.SkuModelVersionMapping.sku_code == models.ShipmentLine.sku_code,
+        )
+        mapped_ship_q = (
+            db.query(func.coalesce(func.sum(models.ShipmentLine.qty), 0))
+            .join(models.SkuModelVersionMapping, mapping_ship_on)
+            .filter(
+                models.ShipmentLine.completed_at.isnot(None),
+                models.ShipmentLine.completed_at >= start,
+                models.ShipmentLine.completed_at < end,
+                models.ShipmentLine.is_archived.is_(False),
+                models.ShipmentLine.is_active.is_(True),
+            )
+        )
+        if channel:
+            mapped_ship_q = mapped_ship_q.filter(models.ShipmentLine.channel == channel)
+        mapped_shipped_qty = Decimal(str(mapped_ship_q.scalar() or 0))
+        unmapped_shipped_qty = max(shipped_qty_total - mapped_shipped_qty, Decimal("0"))
+        model_mapped_rate = (mapped_shipped_qty / shipped_qty_total) if shipped_qty_total > 0 else None
+
+        mapping_ret_on = and_(
+            models.SkuModelVersionMapping.is_archived.is_(False),
+            models.SkuModelVersionMapping.is_active.is_(True),
+            models.SkuModelVersionMapping.sku_code == models.AfterSalesLine.sku_code,
+        )
+        mapped_ret_q = (
+            db.query(
+                func.coalesce(
+                    func.sum(func.coalesce(models.AfterSalesLine.actual_return_qty, models.AfterSalesLine.return_qty)),
+                    0,
+                )
+            )
+            .select_from(models.AfterSalesLine)
+            .join(models.SkuModelVersionMapping, mapping_ret_on)
+            .filter(
+                models.AfterSalesLine.is_archived.is_(False),
+                applied_time_expr.isnot(None),
+                applied_time_expr >= start,
+                applied_time_expr < end,
+                models.AfterSalesLine.sku_code.isnot(None),
+            )
+        )
+        if channel:
+            mapped_ret_q = mapped_ret_q.filter(models.AfterSalesLine.channel == channel)
+        mapped_returned_qty = Decimal(str(mapped_ret_q.scalar() or 0))
+        unmapped_returned_qty = max(returned_qty_total - mapped_returned_qty, Decimal("0"))
+        model_mapped_returned_rate = (mapped_returned_qty / returned_qty_total) if returned_qty_total > 0 else None
+
         # series: merge shipments(completed_at) and after-sales(applied_at/occurred_at) into same week/month buckets
         ship_series_rows = (
             db.query(ship_period_expr, shipped_qty_sum, shipped_amount_sum)
@@ -588,8 +639,12 @@ def after_sales_dashboard(
                 "refund_amount": refund_amount_total,
                 "return_rate": return_rate_total,
                 "refund_rate": refund_rate_total,
-                "model_mapped_shipped_qty": Decimal("0"),
-                "model_mapped_rate": None,
+                "model_mapped_shipped_qty": mapped_shipped_qty,
+                "model_mapped_rate": model_mapped_rate,
+                "model_unmapped_shipped_qty": unmapped_shipped_qty,
+                "model_mapped_returned_qty": mapped_returned_qty,
+                "model_unmapped_returned_qty": unmapped_returned_qty,
+                "model_mapped_returned_rate": model_mapped_returned_rate,
                 "matched_return_lines": 0,
                 "matched_return_lines_with_applied_at": 0,
                 "after_sales_lines_total": after_sales_lines_total,
@@ -817,6 +872,48 @@ def after_sales_dashboard(
         ship_model_cover_q = ship_model_cover_q.filter(models.ShipmentLine.channel == channel)
     mapped_shipped_qty = Decimal(str(ship_model_cover_q.scalar() or 0))
     model_mapped_rate = (mapped_shipped_qty / shipped_qty_total) if shipped_qty_total > 0 else None
+    unmapped_shipped_qty = max(shipped_qty_total - mapped_shipped_qty, Decimal("0"))
+
+    # model-mapped returned qty (coverage for Top models; does NOT affect returned totals)
+    mapping_ret_on = and_(
+        models.SkuModelVersionMapping.is_archived.is_(False),
+        models.SkuModelVersionMapping.is_active.is_(True),
+        models.SkuModelVersionMapping.sku_code == models.AfterSalesLine.sku_code,
+    )
+    ret_model_cover_q = (
+        db.query(
+            func.coalesce(
+                func.sum(func.coalesce(models.AfterSalesLine.actual_return_qty, models.AfterSalesLine.return_qty)),
+                0,
+            ).label("mapped_returned_qty")
+        )
+        .select_from(models.ShipmentLine)
+        .join(
+            models.AfterSalesLine,
+            and_(
+                models.AfterSalesLine.order_no.isnot(None),
+                models.AfterSalesLine.product_link_id.isnot(None),
+                models.AfterSalesLine.sku_code.isnot(None),
+                models.ShipmentLine.order_no == models.AfterSalesLine.order_no,
+                models.ShipmentLine.product_link_id == models.AfterSalesLine.product_link_id,
+                models.ShipmentLine.sku_code == models.AfterSalesLine.sku_code,
+            ),
+        )
+        .join(models.SkuModelVersionMapping, mapping_ret_on)
+        .filter(
+            models.ShipmentLine.completed_at.isnot(None),
+            models.ShipmentLine.completed_at >= start,
+            models.ShipmentLine.completed_at < end,
+            models.ShipmentLine.is_archived.is_(False),
+            models.ShipmentLine.is_active.is_(True),
+            models.AfterSalesLine.is_archived.is_(False),
+        )
+    )
+    if channel:
+        ret_model_cover_q = ret_model_cover_q.filter(models.ShipmentLine.channel == channel)
+    mapped_returned_qty = Decimal(str(ret_model_cover_q.scalar() or 0))
+    unmapped_returned_qty = max(returned_qty_total - mapped_returned_qty, Decimal("0"))
+    model_mapped_returned_rate = (mapped_returned_qty / returned_qty_total) if returned_qty_total > 0 else None
 
     # ----- series (period totals) -----
     ship_series_q = db.query(
@@ -844,6 +941,7 @@ def after_sales_dashboard(
             models.ShipmentLine.completed_at >= start,
             models.ShipmentLine.completed_at < end,
             models.ShipmentLine.is_archived.is_(False),
+            models.ShipmentLine.is_active.is_(True),
         )
     )
     if channel:
@@ -873,6 +971,7 @@ def after_sales_dashboard(
         models.ShipmentLine.completed_at >= start,
         models.ShipmentLine.completed_at < end,
         models.ShipmentLine.is_archived.is_(False),
+        models.ShipmentLine.is_active.is_(True),
         models.AfterSalesLine.is_archived.is_(False),
     )
     if channel:
@@ -1330,6 +1429,10 @@ def after_sales_dashboard(
             "refund_rate": refund_rate_total,
             "model_mapped_shipped_qty": mapped_shipped_qty,
             "model_mapped_rate": model_mapped_rate,
+            "model_unmapped_shipped_qty": unmapped_shipped_qty,
+            "model_mapped_returned_qty": mapped_returned_qty,
+            "model_unmapped_returned_qty": unmapped_returned_qty,
+            "model_mapped_returned_rate": model_mapped_returned_rate,
             "matched_return_lines": matched_return_lines,
             "matched_return_lines_with_applied_at": matched_return_lines_with_applied_at,
             "after_sales_lines_total": after_sales_lines_total,

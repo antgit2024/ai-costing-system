@@ -167,11 +167,12 @@ const ProfitInsightsPage = () => {
 
     try {
       const raw = typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_KEY) : null
-      const saved = raw ? (JSON.parse(raw || '{}') as any) : ({} as any)
+      void raw
       // 固定默认范围，方便验证历史数据（近期可能未导入）
       form.setFieldsValue({
         range: DEBUG_DEFAULT_RANGE,
-        channel: saved?.channel ?? undefined,
+        // 验数模式：默认不带历史渠道，避免误以为“全量”
+        channel: undefined,
       })
     } catch {
       // ignore

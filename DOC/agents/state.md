@@ -850,6 +850,7 @@
       - `frontend/src/pages/costing/ProfitInsightsPage.tsx`
         - 临时校验口径：默认日期范围固定为 `2025-12-01 ~ 2025-12-31`
         - 默认切到“实时计算”（快照仅支持近 N 天，无法固定到历史月份）
+        - 验数模式：默认不自动恢复“渠道”等历史筛选（默认全量）
       - `frontend/src/types/planner.ts`：`SalesLineItem` 增加 `bound_model_code/bound_model_name`
     - 后端：
       - `backend/src/planner/services/analytics_service.py`：`sales_lines` 通过 `sku_code -> active mapping` 回填 `bound_model_code/bound_model_name`

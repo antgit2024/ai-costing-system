@@ -481,8 +481,9 @@ const AfterSalesInsightsPage = () => {
         form.setFieldsValue({
           group_by: groupBy,
           range,
-          channel: saved?.channel ?? undefined,
-          sku_code: saved?.sku_code ?? undefined,
+          // 验数模式：默认不带历史筛选（渠道/条码），避免误以为“全量”
+          channel: undefined,
+          sku_code: undefined,
         })
       } else {
         // default: fixed debug range for easier verification
@@ -490,6 +491,8 @@ const AfterSalesInsightsPage = () => {
         form.setFieldsValue({
           group_by: 'month',
           range: DEBUG_DEFAULT_CUSTOM_RANGE,
+          channel: undefined,
+          sku_code: undefined,
         })
       }
     } catch {

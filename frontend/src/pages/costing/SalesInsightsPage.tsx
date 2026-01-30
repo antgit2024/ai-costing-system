@@ -628,7 +628,8 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
         const range: [dayjs.Dayjs, dayjs.Dayjs] = DEBUG_DEFAULT_CUSTOM_RANGE
         form.setFieldsValue({
           range,
-          shop: saved?.channel ?? undefined,
+          // 验数模式：默认不带历史渠道，避免误以为“全量”但实际被筛选
+          shop: undefined,
           // do not auto-restore advanced filters (avoid "barcode stuck")
           sku_code: undefined,
           order_no: undefined,
@@ -639,7 +640,7 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
           start: range[0].startOf('day').toISOString(),
           end: range[1].endOf('day').toISOString(),
           include_missing: true,
-          channel: String(saved?.channel ?? '').trim() || undefined,
+          channel: undefined,
           sku_code: undefined,
           order_no: undefined,
           product_link_id: undefined,

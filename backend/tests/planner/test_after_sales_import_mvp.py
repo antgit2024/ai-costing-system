@@ -135,3 +135,50 @@ def test_after_sales_import_and_returns_rate_by_sku(client, db_session):
     assert str(item["shipped_qty"]) in ("2", "2.0")
     assert str(item["returned_qty"]) in ("1", "1.0")
 
+
+def test_after_sales_import_parses_excel_serial_applied_at(client, db_session):
+    _create_shipment_line(
+        db_session,
+        order_no="TM-ORDER-002",
+        product_link_id="LINK-002",
+        channel="绮妙旗舰店",
+        sku_code="BARCODE-002",
+        completed_at="2025-01-02 10:00:00",
+        qty=1,
+        revenue_amount=100,
+    )
+
+    # Excel serial for 2025-01-03 12:00:00 (approx). We only need: parsed not None and within the window.
+    # Using an integer is enough for this MVP: expect 2025-01-03 00:00:00+00:00.
+    file_bytes = _build_after_sales_xlsx_bytes(
+        rows=[
+            {
+                "after_sales_no": "SH202501030002",
+                "channel": "绮妙旗舰店",
+                "sku_code": "BARCODE-002",
+                "product_link_id": "LINK-002",
+                "order_no": "TM-ORDER-002",
+                "applied_at": 45660,  # excel date serial (should be parsed)
+                "return_qty": 1,
+                "refund_amount": 10,
+                "reason": "测试",
+            }
+        ]
+    )
+
+    files = {
+        "file": ("after_sales.xlsx", file_bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    }
+    resp = client.post(f"{API_PREFIX}/after-sales/import", files=files, data={"requested_by": "tester"})
+    assert resp.status_code == 200, resp.text
+
+    # ensure the line has applied_at parsed (not None)
+    row = (
+        db_session.query(models.AfterSalesLine)
+        .filter(models.AfterSalesLine.sku_code == "BARCODE-002", models.AfterSalesLine.is_archived.is_(False))
+        .order_by(models.AfterSalesLine.created_at.desc())
+        .first()
+    )
+    assert row is not None
+    assert row.applied_at is not None
+

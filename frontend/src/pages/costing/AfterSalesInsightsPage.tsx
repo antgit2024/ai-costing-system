@@ -889,8 +889,38 @@ const AfterSalesInsightsPage = () => {
                                   { title: '周期', dataIndex: 'period', width: 160, ellipsis: true },
                                   { title: '发货(件)', dataIndex: 'shipped_qty', width: 110 },
                                   { title: '退货(件)', dataIndex: 'returned_qty', width: 110 },
+                                  {
+                                    title: '退货率(件)',
+                                    dataIndex: 'return_rate',
+                                    width: 120,
+                                    render: (v: any) => {
+                                      const n = Number(v ?? 0) * 100
+                                      if (!Number.isFinite(n)) return '-'
+                                      const s = `${n.toFixed(2)}%`
+                                      return (
+                                        <Typography.Text type={n > 100 ? 'danger' : undefined}>
+                                          {s}
+                                        </Typography.Text>
+                                      )
+                                    },
+                                  },
                                   { title: '发货额', dataIndex: 'shipped_amount', width: 120, render: (v: any) => formatMoney(v) },
                                   { title: '退款额', dataIndex: 'refund_amount', width: 120, render: (v: any) => formatMoney(v) },
+                                  {
+                                    title: '退款率(额)',
+                                    dataIndex: 'refund_rate',
+                                    width: 120,
+                                    render: (v: any) => {
+                                      const n = Number(v ?? 0) * 100
+                                      if (!Number.isFinite(n)) return '-'
+                                      const s = `${n.toFixed(2)}%`
+                                      return (
+                                        <Typography.Text type={n > 100 ? 'danger' : undefined}>
+                                          {s}
+                                        </Typography.Text>
+                                      )
+                                    },
+                                  },
                                 ]
                               : [
                                   { title: '周期', dataIndex: 'period', width: 160, ellipsis: true },
@@ -995,25 +1025,19 @@ const AfterSalesInsightsPage = () => {
                               },
                               { title: '发货', dataIndex: 'shipped_qty', width: 110 },
                               { title: '退货', dataIndex: 'returned_qty', width: 110 },
-                              ...(dashboardView === 'ops'
-                                ? []
-                                : [
-                                    {
-                                      title: '退货率',
-                                      dataIndex: 'return_rate',
-                                      width: 160,
-                                      render: (v: any) => {
-                                        const n = Number(v ?? 0) * 100
-                                        return (
-                                          <Progress
-                                            percent={Number.isFinite(n) ? Number(n.toFixed(2)) : 0}
-                                            size="small"
-                                            strokeColor={factoryStroke}
-                                          />
-                                        )
-                                      },
-                                    },
-                                  ]),
+                              {
+                                title: '退货率',
+                                dataIndex: 'return_rate',
+                                width: 160,
+                                render: (v: any) => {
+                                  const n = Number(v ?? 0) * 100
+                                  if (!Number.isFinite(n)) return '-'
+                                  if (dashboardView === 'ops') {
+                                    return <Typography.Text type={n > 100 ? 'danger' : undefined}>{`${n.toFixed(2)}%`}</Typography.Text>
+                                  }
+                                  return <Progress percent={Number(n.toFixed(2))} size="small" strokeColor={factoryStroke} />
+                                },
+                              },
                             ] as any
                           }
                           onRow={(r: any) => ({
@@ -1046,25 +1070,19 @@ const AfterSalesInsightsPage = () => {
                                       { title: '规格（最常见）', dataIndex: 'spec_text', ellipsis: true },
                                       { title: '发货', dataIndex: 'shipped_qty', width: 110 },
                                       { title: '退货', dataIndex: 'returned_qty', width: 110 },
-                                      ...(dashboardView === 'ops'
-                                        ? []
-                                        : [
-                                            {
-                                              title: '退货率',
-                                              dataIndex: 'return_rate',
-                                              width: 160,
-                                              render: (v: any) => {
-                                                const n = Number(v ?? 0) * 100
-                                                return (
-                                                  <Progress
-                                                    percent={Number.isFinite(n) ? Number(n.toFixed(2)) : 0}
-                                                    size="small"
-                                                    strokeColor={factoryStroke}
-                                                  />
-                                                )
-                                              },
-                                            },
-                                          ]),
+                                      {
+                                        title: '退货率',
+                                        dataIndex: 'return_rate',
+                                        width: 160,
+                                        render: (v: any) => {
+                                          const n = Number(v ?? 0) * 100
+                                          if (!Number.isFinite(n)) return '-'
+                                          if (dashboardView === 'ops') {
+                                            return <Typography.Text type={n > 100 ? 'danger' : undefined}>{`${n.toFixed(2)}%`}</Typography.Text>
+                                          }
+                                          return <Progress percent={Number(n.toFixed(2))} size="small" strokeColor={factoryStroke} />
+                                        },
+                                      },
                                     ] as any
                                   }
                                   onRow={(r: any) => ({
@@ -1108,25 +1126,19 @@ const AfterSalesInsightsPage = () => {
                                     { title: '规格（最常见）', dataIndex: 'spec_text', ellipsis: true },
                                     { title: '发货', dataIndex: 'shipped_qty', width: 110 },
                                     { title: '退货', dataIndex: 'returned_qty', width: 110 },
-                                    ...(dashboardView === 'ops'
-                                      ? []
-                                      : [
-                                          {
-                                            title: '退货率',
-                                            dataIndex: 'return_rate',
-                                            width: 160,
-                                            render: (v: any) => {
-                                              const n = Number(v ?? 0) * 100
-                                              return (
-                                                <Progress
-                                                  percent={Number.isFinite(n) ? Number(n.toFixed(2)) : 0}
-                                                  size="small"
-                                                  strokeColor={factoryStroke}
-                                                />
-                                              )
-                                            },
-                                          },
-                                        ]),
+                                      {
+                                        title: '退货率',
+                                        dataIndex: 'return_rate',
+                                        width: 160,
+                                        render: (v: any) => {
+                                          const n = Number(v ?? 0) * 100
+                                          if (!Number.isFinite(n)) return '-'
+                                          if (dashboardView === 'ops') {
+                                            return <Typography.Text type={n > 100 ? 'danger' : undefined}>{`${n.toFixed(2)}%`}</Typography.Text>
+                                          }
+                                          return <Progress percent={Number(n.toFixed(2))} size="small" strokeColor={factoryStroke} />
+                                        },
+                                      },
                                     ] as any
                                   }
                                   onRow={(r: any) => ({

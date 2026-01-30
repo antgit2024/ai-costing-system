@@ -904,6 +904,11 @@
       - `frontend/src/pages/costing/AfterSalesInsightsPage.tsx`
         - 售后看板顶部增加一行“模型未绑定”摘要（发货/退货），避免误解“未绑定就不计入售后”
         - 运营看板 KPI 卡片恢复展示“退货率/退款率”，并移除“发货金额”卡片（按运营验数习惯）
+        - 趋势/Top模型/Top货品&链接 在运营看板下也展示退货率（可能>100%时以红字提示）
+      - `backend/src/planner/services/after_sales_import_service.py`
+        - 修复：支持解析 Excel 序列号类型的“申请时间”(applied_at)，避免申请期统计被低估
+      - `backend/tests/planner/test_after_sales_import_mvp.py`
+        - 新增回归用例：applied_at 为 excel 数值时可正确解析落库
       - `model_insights_summary/detail` 在 `shipment_lines.metadata_json` 上按 bundle 锚点过滤（与销售明细筛选口径一致）
   - 本轮产物（前端）：
     - `frontend/src/pages/costing/ProfitInsightsPage.tsx`

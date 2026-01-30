@@ -8,6 +8,7 @@ from decimal import Decimal
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from openpyxl import load_workbook
+from openpyxl.utils.datetime import from_excel
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
@@ -258,8 +259,16 @@ def _normalize_rows_from_xlsx(file_bytes: bytes) -> Tuple[List[Dict[str, Any]], 
         if isinstance(applied_at_raw, datetime):
             applied_at = applied_at_raw if applied_at_raw.tzinfo else applied_at_raw.replace(tzinfo=timezone.utc)
         elif isinstance(applied_at_raw, (int, float)):
-            # openpyxl already converts most excel dates to datetime; keep best-effort fallback
-            applied_at = None
+            # Some ERP exports store excel datetimes as serial numbers.
+            try:
+                dt = from_excel(applied_at_raw)
+                if isinstance(dt, datetime):
+                    applied_at = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+                else:
+                    # date -> datetime at 00:00
+                    applied_at = datetime(dt.year, dt.month, dt.day, tzinfo=timezone.utc)  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001
+                applied_at = None
         elif isinstance(applied_at_raw, str):
             s = applied_at_raw.strip()
             if s:

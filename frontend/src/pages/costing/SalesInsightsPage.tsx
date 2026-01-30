@@ -23,6 +23,7 @@ import dayjs from 'dayjs'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
+import { InfoCircleOutlined } from '@ant-design/icons'
 
 import {
   fetchSalesLines,
@@ -62,6 +63,8 @@ type SalesInsightsPageProps = {
   embedded?: boolean
 }
 
+type SalesPeriodMode = 'day' | 'week' | 'month' | 'custom'
+
 const SalesInsightsPage = (props: SalesInsightsPageProps) => {
   const embedded = !!props.embedded
   const navigate = useNavigate()
@@ -77,6 +80,8 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
   const [useSnapshot, setUseSnapshot] = useState(true)
   const [quickDays, setQuickDays] = useState<7 | 30 | 90>(30)
   const [dashboardComputedAt, setDashboardComputedAt] = useState<string | null>(null)
+  const [periodMode, setPeriodMode] = useState<SalesPeriodMode>('day')
+  const [anchorDate, setAnchorDate] = useState(() => dayjs().subtract(1, 'day').startOf('day'))
   const [lastQuery, setLastQuery] = useState<{
     start: string
     end: string
@@ -91,8 +96,39 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
 
   const watchedRange = Form.useWatch('range', form) as [dayjs.Dayjs, dayjs.Dayjs] | undefined
   const watchedShop = Form.useWatch('shop', form) as string | undefined
-  const rangeStartIso = watchedRange?.[0]?.startOf('day')?.toISOString?.()
-  const rangeEndIso = watchedRange?.[1]?.endOf('day')?.toISOString?.()
+
+  const computedRange = useMemo(() => {
+    if (periodMode === 'custom') {
+      const r = watchedRange
+      if (r && r[0] && r[1]) return [r[0].startOf('day'), r[1].endOf('day')] as const
+      return [dayjs().subtract(30, 'day').startOf('day'), dayjs().endOf('day')] as const
+    }
+    const a = anchorDate || dayjs().subtract(1, 'day').startOf('day')
+    if (periodMode === 'day') return [a.startOf('day'), a.endOf('day')] as const
+    if (periodMode === 'week') {
+      // 上一完整周（按周一~周日）；以 anchorDate 所在周为“本周”，取本周开始日前一周
+      const wkStart = a.startOf('week')
+      const prevEnd = wkStart.subtract(1, 'day').endOf('day')
+      const prevStart = wkStart.subtract(7, 'day').startOf('day')
+      return [prevStart, prevEnd] as const
+    }
+    // month: 上一完整月
+    const mStart = a.startOf('month')
+    const prevEnd = mStart.subtract(1, 'day').endOf('day')
+    const prevStart = mStart.subtract(1, 'month').startOf('month').startOf('day')
+    return [prevStart, prevEnd] as const
+  }, [anchorDate, periodMode, watchedRange])
+
+  const rangeStartIso = computedRange?.[0]?.toISOString?.()
+  const rangeEndIso = computedRange?.[1]?.toISOString?.()
+
+  useEffect(() => {
+    // Keep form range in sync for downstream list queries.
+    if (periodMode !== 'custom') {
+      form.setFieldsValue({ range: [computedRange[0], computedRange[1]] })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [periodMode, anchorDate])
 
   const dashboardQuery = useQuery({
     queryKey: ['sales', 'profit-dashboard', rangeStartIso, rangeEndIso, watchedShop, dashboardGroupBy],
@@ -317,8 +353,10 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
   }
 
   const applyQuickRange = async (days: number) => {
+    // legacy helper: keep for empty-state buttons; switch to custom range
     const d = days === 7 || days === 30 || days === 90 ? (days as 7 | 30 | 90) : 30
     setQuickDays(d)
+    setPeriodMode('custom')
     const range: [dayjs.Dayjs, dayjs.Dayjs] = [dayjs().subtract(days, 'day'), dayjs()]
     form.setFieldsValue({ range })
     await onQuery()
@@ -411,24 +449,25 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
     <div style={{ padding: embedded ? 0 : 16 }}>
       {!embedded ? (
         <>
-          <Typography.Title level={3} style={{ margin: '0 0 12px' }}>
-            数据洞察 / 销售分析
-          </Typography.Title>
-
-          <Alert
-            type="info"
-            showIcon
-            style={{ marginBottom: 12 }}
-            message="说明（利润看板）"
-            description={
-              <div>
-                <div>
-                  本页默认展示“利润看板”，帮运营快速识别<strong>赚钱</strong>与<strong>亏钱</strong>的货品/模型（避免“卖一个亏一个”）。
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '0 0 12px' }}>
+            <Typography.Title level={3} style={{ margin: 0 }}>
+              数据洞察 / 销售分析
+            </Typography.Title>
+            <Tooltip
+              title={
+                <div style={{ maxWidth: 520 }}>
+                  <div>
+                    本页默认展示“利润看板”，帮运营快速识别<strong>赚钱</strong>与<strong>亏钱</strong>的货品/模型（避免“卖一个亏一个”）。
+                  </div>
+                  <div style={{ marginTop: 6 }}>
+                    为避免缺成本导致利润虚高：毛利/毛利率仅在“已计价行”上计算，并单独展示成本覆盖率。
+                  </div>
                 </div>
-                <div>为避免缺成本导致利润虚高：毛利/毛利率仅在“已计价行”上计算，并单独展示成本覆盖率。</div>
-              </div>
-            }
-          />
+              }
+            >
+              <InfoCircleOutlined style={{ color: 'var(--ant-color-text-secondary)', cursor: 'help' }} />
+            </Tooltip>
+          </div>
         </>
       ) : null}
 
@@ -441,20 +480,35 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
             shop: undefined,
           }}
         >
-          <Form.Item label="时间范围" name="range" rules={[{ required: true, message: '请选择时间范围' }]}>
-            <DatePicker.RangePicker allowClear={false} />
-          </Form.Item>
-          <Form.Item label="快捷">
-            <Space size={6}>
-              <Button size="small" onClick={() => applyQuickRange(7)}>
-                近7天
-              </Button>
-              <Button size="small" onClick={() => applyQuickRange(30)}>
-                近30天
-              </Button>
-              <Button size="small" onClick={() => applyQuickRange(90)}>
-                近90天
-              </Button>
+          <Form.Item label="统计时间">
+            <Space size={8} wrap>
+              <Segmented<SalesPeriodMode>
+                value={periodMode}
+                onChange={(v) => setPeriodMode(v as SalesPeriodMode)}
+                options={[
+                  { label: '日', value: 'day' },
+                  { label: '周', value: 'week' },
+                  { label: '月', value: 'month' },
+                  { label: '自定义', value: 'custom' },
+                ]}
+              />
+              {periodMode === 'custom' ? (
+                <Form.Item name="range" rules={[{ required: true, message: '请选择时间范围' }]} style={{ marginBottom: 0 }}>
+                  <DatePicker.RangePicker allowClear={false} />
+                </Form.Item>
+              ) : (
+                <DatePicker
+                  value={anchorDate as any}
+                  onChange={(v) => {
+                    if (v) setAnchorDate(v.startOf('day'))
+                  }}
+                  allowClear={false}
+                  format="YYYY-MM-DD"
+                />
+              )}
+              <Typography.Text type="secondary">
+                {computedRange?.[0]?.format?.('YYYY-MM-DD')} ~ {computedRange?.[1]?.format?.('YYYY-MM-DD')}
+              </Typography.Text>
             </Space>
           </Form.Item>
           <Form.Item label="店铺" name="shop">

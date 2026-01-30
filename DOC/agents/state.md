@@ -99,6 +99,18 @@
   - 下一步（仍未闭环）：
     - 进一步把 issue hints 做成 **行级落库**（而非仅“问题列表快照”落库），让“问题提示”成为可复用字段：用于排序/筛选/导出/历史追溯，并减少每次扫描时的规格解析/快照 trace 拉取成本。
 
+- **最近校对（北京时间 GMT+8）**：2026-01-30（销售洞察：说明改为 ! 悬停 + “统计时间（日/周/月/自定义）”）
+  - 背景：销售洞察页面筛选项偏“报表系统”，不够贴近运营日常（天猫/ERP 看板常见的“统计时间：日/周/月 + 自定义”心智）；同时“说明（利润看板）”占用首屏空间。
+  - 口径：
+    - 标题右侧使用 `!`（悬停 Tooltip）展示说明，不再占用首屏 Alert。
+    - 时间筛选改为：`统计时间` + `日/周/月/自定义`；默认“日=昨天”，并展示本次统计的起止日期范围（便于对账）。
+    - 原有的“缓存/刷新/切到实时”保持不变（仍可夜间预处理）。
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/SalesInsightsPage.tsx`
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-27（数据洞察：首屏不再“空白”，默认轻量查询 + 记住筛选）
   - 现象：`/costing/insights/after-sales`、`/costing/insights/sales`、`/costing/insights/models` 进入页面首屏为空，必须点“查询”才有内容，体验弱于常见 ERP 报表页。
   - 处理策略（不新增重复列表，只让原列表首屏有真实数据）：

@@ -334,7 +334,7 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
   const onQuery = async () => {
     setError(null)
     const v = await form.validateFields()
-    const range = v.range as [dayjs.Dayjs, dayjs.Dayjs]
+    const range = computedRange as unknown as [dayjs.Dayjs, dayjs.Dayjs]
     const base = {
       start: range[0].startOf('day').toISOString(),
       end: range[1].endOf('day').toISOString(),
@@ -352,7 +352,11 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
         window.localStorage.setItem(
           STORAGE_KEY,
           JSON.stringify({
-            ...base,
+            // keep only minimal "tmall-like" memory; avoid sticky barcode etc.
+            start: base.start,
+            end: base.end,
+            include_missing: base.include_missing,
+            channel: base.channel,
             page_size: pageSize,
           }),
         )
@@ -408,9 +412,10 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
         form.setFieldsValue({
           range,
           shop: saved?.channel ?? undefined,
-          sku_code: saved?.sku_code ?? undefined,
-          order_no: saved?.order_no ?? undefined,
-          product_link_id: saved?.product_link_id ?? undefined,
+          // do not auto-restore advanced filters (avoid "barcode stuck")
+          sku_code: undefined,
+          order_no: undefined,
+          product_link_id: undefined,
         })
 
         const base = {
@@ -418,9 +423,9 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
           end: range[1].endOf('day').toISOString(),
           include_missing: nextIncludeMissing,
           channel: String(saved?.channel ?? '').trim() || undefined,
-          sku_code: String(saved?.sku_code ?? '').trim() || undefined,
-          order_no: String(saved?.order_no ?? '').trim() || undefined,
-          product_link_id: String(saved?.product_link_id ?? '').trim() || undefined,
+          sku_code: undefined,
+          order_no: undefined,
+          product_link_id: undefined,
         }
         setLastQuery(base)
       } catch {
@@ -441,10 +446,9 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
     }
     // fallback: if user paginates before first query, read current form state
     const v = form.getFieldsValue(true) as any
-    const range = v.range as [dayjs.Dayjs, dayjs.Dayjs]
     const fallback = {
-      start: range?.[0]?.startOf('day')?.toISOString?.() ?? dayjs().startOf('day').toISOString(),
-      end: range?.[1]?.endOf('day')?.toISOString?.() ?? dayjs().endOf('day').toISOString(),
+      start: computedRange?.[0]?.startOf?.('day')?.toISOString?.() ?? dayjs().startOf('day').toISOString(),
+      end: computedRange?.[1]?.endOf?.('day')?.toISOString?.() ?? dayjs().endOf('day').toISOString(),
       include_missing: includeMissing,
       channel: v.shop?.trim() || undefined,
       sku_code: v.sku_code?.trim() || undefined,

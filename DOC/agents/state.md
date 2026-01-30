@@ -111,6 +111,19 @@
     - Frontend：`npm -C frontend run build`
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-30（销售洞察：修复“条码无法清空/致命错误 reading '0'”）
+  - 现象：
+    - 货品条码输入框会被历史记忆反复回填，导致“清除后又出现”（例如 `5970014255534`）。
+    - 页面偶发出现致命错误：`Cannot read properties of undefined (reading '0')`（unhandledrejection）。
+  - 原因：
+    - 新版“统计时间（日/周/月）”下，`range` 字段在非自定义模式不一定挂载到表单，仍用 `v.range[0]` 会触发 undefined 访问。
+    - localStorage 恢复了高级筛选（sku_code/order_no 等），导致条码看起来“始终在里面”。
+  - 修复：
+    - 查询口径不再依赖表单的 `range` 字段，统一使用页面计算出的 `computedRange`。
+    - localStorage 只记忆最小字段（start/end/channel/include_missing/page_size），不再自动恢复条码等高级筛选。
+  - 影响文件：
+    - `frontend/src/pages/costing/SalesInsightsPage.tsx`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-27（数据洞察：首屏不再“空白”，默认轻量查询 + 记住筛选）
   - 现象：`/costing/insights/after-sales`、`/costing/insights/sales`、`/costing/insights/models` 进入页面首屏为空，必须点“查询”才有内容，体验弱于常见 ERP 报表页。
   - 处理策略（不新增重复列表，只让原列表首屏有真实数据）：

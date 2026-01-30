@@ -199,7 +199,7 @@ def refresh_sales_profit_dashboard_snapshot(
 @router.get("/insights/after-sales-dashboard")
 def get_after_sales_dashboard_snapshot(
     range_days: int = Query(30, ge=1, le=365),
-    group_by: Literal["week", "month"] = Query("week"),
+    group_by: Literal["day", "week", "month"] = Query("week"),
     view: Literal["factory", "ops"] = Query("factory"),
     channel: Optional[str] = Query(None),
     db: Session = Depends(get_db_session),
@@ -220,7 +220,7 @@ def get_after_sales_dashboard_snapshot(
 @router.post("/insights/after-sales-dashboard/refresh")
 def refresh_after_sales_dashboard_snapshot(
     range_days: int = Query(30, ge=1, le=365),
-    group_by: Literal["week", "month"] = Query("week"),
+    group_by: Literal["day", "week", "month"] = Query("week"),
     view: Literal["factory", "ops"] = Query("factory"),
     channel: Optional[str] = Query(None),
     operator_id: Optional[str] = Query(None),

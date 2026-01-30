@@ -86,7 +86,7 @@ def returns_rate_by_channel(
 def after_sales_dashboard(
     start: str = Query(..., description="ISO datetime, e.g. 2025-01-01T00:00:00Z"),
     end: str = Query(..., description="ISO datetime, e.g. 2026-01-01T00:00:00Z"),
-    group_by: Literal["week", "month"] = Query("week"),
+    group_by: Literal["day", "week", "month"] = Query("week"),
     channel: Optional[str] = None,
     top_n: int = 12,
     view: Literal["factory", "ops"] = Query("factory", description="factory=发货归因口径; ops=申请口径全量"),

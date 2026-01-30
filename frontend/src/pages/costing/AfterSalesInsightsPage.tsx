@@ -68,10 +68,57 @@ const formatQty = (raw?: string) => {
   return n.toFixed(2).replace(/\.00$/, '')
 }
 
+const Sparkline = ({
+  values,
+  height = 34,
+  stroke = 'var(--ant-color-primary, #1677ff)',
+}: {
+  values: Array<number | null | undefined>
+  height?: number
+  stroke?: string
+}) => {
+  const cleaned = (values ?? []).map((v) => (v == null || !Number.isFinite(Number(v)) ? null : Number(v)))
+  const points = cleaned.map((v, idx) => ({ idx, v })).filter((x) => x.v != null) as Array<{ idx: number; v: number }>
+  if (points.length <= 1) return <div style={{ height }} />
+
+  const min = Math.min(...points.map((p) => p.v))
+  const max = Math.max(...points.map((p) => p.v))
+  const span = Math.max(max - min, 1e-9)
+
+  const width = 100
+  const padX = 2
+  const padY = 2
+  const w = width - padX * 2
+  const h = height - padY * 2
+
+  const xOf = (i: number) => padX + (w * i) / Math.max((cleaned.length - 1) || 1, 1)
+  const yOf = (v: number) => padY + h - (h * (v - min)) / span
+
+  const poly = cleaned
+    .map((v, i) => (v == null ? null : `${xOf(i).toFixed(2)},${yOf(v).toFixed(2)}`))
+    .filter(Boolean)
+    .join(' ')
+
+  // area fill: close to bottom
+  const firstIdx = cleaned.findIndex((v) => v != null)
+  const lastIdx = cleaned.length - 1 - [...cleaned].reverse().findIndex((v) => v != null)
+  const area =
+    firstIdx >= 0 && lastIdx >= 0
+      ? `${xOf(firstIdx).toFixed(2)},${(padY + h).toFixed(2)} ${poly} ${xOf(lastIdx).toFixed(2)},${(padY + h).toFixed(2)}`
+      : ''
+
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} width="100%" height={height} preserveAspectRatio="none">
+      {area ? <polyline points={area} fill={stroke} opacity={0.12} stroke="none" /> : null}
+      <polyline points={poly} fill="none" stroke={stroke} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  )
+}
+
 const AfterSalesInsightsPage = () => {
   const [form] = Form.useForm()
   const [activeTab, setActiveTab] = useState<'dashboard' | 'rate' | 'detail'>('dashboard')
-  const [dashboardGroupBy, setDashboardGroupBy] = useState<'week' | 'month'>('week')
+  const [dashboardGroupBy, setDashboardGroupBy] = useState<'day' | 'week' | 'month'>('week')
   const [dashboardView, setDashboardView] = useState<'ops' | 'factory'>('factory')
   const [dashboardAutoLoad, setDashboardAutoLoad] = useState(false)
   const [dashboardUseSnapshot, setDashboardUseSnapshot] = useState(true)
@@ -148,6 +195,17 @@ const AfterSalesInsightsPage = () => {
     staleTime: 30_000,
     refetchOnWindowFocus: false,
   })
+
+  const dashSeries = ((dashboardQuery.data as AfterSalesDashboardResponse | undefined)?.series ?? []) as any[]
+  const dashPointsN = dashboardGroupBy === 'month' ? 12 : 7
+  const dashSeriesTail = dashSeries.slice(-dashPointsN)
+  const shippedSpark = dashSeriesTail.map((x) => Number(x?.shipped_qty ?? 0))
+  const returnedSpark = dashSeriesTail.map((x) => Number(x?.returned_qty ?? 0))
+  const returnRateSpark = dashSeriesTail.map((x) => Number(x?.return_rate ?? 0) * 100)
+  const mappedRateSpark =
+    dashboardView === 'factory'
+      ? dashSeriesTail.map((x) => Number(x?.model_mapped_rate ?? 0) * 100)
+      : dashSeriesTail.map((x) => Number(x?.refund_rate ?? 0) * 100)
 
   const dashboardHttpStatus = (dashboardQuery.error as any)?.response?.status as number | undefined
 
@@ -444,8 +502,9 @@ const AfterSalesInsightsPage = () => {
                     style={{ width: 120 }}
                     onChange={(v) => setDashboardGroupBy(v)}
                     options={[
-                      { value: 'week', label: '按周（默认）' },
-                      { value: 'month', label: '按月' },
+                      { value: 'day', label: '按日（近7点）' },
+                      { value: 'week', label: '按周（近7点）' },
+                      { value: 'month', label: '按月（近12点）' },
                     ]}
                   />
                   {!dashboardAutoLoad ? (
@@ -589,6 +648,7 @@ const AfterSalesInsightsPage = () => {
                     <Col xs={24} lg={6}>
                       <Card size="small">
                         <Statistic title="发货数量" value={Number((dashboardQuery.data as AfterSalesDashboardResponse | undefined)?.kpis?.shipped_qty ?? 0)} />
+                        <Sparkline values={shippedSpark} stroke={opsStroke} />
                       </Card>
                     </Col>
                     <Col xs={24} lg={6}>
@@ -597,6 +657,7 @@ const AfterSalesInsightsPage = () => {
                           title={dashboardView === 'ops' ? '退货数量（申请期全量，实退优先）' : '退货数量（归因，实退优先）'}
                           value={Number((dashboardQuery.data as AfterSalesDashboardResponse | undefined)?.kpis?.returned_qty ?? 0)}
                         />
+                        <Sparkline values={returnedSpark} stroke={factoryStroke} />
                       </Card>
                     </Col>
                     <Col xs={24} lg={6}>
@@ -607,6 +668,7 @@ const AfterSalesInsightsPage = () => {
                           precision={2}
                           suffix="%"
                         />
+                        <Sparkline values={returnRateSpark} stroke={opsStroke} />
                       </Card>
                     </Col>
                     <Col xs={24} lg={6}>
@@ -626,6 +688,7 @@ const AfterSalesInsightsPage = () => {
                             suffix="%"
                           />
                         )}
+                        <Sparkline values={mappedRateSpark} stroke={dashboardView === 'factory' ? factoryStroke : opsStroke} />
                       </Card>
                     </Col>
                   </Row>

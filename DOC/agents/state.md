@@ -848,6 +848,23 @@
     - Frontend：`npm -C frontend run build`
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-30（售后分析：KPI 卡片加入趋势曲线 Sparkline）
+  - 需求：`/costing/insights/after-sales` 四个 KPI 卡（发货数量/退货数量/退货率/覆盖率或退款率）在卡片内展示趋势曲线；按日/周默认展示近 7 个点，按月展示近 12 个点。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/AfterSalesInsightsPage.tsx`
+      - KPI 卡片下方新增轻量 `Sparkline`（SVG），不引入新依赖
+      - 仪表盘 `group_by` 增加 `day` 选项，并据此截取近 7/12 个点渲染曲线
+    - 前端类型：`frontend/src/types/planner.ts`、`frontend/src/services/planner.ts`
+      - `AfterSalesDashboardResponse.group_by` 扩展为 `day|week|month`
+      - `AfterSalesDashboardSeriesItem` 增加 `model_mapped_rate`（工厂口径覆盖率趋势）等可选字段
+    - 后端：`backend/src/planner/services/analytics_service.py`、`backend/src/planner/routers/analytics.py`、`backend/src/planner/routers/reports.py`、`backend/src/planner/schemas.py`
+      - `after_sales_dashboard` 支持 `group_by=day`，并在 series 中补齐 `model_mapped_rate`（工厂口径）
+      - 快照接口 `/reports/insights/after-sales-dashboard` 同步支持 `group_by=day`
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-27（模型分析支持套装筛选：先筛选不拆件，仍按模型聚合）
   - 目标：对“模型分析”补齐套装锚点筛选（`bundle_template_code + bundle_preset_selector`），用于未来按套装模块对账/排查/看板；口径保持“按模型聚合”，暂不做组件拆解归因。
   - 本轮产物（后端）：

@@ -67,7 +67,7 @@ def _utc_date(dt: datetime) -> date:
     return dt.astimezone(timezone.utc).date()
 
 
-def _fmt_period_label(period_dt: Any, group_by: Literal["week", "month"]) -> str:
+def _fmt_period_label(period_dt: Any, group_by: Literal["day", "week", "month"]) -> str:
     """
     Format period label for dashboard:
     - week: YYYY-MM-DD~YYYY-MM-DD (Mon~Sun)
@@ -87,6 +87,8 @@ def _fmt_period_label(period_dt: Any, group_by: Literal["week", "month"]) -> str
     else:
         return str(period_dt)
 
+    if group_by == "day":
+        return start_date.strftime("%Y-%m-%d")
     if group_by == "month":
         return start_date.strftime("%Y-%m")
     end_date = start_date + timedelta(days=6)
@@ -105,14 +107,18 @@ def _group_time_expr(db: Session, column, group_by: Literal["day", "month"]):
     return func.date(column)
 
 
-def _group_time_expr_dash(db: Session, column, group_by: Literal["week", "month"]):
+def _group_time_expr_dash(db: Session, column, group_by: Literal["day", "week", "month"]):
     dialect = getattr(getattr(db.get_bind(), "dialect", None), "name", "")
     if dialect == "postgresql":
+        if group_by == "day":
+            return func.date_trunc("day", column)
         if group_by == "month":
             return func.date_trunc("month", column)
         # week: date_trunc('week') => week start (Mon) in postgres
         return func.date_trunc("week", column)
     # sqlite / mysql fallback (best-effort)
+    if group_by == "day":
+        return func.strftime("%Y-%m-%d", column)
     if group_by == "month":
         return func.strftime("%Y-%m-01", column)
     # week start (Mon) best-effort: date(column, 'weekday 1', '-7 days')
@@ -124,7 +130,7 @@ def after_sales_dashboard(
     *,
     start: datetime,
     end: datetime,
-    group_by: Literal["week", "month"] = "week",
+    group_by: Literal["day", "week", "month"] = "week",
     channel: Optional[str] = None,
     top_n: int = 12,
     view: Literal["factory", "ops"] = "factory",
@@ -818,6 +824,23 @@ def after_sales_dashboard(
     ship_series_q = ship_series_q.group_by(period_expr)
     ship_rows = ship_series_q.all()
 
+    # model-mapped shipped qty by period (coverage trend)
+    ship_model_cover_series_q = (
+        db.query(period_expr, func.coalesce(func.sum(models.ShipmentLine.qty), 0).label("mapped_shipped_qty"))
+        .join(models.SkuModelVersionMapping, mapping_on)
+        .filter(
+            models.ShipmentLine.completed_at.isnot(None),
+            models.ShipmentLine.completed_at >= start,
+            models.ShipmentLine.completed_at < end,
+            models.ShipmentLine.is_archived.is_(False),
+        )
+    )
+    if channel:
+        ship_model_cover_series_q = ship_model_cover_series_q.filter(models.ShipmentLine.channel == channel)
+    ship_model_cover_series_q = ship_model_cover_series_q.group_by(period_expr)
+    mapped_rows = ship_model_cover_series_q.all()
+    mapped_qty_by_period: Dict[str, Decimal] = {str(r.period): Decimal(str(r.mapped_shipped_qty or 0)) for r in mapped_rows}
+
     ret_series_q = db.query(
         period_expr,
         returned_qty_expr,
@@ -862,6 +885,7 @@ def after_sales_dashboard(
         ret = ret_map.get(p_key) or {"returned_qty": Decimal("0"), "refund_amount": Decimal("0")}
         returned_qty = ret["returned_qty"]
         refund_amount = ret["refund_amount"]
+        mapped_qty_p = mapped_qty_by_period.get(p_key, Decimal("0"))
         series.append(
             {
                 "period": p_label,
@@ -871,6 +895,8 @@ def after_sales_dashboard(
                 "refund_amount": refund_amount,
                 "return_rate": (returned_qty / shipped_qty) if shipped_qty > 0 else None,
                 "refund_rate": (refund_amount / shipped_amount) if shipped_amount > 0 else None,
+                "model_mapped_shipped_qty": mapped_qty_p,
+                "model_mapped_rate": (mapped_qty_p / shipped_qty) if shipped_qty > 0 else None,
             }
         )
 

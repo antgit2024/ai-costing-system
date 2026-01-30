@@ -2168,6 +2168,8 @@ export interface AfterSalesDashboardSeriesItem {
   refund_amount: string
   return_rate?: string | null
   refund_rate?: string | null
+  model_mapped_shipped_qty?: string | null
+  model_mapped_rate?: string | null
 }
 
 export interface AfterSalesDashboardTopReasonItem {
@@ -2206,7 +2208,7 @@ export interface AfterSalesDashboardTopLinkItem {
 }
 
 export interface AfterSalesDashboardResponse {
-  group_by: 'week' | 'month'
+  group_by: 'day' | 'week' | 'month'
   start: string
   end: string
   kpis: AfterSalesDashboardKpis

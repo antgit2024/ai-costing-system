@@ -2746,6 +2746,9 @@ class AfterSalesDashboardSeriesItem(BaseModel):
     refund_amount: Decimal
     return_rate: Optional[Decimal] = None
     refund_rate: Optional[Decimal] = None
+    # Only meaningful for factory view (model attribution coverage)
+    model_mapped_shipped_qty: Optional[Decimal] = None
+    model_mapped_rate: Optional[Decimal] = None
 
     class Config:
         json_encoders = {Decimal: _decimal_to_str}
@@ -2802,7 +2805,7 @@ class AfterSalesDashboardTopLinkItem(BaseModel):
 
 
 class AfterSalesDashboardResponse(BaseModel):
-    group_by: Literal["week", "month"]
+    group_by: Literal["day", "week", "month"]
     start: str
     end: str
     kpis: AfterSalesDashboardKpis

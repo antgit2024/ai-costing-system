@@ -896,6 +896,7 @@
         - `bundle_template_code`
         - `bundle_preset_selector`
     - `backend/src/planner/services/analytics_service.py`
+        - 售后看板“发货数量”口径与台账对齐：仅统计 `shipment_lines.is_active = true` 的有效行（避免修订/替换导致统计偏差）
       - `model_insights_summary/detail` 在 `shipment_lines.metadata_json` 上按 bundle 锚点过滤（与销售明细筛选口径一致）
   - 本轮产物（前端）：
     - `frontend/src/pages/costing/ProfitInsightsPage.tsx`

@@ -175,6 +175,7 @@ def after_sales_dashboard(
             models.ShipmentLine.completed_at >= start,
             models.ShipmentLine.completed_at < end,
             models.ShipmentLine.is_archived.is_(False),
+            models.ShipmentLine.is_active.is_(True),
         )
         if channel:
             ship_total_q = ship_total_q.filter(models.ShipmentLine.channel == channel)
@@ -205,6 +206,7 @@ def after_sales_dashboard(
                 models.ShipmentLine.completed_at >= start,
                 models.ShipmentLine.completed_at < end,
                 models.ShipmentLine.is_archived.is_(False),
+                models.ShipmentLine.is_active.is_(True),
             )
             .group_by(ship_period_expr)
             .order_by(ship_period_expr)
@@ -322,6 +324,7 @@ def after_sales_dashboard(
                 models.ShipmentLine.completed_at >= start,
                 models.ShipmentLine.completed_at < end,
                 models.ShipmentLine.is_archived.is_(False),
+                models.ShipmentLine.is_active.is_(True),
                 models.ShipmentLine.sku_code.isnot(None),
             )
             .group_by(models.ShipmentLine.sku_code)
@@ -392,6 +395,7 @@ def after_sales_dashboard(
                 models.ShipmentLine.completed_at >= start,
                 models.ShipmentLine.completed_at < end,
                 models.ShipmentLine.is_archived.is_(False),
+                models.ShipmentLine.is_active.is_(True),
                 models.ShipmentLine.product_link_id.isnot(None),
             )
             .group_by(models.ShipmentLine.product_link_id)
@@ -488,6 +492,7 @@ def after_sales_dashboard(
                 models.ShipmentLine.completed_at >= start,
                 models.ShipmentLine.completed_at < end,
                 models.ShipmentLine.is_archived.is_(False),
+                models.ShipmentLine.is_active.is_(True),
             )
             .group_by(models.ProductModel.model_code, models.ProductModel.model_name)
         )
@@ -626,6 +631,7 @@ def after_sales_dashboard(
         models.ShipmentLine.completed_at >= start,
         models.ShipmentLine.completed_at < end,
         models.ShipmentLine.is_archived.is_(False),
+        models.ShipmentLine.is_active.is_(True),
     )
     if channel:
         ship_total_q = ship_total_q.filter(models.ShipmentLine.channel == channel)
@@ -651,6 +657,7 @@ def after_sales_dashboard(
         models.ShipmentLine.completed_at >= start,
         models.ShipmentLine.completed_at < end,
         models.ShipmentLine.is_archived.is_(False),
+        models.ShipmentLine.is_active.is_(True),
         models.AfterSalesLine.is_archived.is_(False),
     )
     if channel:
@@ -684,6 +691,7 @@ def after_sales_dashboard(
             models.ShipmentLine.completed_at >= start,
             models.ShipmentLine.completed_at < end,
             models.ShipmentLine.is_archived.is_(False),
+            models.ShipmentLine.is_active.is_(True),
             models.AfterSalesLine.is_archived.is_(False),
         )
     )
@@ -710,6 +718,7 @@ def after_sales_dashboard(
             models.ShipmentLine.completed_at >= start,
             models.ShipmentLine.completed_at < end,
             models.ShipmentLine.is_archived.is_(False),
+            models.ShipmentLine.is_active.is_(True),
             models.AfterSalesLine.is_archived.is_(False),
             models.AfterSalesLine.applied_at.isnot(None),
         )
@@ -802,6 +811,7 @@ def after_sales_dashboard(
         models.ShipmentLine.completed_at >= start,
         models.ShipmentLine.completed_at < end,
         models.ShipmentLine.is_archived.is_(False),
+        models.ShipmentLine.is_active.is_(True),
     )
     if channel:
         ship_model_cover_q = ship_model_cover_q.filter(models.ShipmentLine.channel == channel)
@@ -818,6 +828,7 @@ def after_sales_dashboard(
         models.ShipmentLine.completed_at >= start,
         models.ShipmentLine.completed_at < end,
         models.ShipmentLine.is_archived.is_(False),
+        models.ShipmentLine.is_active.is_(True),
     )
     if channel:
         ship_series_q = ship_series_q.filter(models.ShipmentLine.channel == channel)

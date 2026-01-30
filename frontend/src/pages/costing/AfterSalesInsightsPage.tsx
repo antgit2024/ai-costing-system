@@ -305,11 +305,10 @@ const AfterSalesInsightsPage = () => {
   const dashSeriesTail = dashSeries.slice(-dashPointsN)
   const shippedSpark = dashSeriesTail.map((x) => Number(x?.shipped_qty ?? 0))
   const returnedSpark = dashSeriesTail.map((x) => Number(x?.returned_qty ?? 0))
+  const shippedAmountSpark = dashSeriesTail.map((x) => Number(x?.shipped_amount ?? 0))
+  const refundAmountSpark = dashSeriesTail.map((x) => Number(x?.refund_amount ?? 0))
   const returnRateSpark = dashSeriesTail.map((x) => Number(x?.return_rate ?? 0) * 100)
-  const mappedRateSpark =
-    dashboardView === 'factory'
-      ? dashSeriesTail.map((x) => Number(x?.model_mapped_rate ?? 0) * 100)
-      : dashSeriesTail.map((x) => Number(x?.refund_rate ?? 0) * 100)
+  const mappedRateSpark = dashSeriesTail.map((x) => Number(x?.model_mapped_rate ?? 0) * 100)
 
   const dashboardHttpStatus = (dashboardQuery.error as any)?.response?.status as number | undefined
 
@@ -822,33 +821,48 @@ const AfterSalesInsightsPage = () => {
                     </Col>
                     <Col xs={24} lg={6}>
                       <Card size="small">
-                        <Statistic
-                          title="退货率(件)"
-                          value={Number((dashboardQuery.data as AfterSalesDashboardResponse | undefined)?.kpis?.return_rate ?? 0) * 100}
-                          precision={2}
-                          suffix="%"
-                        />
-                        <Sparkline values={returnRateSpark} stroke={opsStroke} />
+                        {dashboardView === 'ops' ? (
+                          <>
+                            <Statistic
+                              title="发货金额（发货完成）"
+                              value={formatMoney((dashboardQuery.data as AfterSalesDashboardResponse | undefined)?.kpis?.shipped_amount as any)}
+                            />
+                            <Sparkline values={shippedAmountSpark} stroke={opsStroke} />
+                          </>
+                        ) : (
+                          <>
+                            <Statistic
+                              title="退货率(件)"
+                              value={Number((dashboardQuery.data as AfterSalesDashboardResponse | undefined)?.kpis?.return_rate ?? 0) * 100}
+                              precision={2}
+                              suffix="%"
+                            />
+                            <Sparkline values={returnRateSpark} stroke={opsStroke} />
+                          </>
+                        )}
                       </Card>
                     </Col>
                     <Col xs={24} lg={6}>
                       <Card size="small">
-                        {dashboardView === 'factory' ? (
-                          <Statistic
-                            title="模型可归因覆盖率（发货）"
-                            value={Number((dashboardQuery.data as AfterSalesDashboardResponse | undefined)?.kpis?.model_mapped_rate ?? 0) * 100}
-                            precision={1}
-                            suffix="%"
-                          />
+                        {dashboardView === 'ops' ? (
+                          <>
+                            <Statistic
+                              title="退款金额（申请期全量）"
+                              value={formatMoney((dashboardQuery.data as AfterSalesDashboardResponse | undefined)?.kpis?.refund_amount as any)}
+                            />
+                            <Sparkline values={refundAmountSpark} stroke={opsStroke} />
+                          </>
                         ) : (
-                          <Statistic
-                            title="退款率(额)"
-                            value={Number((dashboardQuery.data as AfterSalesDashboardResponse | undefined)?.kpis?.refund_rate ?? 0) * 100}
-                            precision={2}
-                            suffix="%"
-                          />
+                          <>
+                            <Statistic
+                              title="模型可归因覆盖率（发货）"
+                              value={Number((dashboardQuery.data as AfterSalesDashboardResponse | undefined)?.kpis?.model_mapped_rate ?? 0) * 100}
+                              precision={1}
+                              suffix="%"
+                            />
+                            <Sparkline values={mappedRateSpark} stroke={factoryStroke} />
+                          </>
                         )}
-                        <Sparkline values={mappedRateSpark} stroke={dashboardView === 'factory' ? factoryStroke : opsStroke} />
                       </Card>
                     </Col>
                   </Row>
@@ -865,21 +879,31 @@ const AfterSalesInsightsPage = () => {
                           loading={dashboardQuery.isFetching}
                           dataSource={(dashboardQuery.data as AfterSalesDashboardResponse | undefined)?.series ?? []}
                           pagination={{ pageSize: 8, showSizeChanger: true }}
-                          columns={[
-                            { title: '周期', dataIndex: 'period', width: 160, ellipsis: true },
-                            { title: '发货', dataIndex: 'shipped_qty', width: 110 },
-                            { title: '退货', dataIndex: 'returned_qty', width: 110 },
-                            {
-                              title: '退货率',
-                              dataIndex: 'return_rate',
-                              width: 120,
-                              render: (v: any) => {
-                                const n = Number(v ?? 0)
-                                if (!Number.isFinite(n)) return '-'
-                                return `${(n * 100).toFixed(2)}%`
-                              },
-                            },
-                          ]}
+                          columns={
+                            dashboardView === 'ops'
+                              ? [
+                                  { title: '周期', dataIndex: 'period', width: 160, ellipsis: true },
+                                  { title: '发货(件)', dataIndex: 'shipped_qty', width: 110 },
+                                  { title: '退货(件)', dataIndex: 'returned_qty', width: 110 },
+                                  { title: '发货额', dataIndex: 'shipped_amount', width: 120, render: (v: any) => formatMoney(v) },
+                                  { title: '退款额', dataIndex: 'refund_amount', width: 120, render: (v: any) => formatMoney(v) },
+                                ]
+                              : [
+                                  { title: '周期', dataIndex: 'period', width: 160, ellipsis: true },
+                                  { title: '发货', dataIndex: 'shipped_qty', width: 110 },
+                                  { title: '退货', dataIndex: 'returned_qty', width: 110 },
+                                  {
+                                    title: '退货率',
+                                    dataIndex: 'return_rate',
+                                    width: 120,
+                                    render: (v: any) => {
+                                      const n = Number(v ?? 0)
+                                      if (!Number.isFinite(n)) return '-'
+                                      return `${(n * 100).toFixed(2)}%`
+                                    },
+                                  },
+                                ]
+                          }
                         />
                       </Card>
                     </Col>
@@ -931,57 +955,63 @@ const AfterSalesInsightsPage = () => {
                           loading={dashboardQuery.isFetching}
                           dataSource={(dashboardQuery.data as AfterSalesDashboardResponse | undefined)?.top_models ?? []}
                           pagination={{ pageSize: 8, showSizeChanger: true }}
-                          columns={[
-                            {
-                              title: '模型',
-                              key: 'model',
-                              ellipsis: true,
-                              render: (_: any, r: any) => {
-                                const main = `${r.model_code}${r.model_name ? ` ${r.model_name}` : ''}`
-                                const phrase = String(r.bundle_preset_phrase ?? '').trim()
-                                if (!phrase) return main
-                                const pillStyle: CSSProperties = {
-                                  display: 'inline-block',
-                                  padding: '0px 6px',
-                                  borderRadius: 6,
-                                  border: '1px solid',
-                                  borderColor: 'color-mix(in srgb, var(--ant-color-success) 45%, var(--ant-color-border))',
-                                  background: 'color-mix(in srgb, var(--ant-color-success) 18%, var(--ant-color-fill-tertiary))',
-                                  fontSize: 11,
-                                  lineHeight: '18px',
-                                  color: 'var(--ant-color-success)',
-                                  whiteSpace: 'nowrap',
-                                }
-                                return (
-                                  <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                                    <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                      {main}
+                          columns={
+                            [
+                              {
+                                title: '模型',
+                                key: 'model',
+                                ellipsis: true,
+                                render: (_: any, r: any) => {
+                                  const main = `${r.model_code}${r.model_name ? ` ${r.model_name}` : ''}`
+                                  const phrase = String(r.bundle_preset_phrase ?? '').trim()
+                                  if (!phrase) return main
+                                  const pillStyle: CSSProperties = {
+                                    display: 'inline-block',
+                                    padding: '0px 6px',
+                                    borderRadius: 6,
+                                    border: '1px solid',
+                                    borderColor: 'color-mix(in srgb, var(--ant-color-success) 45%, var(--ant-color-border))',
+                                    background: 'color-mix(in srgb, var(--ant-color-success) 18%, var(--ant-color-fill-tertiary))',
+                                    fontSize: 11,
+                                    lineHeight: '18px',
+                                    color: 'var(--ant-color-success)',
+                                    whiteSpace: 'nowrap',
+                                  }
+                                  return (
+                                    <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                                      <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                        {main}
+                                      </span>
+                                      <Tooltip title={phrase}>
+                                        <span style={pillStyle}>{phrase}</span>
+                                      </Tooltip>
                                     </span>
-                                    <Tooltip title={phrase}>
-                                      <span style={pillStyle}>{phrase}</span>
-                                    </Tooltip>
-                                  </span>
-                                )
+                                  )
+                                },
                               },
-                            },
-                            { title: '发货', dataIndex: 'shipped_qty', width: 110 },
-                            { title: '退货', dataIndex: 'returned_qty', width: 110 },
-                            {
-                              title: '退货率',
-                              dataIndex: 'return_rate',
-                              width: 160,
-                              render: (v: any) => {
-                                const n = Number(v ?? 0) * 100
-                                return (
-                                  <Progress
-                                    percent={Number.isFinite(n) ? Number(n.toFixed(2)) : 0}
-                                    size="small"
-                                    strokeColor={dashboardView === 'ops' ? opsStroke : factoryStroke}
-                                  />
-                                )
-                              },
-                            },
-                          ]}
+                              { title: '发货', dataIndex: 'shipped_qty', width: 110 },
+                              { title: '退货', dataIndex: 'returned_qty', width: 110 },
+                              ...(dashboardView === 'ops'
+                                ? []
+                                : [
+                                    {
+                                      title: '退货率',
+                                      dataIndex: 'return_rate',
+                                      width: 160,
+                                      render: (v: any) => {
+                                        const n = Number(v ?? 0) * 100
+                                        return (
+                                          <Progress
+                                            percent={Number.isFinite(n) ? Number(n.toFixed(2)) : 0}
+                                            size="small"
+                                            strokeColor={factoryStroke}
+                                          />
+                                        )
+                                      },
+                                    },
+                                  ]),
+                            ] as any
+                          }
                           onRow={(r: any) => ({
                             onClick: async () => {
                               form.setFieldsValue({ model_code: String(r.model_code || '') })
@@ -1006,27 +1036,33 @@ const AfterSalesInsightsPage = () => {
                                   loading={dashboardQuery.isFetching}
                                   dataSource={(dashboardQuery.data as AfterSalesDashboardResponse | undefined)?.top_skus ?? []}
                                   pagination={{ pageSize: 8, showSizeChanger: true }}
-                                  columns={[
-                                    { title: 'SKU', dataIndex: 'sku_code', width: 150, ellipsis: true },
-                                    { title: '规格（最常见）', dataIndex: 'spec_text', ellipsis: true },
-                                    { title: '发货', dataIndex: 'shipped_qty', width: 110 },
-                                    { title: '退货', dataIndex: 'returned_qty', width: 110 },
-                                    {
-                                      title: '退货率',
-                                      dataIndex: 'return_rate',
-                                      width: 160,
-                                      render: (v: any) => {
-                                        const n = Number(v ?? 0) * 100
-                                        return (
-                                          <Progress
-                                            percent={Number.isFinite(n) ? Number(n.toFixed(2)) : 0}
-                                            size="small"
-                                            strokeColor={dashboardView === 'ops' ? opsStroke : factoryStroke}
-                                          />
-                                        )
-                                      },
-                                    },
-                                  ]}
+                                  columns={
+                                    [
+                                      { title: 'SKU', dataIndex: 'sku_code', width: 150, ellipsis: true },
+                                      { title: '规格（最常见）', dataIndex: 'spec_text', ellipsis: true },
+                                      { title: '发货', dataIndex: 'shipped_qty', width: 110 },
+                                      { title: '退货', dataIndex: 'returned_qty', width: 110 },
+                                      ...(dashboardView === 'ops'
+                                        ? []
+                                        : [
+                                            {
+                                              title: '退货率',
+                                              dataIndex: 'return_rate',
+                                              width: 160,
+                                              render: (v: any) => {
+                                                const n = Number(v ?? 0) * 100
+                                                return (
+                                                  <Progress
+                                                    percent={Number.isFinite(n) ? Number(n.toFixed(2)) : 0}
+                                                    size="small"
+                                                    strokeColor={factoryStroke}
+                                                  />
+                                                )
+                                              },
+                                            },
+                                          ]),
+                                    ] as any
+                                  }
                                   onRow={(r: any) => ({
                                     onClick: async () => {
                                       form.setFieldsValue({ sku_code: String(r.sku_code || '') })
@@ -1047,7 +1083,8 @@ const AfterSalesInsightsPage = () => {
                                   loading={dashboardQuery.isFetching}
                                   dataSource={(dashboardQuery.data as AfterSalesDashboardResponse | undefined)?.top_links ?? []}
                                   pagination={{ pageSize: 8, showSizeChanger: true }}
-                                  columns={[
+                                  columns={
+                                    [
                                     {
                                       title: '链接ID',
                                       dataIndex: 'product_link_id',
@@ -1067,22 +1104,27 @@ const AfterSalesInsightsPage = () => {
                                     { title: '规格（最常见）', dataIndex: 'spec_text', ellipsis: true },
                                     { title: '发货', dataIndex: 'shipped_qty', width: 110 },
                                     { title: '退货', dataIndex: 'returned_qty', width: 110 },
-                                    {
-                                      title: '退货率',
-                                      dataIndex: 'return_rate',
-                                      width: 160,
-                                      render: (v: any) => {
-                                        const n = Number(v ?? 0) * 100
-                                        return (
-                                          <Progress
-                                            percent={Number.isFinite(n) ? Number(n.toFixed(2)) : 0}
-                                            size="small"
-                                            strokeColor={dashboardView === 'ops' ? opsStroke : factoryStroke}
-                                          />
-                                        )
-                                      },
-                                    },
-                                  ]}
+                                    ...(dashboardView === 'ops'
+                                      ? []
+                                      : [
+                                          {
+                                            title: '退货率',
+                                            dataIndex: 'return_rate',
+                                            width: 160,
+                                            render: (v: any) => {
+                                              const n = Number(v ?? 0) * 100
+                                              return (
+                                                <Progress
+                                                  percent={Number.isFinite(n) ? Number(n.toFixed(2)) : 0}
+                                                  size="small"
+                                                  strokeColor={factoryStroke}
+                                                />
+                                              )
+                                            },
+                                          },
+                                        ]),
+                                    ] as any
+                                  }
                                   onRow={(r: any) => ({
                                     onClick: async () => {
                                       form.setFieldsValue({ product_link_id: String(r.product_link_id || '') })

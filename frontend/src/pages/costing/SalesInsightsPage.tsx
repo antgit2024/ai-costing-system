@@ -63,6 +63,14 @@ const formatDateToDay = (raw?: string | null) => {
   return d.format('YYYY-MM-DD')
 }
 
+const formatDateTime = (raw?: string | null) => {
+  if (!raw) return '-'
+  const s = String(raw)
+  const d = dayjs(s)
+  if (!d.isValid()) return s
+  return d.format('YYYY-MM-DD HH:mm:ss')
+}
+
 type SalesInsightsPageProps = {
   embedded?: boolean
 }
@@ -742,16 +750,6 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
         />
       ) : null}
 
-      {!embedded && useSnapshot && dashboardComputedAt ? (
-        <Alert
-          type="success"
-          showIcon
-          style={{ marginBottom: 12 }}
-          message="利润看板（缓存）"
-          description={<span>数据更新时间：{dashboardComputedAt}</span>}
-        />
-      ) : null}
-
       <Card size="small">
         {embedded ? (
           <>
@@ -796,6 +794,9 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
                   <>
                   <div style={{ marginBottom: 12 }}>
                     <Space wrap>
+                      {useSnapshot && dashboardComputedAt ? (
+                        <Typography.Text type="secondary">数据更新时间：{formatDateTime(dashboardComputedAt)}</Typography.Text>
+                      ) : null}
                       <Typography.Text type="secondary">时间口径：按发货完成时间（成本口径一致）</Typography.Text>
                     </Space>
                   </div>
@@ -1121,25 +1122,21 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
                   <>
                     {linesView !== 'list' ? (
                       <>
-                        <Alert
-                          type="info"
-                          showIcon
-                          style={{ marginBottom: 12 }}
-                          message={linesView === 'rank_profit' ? 'Top 赚钱货品（前100，按毛利额）' : 'Top 亏损货品（前100，按毛利额）'}
-                          description={
-                            <Space wrap>
-                              <span>点击行查看该 SKU 的销售明细（本页内分析）</span>
-                              <Button
-                                size="small"
-                                onClick={() => {
-                                  setLinesView('list')
-                                }}
-                              >
-                                切回明细行列表
-                              </Button>
-                            </Space>
-                          }
-                        />
+                        <div style={{ marginBottom: 12 }}>
+                          <Space wrap>
+                            <Typography.Text strong>
+                              {linesView === 'rank_profit' ? 'Top 赚钱货品（前100，按毛利额）' : 'Top 亏损货品（前100，按毛利额）'}
+                            </Typography.Text>
+                            <Button
+                              size="small"
+                              onClick={() => {
+                                setLinesView('list')
+                              }}
+                            >
+                              切回明细行列表
+                            </Button>
+                          </Space>
+                        </div>
                         <Table<SalesProfitDashboardTopSkuItem>
                           rowKey={(r) => `${r.sku_code}-${String(r.spec_text ?? '')}`}
                           size="small"

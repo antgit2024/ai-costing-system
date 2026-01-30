@@ -836,6 +836,7 @@
         - 明细默认 `page_size=100`（更符合“运营看列表”的使用方式）
         - “更多排名”不再弹窗，改为直接切换到“销售明细”TAB展示 Top100（赚钱/亏损）排行
         - 排行表点击行不再跳台账：改为回到“销售明细-明细行列表”，并自动带入 SKU 条码筛选立即查询；需要排查单笔时再点“去台账”
+        - “数据更新时间”提示移入看板内部并改为纯文本（无 Alert 底框/标题），放在“时间口径...”前
       - `frontend/src/types/planner.ts`：`SalesLineItem` 增加 `bound_model_code/bound_model_name`
     - 后端：
       - `backend/src/planner/services/analytics_service.py`：`sales_lines` 通过 `sku_code -> active mapping` 回填 `bound_model_code/bound_model_name`

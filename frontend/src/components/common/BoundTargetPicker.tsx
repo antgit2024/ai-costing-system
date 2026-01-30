@@ -102,8 +102,8 @@ const BoundTargetPicker = ({ value, onChange, size = 'small', allowAny = true, c
   const bundleTemplateOptions = useMemo(() => {
     return bundleTemplates
       .map((t) => ({
-        label: `${String((t as any)?.template_code ?? '').trim()} ${String((t as any)?.name ?? '').trim()}`.trim(),
-        value: String((t as any)?.template_code ?? '').trim().toUpperCase(),
+        label: `${String((t as any)?.code ?? '').trim()} ${String((t as any)?.name ?? '').trim()}`.trim(),
+        value: String((t as any)?.code ?? '').trim().toUpperCase(),
       }))
       .filter((x) => x.value)
   }, [bundleTemplates])
@@ -111,7 +111,7 @@ const BoundTargetPicker = ({ value, onChange, size = 'small', allowAny = true, c
   const selectedBundleTemplate = useMemo(() => {
     const code = String(value.bundle_template_code ?? '').trim().toUpperCase()
     if (!code) return null
-    return bundleTemplates.find((t: any) => String(t?.template_code ?? '').trim().toUpperCase() === code) || null
+    return bundleTemplates.find((t: any) => String(t?.code ?? '').trim().toUpperCase() === code) || null
   }, [bundleTemplates, value.bundle_template_code])
 
   const bundleSelectorOptions = useMemo(() => {
@@ -200,7 +200,7 @@ const BoundTargetPicker = ({ value, onChange, size = 'small', allowAny = true, c
             value={value.bundle_template_code ? String(value.bundle_template_code).trim().toUpperCase() : undefined}
             onChange={(code) => {
               const tpl = String(code ?? '').trim().toUpperCase() || undefined
-              const t = bundleTemplates.find((x: any) => String(x?.template_code ?? '').trim().toUpperCase() === tpl)
+              const t = bundleTemplates.find((x: any) => String(x?.code ?? '').trim().toUpperCase() === tpl)
               setValue({
                 kind: 'bundle',
                 bundle_template_code: tpl,

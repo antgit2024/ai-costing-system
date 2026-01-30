@@ -118,9 +118,10 @@ const Sparkline = ({
 }
 
 const AfterSalesInsightsPage = () => {
+  const DEBUG_DEFAULT_CUSTOM_RANGE: [dayjs.Dayjs, dayjs.Dayjs] = [dayjs('2025-12-01'), dayjs('2025-12-31')]
   const [form] = Form.useForm()
   const [activeTab, setActiveTab] = useState<'dashboard' | 'rate' | 'detail'>('dashboard')
-  const [periodMode, setPeriodMode] = useState<'day' | 'week' | 'month' | 'custom'>('week')
+  const [periodMode, setPeriodMode] = useState<'day' | 'week' | 'month' | 'custom'>('custom')
   const [anchorDate, setAnchorDate] = useState(() => dayjs().subtract(1, 'week').startOf('isoWeek'))
   const [dashboardView, setDashboardView] = useState<'ops' | 'factory'>('factory')
   const [dashboardAutoLoad, setDashboardAutoLoad] = useState(false)
@@ -473,13 +474,10 @@ const AfterSalesInsightsPage = () => {
       const raw = typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_KEY) : null
       if (raw) {
         const saved = JSON.parse(raw || '{}') as any
-        const start = String(saved?.start ?? '').trim()
-        const end = String(saved?.end ?? '').trim()
         const groupBy = (String(saved?.group_by ?? 'month').trim() as GroupBy) || 'month'
-        const range: [dayjs.Dayjs, dayjs.Dayjs] = [
-          dayjs(start || dayjs().subtract(30, 'day').startOf('day').toISOString()),
-          dayjs(end || dayjs().endOf('day').toISOString()),
-        ]
+        // 固定默认“自定义”范围，方便验证历史数据（近期可能未导入）
+        setPeriodMode('custom')
+        const range: [dayjs.Dayjs, dayjs.Dayjs] = DEBUG_DEFAULT_CUSTOM_RANGE
         form.setFieldsValue({
           group_by: groupBy,
           range,
@@ -487,10 +485,11 @@ const AfterSalesInsightsPage = () => {
           sku_code: saved?.sku_code ?? undefined,
         })
       } else {
-        // default: auto preview last 30 days (lightweight)
+        // default: fixed debug range for easier verification
+        setPeriodMode('custom')
         form.setFieldsValue({
           group_by: 'month',
-          range: [dayjs().subtract(30, 'day'), dayjs()],
+          range: DEBUG_DEFAULT_CUSTOM_RANGE,
         })
       }
     } catch {

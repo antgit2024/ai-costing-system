@@ -126,6 +126,7 @@ type SalesPeriodMode = 'day' | 'week' | 'month' | 'custom'
 
 const SalesInsightsPage = (props: SalesInsightsPageProps) => {
   const embedded = !!props.embedded
+  const DEBUG_DEFAULT_CUSTOM_RANGE: [dayjs.Dayjs, dayjs.Dayjs] = [dayjs('2025-12-01'), dayjs('2025-12-31')]
   const navigate = useNavigate()
   const location = useLocation()
   const [form] = Form.useForm()
@@ -139,7 +140,7 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
   const [shopOptions, setShopOptions] = useState<string[]>([])
   const [useSnapshot] = useState(true)
   const [dashboardComputedAt, setDashboardComputedAt] = useState<string | null>(null)
-  const [periodMode, setPeriodMode] = useState<SalesPeriodMode>('day')
+  const [periodMode, setPeriodMode] = useState<SalesPeriodMode>('custom')
   const [anchorDate, setAnchorDate] = useState(() => dayjs().subtract(1, 'day').startOf('day'))
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [boundTarget, setBoundTarget] = useState<BoundTargetPickerValue>({ kind: 'any' })
@@ -618,22 +619,13 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
     const applyAndQuery = async () => {
       try {
         const raw = typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_KEY) : null
-        if (!raw) {
-          // default: show last 30 days on dashboard
-          form.setFieldsValue({ range: [dayjs().subtract(30, 'day'), dayjs()] })
-          return
-        }
-        const saved = JSON.parse(raw || '{}') as any
-        const start = String(saved?.start ?? '').trim()
-        const end = String(saved?.end ?? '').trim()
+        const saved = raw ? (JSON.parse(raw || '{}') as any) : ({} as any)
         const nextPageSize = Number(saved?.page_size)
         if (Number.isFinite(nextPageSize) && nextPageSize > 0) setPageSize(nextPageSize)
-        // include_missing is fixed to true (no toggle)
 
-        const range: [dayjs.Dayjs, dayjs.Dayjs] = [
-          dayjs(start || dayjs().subtract(30, 'day').startOf('day').toISOString()),
-          dayjs(end || dayjs().endOf('day').toISOString()),
-        ]
+        // 固定默认“自定义”范围，方便验证历史数据（近期可能未导入）
+        setPeriodMode('custom')
+        const range: [dayjs.Dayjs, dayjs.Dayjs] = DEBUG_DEFAULT_CUSTOM_RANGE
         form.setFieldsValue({
           range,
           shop: saved?.channel ?? undefined,
@@ -654,7 +646,8 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
         }
         setLastQuery(base)
       } catch {
-        form.setFieldsValue({ range: [dayjs().subtract(30, 'day'), dayjs()] })
+        setPeriodMode('custom')
+        form.setFieldsValue({ range: DEBUG_DEFAULT_CUSTOM_RANGE })
       }
     }
 

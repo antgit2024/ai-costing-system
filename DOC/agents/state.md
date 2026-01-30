@@ -844,6 +844,12 @@
         - 时间选择修复：周/月选择展示“所选周期本身”，避免出现“选12月但显示11月导致销售额=0”的冲突
         - 销售看板接口支持 `group_by=day`（用于按日趋势）
         - KPI“成本覆盖率”卡片移除占比条，仅保留曲线；“x / y”以小字跟在覆盖率百分比后展示
+        - 临时校验口径：默认“自定义”范围固定为 `2025-12-01 ~ 2025-12-31`（近期无数据时便于检验）
+      - `frontend/src/pages/costing/AfterSalesInsightsPage.tsx`
+        - 临时校验口径：默认“自定义”范围固定为 `2025-12-01 ~ 2025-12-31`
+      - `frontend/src/pages/costing/ProfitInsightsPage.tsx`
+        - 临时校验口径：默认日期范围固定为 `2025-12-01 ~ 2025-12-31`
+        - 默认切到“实时计算”（快照仅支持近 N 天，无法固定到历史月份）
       - `frontend/src/types/planner.ts`：`SalesLineItem` 增加 `bound_model_code/bound_model_name`
     - 后端：
       - `backend/src/planner/services/analytics_service.py`：`sales_lines` 通过 `sku_code -> active mapping` 回填 `bound_model_code/bound_model_name`

@@ -53,6 +53,7 @@ const formatCoveragePercent = (num: number, den: number) => {
 }
 
 const ProfitInsightsPage = () => {
+  const DEBUG_DEFAULT_RANGE: [dayjs.Dayjs, dayjs.Dayjs] = [dayjs('2025-12-01'), dayjs('2025-12-31')]
   const [form] = Form.useForm()
   const [loadingSummary, setLoadingSummary] = useState(false)
   const [loadingDetail, setLoadingDetail] = useState(false)
@@ -61,7 +62,8 @@ const ProfitInsightsPage = () => {
   const [selectedModelCode, setSelectedModelCode] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const didInitRef = useRef(false)
-  const [useSnapshot, setUseSnapshot] = useState(true)
+  // 默认走实时：当前用于固定历史月份校验（快照仅支持近N天）
+  const [useSnapshot, setUseSnapshot] = useState(false)
   const [quickDays, setQuickDays] = useState<7 | 30 | 90>(30)
   const [computedAt, setComputedAt] = useState<string | null>(null)
 
@@ -165,19 +167,12 @@ const ProfitInsightsPage = () => {
 
     try {
       const raw = typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_KEY) : null
-      if (raw) {
-        const saved = JSON.parse(raw || '{}') as any
-        const start = String(saved?.start ?? '').trim()
-        const end = String(saved?.end ?? '').trim()
-        const range: [dayjs.Dayjs, dayjs.Dayjs] = [
-          dayjs(start || dayjs().subtract(30, 'day').startOf('day').toISOString()),
-          dayjs(end || dayjs().endOf('day').toISOString()),
-        ]
-        form.setFieldsValue({
-          range,
-          channel: saved?.channel ?? undefined,
-        })
-      }
+      const saved = raw ? (JSON.parse(raw || '{}') as any) : ({} as any)
+      // 固定默认范围，方便验证历史数据（近期可能未导入）
+      form.setFieldsValue({
+        range: DEBUG_DEFAULT_RANGE,
+        channel: saved?.channel ?? undefined,
+      })
     } catch {
       // ignore
     }

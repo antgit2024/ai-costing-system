@@ -134,6 +134,7 @@ def get_sales_profit_dashboard_snapshot(
     start: Optional[str] = Query(None, description="可选：显式开始时间（ISO8601，UTC 或含时区）"),
     end: Optional[str] = Query(None, description="可选：显式结束时间（ISO8601，UTC 或含时区）"),
     group_by: Literal["week", "month"] = Query("week"),
+    top_n: int = Query(12, ge=5, le=200, description="Top 排名条数（影响 top_skus/top_models）"),
     channel: Optional[str] = Query(None),
     db: Session = Depends(get_db_session),
 ):
@@ -144,6 +145,7 @@ def get_sales_profit_dashboard_snapshot(
         "start": st.isoformat() if st else None,
         "end": ed.isoformat() if ed else None,
         "group_by": group_by,
+        "top_n": int(top_n),
         "channel": (channel or "").strip() or None,
     }
     key = report_snapshot_service.snapshot_key("insights.sales_profit_dashboard", params)
@@ -159,6 +161,7 @@ def refresh_sales_profit_dashboard_snapshot(
     start: Optional[str] = Query(None),
     end: Optional[str] = Query(None),
     group_by: Literal["week", "month"] = Query("week"),
+    top_n: int = Query(12, ge=5, le=200),
     channel: Optional[str] = Query(None),
     operator_id: Optional[str] = Query(None),
     db: Session = Depends(get_db_session),
@@ -177,6 +180,7 @@ def refresh_sales_profit_dashboard_snapshot(
         "start": st.isoformat() if st else None,
         "end": ed.isoformat() if ed else None,
         "group_by": group_by,
+        "top_n": int(top_n),
         "channel": (channel or "").strip() or None,
     }
     payload = analytics_service.sales_profit_dashboard(
@@ -185,7 +189,7 @@ def refresh_sales_profit_dashboard_snapshot(
         end=end_dt,
         group_by=group_by,
         channel=params["channel"],
-        top_n=12,
+        top_n=int(top_n),
     )
     key = report_snapshot_service.snapshot_key("insights.sales_profit_dashboard", params)
     snap = report_snapshot_service.upsert_snapshot(db, key=key, data=payload, params=params, operator_id=operator_id)

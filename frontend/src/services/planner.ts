@@ -1591,6 +1591,7 @@ export const fetchSalesProfitDashboardSnapshot = async (params: {
   start?: string
   end?: string
   group_by?: 'week' | 'month'
+  top_n?: number
   channel?: string
 } = {}): Promise<ReportSnapshotEnvelope<any>> => {
   const resp = await plannerClient.get('/reports/insights/sales-profit-dashboard', { params: sanitizeParams(params as any) })
@@ -1602,6 +1603,7 @@ export const refreshSalesProfitDashboardSnapshot = async (params: {
   start?: string
   end?: string
   group_by?: 'week' | 'month'
+  top_n?: number
   channel?: string
   operator_id?: string
 } = {}): Promise<{ key: string; computed_at: string; params: Record<string, any> }> => {

@@ -6,6 +6,7 @@ import {
   DatePicker,
   Form,
   Input,
+  Modal,
   Progress,
   Row,
   Segmented,
@@ -84,6 +85,8 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
   const [periodMode, setPeriodMode] = useState<SalesPeriodMode>('day')
   const [anchorDate, setAnchorDate] = useState(() => dayjs().subtract(1, 'day').startOf('day'))
   const [showAdvanced, setShowAdvanced] = useState(false)
+  const [topModalOpen, setTopModalOpen] = useState(false)
+  const [topModalKind, setTopModalKind] = useState<'profit' | 'loss'>('profit')
   const [lastQuery, setLastQuery] = useState<{
     start: string
     end: string
@@ -157,6 +160,7 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
             start: String(rangeStartIso),
             end: String(rangeEndIso),
             group_by: dashboardGroupBy,
+            top_n: 12,
             channel,
           })
           setDashboardComputedAt(String((snap as any)?.computed_at ?? '') || null)
@@ -193,6 +197,7 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
         start: String(rangeStartIso),
         end: String(rangeEndIso),
         group_by: dashboardGroupBy,
+        top_n: 12,
         channel,
         operator_id: 'planner-ui',
       })
@@ -202,6 +207,47 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
       message.error(`刷新失败：${e?.response?.data?.detail ?? e?.message ?? 'unknown error'}`)
     }
   }
+
+  const top100Query = useQuery({
+    queryKey: ['sales', 'profit-dashboard', 'top100', rangeStartIso, rangeEndIso, watchedShop, dashboardGroupBy, topModalKind],
+    enabled: !embedded && topModalOpen && !!rangeStartIso && !!rangeEndIso,
+    queryFn: async () => {
+      const channel = watchedShop?.trim() || undefined
+      try {
+        const snap = await fetchSalesProfitDashboardSnapshot({
+          start: String(rangeStartIso),
+          end: String(rangeEndIso),
+          group_by: dashboardGroupBy,
+          top_n: 100,
+          channel,
+        })
+        return snap.data as SalesProfitDashboardResponse
+      } catch (e: any) {
+        const status = Number(e?.response?.status)
+        if (status === 404) {
+          await refreshSalesProfitDashboardSnapshot({
+            start: String(rangeStartIso),
+            end: String(rangeEndIso),
+            group_by: dashboardGroupBy,
+            top_n: 100,
+            channel,
+            operator_id: 'planner-ui',
+          })
+          const snap2 = await fetchSalesProfitDashboardSnapshot({
+            start: String(rangeStartIso),
+            end: String(rangeEndIso),
+            group_by: dashboardGroupBy,
+            top_n: 100,
+            channel,
+          })
+          return snap2.data as SalesProfitDashboardResponse
+        }
+        throw e
+      }
+    },
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+  })
 
   const navigateToShipmentsProcessed = (params: { sku_code?: string; bundle_template_code?: string; bundle_preset_selector?: string }) => {
     const qp = new URLSearchParams()
@@ -645,6 +691,61 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
         />
       ) : null}
 
+      {!embedded ? (
+        <Modal
+          width={980}
+          open={topModalOpen}
+          onCancel={() => setTopModalOpen(false)}
+          footer={null}
+          title={topModalKind === 'profit' ? '更多排名：Top 赚钱货品（前100）' : '更多排名：Top 亏损货品（前100）'}
+        >
+          <Table<SalesProfitDashboardTopSkuItem>
+            rowKey={(r) => `${r.sku_code}-${String(r.spec_text ?? '')}`}
+            size="small"
+            loading={top100Query.isFetching}
+            pagination={{ pageSize: 100, showSizeChanger: false }}
+            dataSource={
+              topModalKind === 'profit'
+                ? ((top100Query.data as SalesProfitDashboardResponse | undefined)?.top_skus_profit ?? [])
+                : ((top100Query.data as SalesProfitDashboardResponse | undefined)?.top_skus_loss ?? [])
+            }
+            columns={[
+              {
+                title: '排名',
+                width: 70,
+                render: (_v, _r, idx) => idx + 1,
+              },
+              { title: 'SKU', dataIndex: 'sku_code', width: 160, ellipsis: true },
+              { title: '规格（最常见）', dataIndex: 'spec_text', ellipsis: true },
+              { title: '发货件数', dataIndex: 'shipped_qty', width: 110, render: (v: any) => formatQty(v) },
+              { title: '销售额', dataIndex: 'revenue_amount', width: 120, render: (v: any) => formatMoney(v) },
+              { title: '成本', dataIndex: 'cost_amount', width: 120, render: (v: any) => formatMoney(v) },
+              {
+                title: '毛利',
+                dataIndex: 'gross_profit',
+                width: 120,
+                render: (v: any) => (
+                  <Typography.Text type={Number(v ?? 0) < 0 ? 'danger' : undefined}>{formatMoney(v)}</Typography.Text>
+                ),
+              },
+              {
+                title: '毛利率',
+                dataIndex: 'gross_margin',
+                width: 110,
+                render: (v: any) => (v == null ? '-' : `${(Number(v) * 100).toFixed(2)}%`),
+              },
+            ]}
+            onRow={(r) => ({
+              onClick: () => {
+                const sku = String(r?.sku_code ?? '').trim()
+                if (!sku) return
+                navigateToShipmentsProcessed({ sku_code: sku })
+              },
+            })}
+          />
+        </Modal>
+      ) : null}
+
       <Card size="small">
         {embedded ? (
           <>
@@ -747,7 +848,22 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
 
                   <Row gutter={[12, 12]}>
                     <Col xs={24} lg={12}>
-                      <Card size="small" title="Top 赚钱货品（毛利额最高，已计价）">
+                      <Card
+                        size="small"
+                        title="Top 赚钱货品（毛利额最高，已计价）"
+                        extra={
+                          <Button
+                            type="link"
+                            size="small"
+                            onClick={() => {
+                              setTopModalKind('profit')
+                              setTopModalOpen(true)
+                            }}
+                          >
+                            更多排名
+                          </Button>
+                        }
+                      >
                         <Table
                           rowKey={(r: any) => String(r.sku_code)}
                           size="small"
@@ -785,7 +901,22 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
                       </Card>
                     </Col>
                     <Col xs={24} lg={12}>
-                      <Card size="small" title="Top 亏损货品（毛利额最低，已计价）">
+                      <Card
+                        size="small"
+                        title="Top 亏损货品（毛利额最低，已计价）"
+                        extra={
+                          <Button
+                            type="link"
+                            size="small"
+                            onClick={() => {
+                              setTopModalKind('loss')
+                              setTopModalOpen(true)
+                            }}
+                          >
+                            更多排名
+                          </Button>
+                        }
+                      >
                         <Table
                           rowKey={(r: any) => String(r.sku_code)}
                           size="small"

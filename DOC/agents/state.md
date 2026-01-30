@@ -133,6 +133,8 @@
     - `backend/src/planner/routers/reports.py`
     - `frontend/src/services/planner.ts`
     - `frontend/src/pages/costing/SalesInsightsPage.tsx`
+  - 下一步：
+    - Top 赚钱/亏损货品支持“更多排名”弹窗（Top100 列表），并尽量走快照（夜间预处理/按需刷新）。
 
 - **最近校对（北京时间 GMT+8）**：2026-01-30（发货台账：模型/套装筛选改为可复用“目标选择器”）
   - 背景：多个页面（发货台账/售后/作业中心等）的“模型/套装下拉”因远程搜索/二级选择分散在各页，容易出现“下拉不好用/状态互相打架”。

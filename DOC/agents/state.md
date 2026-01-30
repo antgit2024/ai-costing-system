@@ -843,7 +843,7 @@
         - 利润看板 4 个 KPI 卡片增加趋势 Sparkline（近7点/近12点）
         - 时间选择修复：周/月选择展示“所选周期本身”，避免出现“选12月但显示11月导致销售额=0”的冲突
         - 销售看板接口支持 `group_by=day`（用于按日趋势）
-        - KPI“成本覆盖率”卡片移除占比条，仅保留曲线；“缺成本行 x / y”改为与 KPI 数字一致的展示风格
+        - KPI“成本覆盖率”卡片移除占比条，仅保留曲线；“x / y”以小字跟在覆盖率百分比后展示
       - `frontend/src/types/planner.ts`：`SalesLineItem` 增加 `bound_model_code/bound_model_name`
     - 后端：
       - `backend/src/planner/services/analytics_service.py`：`sales_lines` 通过 `sku_code -> active mapping` 回填 `bound_model_code/bound_model_name`

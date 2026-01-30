@@ -1014,17 +1014,21 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
                         <Statistic
                           title="成本覆盖率（按销售额）"
                           value={Number((Number((dashboardQuery.data as any)?.kpis?.costed_revenue_rate ?? 0) * 100).toFixed(1))}
-                          precision={1}
-                          suffix="%"
+                          formatter={(v) => {
+                            const missing = Number((dashboardQuery.data as any)?.kpis?.lines_missing_costing ?? 0)
+                            const total = Number((dashboardQuery.data as any)?.kpis?.shipment_lines_total ?? 0)
+                            const vv = Number(v ?? 0)
+                            return (
+                              <span>
+                                {Number.isFinite(vv) ? vv.toFixed(1) : String(v ?? '-')}%
+                                <Typography.Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>
+                                  {missing} / {total}
+                                </Typography.Text>
+                              </span>
+                            )
+                          }}
                         />
                         <Sparkline values={coverageSpark} height={28} stroke="var(--ant-color-primary, #1677ff)" />
-                        <Statistic
-                          title="缺成本行"
-                          value={`${Number((dashboardQuery.data as any)?.kpis?.lines_missing_costing ?? 0)} / ${Number(
-                            (dashboardQuery.data as any)?.kpis?.shipment_lines_total ?? 0,
-                          )}`}
-                          formatter={(v) => <span style={{ fontSize: 20, fontWeight: 600 }}>{String(v ?? '-')}</span>}
-                        />
                       </Card>
                     </Col>
                   </Row>

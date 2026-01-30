@@ -27,6 +27,7 @@
     - **快照重建（清空→再生成）**：用于“找出需要处理的发货行（绑定变更/解绑/已清空待重建）→ 定向清空（让报表忽略旧快照）→ 修好绑定后回到待生成生成新快照”，面向“需要把快照从业务口径里先剔除再重建”的场景。
   - 本轮产物（前端）：
     - `frontend/src/pages/costing/shipment-ops/components/BatchWorkbench.tsx`
+        - 批次统计口径澄清：新增展示“跳过(重复)”并将“异常”改名为“待处理”，避免误以为导入失败
       - “快照重建”TAB 改为基于 `GET /api/planner/shipments/lines` 的 **发货行列表**（而非快照列表），并提供：
         - 范围切换：`需重建（绑定变更/解绑）`（`need_rebuild_snapshot=true`）/ `已清空待重建`（`unresolved_reason=SNAPSHOT_CLEARED`）
         - 筛选：日期区间（`start/end`）、绑定类型（模型/套装）、绑定关键字、交易规格模糊、商家编码下拉、重建原因下拉（含“解绑但仍有快照”）

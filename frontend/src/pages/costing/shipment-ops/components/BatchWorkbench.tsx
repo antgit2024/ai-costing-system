@@ -548,8 +548,9 @@ export default function BatchWorkbench(props: { onOpenImport: () => void }) {
         },
       },
       { title: '总行', dataIndex: 'total_rows', width: 90 },
-      { title: '写入', dataIndex: 'inserted_rows', width: 90 },
-      { title: '异常', dataIndex: 'exception_rows', width: 90 },
+      { title: '写入(新增)', dataIndex: 'inserted_rows', width: 100 },
+      { title: '跳过(重复)', dataIndex: 'skipped_rows', width: 110 },
+      { title: '待处理', dataIndex: 'exception_rows', width: 90 },
     ],
     [],
   )
@@ -1363,8 +1364,18 @@ function DescriptionsBlock(props: { batch?: ShipmentImportBatch | null }) {
           <Card size="small" title="统计">
             <Space size={10} wrap>
               <Tag>总行 {Number((b as any)?.total_rows ?? 0) || 0}</Tag>
-              <Tag color="green">写入 {Number((b as any)?.inserted_rows ?? 0) || 0}</Tag>
-              <Tag color="red">异常 {Number((b as any)?.exception_rows ?? 0) || 0}</Tag>
+              <Tag color="green" title="成功写入数据库的新增发货行（去重后）">
+                写入(新增) {Number((b as any)?.inserted_rows ?? 0) || 0}
+              </Tag>
+              <Tag title="与历史已存在行重复（同一 shipment_no+sku+规格+数量+金额）则跳过写入">
+                跳过(重复) {Number((b as any)?.skipped_rows ?? 0) || 0}
+              </Tag>
+              <Tag
+                color="red"
+                title="写入成功，但未能生成快照/计价（未绑定/缺规格/解析失败/BOM失败等），已进入“待处理（异常）”队列；修复后可批量重试"
+              >
+                待处理 {Number((b as any)?.exception_rows ?? 0) || 0}
+              </Tag>
               <Tag>{formatBatchStatus((b as any)?.status).label}</Tag>
             </Space>
           </Card>

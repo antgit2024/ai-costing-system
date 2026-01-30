@@ -2036,6 +2036,11 @@ export interface SalesProfitDashboardSeriesItem {
 export interface SalesProfitDashboardTopSkuItem {
   sku_code: string
   spec_text?: string | null
+  bound_model_code?: string | null
+  bound_model_name?: string | null
+  bundle_template_code?: string | null
+  bundle_preset_selector?: string | null
+  bundle_preset_phrase?: string | null
   shipped_qty: string
   revenue_amount: string
   cost_amount: string

@@ -2835,6 +2835,11 @@ def sales_profit_dashboard(
                 {
                     "sku_code": sku,
                     "spec_text": None,
+                    "bound_model_code": (sku_to_model.get(sku, (None, None))[0] if sku in sku_to_model else None),
+                    "bound_model_name": (sku_to_model.get(sku, (None, None))[1] if sku in sku_to_model else None),
+                    "bundle_template_code": None,
+                    "bundle_preset_selector": None,
+                    "bundle_preset_phrase": None,
                     "shipped_qty": Decimal("0"),
                     "revenue_amount": Decimal("0"),
                     "costed_revenue_amount": Decimal("0"),
@@ -2944,6 +2949,22 @@ def sales_profit_dashboard(
 
     top_models_profit = _enrich_bundle_fields(top_models_profit)
     top_models_loss = _enrich_bundle_fields(top_models_loss)
+
+    # Enrich top SKUs for model/bundle display.
+    def _enrich_sku_bound_fields(items0: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        for it in items0:
+            mc = str(it.get("bound_model_code") or "").strip()
+            tpl_code, selector, phrase = _try_get_bundle_phrase_preset(db, mc)
+            it2 = dict(it)
+            it2["bundle_template_code"] = tpl_code
+            it2["bundle_preset_selector"] = selector
+            it2["bundle_preset_phrase"] = phrase
+            out.append(it2)
+        return out
+
+    top_skus_profit = _enrich_sku_bound_fields(top_skus_profit)
+    top_skus_loss = _enrich_sku_bound_fields(top_skus_loss)
 
     return {
         "group_by": group_by,

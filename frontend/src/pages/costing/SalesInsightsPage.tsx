@@ -23,7 +23,7 @@ import dayjs from 'dayjs'
 import isoWeek from 'dayjs/plugin/isoWeek'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { InfoCircleOutlined } from '@ant-design/icons'
 import { LeftOutlined, RightOutlined } from '@ant-design/icons'
 
@@ -82,6 +82,7 @@ type SalesPeriodMode = 'day' | 'week' | 'month' | 'custom'
 const SalesInsightsPage = (props: SalesInsightsPageProps) => {
   const embedded = !!props.embedded
   const navigate = useNavigate()
+  const location = useLocation()
   const [form] = Form.useForm()
   const [activeTab, setActiveTab] = useState<'dashboard' | 'lines'>('dashboard')
   const [linesView, setLinesView] = useState<'list' | 'rank_profit' | 'rank_loss'>('list')
@@ -109,6 +110,7 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
   } | null>(null)
 
   const didInitRef = useRef(false)
+  const urlStateInitRef = useRef(false)
 
   const watchedRange = Form.useWatch('range', form) as [dayjs.Dayjs, dayjs.Dayjs] | undefined
   const watchedShop = Form.useWatch('shop', form) as string | undefined
@@ -261,9 +263,14 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
   })
 
   const openRankingInLinesTab = (kind: 'profit' | 'loss') => {
+    const nextView = kind === 'profit' ? 'rank_profit' : 'rank_loss'
     setActiveTab('lines')
-    setLinesView(kind === 'profit' ? 'rank_profit' : 'rank_loss')
+    setLinesView(nextView)
     setError(null)
+    const sp = new URLSearchParams(location.search)
+    sp.set('tab', 'lines')
+    sp.set('view', nextView)
+    navigate(`${location.pathname}?${sp.toString()}`)
   }
 
   const openSkuInLinesList = async (sku_code: string) => {
@@ -273,6 +280,10 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
     setLinesView('list')
     setError(null)
     setPage(1)
+    const sp = new URLSearchParams(location.search)
+    sp.set('tab', 'lines')
+    sp.set('view', 'list')
+    navigate(`${location.pathname}?${sp.toString()}`)
 
     // Keep filters consistent with "analyze here" flow.
     form.setFieldsValue({
@@ -559,6 +570,40 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Sync in-page view state with URL so browser "back" stays within this page first.
+  useEffect(() => {
+    if (embedded) return
+    if (!urlStateInitRef.current) {
+      urlStateInitRef.current = true
+      const sp = new URLSearchParams(location.search)
+      const tab = String(sp.get('tab') ?? '').trim()
+      const view = String(sp.get('view') ?? '').trim()
+      if (tab === 'lines') {
+        setActiveTab('lines')
+        if (view === 'rank_profit' || view === 'rank_loss' || view === 'list') {
+          setLinesView(view as any)
+        }
+      } else if (tab === 'dashboard') {
+        setActiveTab('dashboard')
+      }
+      return
+    }
+    // Subsequent back/forward navigations
+    const sp = new URLSearchParams(location.search)
+    const tab = String(sp.get('tab') ?? '').trim()
+    const view = String(sp.get('view') ?? '').trim()
+    if (tab === 'dashboard') {
+      setActiveTab('dashboard')
+      return
+    }
+    if (tab === 'lines') {
+      setActiveTab('lines')
+      if (view === 'rank_profit' || view === 'rank_loss' || view === 'list') {
+        setLinesView(view as any)
+      }
+    }
+  }, [embedded, location.search])
+
   const onPageChange = async (p: number, ps: number) => {
     setError(null)
     const base = lastQuery
@@ -795,8 +840,17 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
           <Tabs
             activeKey={activeTab}
             onChange={(k) => {
-              setActiveTab(k as any)
-              if (k === 'lines') setLinesView('list')
+              const nextTab = String(k || 'dashboard') as any
+              setActiveTab(nextTab)
+              const sp = new URLSearchParams(location.search)
+              sp.set('tab', nextTab)
+              if (nextTab === 'lines') {
+                setLinesView('list')
+                sp.set('view', 'list')
+              } else {
+                sp.delete('view')
+              }
+              navigate(`${location.pathname}?${sp.toString()}`)
             }}
             items={[
               {
@@ -893,6 +947,30 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
                           dataSource={(dashboardQuery.data as SalesProfitDashboardResponse | undefined)?.top_skus_profit ?? []}
                           pagination={false}
                           columns={[
+                            {
+                              title: '模型/套装',
+                              key: 'bound',
+                              width: 200,
+                              ellipsis: true,
+                              render: (_v: any, r: SalesProfitDashboardTopSkuItem) => {
+                                const mc = String((r as any)?.bound_model_code ?? '').trim()
+                                const mn = String((r as any)?.bound_model_name ?? '').trim()
+                                const tpl = String((r as any)?.bundle_template_code ?? '').trim()
+                                const sel = String((r as any)?.bundle_preset_selector ?? '').trim()
+                                const phrase = String((r as any)?.bundle_preset_phrase ?? '').trim()
+                                if (tpl) {
+                                  const main = [tpl, sel].filter(Boolean).join('-') || mc
+                                  return phrase ? (
+                                    <Tooltip title={phrase}>
+                                      <span>{main}</span>
+                                    </Tooltip>
+                                  ) : (
+                                    <span>{main}</span>
+                                  )
+                                }
+                                return <span>{[mc, mn].filter(Boolean).join(' ') || '-'}</span>
+                              },
+                            },
                             { title: 'SKU', dataIndex: 'sku_code', width: 140, ellipsis: true },
                             { title: '规格（最常见）', dataIndex: 'spec_text', ellipsis: true },
                             { title: '销售额', dataIndex: 'revenue_amount', width: 110, render: (v: any) => formatMoney(v) },
@@ -945,6 +1023,30 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
                           dataSource={(dashboardQuery.data as SalesProfitDashboardResponse | undefined)?.top_skus_loss ?? []}
                           pagination={false}
                           columns={[
+                            {
+                              title: '模型/套装',
+                              key: 'bound',
+                              width: 200,
+                              ellipsis: true,
+                              render: (_v: any, r: SalesProfitDashboardTopSkuItem) => {
+                                const mc = String((r as any)?.bound_model_code ?? '').trim()
+                                const mn = String((r as any)?.bound_model_name ?? '').trim()
+                                const tpl = String((r as any)?.bundle_template_code ?? '').trim()
+                                const sel = String((r as any)?.bundle_preset_selector ?? '').trim()
+                                const phrase = String((r as any)?.bundle_preset_phrase ?? '').trim()
+                                if (tpl) {
+                                  const main = [tpl, sel].filter(Boolean).join('-') || mc
+                                  return phrase ? (
+                                    <Tooltip title={phrase}>
+                                      <span>{main}</span>
+                                    </Tooltip>
+                                  ) : (
+                                    <span>{main}</span>
+                                  )
+                                }
+                                return <span>{[mc, mn].filter(Boolean).join(' ') || '-'}</span>
+                              },
+                            },
                             { title: 'SKU', dataIndex: 'sku_code', width: 140, ellipsis: true },
                             { title: '规格（最常见）', dataIndex: 'spec_text', ellipsis: true },
                             { title: '销售额', dataIndex: 'revenue_amount', width: 110, render: (v: any) => formatMoney(v) },
@@ -1143,6 +1245,10 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
                               size="small"
                               onClick={() => {
                                 setLinesView('list')
+                                const sp = new URLSearchParams(location.search)
+                                sp.set('tab', 'lines')
+                                sp.set('view', 'list')
+                                navigate(`${location.pathname}?${sp.toString()}`)
                               }}
                             >
                               切回明细行列表
@@ -1161,6 +1267,30 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
                           }
                           columns={[
                             { title: '排名', width: 70, render: (_v, _r, idx) => idx + 1 },
+                            {
+                              title: '模型/套装',
+                              key: 'bound',
+                              width: 220,
+                              ellipsis: true,
+                              render: (_v: any, r: SalesProfitDashboardTopSkuItem) => {
+                                const mc = String((r as any)?.bound_model_code ?? '').trim()
+                                const mn = String((r as any)?.bound_model_name ?? '').trim()
+                                const tpl = String((r as any)?.bundle_template_code ?? '').trim()
+                                const sel = String((r as any)?.bundle_preset_selector ?? '').trim()
+                                const phrase = String((r as any)?.bundle_preset_phrase ?? '').trim()
+                                if (tpl) {
+                                  const main = [tpl, sel].filter(Boolean).join('-') || mc
+                                  return phrase ? (
+                                    <Tooltip title={phrase}>
+                                      <span>{main}</span>
+                                    </Tooltip>
+                                  ) : (
+                                    <span>{main}</span>
+                                  )
+                                }
+                                return <span>{[mc, mn].filter(Boolean).join(' ') || '-'}</span>
+                              },
+                            },
                             { title: 'SKU', dataIndex: 'sku_code', width: 160, ellipsis: true },
                             { title: '规格（最常见）', dataIndex: 'spec_text', ellipsis: true },
                             { title: '发货件数', dataIndex: 'shipped_qty', width: 110, render: (v: any) => formatQty(v) },

@@ -3282,6 +3282,13 @@ class SalesProfitDashboardSeriesItem(BaseModel):
 class SalesProfitDashboardTopSkuItem(BaseModel):
     sku_code: str
     spec_text: Optional[str] = None
+    # 绑定/归属（运营视角：该 SKU 当前对应的模型/套装）
+    bound_model_code: Optional[str] = None
+    bound_model_name: Optional[str] = None
+    # Optional bundle (BundleAsModel) display helpers
+    bundle_template_code: Optional[str] = None
+    bundle_preset_selector: Optional[str] = None
+    bundle_preset_phrase: Optional[str] = None
     shipped_qty: Decimal
     revenue_amount: Decimal
     cost_amount: Decimal

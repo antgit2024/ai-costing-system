@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import Query
 from sqlalchemy.orm import Session
 
 from ..dependencies import get_db_session
@@ -91,6 +92,7 @@ def search_lines(
     product_link_id: str | None = None,
     reason: str | None = None,
     model_code: str | None = None,
+    time_basis: str | None = Query(None, description="applied | shipment_completed"),
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db_session),
@@ -104,6 +106,7 @@ def search_lines(
         product_link_id=product_link_id,
         reason=reason,
         model_code=model_code,
+        time_basis=(time_basis or "applied"),
         page=page,
         page_size=page_size,
     )
@@ -117,6 +120,7 @@ def reason_options(
     channel: str | None = None,
     sku_code: str | None = None,
     model_code: str | None = None,
+    time_basis: str | None = Query(None, description="applied | shipment_completed"),
     limit: int = 200,
     db: Session = Depends(get_db_session),
 ):
@@ -127,6 +131,7 @@ def reason_options(
         channel=channel,
         sku_code=sku_code,
         model_code=model_code,
+        time_basis=(time_basis or "applied"),
         limit=limit,
     )
     return {"items": items}
@@ -139,6 +144,7 @@ def model_options(
     channel: str | None = None,
     sku_code: str | None = None,
     reason: str | None = None,
+    time_basis: str | None = Query(None, description="applied | shipment_completed"),
     limit: int = 200,
     db: Session = Depends(get_db_session),
 ):
@@ -149,6 +155,7 @@ def model_options(
         channel=channel,
         sku_code=sku_code,
         reason=reason,
+        time_basis=(time_basis or "applied"),
         limit=limit,
     )
     return {"items": items}

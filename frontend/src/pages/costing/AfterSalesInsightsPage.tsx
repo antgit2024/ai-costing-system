@@ -337,6 +337,16 @@ const AfterSalesInsightsPage = () => {
 
   const detailColumns = useMemo<ColumnsType<AfterSalesLineItem>>(
     () => [
+      ...(dashboardView === 'factory'
+        ? [
+            {
+              title: '发货完成',
+              dataIndex: 'shipment_completed_at',
+              width: 110,
+              render: (v: any) => formatDateToDay(v as any),
+            },
+          ]
+        : []),
       { title: '申请日期', dataIndex: 'applied_at', width: 110, render: (v) => formatDateToDay(v as any) },
       { title: '渠道', dataIndex: 'channel', width: 140, ellipsis: true, render: (v) => String(v ?? '-') },
       { title: '货品条码', dataIndex: 'sku_code', width: 150, ellipsis: true, render: (v) => String(v ?? '-') },
@@ -369,7 +379,7 @@ const AfterSalesInsightsPage = () => {
       { title: '退货数量', dataIndex: 'return_qty', width: 110, render: formatQty },
       { title: '退款金额', dataIndex: 'refund_amount', width: 110, render: formatMoney },
     ],
-    [],
+    [dashboardView],
   )
 
   const onQuery = async () => {
@@ -451,6 +461,7 @@ const AfterSalesInsightsPage = () => {
           product_link_id: v.product_link_id?.trim() || undefined,
           reason: v.reason || undefined,
           model_code: modelCodeFromPicker || v.model_code || undefined,
+          time_basis: dashboardView === 'factory' ? 'shipment_completed' : 'applied',
         },
         { timeoutMs: 60000 },
       )

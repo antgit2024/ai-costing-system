@@ -2636,6 +2636,8 @@ class AfterSalesLineRead(BaseModel):
     refund_amount: Optional[Decimal] = None
     allocated_refund_amount: Optional[Decimal] = None
     sku_code: Optional[str] = None
+    # Optional join field for "归因到发货期" detail mode
+    shipment_completed_at: Optional[datetime] = None
     normalize_warnings: List[Dict[str, Any]] = Field(default_factory=list, alias="normalize_warnings_json")
     metadata: Dict[str, Any] = Field(default_factory=dict, alias="metadata_json")
     created_at: datetime

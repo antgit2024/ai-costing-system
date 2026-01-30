@@ -523,6 +523,7 @@ def search_lines(
     reason: Optional[str],
     model_code: Optional[str],
     product_link_id: Optional[str],
+    time_basis: str = "applied",
     page: int,
     page_size: int,
 ) -> Tuple[int, List[Dict[str, Any]]]:
@@ -531,6 +532,7 @@ def search_lines(
     Filters are applied on coalesce(applied_at, occurred_at) for robustness:
     some ERP exports miss applied_at or provide excel serial numbers.
     """
+    tb = (time_basis or "applied").strip().lower()
     applied_time_expr = func.coalesce(models.AfterSalesLine.applied_at, models.AfterSalesLine.occurred_at)
     mapping_on = and_(
         models.SkuModelVersionMapping.is_archived.is_(False),
@@ -548,10 +550,32 @@ def search_lines(
         .filter(models.AfterSalesLine.is_archived.is_(False))
     )
 
-    if start is not None:
-        q = q.filter(applied_time_expr.isnot(None), applied_time_expr >= start)
-    if end is not None:
-        q = q.filter(applied_time_expr.isnot(None), applied_time_expr < end)
+    shipment_completed_expr = None
+    if tb == "shipment_completed":
+        # Match returns to shipment lines by strong keys, then filter by shipment completed_at window.
+        q = q.join(
+            models.ShipmentLine,
+            and_(
+                models.AfterSalesLine.order_no.isnot(None),
+                models.AfterSalesLine.product_link_id.isnot(None),
+                models.AfterSalesLine.sku_code.isnot(None),
+                models.ShipmentLine.is_archived.is_(False),
+                models.ShipmentLine.is_active.is_(True),
+                models.ShipmentLine.order_no == models.AfterSalesLine.order_no,
+                models.ShipmentLine.product_link_id == models.AfterSalesLine.product_link_id,
+                models.ShipmentLine.sku_code == models.AfterSalesLine.sku_code,
+            ),
+        )
+        shipment_completed_expr = models.ShipmentLine.completed_at
+        if start is not None:
+            q = q.filter(shipment_completed_expr.isnot(None), shipment_completed_expr >= start)
+        if end is not None:
+            q = q.filter(shipment_completed_expr.isnot(None), shipment_completed_expr < end)
+    else:
+        if start is not None:
+            q = q.filter(applied_time_expr.isnot(None), applied_time_expr >= start)
+        if end is not None:
+            q = q.filter(applied_time_expr.isnot(None), applied_time_expr < end)
     if channel:
         q = q.filter(models.AfterSalesLine.channel == channel)
     if sku_code:
@@ -565,21 +589,32 @@ def search_lines(
 
     total = int(q.with_entities(func.count(func.distinct(models.AfterSalesLine.id))).scalar() or 0)
 
+    entity_fields = [
+        models.AfterSalesLine,
+        models.ProductModel.model_code.label("bound_model_code"),
+        models.ProductModel.model_name.label("bound_model_name"),
+        models.ProductModelVersion.version_label.label("bound_version_label"),
+    ]
+    if shipment_completed_expr is not None:
+        entity_fields.append(models.ShipmentLine.completed_at.label("shipment_completed_at"))
     rows = (
-        q.with_entities(
-            models.AfterSalesLine,
-            models.ProductModel.model_code.label("bound_model_code"),
-            models.ProductModel.model_name.label("bound_model_name"),
-            models.ProductModelVersion.version_label.label("bound_version_label"),
+        q.with_entities(*entity_fields)
+        .order_by(
+            (shipment_completed_expr if shipment_completed_expr is not None else applied_time_expr).desc().nullslast(),
+            models.AfterSalesLine.created_at.desc(),
         )
-        .order_by(applied_time_expr.desc().nullslast(), models.AfterSalesLine.created_at.desc())
         .offset((max(page, 1) - 1) * max(page_size, 1))
         .limit(max(page_size, 1))
         .all()
     )
 
     items: List[Dict[str, Any]] = []
-    for line, bmc, bmn, bvl in rows:
+    for row in rows:
+        if shipment_completed_expr is not None:
+            line, bmc, bmn, bvl, shipment_completed_at = row
+        else:
+            line, bmc, bmn, bvl = row
+            shipment_completed_at = None
         items.append(
             {
                 "id": line.id,
@@ -589,6 +624,7 @@ def search_lines(
                 "occurred_at": line.occurred_at,
                 # For UI readability: show applied date if present, else fallback to occurred_at.
                 "applied_at": line.applied_at or line.occurred_at,
+                "shipment_completed_at": shipment_completed_at,
                 "channel": line.channel,
                 "reason": line.reason,
                 "bound_model_code": bmc,
@@ -624,8 +660,10 @@ def reason_options(
     channel: Optional[str],
     sku_code: Optional[str],
     model_code: Optional[str],
+    time_basis: str = "applied",
     limit: int = 200,
 ) -> List[Dict[str, Any]]:
+    tb = (time_basis or "applied").strip().lower()
     applied_time_expr = func.coalesce(models.AfterSalesLine.applied_at, models.AfterSalesLine.occurred_at)
     mapping_on = and_(
         models.SkuModelVersionMapping.is_archived.is_(False),
@@ -643,10 +681,29 @@ def reason_options(
         .filter(models.AfterSalesLine.is_archived.is_(False))
         .filter(models.AfterSalesLine.reason.isnot(None), func.length(func.trim(models.AfterSalesLine.reason)) > 0)
     )
-    if start is not None:
-        q = q.filter(applied_time_expr.isnot(None), applied_time_expr >= start)
-    if end is not None:
-        q = q.filter(applied_time_expr.isnot(None), applied_time_expr < end)
+    if tb == "shipment_completed":
+        q = q.join(
+            models.ShipmentLine,
+            and_(
+                models.AfterSalesLine.order_no.isnot(None),
+                models.AfterSalesLine.product_link_id.isnot(None),
+                models.AfterSalesLine.sku_code.isnot(None),
+                models.ShipmentLine.is_archived.is_(False),
+                models.ShipmentLine.is_active.is_(True),
+                models.ShipmentLine.order_no == models.AfterSalesLine.order_no,
+                models.ShipmentLine.product_link_id == models.AfterSalesLine.product_link_id,
+                models.ShipmentLine.sku_code == models.AfterSalesLine.sku_code,
+            ),
+        )
+        if start is not None:
+            q = q.filter(models.ShipmentLine.completed_at.isnot(None), models.ShipmentLine.completed_at >= start)
+        if end is not None:
+            q = q.filter(models.ShipmentLine.completed_at.isnot(None), models.ShipmentLine.completed_at < end)
+    else:
+        if start is not None:
+            q = q.filter(applied_time_expr.isnot(None), applied_time_expr >= start)
+        if end is not None:
+            q = q.filter(applied_time_expr.isnot(None), applied_time_expr < end)
     if channel:
         q = q.filter(models.AfterSalesLine.channel == channel)
     if sku_code:
@@ -671,8 +728,10 @@ def model_options(
     channel: Optional[str],
     sku_code: Optional[str],
     reason: Optional[str],
+    time_basis: str = "applied",
     limit: int = 200,
 ) -> List[Dict[str, Any]]:
+    tb = (time_basis or "applied").strip().lower()
     applied_time_expr = func.coalesce(models.AfterSalesLine.applied_at, models.AfterSalesLine.occurred_at)
     mapping_on = and_(
         models.SkuModelVersionMapping.is_archived.is_(False),
@@ -694,10 +753,29 @@ def model_options(
         .filter(models.AfterSalesLine.is_archived.is_(False))
         .filter(models.ProductModel.model_code.isnot(None), func.length(func.trim(models.ProductModel.model_code)) > 0)
     )
-    if start is not None:
-        q = q.filter(applied_time_expr.isnot(None), applied_time_expr >= start)
-    if end is not None:
-        q = q.filter(applied_time_expr.isnot(None), applied_time_expr < end)
+    if tb == "shipment_completed":
+        q = q.join(
+            models.ShipmentLine,
+            and_(
+                models.AfterSalesLine.order_no.isnot(None),
+                models.AfterSalesLine.product_link_id.isnot(None),
+                models.AfterSalesLine.sku_code.isnot(None),
+                models.ShipmentLine.is_archived.is_(False),
+                models.ShipmentLine.is_active.is_(True),
+                models.ShipmentLine.order_no == models.AfterSalesLine.order_no,
+                models.ShipmentLine.product_link_id == models.AfterSalesLine.product_link_id,
+                models.ShipmentLine.sku_code == models.AfterSalesLine.sku_code,
+            ),
+        )
+        if start is not None:
+            q = q.filter(models.ShipmentLine.completed_at.isnot(None), models.ShipmentLine.completed_at >= start)
+        if end is not None:
+            q = q.filter(models.ShipmentLine.completed_at.isnot(None), models.ShipmentLine.completed_at < end)
+    else:
+        if start is not None:
+            q = q.filter(applied_time_expr.isnot(None), applied_time_expr >= start)
+        if end is not None:
+            q = q.filter(applied_time_expr.isnot(None), applied_time_expr < end)
     if channel:
         q = q.filter(models.AfterSalesLine.channel == channel)
     if sku_code:

@@ -2302,6 +2302,7 @@ export const fetchAfterSalesLines = async (
     product_link_id?: string
     reason?: string
     model_code?: string
+    time_basis?: 'applied' | 'shipment_completed'
     page?: number
     page_size?: number
   } = {},

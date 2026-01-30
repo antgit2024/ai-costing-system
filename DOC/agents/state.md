@@ -908,6 +908,11 @@
       - `backend/src/planner/services/after_sales_import_service.py`
         - 修复：支持解析 Excel 序列号类型的“申请时间”(applied_at)，避免申请期统计被低估
         - 修复：售后明细/筛选改为按 `coalesce(applied_at, occurred_at)` 口径，避免 applied_at 缺失导致“明细只有 11 条”与看板不一致
+        - 新增：明细支持 `time_basis=shipment_completed`（按发货完成时间过滤，供“工厂口径”下钻对账）
+      - `backend/src/planner/routers/after_sales.py`
+        - `/after-sales/lines/search` 支持 `time_basis` 参数（applied | shipment_completed）
+      - `frontend/src/pages/costing/AfterSalesInsightsPage.tsx`
+        - 工厂看板下钻明细改为按发货完成时间过滤，并显示“发货完成”列
       - `backend/tests/planner/test_after_sales_import_mvp.py`
         - 新增回归用例：applied_at 为 excel 数值时可正确解析落库
       - `model_insights_summary/detail` 在 `shipment_lines.metadata_json` 上按 bundle 锚点过滤（与销售明细筛选口径一致）

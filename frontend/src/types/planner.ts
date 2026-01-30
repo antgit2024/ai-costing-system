@@ -2104,6 +2104,7 @@ export interface AfterSalesLineItem {
   after_sales_no?: string | null
   occurred_at?: string | null
   applied_at?: string | null
+  shipment_completed_at?: string | null
   channel?: string | null
   reason?: string | null
   bound_model_code?: string | null

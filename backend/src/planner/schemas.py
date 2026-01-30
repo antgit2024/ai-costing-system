@@ -2340,6 +2340,10 @@ class ShipmentLineListItem(BaseModel):
     revenue_amount: Optional[Decimal] = None
     # 成本金额（优先读 shipment_costing_results.cost_total；为台账/毛利展示）
     cost_total: Optional[Decimal] = None
+    # 绑定/快照版本（用于“待生成/需重建”工作流）
+    bound_model_version_id: Optional[str] = None
+    snapshot_model_version_id: Optional[str] = None
+    needs_rebuild_snapshot: bool = False
     # latest snapshot id (if any) for bulk recompute
     bom_snapshot_id: Optional[str] = None
 
@@ -2349,6 +2353,12 @@ class ShipmentLineListItem(BaseModel):
     mode: Optional[Literal["2025", "2026"]] = None
     unresolved_reason: Optional[str] = None
     unresolved_message: Optional[str] = None
+    # Soft guardrail (heuristic): spec keywords seem mismatched with bound target category
+    suspected_mismatch: bool = False
+    mismatch_warnings: List[str] = Field(default_factory=list)
+    # Soft guardrail: size/area mismatch between parsed spec and snapshot measurement.
+    suspected_size_anomaly: bool = False
+    size_anomaly_detail: Optional[str] = None
 
     class Config:
         json_encoders = {Decimal: _decimal_to_str}
@@ -2371,6 +2381,21 @@ class ShipmentLineComputeSnapshotResponse(BaseModel):
     shipment_line_id: str
     bom_snapshot_id: Optional[str] = None
     detail: Optional[str] = None
+
+
+class ShipmentLineClearSnapshotsRequest(BaseModel):
+    shipment_line_ids: List[str] = Field(default_factory=list)
+    operator_id: Optional[str] = None
+    reason: Optional[str] = None
+
+
+class ShipmentLineClearSnapshotsResponse(BaseModel):
+    total_selected: int
+    cleared_count: int
+    skipped_not_found: int
+    skipped_already_cleared: int
+    skipped_missing_barcode: int
+    errors: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class ShipmentImportPreviewIssue(BaseModel):
@@ -3192,6 +3217,10 @@ class SalesLineItem(BaseModel):
     # 套装二级名称（phrase preset 文本，如 "[{}{毛球}][{黄金绒}{雪尼尔}]0*0*0"）
     bundle_preset_phrase: Optional[str] = None
 
+    # 当前生效绑定（用于运营决策/下钻；标准模型或 BundleAsModel）
+    bound_model_code: Optional[str] = None
+    bound_model_name: Optional[str] = None
+
     bom_snapshot_id: Optional[str] = None
     status: str = "unknown"  # costed | missing_snapshot | missing_costing
     note: Optional[str] = None
@@ -3560,6 +3589,37 @@ class SkuMasterBindByModelResponse(BaseModel):
     errors: List[Dict[str, Any]] = Field(default_factory=list)
 
 
+class SkuMasterUnbindRequest(BaseModel):
+    sku_master_ids: List[str] = Field(default_factory=list)
+    requested_by: Optional[str] = None
+
+
+class SkuMasterUnbindResponse(BaseModel):
+    total_selected: int
+    unbound_count: int
+    skipped_missing_barcode: int
+    errors: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class SkuMasterGeneratePreparseAndSnapshotsRequest(BaseModel):
+    sku_master_ids: List[str] = Field(default_factory=list)
+    operator_id: Optional[str] = None
+    # Safety defaults: only fill missing snapshots (never overwrite) and cap per SKU.
+    limit_per_sku: int = Field(50, ge=1, le=500)
+    overwrite: bool = False  # 高风险：覆盖重算（默认关闭）
+
+
+class SkuMasterGeneratePreparseAndSnapshotsResponse(BaseModel):
+    total_selected: int
+    parsed_count: int
+    created_snapshots: int
+    recomputed_snapshots: int
+    skipped_snapshots: int
+    failed_snapshots: int
+    skipped_missing_barcode: int
+    errors: List[Dict[str, Any]] = Field(default_factory=list)
+
+
 class SkuMasterBindByModelBulkRequest(BaseModel):
     """
     Bind all *unbound* SKU masters matched by current filters, in batches (server-side paging).
@@ -3654,6 +3714,81 @@ class SkuMasterBindByBundleTemplateBulkResponse(BaseModel):
     skipped_excluded: int
     errors: List[Dict[str, Any]] = Field(default_factory=list)
     has_more: bool
+
+
+class SkuMasterBindPreviewItem(BaseModel):
+    sku_master_id: str
+    sku_code: Optional[str] = None
+    channel: Optional[str] = None
+    # shipment sample (latest)
+    sample_shipment_line_id: Optional[str] = None
+    sample_completed_at: Optional[datetime] = None
+    sample_spec_text: Optional[str] = None
+    sample_spec_text_norm: Optional[str] = None
+
+    # can_bind: hard-validated OK
+    # skip_*: not an error, but will not be bound (e.g. already bound)
+    # hard_error: validation failed; binding must be blocked for this item
+    status: Literal["can_bind", "skip_already_bound", "skip_missing_barcode", "hard_error"]
+    hard_errors: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+
+    # lightweight preview signals (optional)
+    model_version_id: Optional[str] = None
+    cost_total: Optional[Decimal] = None
+    inventory_line_count: Optional[int] = None
+
+    class Config:
+        orm_mode = True
+        allow_population_by_field_name = True
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class SkuMasterBindPreviewResponse(BaseModel):
+    total_selected: int
+    can_bind: int
+    skip_already_bound: int
+    skip_missing_barcode: int
+    hard_errors: int
+    items: List[SkuMasterBindPreviewItem] = Field(default_factory=list)
+
+
+class SkuMasterBindPreviewBulkRequest(BaseModel):
+    """
+    Preview binding eligibility for all SKU masters matched by current filters (server-side paging),
+    consistent with *bulk bind* semantics.
+    """
+
+    limit: int = Field(200, ge=1, le=2000)
+    bound_state: Literal["unbound", "bound", "all"] = "unbound"
+    allow_rebind: bool = False
+
+    # Filters (same semantics as list endpoint)
+    search: Optional[str] = None
+    channel: Optional[str] = None
+    match_status: Optional[str] = None
+    spec_mismatch: Optional[bool] = None
+    preparse_state: Optional[str] = None
+    include_terms: Optional[str] = None
+    exclude_terms: Optional[str] = None
+    match_scope: Optional[str] = None
+    bound_model_id: Optional[str] = None
+    bound_model_code: Optional[str] = None
+    bound_version_id: Optional[str] = None
+
+    excluded_sku_master_ids: List[str] = Field(default_factory=list)
+    requested_by: Optional[str] = None
+
+
+class SkuMasterBindPreviewBulkResponse(BaseModel):
+    batch_candidates: int
+    can_bind: int
+    skip_already_bound: int
+    skip_missing_barcode: int
+    hard_errors: int
+    skipped_excluded: int
+    has_more: bool
+    items: List[SkuMasterBindPreviewItem] = Field(default_factory=list)
 
 
 class SkuMasterAutoBindPreviewRequest(BaseModel):

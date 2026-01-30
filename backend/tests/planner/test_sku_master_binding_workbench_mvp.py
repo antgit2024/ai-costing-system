@@ -1,7 +1,50 @@
 from __future__ import annotations
 
+import uuid
+from datetime import datetime, timezone
+
 from src.planner import models
 from src.planner.services import sku_master_service
+
+
+def _seed_shipment_sample(db_session, *, sku_code: str, spec_text: str) -> None:
+    batch = models.ShipmentImportBatch(
+        file_name="seed.xlsx",
+        file_hash=uuid.uuid4().hex,
+        export_date="2026-01-01",
+        requested_by="tester",
+        status="done",
+        total_rows=1,
+        inserted_rows=1,
+        skipped_rows=0,
+        exception_rows=0,
+    )
+    db_session.add(batch)
+    db_session.flush()
+    line = models.ShipmentLine(
+        batch_id=batch.id,
+        row_index=1,
+        shipment_no="S-SEED",
+        order_no="O-SEED",
+        product_link_id="L-SEED",
+        completed_at=datetime.now(timezone.utc),
+        channel="seed",
+        sku_code=sku_code,
+        spec_text=spec_text,
+        spec_hash=None,
+        qty=1,
+        revenue_amount=1,
+        external_line_key_hash=uuid.uuid4().hex,
+        revision_group_hash=uuid.uuid4().hex,
+        revision_no=1,
+        superseded_by_id=None,
+        is_active=True,
+        raw_row_json={},
+        normalize_warnings_json=[],
+        metadata_json={},
+    )
+    db_session.add(line)
+    db_session.commit()
 
 
 def test_manual_bind_by_model_and_auto_bind_preview_execute(client, db_session):
@@ -30,6 +73,10 @@ def test_manual_bind_by_model_and_auto_bind_preview_execute(client, db_session):
     )
     db_session.add_all([sm1, sm2])
     db_session.commit()
+
+    # Seed latest shipment spec samples (binding now enforces validation)
+    _seed_shipment_sample(db_session, sku_code="BC-100", spec_text="50*140;A1B;xxx")
+    _seed_shipment_sample(db_session, sku_code="BC-200", spec_text="50*140;A1B;xxx")
 
     # Manual bind by model should bind sm1 barcode to published standard version
     resp = client.post(
@@ -98,6 +145,9 @@ def test_manual_bulk_bind_by_filters_with_exclusions(client, db_session):
     sm3 = models.SkuMaster(erp_sku_barcode="BC-OTHER", spec_text="皮革地垫 60*90", metadata_json={})
     db_session.add_all([sm1, sm2, sm3])
     db_session.commit()
+
+    _seed_shipment_sample(db_session, sku_code="BC-OZU-1", spec_text="60*90;丝圈地垫")
+    _seed_shipment_sample(db_session, sku_code="BC-OZU-2", spec_text="60*90;丝圈地垫")
 
     # Exclude sm2 (simulate user unchecked)
     resp = client.post(

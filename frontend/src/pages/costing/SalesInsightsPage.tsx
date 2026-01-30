@@ -74,11 +74,12 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
   const embedded = !!props.embedded
   const navigate = useNavigate()
   const [form] = Form.useForm()
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'lines'>('dashboard')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [data, setData] = useState<SalesLinesResponse | null>(null)
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(20)
+  const [pageSize, setPageSize] = useState(100)
   const [shopOptions, setShopOptions] = useState<string[]>([])
   const [useSnapshot] = useState(true)
   const [dashboardComputedAt, setDashboardComputedAt] = useState<string | null>(null)
@@ -276,6 +277,22 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
       { title: '交易规格', dataIndex: 'spec_text', width: 260, ellipsis: true, render: (v) => String(v ?? '-') },
       { title: '货品条码', dataIndex: 'sku_code', width: 160, ellipsis: true, render: (v) => String(v ?? '-') },
       {
+        title: '模型/套装（绑定）',
+        key: 'bound_model',
+        width: 260,
+        render: (_v, r) => {
+          const code = String((r as any)?.bound_model_code ?? '').trim()
+          const name = String((r as any)?.bound_model_name ?? '').trim()
+          const s = [code, name].filter(Boolean).join(' ')
+          if (!s) return '-'
+          return (
+            <span style={{ display: 'inline-block', maxWidth: 250, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {s}
+            </span>
+          )
+        },
+      },
+      {
         title: '套装',
         key: 'bundle',
         width: 260,
@@ -416,6 +433,10 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
       // ignore storage errors (private mode / quota)
     }
     if (embedded) {
+      await runQuery({ ...base, page: 1, page_size: pageSize })
+      return
+    }
+    if (activeTab === 'lines') {
       await runQuery({ ...base, page: 1, page_size: pageSize })
       return
     }
@@ -630,12 +651,12 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
           <Form.Item>
             <Space>
               <Segmented
-                options={[{ label: '仅已计价（固定）', value: 'costed' }]}
-                value="costed"
+                options={[{ label: '含未计价（固定）', value: 'all' }]}
+                value="all"
                 disabled
               />
               <Button type="primary" onClick={() => onQuery()} loading={loading || dashboardQuery.isFetching}>
-                {embedded ? '查询明细' : '刷新看板'}
+                {embedded ? '查询明细' : activeTab === 'lines' ? '查询明细' : '刷新看板'}
               </Button>
               {!embedded ? (
                 <>
@@ -777,7 +798,8 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
           </>
         ) : (
           <Tabs
-            activeKey="dashboard"
+            activeKey={activeTab}
+            onChange={(k) => setActiveTab(k as any)}
             items={[
               {
                 key: 'dashboard',
@@ -1106,6 +1128,39 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
                 </>
               ),
             },
+              {
+                key: 'lines',
+                label: '销售明细',
+                children: (
+                  <>
+                    {data ? (
+                      <Alert
+                        type={data.lines_with_bom_snapshots > 0 ? 'success' : 'warning'}
+                        showIcon
+                        style={{ marginBottom: 12 }}
+                        message="成本覆盖率（明细范围内）"
+                        description={
+                          <div>
+                            <div>
+                              有 BOM/计价行：{data.lines_with_bom_snapshots}；缺成本字段行：{data.lines_missing_costing}
+                            </div>
+                            <div style={{ color: '#888' }}>{data.note || ''}</div>
+                          </div>
+                        }
+                      />
+                    ) : null}
+                    <Table
+                      rowKey="shipment_line_id"
+                      size="small"
+                      loading={loading}
+                      columns={columns}
+                      dataSource={data?.items ?? []}
+                      pagination={pagination}
+                      scroll={{ x: 2350 }}
+                    />
+                  </>
+                ),
+              },
           ]}
           />
         )}

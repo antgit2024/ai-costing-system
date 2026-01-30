@@ -1473,12 +1473,19 @@ export interface ShipmentLineListItem {
   qty?: string | null
   revenue_amount?: string | null
   cost_total?: string | null
+  bound_model_version_id?: string | null
+  snapshot_model_version_id?: string | null
+  needs_rebuild_snapshot?: boolean
   bom_snapshot_id?: string | null
   status: ShipmentLineStatus
   processed_source?: ShipmentLineProcessedSource | null
   mode?: ShipmentLineMode | null
   unresolved_reason?: string | null
   unresolved_message?: string | null
+  suspected_mismatch?: boolean
+  mismatch_warnings?: string[]
+  suspected_size_anomaly?: boolean
+  size_anomaly_detail?: string | null
 }
 
 export interface ShipmentLineListResponse extends PaginatedResponse<ShipmentLineListItem> {}
@@ -1495,6 +1502,15 @@ export interface ShipmentLineComputeSnapshotResponse {
   shipment_line_id: string
   bom_snapshot_id?: string | null
   detail?: string | null
+}
+
+export interface ShipmentLineClearSnapshotsResponse {
+  total_selected: number
+  cleared_count: number
+  skipped_not_found: number
+  skipped_already_cleared: number
+  skipped_missing_barcode: number
+  errors: Array<Record<string, unknown>>
 }
 
 export interface ShipmentCostingResult {
@@ -1972,6 +1988,8 @@ export interface SalesLineItem {
   bundle_template_code?: string | null
   bundle_preset_selector?: string | null
   bundle_preset_phrase?: string | null
+  bound_model_code?: string | null
+  bound_model_name?: string | null
   bom_snapshot_id?: string | null
   status: 'costed' | 'missing_snapshot' | 'missing_costing' | 'unknown'
   note?: string | null
@@ -2308,6 +2326,62 @@ export interface SkuMasterBindByModelResponse {
   skipped_already_bound: number
   skipped_missing_barcode: number
   errors: Array<Record<string, unknown>>
+}
+
+export interface SkuMasterUnbindResponse {
+  total_selected: number
+  unbound_count: number
+  skipped_missing_barcode: number
+  errors: Array<Record<string, unknown>>
+}
+
+export interface SkuMasterGeneratePreparseAndSnapshotsResponse {
+  total_selected: number
+  parsed_count: number
+  created_snapshots: number
+  recomputed_snapshots: number
+  skipped_snapshots: number
+  failed_snapshots: number
+  skipped_missing_barcode: number
+  errors: Array<Record<string, unknown>>
+}
+
+export type SkuMasterBindPreviewItemStatus = 'can_bind' | 'skip_already_bound' | 'skip_missing_barcode' | 'hard_error'
+
+export interface SkuMasterBindPreviewItem {
+  sku_master_id: string
+  sku_code?: string | null
+  channel?: string | null
+  sample_shipment_line_id?: string | null
+  sample_completed_at?: string | null
+  sample_spec_text?: string | null
+  sample_spec_text_norm?: string | null
+  status: SkuMasterBindPreviewItemStatus
+  hard_errors: string[]
+  warnings: string[]
+  model_version_id?: string | null
+  cost_total?: string | null
+  inventory_line_count?: number | null
+}
+
+export interface SkuMasterBindPreviewResponse {
+  total_selected: number
+  can_bind: number
+  skip_already_bound: number
+  skip_missing_barcode: number
+  hard_errors: number
+  items: SkuMasterBindPreviewItem[]
+}
+
+export interface SkuMasterBindPreviewBulkResponse {
+  batch_candidates: number
+  can_bind: number
+  skip_already_bound: number
+  skip_missing_barcode: number
+  hard_errors: number
+  skipped_excluded: number
+  has_more: boolean
+  items: SkuMasterBindPreviewItem[]
 }
 
 export interface SkuMasterAutoBindPreviewItem {

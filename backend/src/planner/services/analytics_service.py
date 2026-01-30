@@ -15,6 +15,11 @@ from . import bom_generation_service, product_model_service
 _BUNDLE_MODEL_CODE_RE = re.compile(r"^B-(?P<tpl>[A-Z0-9]{4})(?P<sel>[A-Z]{2})$", re.IGNORECASE)
 
 
+def _not_snapshot_cleared_pred():
+    # Cross-dialect safe: we store a non-empty ISO string in metadata_json["snapshot_cleared_at"] when cleared.
+    return func.coalesce(models.ShipmentLine.metadata_json["snapshot_cleared_at"].as_string(), "") == ""
+
+
 def _try_get_bundle_phrase_preset(db: Session, model_code: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """
     BundleAsModel display enrichment.
@@ -2394,6 +2399,36 @@ def sales_lines(
         .subquery()
     )
 
+    # Active SKU -> model binding (BundleAsModel is represented as model_code like "B-XXXXYY").
+    m = models.SkuModelVersionMapping
+    v = models.ProductModelVersion
+    pm = models.ProductModel
+    binding_sq = (
+        db.query(
+            m.sku_code.label("sku_code"),
+            m.model_version_id.label("model_version_id"),
+            pm.model_code.label("bound_model_code"),
+            pm.model_name.label("bound_model_name"),
+            v.version_label.label("bound_version_label"),
+            func.row_number()
+            .over(
+                partition_by=m.sku_code,
+                order_by=(m.updated_at.desc(), m.created_at.desc()),
+            )
+            .label("rn"),
+        )
+        .select_from(m)
+        .join(v, v.id == m.model_version_id)
+        .join(pm, pm.id == v.model_id)
+        .filter(
+            m.is_archived.is_(False),
+            m.is_active.is_(True),
+            v.is_archived.is_(False),
+            pm.is_archived.is_(False),
+        )
+        .subquery()
+    )
+
     base_q = (
         db.query(
             models.ShipmentLine,
@@ -2406,11 +2441,21 @@ def sales_lines(
             res_sq.c.cost_overhead_total,
             res_sq.c.model_version_id,
             res_sq.c.spec_hash,
+            binding_sq.c.bound_model_code,
+            binding_sq.c.bound_model_name,
         )
         .outerjoin(res_sq, models.ShipmentLine.id == res_sq.c.shipment_line_id)
         .outerjoin(snap_sq, models.ShipmentLine.id == snap_sq.c.shipment_line_id)
+        .outerjoin(
+            binding_sq,
+            and_(
+                binding_sq.c.sku_code == models.ShipmentLine.sku_code,
+                binding_sq.c.rn == 1,
+            ),
+        )
         .filter(
             models.ShipmentLine.is_archived.is_(False),
+            _not_snapshot_cleared_pred(),
             models.ShipmentLine.completed_at.isnot(None),
             models.ShipmentLine.completed_at >= start,
             models.ShipmentLine.completed_at < end,
@@ -2470,6 +2515,8 @@ def sales_lines(
         cost_overhead_total,
         model_version_id,
         spec_hash,
+        bound_model_code,
+        bound_model_name,
     ) in rows:
         meta_line = getattr(line, "metadata_json", None) or {}
         if not isinstance(meta_line, dict):
@@ -2563,6 +2610,8 @@ def sales_lines(
                 "bundle_template_code": bundle_code,
                 "bundle_preset_selector": bundle_sel,
                 "bundle_preset_phrase": bundle_phrase,
+                "bound_model_code": str(bound_model_code).strip() if bound_model_code not in (None, "") else None,
+                "bound_model_name": str(bound_model_name).strip() if bound_model_name not in (None, "") else None,
                 "bom_snapshot_id": str(bom_snapshot_id) if has_snap else None,
                 "status": status,
                 "note": note,
@@ -2619,6 +2668,7 @@ def sales_profit_dashboard(
         models.ShipmentLine.completed_at >= start,
         models.ShipmentLine.completed_at < end,
         models.ShipmentLine.is_archived.is_(False),
+        _not_snapshot_cleared_pred(),
     )
     if channel:
         ship_q = ship_q.filter(models.ShipmentLine.channel == channel)
@@ -2652,6 +2702,7 @@ def sales_profit_dashboard(
             models.ShipmentLine.completed_at >= start,
             models.ShipmentLine.completed_at < end,
             models.ShipmentLine.is_archived.is_(False),
+            _not_snapshot_cleared_pred(),
             or_(models.ShipmentCostingResult.shipment_line_id.isnot(None), snap_sq.c.bom_snapshot_id.isnot(None)),
         )
     )
@@ -2781,6 +2832,7 @@ def sales_profit_dashboard(
                     "spec_text": None,
                     "shipped_qty": Decimal("0"),
                     "revenue_amount": Decimal("0"),
+                    "costed_revenue_amount": Decimal("0"),
                     "cost_amount": Decimal("0"),
                     "gross_profit": Decimal("0"),
                     "gross_margin": None,
@@ -2793,6 +2845,7 @@ def sales_profit_dashboard(
             sb["revenue_amount"] += rev
             if cost is not None:
                 sb["costed_lines"] += 1
+                sb["costed_revenue_amount"] += rev
                 sb["cost_amount"] += cost
                 sb["gross_profit"] += (rev - cost)
             if spec:
@@ -2808,6 +2861,7 @@ def sales_profit_dashboard(
                         "model_name": mn,
                         "shipped_qty": Decimal("0"),
                         "revenue_amount": Decimal("0"),
+                        "costed_revenue_amount": Decimal("0"),
                         "cost_amount": Decimal("0"),
                         "gross_profit": Decimal("0"),
                         "gross_margin": None,
@@ -2820,6 +2874,7 @@ def sales_profit_dashboard(
                 mb["revenue_amount"] += rev
                 if cost is not None:
                     mb["costed_lines"] += 1
+                    mb["costed_revenue_amount"] += rev
                     mb["cost_amount"] += cost
                     mb["gross_profit"] += (rev - cost)
 
@@ -2850,7 +2905,10 @@ def sales_profit_dashboard(
         series_items.append(b)
 
     def _finalize_bucket(x: Dict[str, Any]) -> Dict[str, Any]:
-        rev = _d(x["revenue_amount"])
+        # IMPORTANT: gross_profit is computed only on costed lines.
+        # Therefore gross_margin must use costed_revenue_amount as denominator, not total revenue_amount,
+        # otherwise margin will be artificially "too low" when there are missing-cost lines.
+        rev = _d(x.get("costed_revenue_amount") or x.get("revenue_amount"))
         gp = _d(x["gross_profit"])
         x["gross_margin"] = (gp / rev) if rev > 0 else None
         return x

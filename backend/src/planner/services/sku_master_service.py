@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, joinedload
 
 from .. import models
-from . import product_model_service, spec_parser_service
+from . import bom_generation_service, product_model_service, spec_parser_service
 from . import bundle_template_service
 
 
@@ -1849,6 +1849,295 @@ def _get_published_standard_version_for_model_id(db: Session, model_id: str) -> 
     return v
 
 
+def unbind_sku_masters(
+    db: Session,
+    *,
+    sku_master_ids: List[str],
+    requested_by: Optional[str],
+) -> Dict[str, Any]:
+    """
+    Clear current binding for selected sku masters.
+
+    What it does:
+    - Deactivate active `sku_model_version_mapping` rows (model or bundle-as-model).
+    - Clear bundle-template related metadata fields on `sku_master.metadata_json`.
+
+    What it does NOT do:
+    - It does NOT delete historical shipment BOM snapshots (immutable/auditable).
+      To fix historical profit/analytics, re-run "重建快照/计价" in shipments ops center.
+    """
+    ids = [str(x).strip() for x in (sku_master_ids or []) if str(x).strip()]
+    total_selected = len(ids)
+    if total_selected <= 0:
+        return {"total_selected": 0, "unbound_count": 0, "skipped_missing_barcode": 0, "errors": []}
+
+    rows = (
+        db.query(models.SkuMaster)
+        .filter(models.SkuMaster.id.in_(list(set(ids))), models.SkuMaster.is_archived.is_(False))
+        .all()
+    )
+    by_id = {r.id: r for r in rows}
+
+    unbound_count = 0
+    skipped_missing_barcode = 0
+    errors: List[Dict[str, Any]] = []
+    now_iso = _utcnow().isoformat()
+
+    for sid in ids:
+        row = by_id.get(sid)
+        if not row:
+            errors.append({"sku_master_id": sid, "error": "sku_master not found"})
+            continue
+        sku = (getattr(row, "erp_sku_barcode", None) or "").strip()
+        if not sku:
+            skipped_missing_barcode += 1
+            continue
+
+        # deactivate active bindings (keep history)
+        mappings = (
+            db.query(models.SkuModelVersionMapping)
+            .filter(
+                models.SkuModelVersionMapping.sku_code == sku,
+                models.SkuModelVersionMapping.is_archived.is_(False),
+                models.SkuModelVersionMapping.is_active.is_(True),
+            )
+            .all()
+        )
+        for m in mappings:
+            m.is_active = False
+            meta2 = dict(getattr(m, "metadata_json", None) or {})
+            meta2.update({"unbound_at": now_iso, "unbound_by": requested_by, "unbound_reason": "manual_clear"})
+            m.metadata_json = meta2
+            db.add(m)
+
+        # Clear bundle-template metadata fields (Phase0 fields)
+        meta = dict(getattr(row, "metadata_json", None) or {})
+        for k in (
+            "bundle_template_id",
+            "bundle_template_code",
+            "bundle_preset_selector",
+            "bundle_template_version_id",
+            "bundle_template_version_label",
+            "bundle_model_version_id",
+        ):
+            if k in meta:
+                meta.pop(k, None)
+        meta.update(
+            {
+                "binding_cleared_at": now_iso,
+                "binding_cleared_by": requested_by,
+                "binding_cleared_reason": "manual_clear",
+            }
+        )
+        row.metadata_json = meta
+        db.add(row)
+
+        if mappings:
+            unbound_count += 1
+
+    db.commit()
+    return {
+        "total_selected": total_selected,
+        "unbound_count": unbound_count,
+        "skipped_missing_barcode": skipped_missing_barcode,
+        "errors": errors,
+    }
+
+
+def generate_preparse_and_snapshots(
+    db: Session,
+    *,
+    sku_master_ids: List[str],
+    operator_id: Optional[str],
+    limit_per_sku: int = 50,
+    overwrite: bool = False,
+) -> Dict[str, Any]:
+    """
+    Convenience automation for SKU master UI:
+    - Generate/update pre-parse cache (dimensions/tokens) from latest shipment spec sample (if exists).
+    - Generate shipment BOM snapshots for lines that are currently pending or in unresolved exception queue.
+
+    Safety:
+    - overwrite defaults to False (fill-missing only).
+    - limit_per_sku caps workload.
+    """
+    from . import shipment_import_service  # local import to avoid circular deps
+
+    ids = [str(x).strip() for x in (sku_master_ids or []) if str(x).strip()]
+    total_selected = len(ids)
+    if total_selected <= 0:
+        return {
+            "total_selected": 0,
+            "parsed_count": 0,
+            "created_snapshots": 0,
+            "recomputed_snapshots": 0,
+            "skipped_snapshots": 0,
+            "failed_snapshots": 0,
+            "skipped_missing_barcode": 0,
+            "errors": [],
+        }
+
+    lim = max(min(int(limit_per_sku or 50), 500), 1)
+    op = (operator_id or "").strip() or None
+
+    rows = (
+        db.query(models.SkuMaster)
+        .filter(models.SkuMaster.id.in_(list(set(ids))), models.SkuMaster.is_archived.is_(False))
+        .all()
+    )
+    by_id = {r.id: r for r in rows}
+
+    parsed_count = 0
+    created_snapshots = 0
+    recomputed_snapshots = 0
+    skipped_snapshots = 0
+    failed_snapshots = 0
+    skipped_missing_barcode = 0
+    errors: List[Dict[str, Any]] = []
+
+    # helpers to identify pending lines quickly
+    has_bom = (
+        db.query(models.BomSnapshot.id)
+        .filter(models.BomSnapshot.shipment_line_id == models.ShipmentLine.id)
+        .limit(1)
+        .correlate(models.ShipmentLine)
+        .exists()
+    )
+    has_costing = (
+        db.query(models.ShipmentCostingResult.id)
+        .filter(models.ShipmentCostingResult.shipment_line_id == models.ShipmentLine.id)
+        .limit(1)
+        .correlate(models.ShipmentLine)
+        .exists()
+    )
+
+    for sid in ids:
+        sm = by_id.get(sid)
+        if not sm:
+            errors.append({"sku_master_id": sid, "error": "sku_master not found"})
+            continue
+
+        sku = (getattr(sm, "erp_sku_barcode", None) or "").strip()
+        if not sku:
+            skipped_missing_barcode += 1
+            continue
+
+        # 1) preparse from latest shipment sample (best-effort)
+        try:
+            _sh, _raw_spec, norm_spec = _latest_shipment_spec_sample(db, sku_code=sku)
+            if norm_spec and norm_spec.strip():
+                _apply_preparse_no_commit(db, sku_master_row=sm, spec_text=norm_spec, requested_by=op)
+                parsed_count += 1
+                db.add(sm)
+                db.commit()
+        except Exception as exc:
+            db.rollback()
+            errors.append({"sku_master_id": sid, "sku_code": sku, "error": f"preparse_failed: {str(exc)}"})
+
+        # IMPORTANT: snapshot generation requires an active binding.
+        # If user has cleared binding, they must go to shipments ops center to decide scope (all orders vs partial)
+        # and perform overwrite rebuild if needed.
+        binding = product_model_service.get_active_sku_binding(db, sku)
+        if not binding:
+            errors.append(
+                {
+                    "sku_master_id": sid,
+                    "sku_code": sku,
+                    "error": "skip_snapshots_unbound: SKU 当前未绑定；请先重新绑定，再执行“补齐缺失”。如需覆盖重建历史快照，请到发货作业中心操作。",
+                }
+            )
+            continue
+
+        # 2) snapshots: unresolved exceptions first (strong signal of missing snapshot)
+        excs = (
+            db.query(models.ShipmentExceptionQueue)
+            .join(models.ShipmentLine, models.ShipmentLine.id == models.ShipmentExceptionQueue.shipment_line_id)
+            .filter(
+                models.ShipmentExceptionQueue.resolved_at.is_(None),
+                models.ShipmentLine.is_archived.is_(False),
+                models.ShipmentLine.is_active.is_(True),
+                models.ShipmentLine.sku_code == sku,
+            )
+            .order_by(models.ShipmentExceptionQueue.created_at.desc())
+            .limit(lim)
+            .all()
+        )
+        line_ids: List[str] = [str(getattr(e, "shipment_line_id", "") or "").strip() for e in excs if getattr(e, "shipment_line_id", None)]
+
+        # also include pending lines (no snapshot/costing) even if no exception row exists
+        more_pending = (
+            db.query(models.ShipmentLine.id)
+            .filter(
+                models.ShipmentLine.is_archived.is_(False),
+                models.ShipmentLine.is_active.is_(True),
+                models.ShipmentLine.completed_at.isnot(None),
+                models.ShipmentLine.sku_code == sku,
+                func.nullif(func.trim(func.coalesce(models.ShipmentLine.spec_text, "")), "").isnot(None),
+                ~or_(has_bom, has_costing),
+            )
+            .order_by(models.ShipmentLine.completed_at.desc().nullslast(), models.ShipmentLine.created_at.desc())
+            .limit(lim)
+            .all()
+        )
+        for (lid,) in more_pending:
+            x = str(lid or "").strip()
+            if x:
+                line_ids.append(x)
+
+        # de-dup and cap
+        uniq: List[str] = []
+        seen: set[str] = set()
+        for lid in line_ids:
+            if lid in seen:
+                continue
+            seen.add(lid)
+            uniq.append(lid)
+            if len(uniq) >= lim:
+                break
+
+        for lid in uniq:
+            try:
+                res = shipment_import_service.compute_snapshot_for_shipment_line(
+                    db,
+                    shipment_line_id=lid,
+                    operator_id=op,
+                    overwrite=bool(overwrite),
+                )
+                action = str(res.get("action") or "")
+                if action == "created":
+                    created_snapshots += 1
+                elif action == "recomputed":
+                    recomputed_snapshots += 1
+                elif action == "skipped":
+                    skipped_snapshots += 1
+                    # If an exception row exists but line is already processed, resolve it to avoid "stale exceptions".
+                    try:
+                        db.query(models.ShipmentExceptionQueue).filter(
+                            models.ShipmentExceptionQueue.shipment_line_id == lid,
+                            models.ShipmentExceptionQueue.resolved_at.is_(None),
+                        ).update({"resolved_at": _utcnow(), "message": "resolved_by_existing_snapshot"})
+                        db.commit()
+                    except Exception:
+                        db.rollback()
+                else:
+                    failed_snapshots += 1
+            except Exception as exc:
+                db.rollback()
+                failed_snapshots += 1
+                errors.append({"sku_master_id": sid, "sku_code": sku, "shipment_line_id": lid, "error": str(exc)})
+
+    return {
+        "total_selected": total_selected,
+        "parsed_count": parsed_count,
+        "created_snapshots": created_snapshots,
+        "recomputed_snapshots": recomputed_snapshots,
+        "skipped_snapshots": skipped_snapshots,
+        "failed_snapshots": failed_snapshots,
+        "skipped_missing_barcode": skipped_missing_barcode,
+        "errors": errors,
+    }
+
+
 def bind_sku_master_by_model(
     db: Session,
     *,
@@ -1898,6 +2187,23 @@ def bind_sku_master_by_model(
             # already aligned to the target published version
             skipped_already_bound += 1
             continue
+        # Validation by latest shipment spec sample (relaxed):
+        # - If no sample, allow binding but mark as "no_shipment_sample".
+        # - If sample exists but BOM preview fails, block binding.
+        sh, raw_spec, norm_spec = _latest_shipment_spec_sample(db, sku_code=sku)
+        if norm_spec:
+            try:
+                bom_generation_service.generate_bom(
+                    db,
+                    spec_text=norm_spec,
+                    model_version_id=str(version.id),
+                    sku_code=sku,
+                    quantity=Decimal("1"),
+                    include_disabled_variants=False,
+                )
+            except Exception as exc:  # noqa: BLE001
+                errors.append({"sku_master_id": row.id, "sku_code": sku, "error": f"BOM试算失败：{str(exc)}"})
+                continue
         try:
             product_model_service.bind_sku_to_version(
                 db,
@@ -1918,9 +2224,16 @@ def bind_sku_master_by_model(
                     "model_bound_at": now_iso,
                     "model_bound_by": (requested_by or meta.get("requested_by") or None),
                     "model_binding_method": "manual_by_model_rebind" if allow_rebind else "manual_by_model",
+                    "binding_validation_state": "sampled" if norm_spec else "no_shipment_sample",
                 }
             )
             row.metadata_json = meta
+            # auto preparse (from latest shipment spec sample)
+            if norm_spec:
+                try:
+                    _apply_preparse_no_commit(db, sku_master_row=row, spec_text=norm_spec, requested_by=requested_by)
+                except Exception:
+                    pass
             bound_count += 1
         except Exception as exc:  # noqa: BLE001
             errors.append({"sku_master_id": row.id, "sku_code": sku, "error": str(exc)})
@@ -1932,6 +2245,416 @@ def bind_sku_master_by_model(
         "skipped_already_bound": skipped_already_bound,
         "skipped_missing_barcode": skipped_missing_barcode,
         "errors": errors,
+    }
+
+
+def _latest_shipment_spec_sample(db: Session, *, sku_code: str) -> Tuple[Optional[models.ShipmentLine], Optional[str], Optional[str]]:
+    """
+    Return (shipment_line, raw_spec_text, normalized_spec_text) for the latest shipment line of this sku_code.
+    """
+    sku = (sku_code or "").strip()
+    if not sku:
+        return None, None, None
+    row = (
+        db.query(models.ShipmentLine)
+        .filter(
+            models.ShipmentLine.is_archived.is_(False),
+            models.ShipmentLine.is_active.is_(True),
+            models.ShipmentLine.sku_code == sku,
+            func.coalesce(models.ShipmentLine.spec_text, "") != "",
+        )
+        .order_by(
+            models.ShipmentLine.completed_at.is_(None).asc(),
+            models.ShipmentLine.completed_at.desc(),
+            models.ShipmentLine.created_at.desc(),
+        )
+        .first()
+    )
+    raw = str(getattr(row, "spec_text", "") or "").strip() if row else None
+    if not raw:
+        return row, None, None
+    try:
+        norm = spec_parser_service.normalize_tx_spec_text(raw)
+    except Exception:  # noqa: BLE001
+        norm = raw
+    norm = str(norm or "").strip() or None
+    return row, raw, norm
+
+
+def _mismatch_warnings_by_keywords(*, sample_text: str, sku_spec_text: Optional[str], product_name: Optional[str], target_label: str) -> List[str]:
+    """
+    Soft guardrail: warn when shipment sample keywords strongly suggest a different category than the chosen target.
+    This is NOT a hard error (users may intentionally map across categories).
+    """
+    s = str(sample_text or "")
+    p = str(product_name or "")
+    sku_spec = str(sku_spec_text or "")
+    combined = f"{s}；{p}；{sku_spec}"
+    combined = combined.replace("（", "(").replace("）", ")").strip()
+    target = str(target_label or "").strip()
+    if not combined or not target:
+        return []
+
+    # Mutually exclusive-ish category markers (Phase0 heuristic)
+    groups: List[Dict[str, Any]] = [
+        {"id": "siquan_dian", "label": "丝圈/地垫", "keys": ["丝圈", "地垫"]},
+        {"id": "baozhen", "label": "抱枕", "keys": ["抱枕", "枕套"]},
+        {"id": "ditan", "label": "地毯", "keys": ["地毯"]},
+        {"id": "zhuodian", "label": "桌垫", "keys": ["桌垫"]},
+        {"id": "zhuangshihua", "label": "装饰画/画框", "keys": ["装饰画", "画框", "挂画"]},
+    ]
+
+    def _hit(text: str, keys: List[str]) -> bool:
+        return any(k and k in text for k in (keys or []))
+
+    sample_hits = [g for g in groups if _hit(combined, g["keys"])]
+    if not sample_hits:
+        return []
+    target_hits = [g for g in groups if _hit(target, g["keys"])]
+
+    # If target has an explicit category marker and it's disjoint with sample markers -> strong warning.
+    sample_ids = {g["id"] for g in sample_hits}
+    target_ids = {g["id"] for g in target_hits}
+    if target_ids and sample_ids.isdisjoint(target_ids):
+        return [
+            f"疑似选错目标：样本更像“{'/'.join([g['label'] for g in sample_hits])}”，但当前目标更像“{'/'.join([g['label'] for g in target_hits])}”。请确认未误选。"
+        ]
+
+    # If sample has a clear marker but target contains none -> softer warning.
+    if not target_ids:
+        return [
+            f"请确认目标是否选对：样本命中“{'/'.join([g['label'] for g in sample_hits])}”关键词，但目标名称未包含对应关键词。"
+        ]
+
+    return []
+
+
+def _apply_preparse_no_commit(db: Session, *, sku_master_row: models.SkuMaster, spec_text: str, requested_by: Optional[str]) -> None:
+    """
+    Same effect as save_spec_preparse but without per-row commit/refresh.
+    """
+    row = sku_master_row
+    text = (spec_text or "").strip()
+    if not text:
+        return
+    spec_hash = _sha1_text(text)
+    parsed0 = spec_parser_service.parse_spec(text)
+    _ensure_spec_parse_snapshot(db, spec_hash=spec_hash, spec_text=text, parsed=parsed0)
+
+    parsed = spec_parser_service.parse_spec(text)
+    dims = {
+        "width_cm": parsed.get("width_cm"),
+        "height_cm": parsed.get("height_cm"),
+        "diameter_cm": parsed.get("diameter_cm"),
+        "area_m2": parsed.get("area_m2"),
+        "perimeter_m": parsed.get("perimeter_m"),
+    }
+    has_dims = any(dims.get(k) not in (None, "") for k in ("width_cm", "height_cm", "diameter_cm"))
+
+    meta = dict(row.metadata_json or {})
+    meta.update(
+        {
+            "preparse_spec_text": text,
+            "preparse_spec_hash": spec_hash,
+            "preparse_parser_version": PARSER_VERSION,
+            "preparse_dimensions": _json_safe(dims),
+            "preparse_tokens": list(parsed.get("tokens") or []),
+            "preparse_has_dims": bool(has_dims),
+            "preparse_saved_at": _utcnow().isoformat(),
+            "preparse_saved_by": (requested_by or meta.get("requested_by") or None),
+        }
+    )
+    row.metadata_json = meta
+
+
+def preview_bind_by_model(
+    db: Session,
+    *,
+    model_id: str,
+    sku_master_ids: List[str],
+    requested_by: Optional[str],
+    allow_rebind: bool = False,
+) -> Dict[str, Any]:
+    version = _get_published_standard_version_for_model_id(db, model_id)
+    model = getattr(version, "model", None)
+    target_label = f"{getattr(model, 'model_code', '')} {getattr(model, 'model_name', '')}".strip()
+    ids = [str(x).strip() for x in (sku_master_ids or []) if str(x).strip()]
+    total_selected = len(ids)
+    if total_selected <= 0:
+        return {"total_selected": 0, "can_bind": 0, "skip_already_bound": 0, "skip_missing_barcode": 0, "hard_errors": 0, "items": []}
+
+    rows = (
+        db.query(models.SkuMaster)
+        .filter(models.SkuMaster.id.in_(list(set(ids))), models.SkuMaster.is_archived.is_(False))
+        .all()
+    )
+    by_id = {r.id: r for r in rows}
+
+    items: List[Dict[str, Any]] = []
+    can_bind = 0
+    skip_already_bound = 0
+    skip_missing_barcode = 0
+    hard_errors = 0
+
+    for sid in ids:
+        row = by_id.get(sid)
+        if not row:
+            items.append(
+                {
+                    "sku_master_id": sid,
+                    "status": "hard_error",
+                    "hard_errors": ["sku_master not found"],
+                    "warnings": [],
+                    "model_version_id": str(version.id),
+                }
+            )
+            hard_errors += 1
+            continue
+        sku = (row.erp_sku_barcode or "").strip() or None
+        base = {"sku_master_id": row.id, "sku_code": sku, "channel": row.channel, "model_version_id": str(version.id)}
+        if not sku:
+            items.append({**base, "status": "skip_missing_barcode", "hard_errors": [], "warnings": []})
+            skip_missing_barcode += 1
+            continue
+        active = product_model_service.get_active_sku_binding(db, sku)
+        if active and not allow_rebind:
+            items.append({**base, "status": "skip_already_bound", "hard_errors": [], "warnings": ["SKU已有绑定且不允许覆盖"]})
+            skip_already_bound += 1
+            continue
+        if active and str(getattr(active, "model_version_id", "") or "") == str(version.id) and allow_rebind:
+            items.append({**base, "status": "skip_already_bound", "hard_errors": [], "warnings": ["SKU已绑定到目标版本"]})
+            skip_already_bound += 1
+            continue
+
+        sh, raw_spec, norm_spec = _latest_shipment_spec_sample(db, sku_code=sku)
+        if not norm_spec:
+            items.append(
+                {
+                    **base,
+                    "status": "can_bind",
+                    "hard_errors": [],
+                    "warnings": ["无发货交易规格样本：本次绑定未做BOM试算校验"],
+                    "sample_shipment_line_id": getattr(sh, "id", None) if sh else None,
+                    "sample_completed_at": getattr(sh, "completed_at", None) if sh else None,
+                    "sample_spec_text": raw_spec,
+                    "sample_spec_text_norm": norm_spec,
+                }
+            )
+            can_bind += 1
+            continue
+
+        try:
+            bom = bom_generation_service.generate_bom(
+                db,
+                spec_text=norm_spec,
+                model_version_id=str(version.id),
+                sku_code=sku,
+                quantity=Decimal("1"),
+                include_disabled_variants=False,
+            )
+            trace = bom.get("trace") if isinstance(bom.get("trace"), dict) else {}
+            costing = trace.get("costing") if isinstance(trace.get("costing"), dict) else {}
+            inventory = trace.get("inventory") if isinstance(trace.get("inventory"), dict) else {}
+            warn2 = _mismatch_warnings_by_keywords(
+                sample_text=norm_spec,
+                sku_spec_text=getattr(row, "spec_text", None),
+                product_name=getattr(row, "product_name", None),
+                target_label=target_label or str(version.id),
+            )
+            items.append(
+                {
+                    **base,
+                    "status": "can_bind",
+                    "hard_errors": [],
+                    "warnings": warn2,
+                    "sample_shipment_line_id": getattr(sh, "id", None) if sh else None,
+                    "sample_completed_at": getattr(sh, "completed_at", None) if sh else None,
+                    "sample_spec_text": raw_spec,
+                    "sample_spec_text_norm": norm_spec,
+                    "cost_total": costing.get("total_cost"),
+                    "inventory_line_count": inventory.get("inventory_line_count") if isinstance(inventory, dict) else None,
+                }
+            )
+            can_bind += 1
+        except Exception as exc:  # noqa: BLE001
+            items.append(
+                {
+                    **base,
+                    "status": "hard_error",
+                    "hard_errors": [f"BOM试算失败：{str(exc)}"],
+                    "warnings": [],
+                    "sample_shipment_line_id": getattr(sh, "id", None) if sh else None,
+                    "sample_completed_at": getattr(sh, "completed_at", None) if sh else None,
+                    "sample_spec_text": raw_spec,
+                    "sample_spec_text_norm": norm_spec,
+                }
+            )
+            hard_errors += 1
+
+    return {
+        "total_selected": total_selected,
+        "can_bind": can_bind,
+        "skip_already_bound": skip_already_bound,
+        "skip_missing_barcode": skip_missing_barcode,
+        "hard_errors": hard_errors,
+        "items": items,
+    }
+
+
+def preview_bind_by_bundle_template(
+    db: Session,
+    *,
+    template_id: str,
+    preset_selector: Optional[str] = None,
+    sku_master_ids: List[str],
+    requested_by: Optional[str],
+    allow_rebind: bool = False,
+) -> Dict[str, Any]:
+    tid = (template_id or "").strip()
+    if not tid:
+        raise ValueError("template_id 不能为空")
+    selector = str(preset_selector or "").strip().upper() or None
+    if not selector:
+        raise ValueError("preset_selector 不能为空")
+    t = bundle_template_service.get_template(db, tid, include_archived=True)
+    if not t or getattr(t, "is_archived", False):
+        raise ValueError("套装模板不存在或已归档")
+    v = bundle_template_service.get_latest_published_version(db, template_id=tid)
+    if not v:
+        raise ValueError("套装模板尚未发布版本：请先在“套装模板”里点“发布为新版本”")
+    bundle_model_version = product_model_service.ensure_bundle_model_version(
+        db, template_version=v, preset_selector=selector, requested_by=requested_by
+    )
+    target_label = f"{str(getattr(t, 'code', '') or '').strip()} {str(getattr(t, 'name', '') or '').strip()}".strip()
+
+    ids = [str(x).strip() for x in (sku_master_ids or []) if str(x).strip()]
+    total_selected = len(ids)
+    if total_selected <= 0:
+        return {"total_selected": 0, "can_bind": 0, "skip_already_bound": 0, "skip_missing_barcode": 0, "hard_errors": 0, "items": []}
+
+    rows = (
+        db.query(models.SkuMaster)
+        .filter(models.SkuMaster.id.in_(list(set(ids))), models.SkuMaster.is_archived.is_(False))
+        .all()
+    )
+    by_id = {r.id: r for r in rows}
+
+    items: List[Dict[str, Any]] = []
+    can_bind = 0
+    skip_already_bound = 0
+    skip_missing_barcode = 0
+    hard_errors = 0
+
+    for sid in ids:
+        row = by_id.get(sid)
+        if not row:
+            items.append(
+                {
+                    "sku_master_id": sid,
+                    "status": "hard_error",
+                    "hard_errors": ["sku_master not found"],
+                    "warnings": [],
+                    "model_version_id": str(bundle_model_version.id),
+                }
+            )
+            hard_errors += 1
+            continue
+        sku = (row.erp_sku_barcode or "").strip() or None
+        base = {"sku_master_id": row.id, "sku_code": sku, "channel": row.channel, "model_version_id": str(bundle_model_version.id)}
+        if not sku:
+            items.append({**base, "status": "skip_missing_barcode", "hard_errors": [], "warnings": []})
+            skip_missing_barcode += 1
+            continue
+
+        meta = dict(row.metadata_json or {})
+        existing_tid = str(meta.get("bundle_template_id") or "").strip()
+        if existing_tid and not allow_rebind:
+            items.append({**base, "status": "skip_already_bound", "hard_errors": [], "warnings": ["SKU已绑定套装模板且不允许覆盖"]})
+            skip_already_bound += 1
+            continue
+        active = product_model_service.get_active_sku_binding(db, sku)
+        if active and not allow_rebind:
+            items.append({**base, "status": "skip_already_bound", "hard_errors": [], "warnings": ["SKU已有绑定且不允许覆盖"]})
+            skip_already_bound += 1
+            continue
+        if active and str(getattr(active, "model_version_id", "") or "") == str(bundle_model_version.id) and allow_rebind:
+            items.append({**base, "status": "skip_already_bound", "hard_errors": [], "warnings": ["SKU已绑定到目标套装版本"]})
+            skip_already_bound += 1
+            continue
+
+        sh, raw_spec, norm_spec = _latest_shipment_spec_sample(db, sku_code=sku)
+        if not norm_spec:
+            items.append(
+                {
+                    **base,
+                    "status": "can_bind",
+                    "hard_errors": [],
+                    "warnings": ["无发货交易规格样本：本次绑定未做BOM试算校验"],
+                    "sample_shipment_line_id": getattr(sh, "id", None) if sh else None,
+                    "sample_completed_at": getattr(sh, "completed_at", None) if sh else None,
+                    "sample_spec_text": raw_spec,
+                    "sample_spec_text_norm": norm_spec,
+                }
+            )
+            can_bind += 1
+            continue
+
+        try:
+            bom = bom_generation_service.generate_bom_by_spec(
+                db,
+                spec_text=norm_spec,
+                sku_code=sku,
+                include_disabled_variants=False,
+                return_components=False,
+                bundle_template_version_id=str(v.id),
+                bundle_preset_selector=selector,
+            )
+            trace = bom.get("trace") if isinstance(bom.get("trace"), dict) else {}
+            costing = trace.get("costing") if isinstance(trace.get("costing"), dict) else {}
+            inventory = trace.get("inventory") if isinstance(trace.get("inventory"), dict) else {}
+            warn2 = _mismatch_warnings_by_keywords(
+                sample_text=norm_spec,
+                sku_spec_text=getattr(row, "spec_text", None),
+                product_name=getattr(row, "product_name", None),
+                target_label=target_label or str(bundle_model_version.id),
+            )
+            items.append(
+                {
+                    **base,
+                    "status": "can_bind",
+                    "hard_errors": [],
+                    "warnings": warn2,
+                    "sample_shipment_line_id": getattr(sh, "id", None) if sh else None,
+                    "sample_completed_at": getattr(sh, "completed_at", None) if sh else None,
+                    "sample_spec_text": raw_spec,
+                    "sample_spec_text_norm": norm_spec,
+                    "cost_total": costing.get("total_cost"),
+                    "inventory_line_count": inventory.get("inventory_line_count") if isinstance(inventory, dict) else None,
+                }
+            )
+            can_bind += 1
+        except Exception as exc:  # noqa: BLE001
+            items.append(
+                {
+                    **base,
+                    "status": "hard_error",
+                    "hard_errors": [f"BOM试算失败：{str(exc)}"],
+                    "warnings": [],
+                    "sample_shipment_line_id": getattr(sh, "id", None) if sh else None,
+                    "sample_completed_at": getattr(sh, "completed_at", None) if sh else None,
+                    "sample_spec_text": raw_spec,
+                    "sample_spec_text_norm": norm_spec,
+                }
+            )
+            hard_errors += 1
+
+    return {
+        "total_selected": total_selected,
+        "can_bind": can_bind,
+        "skip_already_bound": skip_already_bound,
+        "skip_missing_barcode": skip_missing_barcode,
+        "hard_errors": hard_errors,
+        "items": items,
     }
 
 
@@ -2107,6 +2830,20 @@ def bind_sku_master_by_model_bulk(
         if active and str(getattr(active, "model_version_id", "") or "") == str(version.id) and allow_rebind:
             skipped_already_bound += 1
             continue
+        sh, raw_spec, norm_spec = _latest_shipment_spec_sample(db, sku_code=sku)
+        if norm_spec:
+            try:
+                bom_generation_service.generate_bom(
+                    db,
+                    spec_text=norm_spec,
+                    model_version_id=str(version.id),
+                    sku_code=sku,
+                    quantity=Decimal("1"),
+                    include_disabled_variants=False,
+                )
+            except Exception as exc:  # noqa: BLE001
+                errors.append({"sku_master_id": row.id, "sku_code": sku, "error": f"BOM试算失败：{str(exc)}"})
+                continue
         try:
             product_model_service.bind_sku_to_version(
                 db,
@@ -2126,9 +2863,15 @@ def bind_sku_master_by_model_bulk(
                     "model_bound_at": now_iso,
                     "model_bound_by": (requested_by or meta.get("requested_by") or None),
                     "model_binding_method": "manual_by_model_bulk_rebind" if allow_rebind else "manual_by_model_bulk",
+                    "binding_validation_state": "sampled" if norm_spec else "no_shipment_sample",
                 }
             )
             row.metadata_json = meta
+            if norm_spec:
+                try:
+                    _apply_preparse_no_commit(db, sku_master_row=row, spec_text=norm_spec, requested_by=requested_by)
+                except Exception:
+                    pass
             bound_count += 1
         except Exception as exc:  # noqa: BLE001
             errors.append({"sku_master_id": row.id, "sku_code": sku, "error": str(exc)})
@@ -2142,6 +2885,250 @@ def bind_sku_master_by_model_bulk(
         "skipped_excluded": skipped_excluded,
         "errors": errors,
         "has_more": has_more,
+    }
+
+
+def preview_bind_by_model_bulk(
+    db: Session,
+    *,
+    model_id: str,
+    requested_by: Optional[str],
+    limit: int = 200,
+    bound_state: str = "unbound",
+    allow_rebind: bool = False,
+    search: Optional[str] = None,
+    channel: Optional[str] = None,
+    match_status: Optional[str] = None,
+    spec_mismatch: Optional[bool] = None,
+    preparse_state: Optional[str] = None,
+    include_terms: Optional[str] = None,
+    exclude_terms: Optional[str] = None,
+    match_scope: Optional[str] = None,
+    bound_model_id: Optional[str] = None,
+    bound_model_code: Optional[str] = None,
+    bound_version_id: Optional[str] = None,
+    excluded_sku_master_ids: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    version = _get_published_standard_version_for_model_id(db, model_id)
+    model = getattr(version, "model", None)
+    target_label = f"{getattr(model, 'model_code', '')} {getattr(model, 'model_name', '')}".strip()
+    limit2 = max(min(int(limit or 200), 2000), 1)
+
+    excluded_list = list(set([str(x) for x in (excluded_sku_master_ids or []) if str(x).strip()]))
+    skipped_excluded = len(excluded_list)
+
+    q = db.query(models.SkuMaster).filter(models.SkuMaster.is_archived.is_(False))
+
+    if search:
+        s = f"%{search.strip()}%"
+        q = q.filter(
+            (models.SkuMaster.erp_sku_barcode.ilike(s))
+            | (models.SkuMaster.product_name.ilike(s))
+            | (models.SkuMaster.product_code.ilike(s))
+        )
+    if channel:
+        q = q.filter(models.SkuMaster.channel == channel)
+    if match_status:
+        q = q.filter(models.SkuMaster.match_status == match_status)
+
+    # enforce bound/unbound state (server-side) via correlated EXISTS subquery
+    if bound_model_id or bound_model_code or bound_version_id:
+        subq = (
+            db.query(models.SkuModelVersionMapping.id)
+            .join(
+                models.ProductModelVersion,
+                models.ProductModelVersion.id == models.SkuModelVersionMapping.model_version_id,
+            )
+            .join(models.ProductModel, models.ProductModel.id == models.ProductModelVersion.model_id)
+            .filter(
+                models.SkuModelVersionMapping.sku_code == models.SkuMaster.erp_sku_barcode,
+                models.SkuModelVersionMapping.is_active.is_(True),
+                models.SkuModelVersionMapping.is_archived.is_(False),
+                models.ProductModelVersion.is_archived.is_(False),
+                models.ProductModel.is_archived.is_(False),
+            )
+        )
+        if bound_version_id:
+            subq = subq.filter(models.SkuModelVersionMapping.model_version_id == str(bound_version_id).strip())
+        if bound_model_id:
+            subq = subq.filter(models.ProductModelVersion.model_id == str(bound_model_id).strip())
+        if bound_model_code:
+            subq = subq.filter(models.ProductModel.model_code == str(bound_model_code).strip())
+    else:
+        subq = (
+            db.query(models.SkuModelVersionMapping.id)
+            .filter(
+                models.SkuModelVersionMapping.sku_code == models.SkuMaster.erp_sku_barcode,
+                models.SkuModelVersionMapping.is_active.is_(True),
+                models.SkuModelVersionMapping.is_archived.is_(False),
+            )
+        )
+    state = str(bound_state or "unbound").strip().lower()
+    if state not in ("unbound", "bound", "all"):
+        state = "unbound"
+    if state == "unbound":
+        q = q.filter(~subq.exists())
+    elif state == "bound":
+        q = q.filter(subq.exists())
+
+    if spec_mismatch is True:
+        q = q.filter(models.SkuMaster.metadata_json["spec_mismatch"].as_boolean() == True)  # noqa: E712
+
+    if preparse_state:
+        state2 = str(preparse_state).strip().lower()
+        ph = models.SkuMaster.metadata_json["preparse_spec_hash"].as_string()
+        if state2 in ("parsed", "done", "yes", "1", "true"):
+            q = q.filter(func.coalesce(ph, "") != "")
+        elif state2 in ("unparsed", "none", "no", "0", "false"):
+            q = q.filter(func.coalesce(ph, "") == "")
+
+    def _parse_terms(raw: Optional[str]) -> List[str]:
+        if not raw:
+            return []
+        s2 = str(raw)
+        for ch in ("，", ";", "；", "\n", "\t"):
+            s2 = s2.replace(ch, " ")
+        parts = [p.strip() for p in s2.split(" ") if p.strip()]
+        out: List[str] = []
+        seen: set[str] = set()
+        for p in parts:
+            if p in seen:
+                continue
+            seen.add(p)
+            out.append(p)
+        return out
+
+    include_list = _parse_terms(include_terms)
+    exclude_list = _parse_terms(exclude_terms)
+    scope = (match_scope or "auto").strip()
+    if scope not in ("auto", "spec", "name", "spec_or_name"):
+        scope = "auto"
+
+    name_channels = ["小红书", "京东"]
+
+    def _field_expr_for_scope(term: str):
+        pattern = f"%{term}%"
+        spec_hit = models.SkuMaster.spec_text.ilike(pattern)
+        name_hit = models.SkuMaster.product_name.ilike(pattern)
+        if scope == "spec":
+            return spec_hit
+        if scope == "name":
+            return name_hit
+        if scope == "spec_or_name":
+            return spec_hit | name_hit
+        return (models.SkuMaster.channel.in_(name_channels) & name_hit) | (
+            ~models.SkuMaster.channel.in_(name_channels) & spec_hit
+        )
+
+    for t in include_list:
+        q = q.filter(_field_expr_for_scope(t))
+    for t in exclude_list:
+        q = q.filter(~_field_expr_for_scope(t))
+
+    if excluded_list:
+        q = q.filter(~models.SkuMaster.id.in_(excluded_list))
+
+    rows = q.order_by(models.SkuMaster.updated_at.desc()).limit(limit2 + 1).all()
+    has_more = len(rows) > limit2
+    batch_rows = rows[:limit2]
+
+    items: List[Dict[str, Any]] = []
+    can_bind = 0
+    skip_already_bound = 0
+    skip_missing_barcode = 0
+    hard_errors = 0
+
+    for row in batch_rows:
+        sku = (row.erp_sku_barcode or "").strip() or None
+        base = {"sku_master_id": row.id, "sku_code": sku, "channel": row.channel, "model_version_id": str(version.id)}
+        if not sku:
+            items.append({**base, "status": "skip_missing_barcode", "hard_errors": [], "warnings": []})
+            skip_missing_barcode += 1
+            continue
+        active = product_model_service.get_active_sku_binding(db, sku)
+        if active and not allow_rebind:
+            items.append({**base, "status": "skip_already_bound", "hard_errors": [], "warnings": ["SKU已有绑定且不允许覆盖"]})
+            skip_already_bound += 1
+            continue
+        if active and str(getattr(active, "model_version_id", "") or "") == str(version.id) and allow_rebind:
+            items.append({**base, "status": "skip_already_bound", "hard_errors": [], "warnings": ["SKU已绑定到目标版本"]})
+            skip_already_bound += 1
+            continue
+
+        sh, raw_spec, norm_spec = _latest_shipment_spec_sample(db, sku_code=sku)
+        if not norm_spec:
+            items.append(
+                {
+                    **base,
+                    "status": "can_bind",
+                    "hard_errors": [],
+                    "warnings": ["无发货交易规格样本：本次绑定未做BOM试算校验"],
+                    "sample_shipment_line_id": getattr(sh, "id", None) if sh else None,
+                    "sample_completed_at": getattr(sh, "completed_at", None) if sh else None,
+                    "sample_spec_text": raw_spec,
+                    "sample_spec_text_norm": norm_spec,
+                }
+            )
+            can_bind += 1
+            continue
+
+        try:
+            bom = bom_generation_service.generate_bom(
+                db,
+                spec_text=norm_spec,
+                model_version_id=str(version.id),
+                sku_code=sku,
+                quantity=Decimal("1"),
+                include_disabled_variants=False,
+            )
+            trace = bom.get("trace") if isinstance(bom.get("trace"), dict) else {}
+            costing = trace.get("costing") if isinstance(trace.get("costing"), dict) else {}
+            inventory = trace.get("inventory") if isinstance(trace.get("inventory"), dict) else {}
+            warn2 = _mismatch_warnings_by_keywords(
+                sample_text=norm_spec,
+                sku_spec_text=getattr(row, "spec_text", None),
+                product_name=getattr(row, "product_name", None),
+                target_label=target_label or str(version.id),
+            )
+            items.append(
+                {
+                    **base,
+                    "status": "can_bind",
+                    "hard_errors": [],
+                    "warnings": warn2,
+                    "sample_shipment_line_id": getattr(sh, "id", None) if sh else None,
+                    "sample_completed_at": getattr(sh, "completed_at", None) if sh else None,
+                    "sample_spec_text": raw_spec,
+                    "sample_spec_text_norm": norm_spec,
+                    "cost_total": costing.get("total_cost"),
+                    "inventory_line_count": inventory.get("inventory_line_count") if isinstance(inventory, dict) else None,
+                }
+            )
+            can_bind += 1
+        except Exception as exc:  # noqa: BLE001
+            items.append(
+                {
+                    **base,
+                    "status": "hard_error",
+                    "hard_errors": [f"BOM试算失败：{str(exc)}"],
+                    "warnings": [],
+                    "sample_shipment_line_id": getattr(sh, "id", None) if sh else None,
+                    "sample_completed_at": getattr(sh, "completed_at", None) if sh else None,
+                    "sample_spec_text": raw_spec,
+                    "sample_spec_text_norm": norm_spec,
+                }
+            )
+            hard_errors += 1
+
+    return {
+        "batch_candidates": len(batch_rows),
+        "can_bind": can_bind,
+        "skip_already_bound": skip_already_bound,
+        "skip_missing_barcode": skip_missing_barcode,
+        "hard_errors": hard_errors,
+        "skipped_excluded": skipped_excluded,
+        "has_more": has_more,
+        "items": items,
     }
 
 
@@ -2214,6 +3201,21 @@ def bind_sku_master_by_bundle_template(
         if active and str(getattr(active, "model_version_id", "") or "") == str(bundle_model_version.id) and allow_rebind:
             skipped_already_bound += 1
             continue
+        sh, raw_spec, norm_spec = _latest_shipment_spec_sample(db, sku_code=sku)
+        if norm_spec:
+            try:
+                bom_generation_service.generate_bom_by_spec(
+                    db,
+                    spec_text=norm_spec,
+                    sku_code=sku,
+                    include_disabled_variants=False,
+                    return_components=False,
+                    bundle_template_version_id=str(v.id),
+                    bundle_preset_selector=selector,
+                )
+            except Exception as exc:  # noqa: BLE001
+                errors.append({"sku_master_id": row.id, "sku_code": sku, "error": f"BOM试算失败：{str(exc)}"})
+                continue
         # Bind SKU to bundle model version (single-exit)
         product_model_service.bind_sku_to_version(
             db,
@@ -2243,9 +3245,15 @@ def bind_sku_master_by_bundle_template(
                 "bundle_bound_at": now_iso,
                 "bundle_bound_by": (requested_by or meta.get("requested_by") or None),
                 "bundle_binding_method": "manual_by_template_rebind" if allow_rebind else "manual_by_template",
+                "binding_validation_state": "sampled" if norm_spec else "no_shipment_sample",
             }
         )
         row.metadata_json = meta
+        if norm_spec:
+            try:
+                _apply_preparse_no_commit(db, sku_master_row=row, spec_text=norm_spec, requested_by=requested_by)
+            except Exception:
+                pass
         bound_count += 1
 
     db.commit()
@@ -2438,6 +3446,21 @@ def bind_sku_master_by_bundle_template_bulk(
         if active and str(getattr(active, "model_version_id", "") or "") == str(bundle_model_version.id) and allow_rebind:
             skipped_already_bound += 1
             continue
+        sh, raw_spec, norm_spec = _latest_shipment_spec_sample(db, sku_code=sku)
+        if norm_spec:
+            try:
+                bom_generation_service.generate_bom_by_spec(
+                    db,
+                    spec_text=norm_spec,
+                    sku_code=sku,
+                    include_disabled_variants=False,
+                    return_components=False,
+                    bundle_template_version_id=str(v.id),
+                    bundle_preset_selector=selector,
+                )
+            except Exception as exc:  # noqa: BLE001
+                errors.append({"sku_master_id": row.id, "sku_code": sku, "error": f"BOM试算失败：{str(exc)}"})
+                continue
         product_model_service.bind_sku_to_version(
             db,
             sku_code=sku,
@@ -2466,9 +3489,15 @@ def bind_sku_master_by_bundle_template_bulk(
                 "bundle_bound_at": now_iso,
                 "bundle_bound_by": (requested_by or meta.get("requested_by") or None),
                 "bundle_binding_method": "manual_bulk_template_rebind" if allow_rebind else "manual_bulk_template",
+                "binding_validation_state": "sampled" if norm_spec else "no_shipment_sample",
             }
         )
         row.metadata_json = meta
+        if norm_spec:
+            try:
+                _apply_preparse_no_commit(db, sku_master_row=row, spec_text=norm_spec, requested_by=requested_by)
+            except Exception:
+                pass
         bound_count += 1
 
     db.commit()
@@ -2479,6 +3508,261 @@ def bind_sku_master_by_bundle_template_bulk(
         "skipped_excluded": skipped_excluded,
         "errors": errors,
         "has_more": has_more,
+    }
+
+
+def preview_bind_by_bundle_template_bulk(
+    db: Session,
+    *,
+    template_id: str,
+    preset_selector: Optional[str] = None,
+    requested_by: Optional[str],
+    limit: int = 200,
+    bound_state: str = "unbound",
+    allow_rebind: bool = False,
+    search: Optional[str] = None,
+    channel: Optional[str] = None,
+    match_status: Optional[str] = None,
+    spec_mismatch: Optional[bool] = None,
+    preparse_state: Optional[str] = None,
+    include_terms: Optional[str] = None,
+    exclude_terms: Optional[str] = None,
+    match_scope: Optional[str] = None,
+    bound_model_id: Optional[str] = None,
+    bound_model_code: Optional[str] = None,
+    bound_version_id: Optional[str] = None,
+    excluded_sku_master_ids: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    tid = (template_id or "").strip()
+    if not tid:
+        raise ValueError("template_id 不能为空")
+    t = bundle_template_service.get_template(db, tid, include_archived=True)
+    if not t or getattr(t, "is_archived", False):
+        raise ValueError("套装模板不存在或已归档")
+    selector = str(preset_selector or "").strip().upper() or None
+    if not selector:
+        raise ValueError("preset_selector 不能为空")
+    v = bundle_template_service.get_latest_published_version(db, template_id=tid)
+    if not v:
+        raise ValueError("套装模板尚未发布版本：请先在“套装模板”里点“发布为新版本”")
+    bundle_model_version = product_model_service.ensure_bundle_model_version(
+        db, template_version=v, preset_selector=selector, requested_by=requested_by
+    )
+    target_label = f"{str(getattr(t, 'code', '') or '').strip()} {str(getattr(t, 'name', '') or '').strip()}".strip()
+
+    limit2 = max(min(int(limit or 200), 2000), 1)
+    excluded_list = list(set([str(x) for x in (excluded_sku_master_ids or []) if str(x).strip()]))
+    skipped_excluded = len(excluded_list)
+
+    q = db.query(models.SkuMaster).filter(models.SkuMaster.is_archived.is_(False))
+    if search:
+        s_like = f"%{search.strip()}%"
+        q = q.filter(
+            (models.SkuMaster.erp_sku_barcode.ilike(s_like))
+            | (models.SkuMaster.product_name.ilike(s_like))
+            | (models.SkuMaster.product_code.ilike(s_like))
+        )
+    if channel:
+        q = q.filter(models.SkuMaster.channel == channel)
+    if match_status:
+        q = q.filter(models.SkuMaster.match_status == match_status)
+    if excluded_list:
+        q = q.filter(~models.SkuMaster.id.in_(excluded_list))
+    if spec_mismatch is True:
+        q = q.filter(models.SkuMaster.metadata_json["spec_mismatch"].as_boolean() == True)  # noqa: E712
+    if preparse_state:
+        state2 = str(preparse_state).strip().lower()
+        ph = models.SkuMaster.metadata_json["preparse_spec_hash"].as_string()
+        if state2 in ("parsed", "done", "yes", "1", "true"):
+            q = q.filter(func.coalesce(ph, "") != "")
+        elif state2 in ("unparsed", "none", "no", "0", "false"):
+            q = q.filter(func.coalesce(ph, "") == "")
+
+    if bound_model_id or bound_model_code or bound_version_id:
+        subq = (
+            db.query(models.SkuModelVersionMapping.id)
+            .join(
+                models.ProductModelVersion,
+                models.ProductModelVersion.id == models.SkuModelVersionMapping.model_version_id,
+            )
+            .join(models.ProductModel, models.ProductModel.id == models.ProductModelVersion.model_id)
+            .filter(
+                models.SkuModelVersionMapping.sku_code == models.SkuMaster.erp_sku_barcode,
+                models.SkuModelVersionMapping.is_active.is_(True),
+                models.SkuModelVersionMapping.is_archived.is_(False),
+                models.ProductModelVersion.is_archived.is_(False),
+                models.ProductModel.is_archived.is_(False),
+            )
+        )
+        if bound_version_id:
+            subq = subq.filter(models.SkuModelVersionMapping.model_version_id == str(bound_version_id).strip())
+        if bound_model_id:
+            subq = subq.filter(models.ProductModelVersion.model_id == str(bound_model_id).strip())
+        if bound_model_code:
+            subq = subq.filter(models.ProductModel.model_code == str(bound_model_code).strip())
+        q = q.filter(subq.exists())
+
+    # bound_state here refers to "bundle already bound" state
+    state3 = str(bound_state or "unbound").strip().lower()
+    if state3 not in ("unbound", "bound", "all"):
+        state3 = "unbound"
+    existing_expr = func.coalesce(models.SkuMaster.metadata_json["bundle_template_id"].as_string(), "")
+    if state3 == "unbound":
+        q = q.filter(existing_expr == "")
+    elif state3 == "bound":
+        q = q.filter(existing_expr != "")
+
+    def _parse_terms(raw: Optional[str]) -> List[str]:
+        if not raw:
+            return []
+        s0 = str(raw)
+        for ch in ("，", ";", "；", "\n", "\t"):
+            s0 = s0.replace(ch, " ")
+        parts = [p.strip() for p in s0.split(" ") if p.strip()]
+        out: List[str] = []
+        seen: set[str] = set()
+        for p in parts:
+            if p in seen:
+                continue
+            seen.add(p)
+            out.append(p)
+        return out
+
+    include_list = _parse_terms(include_terms)
+    exclude_list = _parse_terms(exclude_terms)
+    scope = (match_scope or "auto").strip()
+    if scope not in ("auto", "spec", "name", "spec_or_name"):
+        scope = "auto"
+    name_channels = ["小红书", "京东"]
+
+    def _field_expr_for_scope(term: str):
+        pattern = f"%{term}%"
+        spec_hit = models.SkuMaster.spec_text.ilike(pattern)
+        name_hit = models.SkuMaster.product_name.ilike(pattern)
+        if scope == "spec":
+            return spec_hit
+        if scope == "name":
+            return name_hit
+        if scope == "spec_or_name":
+            return spec_hit | name_hit
+        return (models.SkuMaster.channel.in_(name_channels) & name_hit) | (
+            ~models.SkuMaster.channel.in_(name_channels) & spec_hit
+        )
+
+    for tterm in include_list:
+        q = q.filter(_field_expr_for_scope(tterm))
+    for tterm in exclude_list:
+        q = q.filter(~_field_expr_for_scope(tterm))
+
+    rows = q.order_by(models.SkuMaster.updated_at.desc()).limit(limit2 + 1).all()
+    has_more = len(rows) > limit2
+    batch_rows = rows[:limit2]
+
+    items: List[Dict[str, Any]] = []
+    can_bind = 0
+    skip_already_bound = 0
+    skip_missing_barcode = 0
+    hard_errors = 0
+
+    for row in batch_rows:
+        meta = dict(row.metadata_json or {})
+        existing_tid = str(meta.get("bundle_template_id") or "").strip()
+        sku = (row.erp_sku_barcode or "").strip() or None
+        base = {"sku_master_id": row.id, "sku_code": sku, "channel": row.channel, "model_version_id": str(bundle_model_version.id)}
+
+        if existing_tid and not allow_rebind:
+            items.append({**base, "status": "skip_already_bound", "hard_errors": [], "warnings": ["SKU已绑定套装模板且不允许覆盖"]})
+            skip_already_bound += 1
+            continue
+        if not sku:
+            items.append({**base, "status": "skip_missing_barcode", "hard_errors": [], "warnings": []})
+            skip_missing_barcode += 1
+            continue
+        active = product_model_service.get_active_sku_binding(db, sku)
+        if active and not allow_rebind:
+            items.append({**base, "status": "skip_already_bound", "hard_errors": [], "warnings": ["SKU已有绑定且不允许覆盖"]})
+            skip_already_bound += 1
+            continue
+        if active and str(getattr(active, "model_version_id", "") or "") == str(bundle_model_version.id) and allow_rebind:
+            items.append({**base, "status": "skip_already_bound", "hard_errors": [], "warnings": ["SKU已绑定到目标套装版本"]})
+            skip_already_bound += 1
+            continue
+
+        sh, raw_spec, norm_spec = _latest_shipment_spec_sample(db, sku_code=sku)
+        if not norm_spec:
+            items.append(
+                {
+                    **base,
+                    "status": "can_bind",
+                    "hard_errors": [],
+                    "warnings": ["无发货交易规格样本：本次绑定未做BOM试算校验"],
+                    "sample_shipment_line_id": getattr(sh, "id", None) if sh else None,
+                    "sample_completed_at": getattr(sh, "completed_at", None) if sh else None,
+                    "sample_spec_text": raw_spec,
+                    "sample_spec_text_norm": norm_spec,
+                }
+            )
+            can_bind += 1
+            continue
+
+        try:
+            bom = bom_generation_service.generate_bom_by_spec(
+                db,
+                spec_text=norm_spec,
+                sku_code=sku,
+                include_disabled_variants=False,
+                return_components=False,
+                bundle_template_version_id=str(v.id),
+                bundle_preset_selector=selector,
+            )
+            trace = bom.get("trace") if isinstance(bom.get("trace"), dict) else {}
+            costing = trace.get("costing") if isinstance(trace.get("costing"), dict) else {}
+            inventory = trace.get("inventory") if isinstance(trace.get("inventory"), dict) else {}
+            warn2 = _mismatch_warnings_by_keywords(
+                sample_text=norm_spec,
+                sku_spec_text=getattr(row, "spec_text", None),
+                product_name=getattr(row, "product_name", None),
+                target_label=target_label or str(bundle_model_version.id),
+            )
+            items.append(
+                {
+                    **base,
+                    "status": "can_bind",
+                    "hard_errors": [],
+                    "warnings": warn2,
+                    "sample_shipment_line_id": getattr(sh, "id", None) if sh else None,
+                    "sample_completed_at": getattr(sh, "completed_at", None) if sh else None,
+                    "sample_spec_text": raw_spec,
+                    "sample_spec_text_norm": norm_spec,
+                    "cost_total": costing.get("total_cost"),
+                    "inventory_line_count": inventory.get("inventory_line_count") if isinstance(inventory, dict) else None,
+                }
+            )
+            can_bind += 1
+        except Exception as exc:  # noqa: BLE001
+            items.append(
+                {
+                    **base,
+                    "status": "hard_error",
+                    "hard_errors": [f"BOM试算失败：{str(exc)}"],
+                    "warnings": [],
+                    "sample_shipment_line_id": getattr(sh, "id", None) if sh else None,
+                    "sample_completed_at": getattr(sh, "completed_at", None) if sh else None,
+                    "sample_spec_text": raw_spec,
+                    "sample_spec_text_norm": norm_spec,
+                }
+            )
+            hard_errors += 1
+
+    return {
+        "batch_candidates": len(batch_rows),
+        "can_bind": can_bind,
+        "skip_already_bound": skip_already_bound,
+        "skip_missing_barcode": skip_missing_barcode,
+        "hard_errors": hard_errors,
+        "skipped_excluded": skipped_excluded,
+        "has_more": has_more,
+        "items": items,
     }
 
 

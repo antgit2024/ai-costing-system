@@ -31,17 +31,27 @@ import {
   bindSkuMastersByBundleTemplateBulk,
   bindSkuMastersByModel,
   bindSkuMastersByModelBulk,
+  previewBindSkuMastersByBundleTemplate,
+  previewBindSkuMastersByModel,
+  unbindSkuMasters,
+  generateSkuMasterPreparseAndSnapshots,
   fetchPublishedStandardModels,
   fetchBundleTemplates,
   fetchSkuMaster,
   fetchSkuMasterDetail,
   importSkuMasterXlsx,
 } from '@/services/planner'
-import type { PublishedStandardModelCandidate, SkuMaster, SkuMasterAutoBindPreviewItem } from '@/types/planner'
+import type {
+  PublishedStandardModelCandidate,
+  SkuMaster,
+  SkuMasterAutoBindPreviewItem,
+  SkuMasterBindPreviewItem,
+  SkuMasterBindPreviewResponse,
+} from '@/types/planner'
 
 const { Title, Text } = Typography
 
-const DEFAULT_PAGE_SIZE = 100
+const DEFAULT_PAGE_SIZE = 50
 const PAGE_SIZE_STORAGE_KEY = 'costing_sku_master_page_size_v1'
 
 type ChipPalette = { bg: string; border: string; text: string }
@@ -165,6 +175,7 @@ const SkuMasterWorkspacePage = () => {
   const [autoPreviewCandidates, setAutoPreviewCandidates] = useState<SkuMasterAutoBindPreviewItem[]>([])
   const [autoCandidatesOnly, setAutoCandidatesOnly] = useState(false)
   const [allowRebind, setAllowRebind] = useState(false)
+  const [clearBinding, setClearBinding] = useState(false)
   const [autoRunAllRunning, setAutoRunAllRunning] = useState(false)
   const autoRunAllStopRef = useRef(false)
   const [autoRunAllStatus, setAutoRunAllStatus] = useState<{
@@ -191,6 +202,10 @@ const SkuMasterWorkspacePage = () => {
     last_update: string
     note?: string
   } | null>(null)
+
+  const [bindPreviewOpen, setBindPreviewOpen] = useState(false)
+  const [bindPreviewLoading, setBindPreviewLoading] = useState(false)
+  const [bindPreview, setBindPreview] = useState<SkuMasterBindPreviewResponse | null>(null)
 
   // NOTE: URL 预填（search/tab）已在 useState 初始化阶段完成，避免“先显示→几秒后清空”的闪烁体验。
 
@@ -437,7 +452,7 @@ const SkuMasterWorkspacePage = () => {
     {
       title: '对接状态（本系统）',
       dataIndex: 'active_model_version_id',
-      width: 240,
+      width: 320,
       render: (v, record) => {
         const modelBound = isFilled(v as any)
         const source = safeString((record.metadata_json as any)?.source)
@@ -479,12 +494,6 @@ const SkuMasterWorkspacePage = () => {
           </Space>
         )
       },
-    },
-    {
-      title: '最后更新时间',
-      dataIndex: 'updated_at',
-      width: 170,
-      render: (v) => formatTime(v),
     },
     {
       title: '原始最后更新时间（ERP）',
@@ -709,6 +718,148 @@ const SkuMasterWorkspacePage = () => {
       message.error(detail || e?.message || '绑定失败')
     },
   })
+
+  const unbindMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedRowKeys.length) throw new Error('请先勾选要清空的条目')
+      // 200/批，避免请求过大
+      const chunk = <T,>(arr: T[], size: number) => {
+        const out: T[][] = []
+        for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
+        return out
+      }
+      const ids = [...selectedRowKeys]
+      const batches = chunk(ids, 200)
+      let totalSelected = 0
+      let unbound = 0
+      const errors: any[] = []
+      for (const batch of batches) {
+        const res = await unbindSkuMasters(
+          { sku_master_ids: batch, requested_by: requestedBy || undefined },
+          { timeoutMs: 60_000 },
+        )
+        totalSelected += Number(res?.total_selected || 0)
+        unbound += Number(res?.unbound_count || 0)
+        errors.push(...((res?.errors ?? []) as any[]))
+      }
+      return { total_selected: totalSelected, unbound_count: unbound, errors }
+    },
+    onSuccess: async (res: any) => {
+      message.success(`清空完成：unbound=${res.unbound_count} errors=${(res.errors ?? []).length}`)
+      setSelectedRowKeys([])
+      await queryClient.invalidateQueries({ queryKey: ['sku-master', 'list'] })
+    },
+    onError: (e: any) => {
+      const detail = String(e?.response?.data?.detail ?? '').trim()
+      message.error(detail || e?.message || '清空失败')
+    },
+  })
+
+  const genParseAndSnapshotsMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedRowKeys.length) throw new Error('请先勾选条目')
+      return generateSkuMasterPreparseAndSnapshots(
+        {
+          sku_master_ids: selectedRowKeys,
+          operator_id: requestedBy.trim() || undefined,
+          limit_per_sku: 50,
+          overwrite: false,
+        },
+        { timeoutMs: 60_000 },
+      )
+    },
+    onSuccess: async (res: any) => {
+      message.success(
+        `完成：预解析${res?.parsed_count ?? 0}；快照 created=${res?.created_snapshots ?? 0} recomputed=${res?.recomputed_snapshots ?? 0} skipped=${res?.skipped_snapshots ?? 0} failed=${res?.failed_snapshots ?? 0}`,
+      )
+      await queryClient.invalidateQueries({ queryKey: ['sku-master', 'list'] })
+    },
+    onError: (e: any) => {
+      message.error(`执行失败：${e?.response?.data?.detail ?? e?.message ?? 'unknown error'}`)
+    },
+  })
+
+  const previewBindSelected = async () => {
+    if (!selectedRowKeys.length) {
+      message.warning('请先勾选要绑定的条目')
+      return
+    }
+    setBindPreview(null)
+    setBindPreviewOpen(true)
+    setBindPreviewLoading(true)
+    try {
+      const chunk = <T,>(arr: T[], size: number) => {
+        const out: T[][] = []
+        for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
+        return out
+      }
+      const ids = [...selectedRowKeys]
+      const batches = chunk(ids, 200)
+      let totalSelected = 0
+      let canBind = 0
+      let skipAlready = 0
+      let skipMissing = 0
+      let hardErrors = 0
+      const items: SkuMasterBindPreviewItem[] = []
+
+      if (targetKind === 'bundle') {
+        if (!selectedBundleTemplateId) throw new Error('请选择套装模板')
+        if (!selectedBundlePresetSelector) throw new Error('请选择套装二级（preset）')
+        for (const batch of batches) {
+          const res = await previewBindSkuMastersByBundleTemplate(
+            {
+              template_id: selectedBundleTemplateId,
+              preset_selector: selectedBundlePresetSelector,
+              sku_master_ids: batch,
+              requested_by: requestedBy || undefined,
+              allow_rebind: allowRebind,
+            },
+            { timeoutMs: 60_000 },
+          )
+          totalSelected += Number(res?.total_selected || 0)
+          canBind += Number(res?.can_bind || 0)
+          skipAlready += Number(res?.skip_already_bound || 0)
+          skipMissing += Number(res?.skip_missing_barcode || 0)
+          hardErrors += Number(res?.hard_errors || 0)
+          items.push(...((res?.items ?? []) as any))
+        }
+      } else {
+        if (!selectedModelId) throw new Error('请选择模型')
+        for (const batch of batches) {
+          const res = await previewBindSkuMastersByModel(
+            {
+              model_id: selectedModelId,
+              sku_master_ids: batch,
+              requested_by: requestedBy || undefined,
+              allow_rebind: allowRebind,
+            },
+            { timeoutMs: 60_000 },
+          )
+          totalSelected += Number(res?.total_selected || 0)
+          canBind += Number(res?.can_bind || 0)
+          skipAlready += Number(res?.skip_already_bound || 0)
+          skipMissing += Number(res?.skip_missing_barcode || 0)
+          hardErrors += Number(res?.hard_errors || 0)
+          items.push(...((res?.items ?? []) as any))
+        }
+      }
+
+      setBindPreview({
+        total_selected: totalSelected,
+        can_bind: canBind,
+        skip_already_bound: skipAlready,
+        skip_missing_barcode: skipMissing,
+        hard_errors: hardErrors,
+        items,
+      })
+    } catch (e: any) {
+      const detail = String(e?.response?.data?.detail ?? '').trim()
+      message.error(detail || e?.message || '预检失败')
+      setBindPreviewOpen(false)
+    } finally {
+      setBindPreviewLoading(false)
+    }
+  }
 
   // 人工审核：按筛选条件“隐式全选”（跨页）
   // - 默认勾选本页全部
@@ -1227,6 +1378,85 @@ const SkuMasterWorkspacePage = () => {
 
   return (
     <div>
+      <Modal
+        open={bindPreviewOpen}
+        title="绑定前预检（按最近发货交易规格样本试算）"
+        onCancel={() => {
+          if (bindPreviewLoading || bindMutation.isPending) return
+          setBindPreviewOpen(false)
+        }}
+        onOk={async () => {
+          if (!bindPreview) return
+          if (bindPreviewLoading || bindMutation.isPending) return
+          if (Number(bindPreview.hard_errors || 0) > 0) return
+          await bindMutation.mutateAsync()
+          setBindPreviewOpen(false)
+        }}
+        okText="确认绑定"
+        cancelText="取消"
+        okButtonProps={{
+          disabled: !bindPreview || Number(bindPreview.hard_errors || 0) > 0,
+          loading: bindMutation.isPending,
+        }}
+        width={980}
+      >
+        {bindPreviewLoading ? (
+          <div>正在预检…</div>
+        ) : !bindPreview ? null : (
+          <>
+            <div style={{ marginBottom: 8 }}>
+              <Text>
+                本次选择：{bindPreview.total_selected}，可绑定：{bindPreview.can_bind}，跳过（已绑定）：
+                {bindPreview.skip_already_bound}，跳过（缺条码）：{bindPreview.skip_missing_barcode}，硬错误：
+                {bindPreview.hard_errors}
+              </Text>
+              {bindPreview.hard_errors > 0 ? (
+                <div style={{ marginTop: 6 }}>
+                  <Alert type="error" showIcon message="存在硬错误：已按规则禁止绑定，请先修正后再试" />
+                </div>
+              ) : null}
+            </div>
+            <Table
+              size="small"
+              rowKey="sku_master_id"
+              pagination={{ pageSize: 10 }}
+              dataSource={bindPreview.items as any}
+              columns={[
+                { title: '货品条码', dataIndex: 'sku_code', width: 150, ellipsis: true },
+                {
+                  title: '状态',
+                  dataIndex: 'status',
+                  width: 140,
+                  render: (v: any) => {
+                    const s = String(v || '')
+                    if (s === 'can_bind') return <Tag color="green">可绑定</Tag>
+                    if (s === 'skip_already_bound') return <Tag>跳过-已绑定</Tag>
+                    if (s === 'skip_missing_barcode') return <Tag>跳过-缺条码</Tag>
+                    return <Tag color="red">硬错误</Tag>
+                  },
+                },
+                {
+                  title: '硬错误/提示',
+                  key: 'msg',
+                  width: 360,
+                  render: (_: any, r: any) => {
+                    const he = Array.isArray(r?.hard_errors) ? r.hard_errors.join('；') : ''
+                    const ws = Array.isArray(r?.warnings) ? r.warnings.join('；') : ''
+                    return (
+                      <div style={{ maxWidth: 360 }}>
+                        {he ? <Text type="danger">{he}</Text> : null}
+                        {he && ws ? <br /> : null}
+                        {ws ? <Text type="secondary">{ws}</Text> : null}
+                      </div>
+                    )
+                  },
+                },
+                { title: '样本交易规格（norm）', dataIndex: 'sample_spec_text_norm', ellipsis: true },
+              ]}
+            />
+          </>
+        )}
+      </Modal>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
         <div>
           <Title level={3} style={{ marginBottom: 4 }}>
@@ -1327,6 +1557,9 @@ const SkuMasterWorkspacePage = () => {
                         <Checkbox checked={allowRebind} onChange={(e) => setAllowRebind(e.target.checked)}>
                           覆盖关联（允许重新绑定）
                         </Checkbox>
+                        <Checkbox checked={clearBinding} onChange={(e) => setClearBinding(e.target.checked)}>
+                          清空模型/套装
+                        </Checkbox>
                         <Space wrap align="center">
                           <Tag color={manualBulkMode ? 'green' : 'default'}>
                             {manualBulkMode ? '所有页勾选模式（跨页）' : '当页勾选模式'}
@@ -1360,14 +1593,31 @@ const SkuMasterWorkspacePage = () => {
                           block
                           type="primary"
                           disabled={
-                            (targetKind === 'bundle'
-                              ? !selectedBundleTemplateId || !selectedBundlePresetSelector
-                              : !selectedModelId) || selectedRowKeys.length === 0
+                            (clearBinding
+                              ? selectedRowKeys.length === 0
+                              : (targetKind === 'bundle'
+                                  ? !selectedBundleTemplateId || !selectedBundlePresetSelector
+                                  : !selectedModelId) || selectedRowKeys.length === 0)
                           }
-                          loading={bindMutation.isPending}
-                          onClick={() => bindMutation.mutate()}
+                          loading={bindMutation.isPending || unbindMutation.isPending}
+                          onClick={() => {
+                            if (!clearBinding) {
+                              previewBindSelected()
+                              return
+                            }
+                            Modal.confirm({
+                              title: '确认清空模型/套装？',
+                              content:
+                                '将对勾选条目执行“解绑”：清除当前模型/套装关联（历史发货快照不会自动删除；如要修正历史利润，请去发货作业中心重建快照/计价）。',
+                              okText: '确认清空',
+                              okButtonProps: { danger: true },
+                              cancelText: '取消',
+                              onOk: async () => unbindMutation.mutateAsync(),
+                            })
+                          }}
                         >
-                          执行绑定（仅勾选）{selectedRowKeys.length ? `（${selectedRowKeys.length}）` : ''}
+                          {clearBinding ? '清空模型/套装（仅勾选）' : '执行绑定（仅勾选）'}
+                          {selectedRowKeys.length ? `（${selectedRowKeys.length}）` : ''}
                         </Button>
                         <Button
                           block
@@ -1384,6 +1634,23 @@ const SkuMasterWorkspacePage = () => {
                           onClick={handleManualRunAll}
                         >
                           一键跑完（{manualBulkMode ? '所有页' : '当页'}）
+                        </Button>
+                        <Button
+                          block
+                          disabled={!selectedRowKeys.length || genParseAndSnapshotsMutation.isPending}
+                          loading={genParseAndSnapshotsMutation.isPending}
+                          onClick={() => {
+                            Modal.confirm({
+                              title: `生成解析和快照？（${selectedRowKeys.length}条）`,
+                              content:
+                                '仅适用于“已重新绑定后补齐缺失”。将为勾选条码：1）从最近发货样本生成预解析（尺寸/TOKEN）落库；2）对相关“待处理/异常”的发货行执行“只补齐缺失”的快照生成（默认不覆盖历史快照）。若条码当前未绑定（例如你刚清空绑定），会跳过快照生成；此类“清空绑定但已有快照/需重建范围”的，请到发货作业中心“待生成”里按范围执行覆盖重算。',
+                              okText: '确认执行',
+                              cancelText: '取消',
+                              onOk: async () => genParseAndSnapshotsMutation.mutateAsync(),
+                            })
+                          }}
+                        >
+                          生成解析和快照（仅勾选）
                         </Button>
                         {manualRunAllRunning ? (
                           <Button
@@ -1488,18 +1755,6 @@ const SkuMasterWorkspacePage = () => {
                   },
                 ]}
               />
-            </Card>
-
-            <Card size="small" title="规则/预设（占位）">
-              <Space direction="vertical" style={{ width: '100%' }}>
-                <Text type="secondary">后续这里放“规则保存/预设”，避免重复调试。</Text>
-                <Button block disabled>
-                  新建规则（待接）
-                </Button>
-                <Button block disabled>
-                  管理预设（待接）
-                </Button>
-              </Space>
             </Card>
 
             <Card size="small" title="导入/同步（入口）">
@@ -1657,6 +1912,7 @@ const SkuMasterWorkspacePage = () => {
                 pageSize,
                 total,
                 showSizeChanger: true,
+                pageSizeOptions: ['50', '100', '200'],
               }}
               onChange={handlePaginationChange}
               scroll={{ x: 1350 }}

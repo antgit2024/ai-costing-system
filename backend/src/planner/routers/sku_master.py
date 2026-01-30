@@ -108,6 +108,47 @@ def bind_by_model(payload: schemas.SkuMasterBindByModelRequest, db: Session = De
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+@router.post("/bind-by-model/preview", response_model=schemas.SkuMasterBindPreviewResponse)
+def preview_bind_by_model(payload: schemas.SkuMasterBindByModelRequest, db: Session = Depends(get_db_session)):
+    try:
+        return sku_master_service.preview_bind_by_model(
+            db,
+            model_id=payload.model_id,
+            sku_master_ids=payload.sku_master_ids,
+            requested_by=payload.requested_by,
+            allow_rebind=payload.allow_rebind,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/bind-by-model/preview/bulk", response_model=schemas.SkuMasterBindPreviewBulkResponse)
+def preview_bind_by_model_bulk(payload: schemas.SkuMasterBindByModelBulkRequest, db: Session = Depends(get_db_session)):
+    try:
+        return sku_master_service.preview_bind_by_model_bulk(
+            db,
+            model_id=payload.model_id,
+            requested_by=payload.requested_by,
+            limit=payload.limit,
+            bound_state=payload.bound_state,
+            allow_rebind=payload.allow_rebind,
+            search=payload.search,
+            channel=payload.channel,
+            match_status=payload.match_status,
+            spec_mismatch=payload.spec_mismatch,
+            preparse_state=payload.preparse_state,
+            include_terms=payload.include_terms,
+            exclude_terms=payload.exclude_terms,
+            match_scope=payload.match_scope,
+            bound_model_id=payload.bound_model_id,
+            bound_model_code=payload.bound_model_code,
+            bound_version_id=payload.bound_version_id,
+            excluded_sku_master_ids=payload.excluded_sku_master_ids,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @router.post("/bind-by-model/bulk", response_model=schemas.SkuMasterBindByModelBulkResponse)
 def bind_by_model_bulk(payload: schemas.SkuMasterBindByModelBulkRequest, db: Session = Depends(get_db_session)):
     """
@@ -154,6 +195,49 @@ def bind_by_bundle(payload: schemas.SkuMasterBindByBundleTemplateRequest, db: Se
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+@router.post("/bind-by-bundle/preview", response_model=schemas.SkuMasterBindPreviewResponse)
+def preview_bind_by_bundle(payload: schemas.SkuMasterBindByBundleTemplateRequest, db: Session = Depends(get_db_session)):
+    try:
+        return sku_master_service.preview_bind_by_bundle_template(
+            db,
+            template_id=payload.template_id,
+            preset_selector=payload.preset_selector,
+            sku_master_ids=payload.sku_master_ids,
+            requested_by=payload.requested_by,
+            allow_rebind=payload.allow_rebind,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/bind-by-bundle/preview/bulk", response_model=schemas.SkuMasterBindPreviewBulkResponse)
+def preview_bind_by_bundle_bulk(payload: schemas.SkuMasterBindByBundleTemplateBulkRequest, db: Session = Depends(get_db_session)):
+    try:
+        return sku_master_service.preview_bind_by_bundle_template_bulk(
+            db,
+            template_id=payload.template_id,
+            preset_selector=payload.preset_selector,
+            requested_by=payload.requested_by,
+            limit=payload.limit,
+            bound_state=payload.bound_state,
+            allow_rebind=payload.allow_rebind,
+            search=payload.search,
+            channel=payload.channel,
+            match_status=payload.match_status,
+            spec_mismatch=payload.spec_mismatch,
+            preparse_state=payload.preparse_state,
+            include_terms=payload.include_terms,
+            exclude_terms=payload.exclude_terms,
+            match_scope=payload.match_scope,
+            bound_model_id=payload.bound_model_id,
+            bound_model_code=payload.bound_model_code,
+            bound_version_id=payload.bound_version_id,
+            excluded_sku_master_ids=payload.excluded_sku_master_ids,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @router.post("/bind-by-bundle/bulk", response_model=schemas.SkuMasterBindByBundleTemplateBulkResponse)
 def bind_by_bundle_bulk(payload: schemas.SkuMasterBindByBundleTemplateBulkRequest, db: Session = Depends(get_db_session)):
     try:
@@ -177,6 +261,35 @@ def bind_by_bundle_bulk(payload: schemas.SkuMasterBindByBundleTemplateBulkReques
             bound_model_code=payload.bound_model_code,
             bound_version_id=payload.bound_version_id,
             excluded_sku_master_ids=payload.excluded_sku_master_ids,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/unbind", response_model=schemas.SkuMasterUnbindResponse)
+def unbind_sku_masters(payload: schemas.SkuMasterUnbindRequest, db: Session = Depends(get_db_session)):
+    try:
+        return sku_master_service.unbind_sku_masters(
+            db,
+            sku_master_ids=payload.sku_master_ids,
+            requested_by=payload.requested_by,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/generate-preparse-and-snapshots", response_model=schemas.SkuMasterGeneratePreparseAndSnapshotsResponse)
+def generate_preparse_and_snapshots(
+    payload: schemas.SkuMasterGeneratePreparseAndSnapshotsRequest,
+    db: Session = Depends(get_db_session),
+):
+    try:
+        return sku_master_service.generate_preparse_and_snapshots(
+            db,
+            sku_master_ids=payload.sku_master_ids,
+            operator_id=payload.operator_id,
+            limit_per_sku=payload.limit_per_sku,
+            overwrite=bool(payload.overwrite),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

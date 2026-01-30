@@ -6,9 +6,12 @@ from typing import Any, Dict, List, Tuple
 
 
 DIMENSION_PATTERN = re.compile(
-    r"(?P<prefix>约|大约|约等)?(?P<width>\d{1,4}(?:\.\d+)?)\s*"
-    r"(?:[xX×\*＊]\s*(?P<height>\d{1,4}(?:\.\d+)?))"
-    r"\s*(?P<unit>cm|厘米|mm|毫米|m|米)?",
+    # Support both:
+    # - "60*60cm"  (unit at tail)
+    # - "60CM*60CM" (unit after each side; common in channel exports)
+    r"(?P<prefix>约|大约|约等)?"
+    r"(?P<width>\d{1,4}(?:\.\d+)?)\s*(?P<unit_w>cm|厘米|mm|毫米|m|米)?\s*"
+    r"(?:[xX×\*＊]\s*(?P<height>\d{1,4}(?:\.\d+)?))\s*(?P<unit_h>cm|厘米|mm|毫米|m|米)?",
     re.IGNORECASE,
 )
 
@@ -19,9 +22,9 @@ DIMENSION_PATTERN = re.compile(
 # NOTE:
 # - unit (cm/mm/m) applies to width/height only; qty is treated as a plain count.
 DIMENSION_WITH_QTY_PATTERN = re.compile(
-    r"(?P<prefix>约|大约|约等)?(?P<width>\d{1,4}(?:\.\d+)?)\s*"
-    r"(?:[xX×\*＊]\s*(?P<height>\d{1,4}(?:\.\d+)?))"
-    r"\s*(?P<unit>cm|厘米|mm|毫米|m|米)?"
+    r"(?P<prefix>约|大约|约等)?"
+    r"(?P<width>\d{1,4}(?:\.\d+)?)\s*(?P<unit_w>cm|厘米|mm|毫米|m|米)?\s*"
+    r"(?:[xX×\*＊]\s*(?P<height>\d{1,4}(?:\.\d+)?))\s*(?P<unit_h>cm|厘米|mm|毫米|m|米)?"
     r"(?:\s*[xX×\*＊]\s*(?P<qty>\d{1,4}))?",
     re.IGNORECASE,
 )
@@ -191,14 +194,17 @@ def parse_spec(spec_text: str) -> Dict[str, Any]:
     if dim_match:
         width_val = _to_decimal(dim_match.group("width"))
         height_val = _to_decimal(dim_match.group("height"))
-        unit = dim_match.group("unit")
+        unit_w = dim_match.group("unit_w")
+        unit_h = dim_match.group("unit_h")
+        # Backward compat: if only one side has unit, apply it to both.
+        unit_fallback = unit_h or unit_w
         if width_cm is None and width_val is not None:
-            width_cm = _normalize_to_cm(width_val, unit)
+            width_cm = _normalize_to_cm(width_val, unit_w or unit_fallback)
             explanations.append(
                 {"token": f"{width_cm}", "source": dim_match.group(0), "rule": "width_height"}
             )
         if height_cm is None and height_val is not None:
-            height_cm = _normalize_to_cm(height_val, unit)
+            height_cm = _normalize_to_cm(height_val, unit_h or unit_fallback)
             explanations.append(
                 {"token": f"{height_cm}", "source": dim_match.group(0), "rule": "width_height"}
             )

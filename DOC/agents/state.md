@@ -826,6 +826,22 @@
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-30（销售分析：新增“销售明细”TAB + 明细回填模型/套装绑定名称）
+  - 需求：`/costing/insights/sales` 在“利润看板（赚钱/亏钱）”旁边增加一个“销售明细”TAB（非弹窗），可按店铺/条码/订单号/套装等筛选，并在列表中展示“模型/套装（绑定）名称”，给运营直接做决策与下钻排查。
+  - 本轮产物：
+    - 前端：
+      - `frontend/src/pages/costing/SalesInsightsPage.tsx`
+        - 新增 `Tabs`：`利润看板（赚钱/亏钱）` / `销售明细`
+        - 明细表新增列：`模型/套装（绑定）`（展示 `bound_model_code + bound_model_name`）
+        - 明细默认 `page_size=100`（更符合“运营看列表”的使用方式）
+      - `frontend/src/types/planner.ts`：`SalesLineItem` 增加 `bound_model_code/bound_model_name`
+    - 后端：
+      - `backend/src/planner/services/analytics_service.py`：`sales_lines` 通过 `sku_code -> active mapping` 回填 `bound_model_code/bound_model_name`
+      - `backend/src/planner/schemas.py`：`SalesLineItem` 增加 `bound_model_code/bound_model_name`
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-27（模型分析支持套装筛选：先筛选不拆件，仍按模型聚合）
   - 目标：对“模型分析”补齐套装锚点筛选（`bundle_template_code + bundle_preset_selector`），用于未来按套装模块对账/排查/看板；口径保持“按模型聚合”，暂不做组件拆解归因。
   - 本轮产物（后端）：

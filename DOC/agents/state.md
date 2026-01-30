@@ -903,6 +903,7 @@
         - 补齐 `AfterSalesDashboardKpis`：`model_unmapped_shipped_qty` / `model_mapped_returned_qty` / `model_unmapped_returned_qty` / `model_mapped_returned_rate`
       - `frontend/src/pages/costing/AfterSalesInsightsPage.tsx`
         - 售后看板顶部增加一行“模型未绑定”摘要（发货/退货），避免误解“未绑定就不计入售后”
+        - 运营看板 KPI 卡片恢复展示“退货率/退款率”，并移除“发货金额”卡片（按运营验数习惯）
       - `model_insights_summary/detail` 在 `shipment_lines.metadata_json` 上按 bundle 锚点过滤（与销售明细筛选口径一致）
   - 本轮产物（前端）：
     - `frontend/src/pages/costing/ProfitInsightsPage.tsx`

@@ -305,9 +305,8 @@ const AfterSalesInsightsPage = () => {
   const dashSeriesTail = dashSeries.slice(-dashPointsN)
   const shippedSpark = dashSeriesTail.map((x) => Number(x?.shipped_qty ?? 0))
   const returnedSpark = dashSeriesTail.map((x) => Number(x?.returned_qty ?? 0))
-  const shippedAmountSpark = dashSeriesTail.map((x) => Number(x?.shipped_amount ?? 0))
-  const refundAmountSpark = dashSeriesTail.map((x) => Number(x?.refund_amount ?? 0))
   const returnRateSpark = dashSeriesTail.map((x) => Number(x?.return_rate ?? 0) * 100)
+  const refundRateSpark = dashSeriesTail.map((x) => Number(x?.refund_rate ?? 0) * 100)
   const mappedRateSpark = dashSeriesTail.map((x) => Number(x?.model_mapped_rate ?? 0) * 100)
 
   const dashboardHttpStatus = (dashboardQuery.error as any)?.response?.status as number | undefined
@@ -795,6 +794,9 @@ const AfterSalesInsightsPage = () => {
                           ? '运营口径：退货按“申请期全量”统计；不要求能匹配到发货行。'
                           : '工厂口径：退货先按强关联键归因到发货行，再归因到发货周/月。'}
                       </Typography.Text>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        注：“数量”均为件数合计（qty 求和），不是行数。
+                      </Typography.Text>
                       {(() => {
                         const k = (dashboardQuery.data as AfterSalesDashboardResponse | undefined)?.kpis as any
                         const unmShip = k?.model_unmapped_shipped_qty
@@ -818,14 +820,14 @@ const AfterSalesInsightsPage = () => {
                   <Row gutter={[12, 12]}>
                     <Col xs={24} lg={6}>
                       <Card size="small">
-                        <Statistic title="发货数量" value={Number((dashboardQuery.data as AfterSalesDashboardResponse | undefined)?.kpis?.shipped_qty ?? 0)} />
+                        <Statistic title="发货数量(件)" value={Number((dashboardQuery.data as AfterSalesDashboardResponse | undefined)?.kpis?.shipped_qty ?? 0)} />
                         <Sparkline values={shippedSpark} stroke={opsStroke} />
                       </Card>
                     </Col>
                     <Col xs={24} lg={6}>
                       <Card size="small">
                         <Statistic
-                          title={dashboardView === 'ops' ? '退货数量（申请期全量，实退优先）' : '退货数量（归因，实退优先）'}
+                          title={dashboardView === 'ops' ? '退货数量(件)（申请期全量，实退优先）' : '退货数量(件)（归因，实退优先）'}
                           value={Number((dashboardQuery.data as AfterSalesDashboardResponse | undefined)?.kpis?.returned_qty ?? 0)}
                         />
                         <Sparkline values={returnedSpark} stroke={factoryStroke} />
@@ -833,25 +835,13 @@ const AfterSalesInsightsPage = () => {
                     </Col>
                     <Col xs={24} lg={6}>
                       <Card size="small">
-                        {dashboardView === 'ops' ? (
-                          <>
-                            <Statistic
-                              title="发货金额（发货完成）"
-                              value={formatMoney((dashboardQuery.data as AfterSalesDashboardResponse | undefined)?.kpis?.shipped_amount as any)}
-                            />
-                            <Sparkline values={shippedAmountSpark} stroke={opsStroke} />
-                          </>
-                        ) : (
-                          <>
-                            <Statistic
-                              title="退货率(件)"
-                              value={Number((dashboardQuery.data as AfterSalesDashboardResponse | undefined)?.kpis?.return_rate ?? 0) * 100}
-                              precision={2}
-                              suffix="%"
-                            />
-                            <Sparkline values={returnRateSpark} stroke={opsStroke} />
-                          </>
-                        )}
+                        <Statistic
+                          title="退货率(件)"
+                          value={Number((dashboardQuery.data as AfterSalesDashboardResponse | undefined)?.kpis?.return_rate ?? 0) * 100}
+                          precision={2}
+                          suffix="%"
+                        />
+                        <Sparkline values={returnRateSpark} stroke={opsStroke} />
                       </Card>
                     </Col>
                     <Col xs={24} lg={6}>
@@ -859,10 +849,12 @@ const AfterSalesInsightsPage = () => {
                         {dashboardView === 'ops' ? (
                           <>
                             <Statistic
-                              title="退款金额（申请期全量）"
-                              value={formatMoney((dashboardQuery.data as AfterSalesDashboardResponse | undefined)?.kpis?.refund_amount as any)}
+                              title="退款率(额)"
+                              value={Number((dashboardQuery.data as AfterSalesDashboardResponse | undefined)?.kpis?.refund_rate ?? 0) * 100}
+                              precision={2}
+                              suffix="%"
                             />
-                            <Sparkline values={refundAmountSpark} stroke={opsStroke} />
+                            <Sparkline values={refundRateSpark} stroke={opsStroke} />
                           </>
                         ) : (
                           <>

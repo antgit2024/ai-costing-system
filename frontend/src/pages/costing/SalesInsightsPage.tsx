@@ -20,10 +20,12 @@ import {
 } from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 import dayjs from 'dayjs'
+import isoWeek from 'dayjs/plugin/isoWeek'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { InfoCircleOutlined } from '@ant-design/icons'
+import { LeftOutlined, RightOutlined } from '@ant-design/icons'
 
 import {
   fetchSalesLines,
@@ -34,6 +36,8 @@ import {
 import type { SalesLineItem, SalesLinesResponse, SalesProfitDashboardResponse, SalesProfitDashboardTopModelItem, SalesProfitDashboardTopSkuItem } from '@/types/planner'
 
 const STORAGE_KEY = 'insights.sales.lastQuery.v1'
+
+dayjs.extend(isoWeek)
 
 const formatMoney = (raw?: string | null) => {
   if (raw == null || raw === '') return '-'
@@ -82,6 +86,7 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
   const [dashboardComputedAt, setDashboardComputedAt] = useState<string | null>(null)
   const [periodMode, setPeriodMode] = useState<SalesPeriodMode>('day')
   const [anchorDate, setAnchorDate] = useState(() => dayjs().subtract(1, 'day').startOf('day'))
+  const [showAdvanced, setShowAdvanced] = useState(false)
   const [lastQuery, setLastQuery] = useState<{
     start: string
     end: string
@@ -107,7 +112,7 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
     if (periodMode === 'day') return [a.startOf('day'), a.endOf('day')] as const
     if (periodMode === 'week') {
       // 上一完整周（按周一~周日）；以 anchorDate 所在周为“本周”，取本周开始日前一周
-      const wkStart = a.startOf('week')
+      const wkStart = a.startOf('isoWeek')
       const prevEnd = wkStart.subtract(1, 'day').endOf('day')
       const prevStart = wkStart.subtract(7, 'day').startOf('day')
       return [prevStart, prevEnd] as const
@@ -118,6 +123,19 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
     const prevStart = mStart.subtract(1, 'month').startOf('month').startOf('day')
     return [prevStart, prevEnd] as const
   }, [anchorDate, periodMode, watchedRange])
+
+  const shiftAnchorDate = (dir: -1 | 1) => {
+    if (periodMode === 'custom') return
+    if (periodMode === 'day') {
+      setAnchorDate((d) => d.add(dir, 'day').startOf('day'))
+      return
+    }
+    if (periodMode === 'week') {
+      setAnchorDate((d) => d.add(dir, 'week').startOf('day'))
+      return
+    }
+    setAnchorDate((d) => d.add(dir, 'month').startOf('day'))
+  }
 
   const rangeStartIso = computedRange?.[0]?.toISOString?.()
   const rangeEndIso = computedRange?.[1]?.toISOString?.()
@@ -482,6 +500,21 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
         >
           <Form.Item label="统计时间">
             <Space size={8} wrap>
+              {periodMode === 'custom' ? (
+                <Form.Item name="range" rules={[{ required: true, message: '请选择时间范围' }]} style={{ marginBottom: 0 }}>
+                  <DatePicker.RangePicker allowClear={false} />
+                </Form.Item>
+              ) : (
+                <DatePicker
+                  picker={periodMode === 'week' ? 'week' : periodMode === 'month' ? 'month' : 'date'}
+                  value={anchorDate as any}
+                  onChange={(v) => {
+                    if (v) setAnchorDate(v.startOf('day'))
+                  }}
+                  allowClear={false}
+                  format={periodMode === 'month' ? 'YYYY-MM' : 'YYYY-MM-DD'}
+                />
+              )}
               <Segmented<SalesPeriodMode>
                 value={periodMode}
                 onChange={(v) => setPeriodMode(v as SalesPeriodMode)}
@@ -489,23 +522,21 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
                   { label: '日', value: 'day' },
                   { label: '周', value: 'week' },
                   { label: '月', value: 'month' },
-                  { label: '自定义', value: 'custom' },
                 ]}
               />
-              {periodMode === 'custom' ? (
-                <Form.Item name="range" rules={[{ required: true, message: '请选择时间范围' }]} style={{ marginBottom: 0 }}>
-                  <DatePicker.RangePicker allowClear={false} />
-                </Form.Item>
-              ) : (
-                <DatePicker
-                  value={anchorDate as any}
-                  onChange={(v) => {
-                    if (v) setAnchorDate(v.startOf('day'))
-                  }}
-                  allowClear={false}
-                  format="YYYY-MM-DD"
-                />
-              )}
+              <Button size="small" onClick={() => shiftAnchorDate(-1)} disabled={periodMode === 'custom'}>
+                <LeftOutlined />
+              </Button>
+              <Button size="small" onClick={() => shiftAnchorDate(1)} disabled={periodMode === 'custom'}>
+                <RightOutlined />
+              </Button>
+              <Button
+                size="small"
+                type={periodMode === 'custom' ? 'primary' : 'default'}
+                onClick={() => setPeriodMode('custom')}
+              >
+                自定义模块
+              </Button>
               <Typography.Text type="secondary">
                 {computedRange?.[0]?.format?.('YYYY-MM-DD')} ~ {computedRange?.[1]?.format?.('YYYY-MM-DD')}
               </Typography.Text>
@@ -524,18 +555,27 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
           <Form.Item label="货品条码" name="sku_code">
             <Input placeholder="可选：barcode" style={{ width: 180 }} allowClear />
           </Form.Item>
-          <Form.Item label="套装模板" name="bundle_template_code">
-            <Input placeholder="可选：bundle code" style={{ width: 160 }} allowClear />
+          <Form.Item>
+            <Button size="small" onClick={() => setShowAdvanced((v) => !v)}>
+              {showAdvanced ? '收起筛选' : '更多筛选'}
+            </Button>
           </Form.Item>
-          <Form.Item label="套装二级" name="bundle_preset_selector">
-            <Input placeholder="可选：AA/AB" style={{ width: 120 }} allowClear />
-          </Form.Item>
-          <Form.Item label="原始单号" name="order_no">
-            <Input placeholder="可选：order_no" style={{ width: 180 }} allowClear />
-          </Form.Item>
-          <Form.Item label="商品链接ID" name="product_link_id">
-            <Input placeholder="可选：product_link_id" style={{ width: 200 }} allowClear />
-          </Form.Item>
+          {showAdvanced ? (
+            <>
+              <Form.Item label="套装模板" name="bundle_template_code">
+                <Input placeholder="可选：bundle code" style={{ width: 160 }} allowClear />
+              </Form.Item>
+              <Form.Item label="套装二级" name="bundle_preset_selector">
+                <Input placeholder="可选：AA/AB" style={{ width: 120 }} allowClear />
+              </Form.Item>
+              <Form.Item label="原始单号" name="order_no">
+                <Input placeholder="可选：order_no" style={{ width: 180 }} allowClear />
+              </Form.Item>
+              <Form.Item label="商品链接ID" name="product_link_id">
+                <Input placeholder="可选：product_link_id" style={{ width: 200 }} allowClear />
+              </Form.Item>
+            </>
+          ) : null}
           <Form.Item>
             <Space>
               <Segmented

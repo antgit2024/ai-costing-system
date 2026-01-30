@@ -866,6 +866,10 @@
       - 快照接口 `/reports/insights/after-sales-dashboard` 同步支持 `group_by=day`，并支持 `start/end` 显式范围（与销售分析一致）
     - 运维：`ops/nightly_refresh_reports.sh`
       - 追加刷新：销售/售后曲线所需的 `group_by=day`，以及销售 Top100（`top_n=100`）快照
+  - 修复：
+    - 解决页面偶发 “页面发生致命错误（unhandledrejection） Cannot read properties of undefined (reading '0')”
+      - 根因：非自定义模式下 `validateFields()` 不一定返回 `range`，导致访问 `v.range[0]` 报错
+      - 修复：售后页统一改用 `computedRange` 作为时间口径来源，并对自定义缺失做兜底提示
   - 验收命令（必须，全部 0 退出码）：
     - Frontend：`npm -C frontend run build`
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`

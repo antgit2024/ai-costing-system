@@ -325,12 +325,15 @@ const AfterSalesInsightsPage = () => {
     setData(null)
 
     const v = await form.validateFields()
-    const range = v.range as [dayjs.Dayjs, dayjs.Dayjs]
     const groupBy = v.group_by as GroupBy
 
     // 只按用户选择的范围查询；不做后台全量计算/全量重跑
-    const start = range[0].startOf('day').toISOString()
-    const end = range[1].endOf('day').toISOString()
+    if (periodMode === 'custom' && (!watchedRange || !watchedRange[0] || !watchedRange[1])) {
+      message.warning('请选择时间范围')
+      return
+    }
+    const start = computedRange[0].startOf('day').toISOString()
+    const end = computedRange[1].endOf('day').toISOString()
 
     setLoading(true)
     try {
@@ -368,9 +371,12 @@ const AfterSalesInsightsPage = () => {
   const onQueryDetail = async (p?: number, ps?: number) => {
     setDetailError(null)
     const v = await form.validateFields()
-    const range = v.range as [dayjs.Dayjs, dayjs.Dayjs]
-    const start = range[0].startOf('day').toISOString()
-    const end = range[1].endOf('day').toISOString()
+    if (periodMode === 'custom' && (!watchedRange || !watchedRange[0] || !watchedRange[1])) {
+      message.warning('请选择时间范围')
+      return
+    }
+    const start = computedRange[0].startOf('day').toISOString()
+    const end = computedRange[1].endOf('day').toISOString()
 
     const page = p ?? detailPage
     const pageSize = ps ?? detailPageSize

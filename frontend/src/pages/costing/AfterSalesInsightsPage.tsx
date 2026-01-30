@@ -123,14 +123,25 @@ const AfterSalesInsightsPage = () => {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'rate' | 'detail'>('dashboard')
   const [periodMode, setPeriodMode] = useState<'day' | 'week' | 'month' | 'custom'>('custom')
   const [anchorDate, setAnchorDate] = useState(() => dayjs().subtract(1, 'week').startOf('isoWeek'))
-  const [dashboardView, setDashboardView] = useState<'ops' | 'factory'>('factory')
-  const [dashboardAutoLoad, setDashboardAutoLoad] = useState(false)
+  // 默认用“运营口径”（申请期全量），更贴近售后验数直觉
+  const [dashboardView, setDashboardView] = useState<'ops' | 'factory'>('ops')
+  // 默认自动加载：减少“加载仪表盘”按钮/提示
+  const [dashboardAutoLoad, setDashboardAutoLoad] = useState(true)
   const [dashboardUseSnapshot, setDashboardUseSnapshot] = useState(true)
   const [dashboardComputedAt, setDashboardComputedAt] = useState<string | null>(null)
   const opsStroke = 'var(--ant-color-primary, #1677ff)'
   const factoryStroke = 'var(--ant-color-success, #52c41a)'
   const [showAdvanced, setShowAdvanced] = useState(false)
   const dayGroupByFallbackWarnedRef = useRef(false)
+  const formatErr = (e: any) => {
+    const detail = e?.response?.data?.detail ?? e?.response?.data?.message ?? e?.message ?? e
+    if (typeof detail === 'string') return detail
+    try {
+      return JSON.stringify(detail)
+    } catch {
+      return String(detail)
+    }
+  }
 
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState<ReturnsRateBySkuResponse | null>(null)
@@ -167,13 +178,14 @@ const AfterSalesInsightsPage = () => {
     if (periodMode === 'custom') {
       const r = watchedRange
       if (r && r[0] && r[1]) return [r[0].startOf('day'), r[1].endOf('day')] as const
-      return [dayjs().subtract(30, 'day').startOf('day'), dayjs().endOf('day')] as const
+      // 避免首次进入/字段尚未同步时弹“请选择时间范围”
+      return [DEBUG_DEFAULT_CUSTOM_RANGE[0].startOf('day'), DEBUG_DEFAULT_CUSTOM_RANGE[1].endOf('day')] as const
     }
     const a = anchorDate || dayjs().subtract(1, 'week').startOf('isoWeek')
     if (periodMode === 'day') return [a.startOf('day'), a.endOf('day')] as const
     if (periodMode === 'week') return [a.startOf('isoWeek'), a.endOf('isoWeek')] as const
     return [a.startOf('month'), a.endOf('month')] as const
-  }, [anchorDate, periodMode, watchedRange])
+  }, [DEBUG_DEFAULT_CUSTOM_RANGE, anchorDate, periodMode, watchedRange])
 
   const shiftAnchorDate = (dir: -1 | 1) => {
     if (periodMode === 'custom') return
@@ -195,10 +207,8 @@ const AfterSalesInsightsPage = () => {
     if (periodMode === 'day') return 'day'
     if (periodMode === 'month') return 'month'
     if (periodMode === 'custom') {
-      const days = computedRange[1].diff(computedRange[0], 'day') + 1
-      if (days <= 35) return 'day'
-      if (days <= 180) return 'week'
-      return 'month'
+      // 先用按周，避免后端未部署 day 粒度时报 422 + 弹窗干扰
+      return 'week'
     }
     return 'week'
   }, [computedRange, periodMode])
@@ -371,11 +381,6 @@ const AfterSalesInsightsPage = () => {
     const v = await form.validateFields()
     const groupBy = v.group_by as GroupBy
 
-    // 只按用户选择的范围查询；不做后台全量计算/全量重跑
-    if (periodMode === 'custom' && (!watchedRange || !watchedRange[0] || !watchedRange[1])) {
-      message.warning('请选择时间范围')
-      return
-    }
     const start = computedRange[0].startOf('day').toISOString()
     const end = computedRange[1].endOf('day').toISOString()
 
@@ -415,10 +420,6 @@ const AfterSalesInsightsPage = () => {
   const onQueryDetail = async (p?: number, ps?: number) => {
     setDetailError(null)
     const v = await form.validateFields()
-    if (periodMode === 'custom' && (!watchedRange || !watchedRange[0] || !watchedRange[1])) {
-      message.warning('请选择时间范围')
-      return
-    }
     const start = computedRange[0].startOf('day').toISOString()
     const end = computedRange[1].endOf('day').toISOString()
 
@@ -506,6 +507,10 @@ const AfterSalesInsightsPage = () => {
   const refreshDashboardSnapshotNow = async () => {
     const channel = watchedChannel?.trim() || undefined
     try {
+      if (!rangeStartIso || !rangeEndIso) {
+        message.warning('请选择时间范围')
+        return
+      }
       await refreshAfterSalesDashboardSnapshot({
         start: String(rangeStartIso),
         end: String(rangeEndIso),
@@ -517,7 +522,7 @@ const AfterSalesInsightsPage = () => {
       await dashboardQuery.refetch()
       message.success('已刷新（使用缓存）')
     } catch (e: any) {
-      message.error(`刷新失败：${e?.response?.data?.detail ?? e?.message ?? 'unknown error'}`)
+      message.error(`刷新失败：${formatErr(e)}`)
     }
   }
 
@@ -675,18 +680,22 @@ const AfterSalesInsightsPage = () => {
                   <Button onClick={refreshDashboardSnapshotNow} disabled={!dashboardUseSnapshot || !dashboardAutoLoad} loading={dashboardQuery.isFetching}>
                     刷新数据
                   </Button>
-                  <Button onClick={() => setDashboardUseSnapshot((v) => !v)} disabled={dashboardQuery.isFetching}>
-                    {dashboardUseSnapshot ? '切到实时' : '切到缓存'}
-                  </Button>
+                  {showAdvanced ? (
+                    <Button onClick={() => setDashboardUseSnapshot((v) => !v)} disabled={dashboardQuery.isFetching}>
+                      {dashboardUseSnapshot ? '切到实时' : '切到缓存'}
+                    </Button>
+                  ) : null}
                 </>
               ) : (
                 <Button type="primary" onClick={onQuery} loading={loading}>
                   查询
                 </Button>
               )}
-              <Button onClick={() => onQueryDetail(1, detailPageSize)} loading={detailLoading} disabled={activeTab !== 'detail'}>
-                查明细
-              </Button>
+              {activeTab === 'detail' ? (
+                <Button onClick={() => onQueryDetail(1, detailPageSize)} loading={detailLoading}>
+                  查明细
+                </Button>
+              ) : null}
               <Button
                 onClick={() => {
                   form.resetFields()
@@ -701,10 +710,14 @@ const AfterSalesInsightsPage = () => {
               >
                 重置
               </Button>
-              <Button onClick={() => setUploadDrawerOpen(true)}>上传/导入</Button>
-              <Button onClick={() => setBatchesDrawerOpen(true)} loading={batchesQuery.isFetching}>
-                导入记录
-              </Button>
+              {showAdvanced ? (
+                <>
+                  <Button onClick={() => setUploadDrawerOpen(true)}>上传/导入</Button>
+                  <Button onClick={() => setBatchesDrawerOpen(true)} loading={batchesQuery.isFetching}>
+                    导入记录
+                  </Button>
+                </>
+              ) : null}
               {lastImportSummary ? (
                 <Typography.Text type="secondary" ellipsis style={{ maxWidth: 520 }}>
                   最近导入：{lastImportSummary}

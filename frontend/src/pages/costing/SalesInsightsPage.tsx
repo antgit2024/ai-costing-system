@@ -947,30 +947,6 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
                           dataSource={(dashboardQuery.data as SalesProfitDashboardResponse | undefined)?.top_skus_profit ?? []}
                           pagination={false}
                           columns={[
-                            {
-                              title: '模型/套装',
-                              key: 'bound',
-                              width: 200,
-                              ellipsis: true,
-                              render: (_v: any, r: SalesProfitDashboardTopSkuItem) => {
-                                const mc = String((r as any)?.bound_model_code ?? '').trim()
-                                const mn = String((r as any)?.bound_model_name ?? '').trim()
-                                const tpl = String((r as any)?.bundle_template_code ?? '').trim()
-                                const sel = String((r as any)?.bundle_preset_selector ?? '').trim()
-                                const phrase = String((r as any)?.bundle_preset_phrase ?? '').trim()
-                                if (tpl) {
-                                  const main = [tpl, sel].filter(Boolean).join('-') || mc
-                                  return phrase ? (
-                                    <Tooltip title={phrase}>
-                                      <span>{main}</span>
-                                    </Tooltip>
-                                  ) : (
-                                    <span>{main}</span>
-                                  )
-                                }
-                                return <span>{[mc, mn].filter(Boolean).join(' ') || '-'}</span>
-                              },
-                            },
                             { title: 'SKU', dataIndex: 'sku_code', width: 140, ellipsis: true },
                             { title: '规格（最常见）', dataIndex: 'spec_text', ellipsis: true },
                             { title: '销售额', dataIndex: 'revenue_amount', width: 110, render: (v: any) => formatMoney(v) },
@@ -1023,30 +999,6 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
                           dataSource={(dashboardQuery.data as SalesProfitDashboardResponse | undefined)?.top_skus_loss ?? []}
                           pagination={false}
                           columns={[
-                            {
-                              title: '模型/套装',
-                              key: 'bound',
-                              width: 200,
-                              ellipsis: true,
-                              render: (_v: any, r: SalesProfitDashboardTopSkuItem) => {
-                                const mc = String((r as any)?.bound_model_code ?? '').trim()
-                                const mn = String((r as any)?.bound_model_name ?? '').trim()
-                                const tpl = String((r as any)?.bundle_template_code ?? '').trim()
-                                const sel = String((r as any)?.bundle_preset_selector ?? '').trim()
-                                const phrase = String((r as any)?.bundle_preset_phrase ?? '').trim()
-                                if (tpl) {
-                                  const main = [tpl, sel].filter(Boolean).join('-') || mc
-                                  return phrase ? (
-                                    <Tooltip title={phrase}>
-                                      <span>{main}</span>
-                                    </Tooltip>
-                                  ) : (
-                                    <span>{main}</span>
-                                  )
-                                }
-                                return <span>{[mc, mn].filter(Boolean).join(' ') || '-'}</span>
-                              },
-                            },
                             { title: 'SKU', dataIndex: 'sku_code', width: 140, ellipsis: true },
                             { title: '规格（最常见）', dataIndex: 'spec_text', ellipsis: true },
                             { title: '销售额', dataIndex: 'revenue_amount', width: 110, render: (v: any) => formatMoney(v) },

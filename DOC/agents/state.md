@@ -838,7 +838,7 @@
         - 排行表点击行不再跳台账：改为回到“销售明细-明细行列表”，并自动带入 SKU 条码筛选立即查询；需要排查单笔时再点“去台账”
         - “数据更新时间”提示移入看板内部并改为纯文本（无 Alert 底框/标题），放在“时间口径...”前
         - 筛选升级：使用 `BoundTargetPicker`（可搜索下拉，先选目标类型再选目标对象），并接入后端 `bound_model_code` 过滤
-        - 看板/排行补齐“模型/套装”列（基于 active mapping 回填；套装额外展示 template/selector/phrase）
+        - 销售明细 Top100 排行补齐“模型/套装”列（基于 active mapping 回填；套装额外展示 template/selector/phrase）；看板 Top12 货品不展示该列（避免重复）
         - 视图状态写入 URL（`tab/view`），浏览器后退优先在销售分析页内回退（不再直接跳走）
       - `frontend/src/types/planner.ts`：`SalesLineItem` 增加 `bound_model_code/bound_model_name`
     - 后端：

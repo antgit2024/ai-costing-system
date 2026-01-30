@@ -6,7 +6,6 @@ import {
   DatePicker,
   Form,
   Input,
-  Progress,
   Row,
   Segmented,
   Select,
@@ -1012,19 +1011,20 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
                     </Col>
                     <Col xs={24} lg={6}>
                       <Card size="small">
-                        <Space direction="vertical" style={{ width: '100%' }}>
-                          <Typography.Text type="secondary">成本覆盖率（按销售额）</Typography.Text>
-                          <Progress
-                            percent={Number((Number((dashboardQuery.data as any)?.kpis?.costed_revenue_rate ?? 0) * 100).toFixed(1))}
-                            strokeColor="var(--ant-color-primary, #1677ff)"
-                            format={(p) => `${p ?? 0}%`}
-                          />
-                          <Sparkline values={coverageSpark} height={28} stroke="var(--ant-color-primary, #1677ff)" />
-                          <Typography.Text type="secondary">
-                            缺成本行：{Number((dashboardQuery.data as any)?.kpis?.lines_missing_costing ?? 0)} /{' '}
-                            {Number((dashboardQuery.data as any)?.kpis?.shipment_lines_total ?? 0)}
-                          </Typography.Text>
-                        </Space>
+                        <Statistic
+                          title="成本覆盖率（按销售额）"
+                          value={Number((Number((dashboardQuery.data as any)?.kpis?.costed_revenue_rate ?? 0) * 100).toFixed(1))}
+                          precision={1}
+                          suffix="%"
+                        />
+                        <Sparkline values={coverageSpark} height={28} stroke="var(--ant-color-primary, #1677ff)" />
+                        <Statistic
+                          title="缺成本行"
+                          value={`${Number((dashboardQuery.data as any)?.kpis?.lines_missing_costing ?? 0)} / ${Number(
+                            (dashboardQuery.data as any)?.kpis?.shipment_lines_total ?? 0,
+                          )}`}
+                          formatter={(v) => <span style={{ fontSize: 20, fontWeight: 600 }}>{String(v ?? '-')}</span>}
+                        />
                       </Card>
                     </Col>
                   </Row>

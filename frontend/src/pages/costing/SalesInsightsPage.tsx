@@ -6,7 +6,6 @@ import {
   DatePicker,
   Form,
   Input,
-  Modal,
   Progress,
   Row,
   Segmented,
@@ -75,6 +74,7 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
   const navigate = useNavigate()
   const [form] = Form.useForm()
   const [activeTab, setActiveTab] = useState<'dashboard' | 'lines'>('dashboard')
+  const [linesView, setLinesView] = useState<'list' | 'rank_profit' | 'rank_loss'>('list')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [data, setData] = useState<SalesLinesResponse | null>(null)
@@ -86,8 +86,6 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
   const [periodMode, setPeriodMode] = useState<SalesPeriodMode>('day')
   const [anchorDate, setAnchorDate] = useState(() => dayjs().subtract(1, 'day').startOf('day'))
   const [showAdvanced, setShowAdvanced] = useState(false)
-  const [topModalOpen, setTopModalOpen] = useState(false)
-  const [topModalKind, setTopModalKind] = useState<'profit' | 'loss'>('profit')
   const [lastQuery, setLastQuery] = useState<{
     start: string
     end: string
@@ -210,8 +208,8 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
   }
 
   const top100Query = useQuery({
-    queryKey: ['sales', 'profit-dashboard', 'top100', rangeStartIso, rangeEndIso, watchedShop, dashboardGroupBy, topModalKind],
-    enabled: !embedded && topModalOpen && !!rangeStartIso && !!rangeEndIso,
+    queryKey: ['sales', 'profit-dashboard', 'top100', rangeStartIso, rangeEndIso, watchedShop, dashboardGroupBy],
+    enabled: !embedded && activeTab === 'lines' && linesView !== 'list' && !!rangeStartIso && !!rangeEndIso,
     queryFn: async () => {
       const channel = watchedShop?.trim() || undefined
       try {
@@ -249,6 +247,12 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
     staleTime: 30_000,
     refetchOnWindowFocus: false,
   })
+
+  const openRankingInLinesTab = (kind: 'profit' | 'loss') => {
+    setActiveTab('lines')
+    setLinesView(kind === 'profit' ? 'rank_profit' : 'rank_loss')
+    setError(null)
+  }
 
   const navigateToShipmentsProcessed = (params: { sku_code?: string; bundle_template_code?: string; bundle_preset_selector?: string }) => {
     const qp = new URLSearchParams()
@@ -437,6 +441,10 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
       return
     }
     if (activeTab === 'lines') {
+      if (linesView !== 'list') {
+        await top100Query.refetch()
+        return
+      }
       await runQuery({ ...base, page: 1, page_size: pageSize })
       return
     }
@@ -656,7 +664,7 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
                 disabled
               />
               <Button type="primary" onClick={() => onQuery()} loading={loading || dashboardQuery.isFetching}>
-                {embedded ? '查询明细' : activeTab === 'lines' ? '查询明细' : '刷新看板'}
+                {embedded ? '查询明细' : activeTab === 'lines' ? (linesView === 'list' ? '查询明细' : '刷新排名') : '刷新看板'}
               </Button>
               {!embedded ? (
                 <>
@@ -712,61 +720,6 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
         />
       ) : null}
 
-      {!embedded ? (
-        <Modal
-          width={980}
-          open={topModalOpen}
-          onCancel={() => setTopModalOpen(false)}
-          footer={null}
-          title={topModalKind === 'profit' ? '更多排名：Top 赚钱货品（前100）' : '更多排名：Top 亏损货品（前100）'}
-        >
-          <Table<SalesProfitDashboardTopSkuItem>
-            rowKey={(r) => `${r.sku_code}-${String(r.spec_text ?? '')}`}
-            size="small"
-            loading={top100Query.isFetching}
-            pagination={{ pageSize: 100, showSizeChanger: false }}
-            dataSource={
-              topModalKind === 'profit'
-                ? ((top100Query.data as SalesProfitDashboardResponse | undefined)?.top_skus_profit ?? [])
-                : ((top100Query.data as SalesProfitDashboardResponse | undefined)?.top_skus_loss ?? [])
-            }
-            columns={[
-              {
-                title: '排名',
-                width: 70,
-                render: (_v, _r, idx) => idx + 1,
-              },
-              { title: 'SKU', dataIndex: 'sku_code', width: 160, ellipsis: true },
-              { title: '规格（最常见）', dataIndex: 'spec_text', ellipsis: true },
-              { title: '发货件数', dataIndex: 'shipped_qty', width: 110, render: (v: any) => formatQty(v) },
-              { title: '销售额', dataIndex: 'revenue_amount', width: 120, render: (v: any) => formatMoney(v) },
-              { title: '成本', dataIndex: 'cost_amount', width: 120, render: (v: any) => formatMoney(v) },
-              {
-                title: '毛利',
-                dataIndex: 'gross_profit',
-                width: 120,
-                render: (v: any) => (
-                  <Typography.Text type={Number(v ?? 0) < 0 ? 'danger' : undefined}>{formatMoney(v)}</Typography.Text>
-                ),
-              },
-              {
-                title: '毛利率',
-                dataIndex: 'gross_margin',
-                width: 110,
-                render: (v: any) => (v == null ? '-' : `${(Number(v) * 100).toFixed(2)}%`),
-              },
-            ]}
-            onRow={(r) => ({
-              onClick: () => {
-                const sku = String(r?.sku_code ?? '').trim()
-                if (!sku) return
-                navigateToShipmentsProcessed({ sku_code: sku })
-              },
-            })}
-          />
-        </Modal>
-      ) : null}
-
       <Card size="small">
         {embedded ? (
           <>
@@ -799,7 +752,10 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
         ) : (
           <Tabs
             activeKey={activeTab}
-            onChange={(k) => setActiveTab(k as any)}
+            onChange={(k) => {
+              setActiveTab(k as any)
+              if (k === 'lines') setLinesView('list')
+            }}
             items={[
               {
                 key: 'dashboard',
@@ -878,8 +834,7 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
                             type="link"
                             size="small"
                             onClick={() => {
-                              setTopModalKind('profit')
-                              setTopModalOpen(true)
+                              openRankingInLinesTab('profit')
                             }}
                           >
                             更多排名
@@ -931,8 +886,7 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
                             type="link"
                             size="small"
                             onClick={() => {
-                              setTopModalKind('loss')
-                              setTopModalOpen(true)
+                              openRankingInLinesTab('loss')
                             }}
                           >
                             更多排名
@@ -1133,31 +1087,97 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
                 label: '销售明细',
                 children: (
                   <>
-                    {data ? (
-                      <Alert
-                        type={data.lines_with_bom_snapshots > 0 ? 'success' : 'warning'}
-                        showIcon
-                        style={{ marginBottom: 12 }}
-                        message="成本覆盖率（明细范围内）"
-                        description={
-                          <div>
-                            <div>
-                              有 BOM/计价行：{data.lines_with_bom_snapshots}；缺成本字段行：{data.lines_missing_costing}
-                            </div>
-                            <div style={{ color: '#888' }}>{data.note || ''}</div>
-                          </div>
-                        }
-                      />
-                    ) : null}
-                    <Table
-                      rowKey="shipment_line_id"
-                      size="small"
-                      loading={loading}
-                      columns={columns}
-                      dataSource={data?.items ?? []}
-                      pagination={pagination}
-                      scroll={{ x: 2350 }}
-                    />
+                    {linesView !== 'list' ? (
+                      <>
+                        <Alert
+                          type="info"
+                          showIcon
+                          style={{ marginBottom: 12 }}
+                          message={linesView === 'rank_profit' ? 'Top 赚钱货品（前100，按毛利额）' : 'Top 亏损货品（前100，按毛利额）'}
+                          description={
+                            <Space wrap>
+                              <span>点击行可下钻到发货台账（已处理）</span>
+                              <Button
+                                size="small"
+                                onClick={() => {
+                                  setLinesView('list')
+                                }}
+                              >
+                                切回明细行列表
+                              </Button>
+                            </Space>
+                          }
+                        />
+                        <Table<SalesProfitDashboardTopSkuItem>
+                          rowKey={(r) => `${r.sku_code}-${String(r.spec_text ?? '')}`}
+                          size="small"
+                          loading={top100Query.isFetching}
+                          pagination={{ pageSize: 100, showSizeChanger: false }}
+                          dataSource={
+                            linesView === 'rank_profit'
+                              ? ((top100Query.data as SalesProfitDashboardResponse | undefined)?.top_skus_profit ?? [])
+                              : ((top100Query.data as SalesProfitDashboardResponse | undefined)?.top_skus_loss ?? [])
+                          }
+                          columns={[
+                            { title: '排名', width: 70, render: (_v, _r, idx) => idx + 1 },
+                            { title: 'SKU', dataIndex: 'sku_code', width: 160, ellipsis: true },
+                            { title: '规格（最常见）', dataIndex: 'spec_text', ellipsis: true },
+                            { title: '发货件数', dataIndex: 'shipped_qty', width: 110, render: (v: any) => formatQty(v) },
+                            { title: '销售额', dataIndex: 'revenue_amount', width: 120, render: (v: any) => formatMoney(v) },
+                            { title: '成本', dataIndex: 'cost_amount', width: 120, render: (v: any) => formatMoney(v) },
+                            {
+                              title: '毛利',
+                              dataIndex: 'gross_profit',
+                              width: 120,
+                              render: (v: any) => (
+                                <Typography.Text type={Number(v ?? 0) < 0 ? 'danger' : undefined}>{formatMoney(v)}</Typography.Text>
+                              ),
+                            },
+                            {
+                              title: '毛利率',
+                              dataIndex: 'gross_margin',
+                              width: 110,
+                              render: (v: any) => (v == null ? '-' : `${(Number(v) * 100).toFixed(2)}%`),
+                            },
+                          ]}
+                          onRow={(r) => ({
+                            onClick: () => {
+                              const sku = String(r?.sku_code ?? '').trim()
+                              if (!sku) return
+                              navigateToShipmentsProcessed({ sku_code: sku })
+                            },
+                          })}
+                        />
+                      </>
+                    ) : (
+                      <>
+                        {data ? (
+                          <Alert
+                            type={data.lines_with_bom_snapshots > 0 ? 'success' : 'warning'}
+                            showIcon
+                            style={{ marginBottom: 12 }}
+                            message="成本覆盖率（明细范围内）"
+                            description={
+                              <div>
+                                <div>
+                                  有 BOM/计价行：{data.lines_with_bom_snapshots}；缺成本字段行：{data.lines_missing_costing}
+                                </div>
+                                <div style={{ color: '#888' }}>{data.note || ''}</div>
+                              </div>
+                            }
+                          />
+                        ) : null}
+                        <Table
+                          rowKey="shipment_line_id"
+                          size="small"
+                          loading={loading}
+                          columns={columns}
+                          dataSource={data?.items ?? []}
+                          pagination={pagination}
+                          scroll={{ x: 2350 }}
+                        />
+                      </>
+                    )}
                   </>
                 ),
               },

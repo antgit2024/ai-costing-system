@@ -834,6 +834,7 @@
         - 新增 `Tabs`：`利润看板（赚钱/亏钱）` / `销售明细`
         - 明细表新增列：`模型/套装（绑定）`（展示 `bound_model_code + bound_model_name`）
         - 明细默认 `page_size=100`（更符合“运营看列表”的使用方式）
+        - “更多排名”不再弹窗，改为直接切换到“销售明细”TAB展示 Top100（赚钱/亏损）排行
       - `frontend/src/types/planner.ts`：`SalesLineItem` 增加 `bound_model_code/bound_model_name`
     - 后端：
       - `backend/src/planner/services/analytics_service.py`：`sales_lines` 通过 `sku_code -> active mapping` 回填 `bound_model_code/bound_model_name`

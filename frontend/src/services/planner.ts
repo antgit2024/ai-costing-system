@@ -2218,6 +2218,7 @@ export const fetchSalesLines = async (params: {
   shipment_no?: string
   order_no?: string
   product_link_id?: string
+  bound_model_code?: string
   bundle_template_code?: string
   bundle_preset_selector?: string
   include_missing?: boolean

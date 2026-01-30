@@ -27,6 +27,8 @@ import { useNavigate } from 'react-router-dom'
 import { InfoCircleOutlined } from '@ant-design/icons'
 import { LeftOutlined, RightOutlined } from '@ant-design/icons'
 
+import BoundTargetPicker from '@/components/common/BoundTargetPicker'
+import type { BoundTargetPickerFilters, BoundTargetPickerValue } from '@/components/common/BoundTargetPicker'
 import {
   fetchSalesLines,
   fetchSalesProfitDashboard,
@@ -94,6 +96,8 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
   const [periodMode, setPeriodMode] = useState<SalesPeriodMode>('day')
   const [anchorDate, setAnchorDate] = useState(() => dayjs().subtract(1, 'day').startOf('day'))
   const [showAdvanced, setShowAdvanced] = useState(false)
+  const [boundTarget, setBoundTarget] = useState<BoundTargetPickerValue>({ kind: 'any' })
+  const [boundTargetFilters, setBoundTargetFilters] = useState<BoundTargetPickerFilters>({})
   const [lastQuery, setLastQuery] = useState<{
     start: string
     end: string
@@ -275,9 +279,9 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
       sku_code: sku,
       order_no: undefined,
       product_link_id: undefined,
-      bundle_template_code: undefined,
-      bundle_preset_selector: undefined,
     })
+    setBoundTarget({ kind: 'any' })
+    setBoundTargetFilters({})
 
     const range = computedRange as unknown as [dayjs.Dayjs, dayjs.Dayjs]
     const base = {
@@ -288,6 +292,7 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
       sku_code: sku,
       order_no: undefined,
       product_link_id: undefined,
+      bound_model_code: undefined,
       bundle_template_code: undefined,
       bundle_preset_selector: undefined,
     }
@@ -455,8 +460,9 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
       sku_code: v.sku_code?.trim() || undefined,
       order_no: v.order_no?.trim() || undefined,
       product_link_id: v.product_link_id?.trim() || undefined,
-      bundle_template_code: v.bundle_template_code?.trim() || undefined,
-      bundle_preset_selector: v.bundle_preset_selector?.trim() || undefined,
+      bound_model_code: boundTargetFilters.bound_target_kind === 'model' ? boundTargetFilters.bound_model_code : undefined,
+      bundle_template_code: boundTargetFilters.bundle_template_code,
+      bundle_preset_selector: boundTargetFilters.bundle_preset_selector,
     }
     setLastQuery(base)
     try {
@@ -570,6 +576,9 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
       sku_code: v.sku_code?.trim() || undefined,
       order_no: v.order_no?.trim() || undefined,
       product_link_id: v.product_link_id?.trim() || undefined,
+      bound_model_code: boundTargetFilters.bound_target_kind === 'model' ? boundTargetFilters.bound_model_code : undefined,
+      bundle_template_code: boundTargetFilters.bundle_template_code,
+      bundle_preset_selector: boundTargetFilters.bundle_preset_selector,
     }
     setLastQuery(fallback)
     await runQuery({ ...fallback, page: p, page_size: ps })
@@ -682,11 +691,14 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
           </Form.Item>
           {showAdvanced ? (
             <>
-              <Form.Item label="套装模板" name="bundle_template_code">
-                <Input placeholder="可选：bundle code" style={{ width: 160 }} allowClear />
-              </Form.Item>
-              <Form.Item label="套装二级" name="bundle_preset_selector">
-                <Input placeholder="可选：AA/AB" style={{ width: 120 }} allowClear />
+              <Form.Item label="模型/套装">
+                <BoundTargetPicker
+                  value={boundTarget}
+                  onChange={(next, filters) => {
+                    setBoundTarget(next)
+                    setBoundTargetFilters(filters)
+                  }}
+                />
               </Form.Item>
               <Form.Item label="原始单号" name="order_no">
                 <Input placeholder="可选：order_no" style={{ width: 180 }} allowClear />

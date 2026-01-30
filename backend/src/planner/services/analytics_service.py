@@ -2330,6 +2330,7 @@ def sales_lines(
     shipment_no: Optional[str] = None,
     order_no: Optional[str] = None,
     product_link_id: Optional[str] = None,
+    bound_model_code: Optional[str] = None,
     bundle_template_code: Optional[str] = None,
     bundle_preset_selector: Optional[str] = None,
     include_missing: bool = True,
@@ -2471,6 +2472,10 @@ def sales_lines(
         base_q = base_q.filter(models.ShipmentLine.order_no == order_no)
     if product_link_id:
         base_q = base_q.filter(models.ShipmentLine.product_link_id == product_link_id)
+    if bound_model_code:
+        mc = str(bound_model_code or "").strip()
+        if mc:
+            base_q = base_q.filter(func.coalesce(binding_sq.c.bound_model_code, "") == mc)
     if bundle_template_code:
         b = str(bundle_template_code or "").strip()
         if b:

@@ -26,9 +26,6 @@ import { useNavigate } from 'react-router-dom'
 
 import SalesInsightsPage from '@/pages/costing/SalesInsightsPage'
 import {
-  fetchBundleTemplates,
-  fetchPublishedStandardModels,
-  fetchProductModelVersions,
   fetchShipmentBomSnapshotDetail,
   fetchShipmentLineCosting,
   fetchShipmentLineDeductions,
@@ -39,6 +36,7 @@ import {
   fetchSkuMasterByBarcode,
 } from '@/services/planner'
 import type { ShipmentLineListItem, ShipmentLineListResponse } from '@/types/planner'
+import BoundTargetPicker, { type BoundTargetPickerValue } from '@/components/common/BoundTargetPicker'
 
 const { Title, Text } = Typography
 
@@ -235,61 +233,36 @@ const ShipmentLedgerPage = () => {
     return f ? { field: f, order: ord } : {}
   })
 
-  // Filter helpers (binding dropdowns)
-  const [boundKind, setBoundKind] = useState<'any' | 'model' | 'bundle'>('any')
-  const [modelSearch, setModelSearch] = useState('')
-  const [bundleSearch, setBundleSearch] = useState('')
-  const [selectedModelId, setSelectedModelId] = useState<string | undefined>(undefined)
+  const [boundTarget, setBoundTarget] = useState<BoundTargetPickerValue>({ kind: 'any' })
 
-  const publishedModelsQuery = useQuery({
-    queryKey: ['shipments', 'ledger', 'published-models', modelSearch],
-    queryFn: () => fetchPublishedStandardModels({ search: modelSearch || undefined, limit: 50 }),
-    enabled: boundKind === 'model',
-    placeholderData: keepPreviousData,
-  })
-  const modelOptions = useMemo(() => {
-    const items = (publishedModelsQuery.data as any)?.items ?? []
-    return (items as any[])
-      .map((m: any) => ({
-        label: `${String(m?.model_code ?? '').trim()} ${String(m?.model_name ?? '').trim()}`.trim(),
-        value: String(m?.model_id ?? '').trim(),
-        code: String(m?.model_code ?? '').trim(),
-      }))
-      .filter((x: any) => x.value && x.code)
-  }, [publishedModelsQuery.data])
-
-  const modelVersionsQuery = useQuery({
-    queryKey: ['shipments', 'ledger', 'model-versions', selectedModelId],
-    queryFn: () => fetchProductModelVersions(String(selectedModelId), {}),
-    enabled: boundKind === 'model' && !!selectedModelId,
-    placeholderData: keepPreviousData,
-  })
-  const versionOptions = useMemo(() => {
-    const items = (modelVersionsQuery.data ?? []) as any[]
-    return items
-      .filter((v: any) => String(v?.version_status ?? '').trim() === 'published')
-      .map((v: any) => ({
-        label: String(v?.version_label ?? '').trim(),
-        value: String(v?.version_label ?? '').trim(),
-      }))
-      .filter((x: any) => x.value)
-  }, [modelVersionsQuery.data])
-
-  const bundleTemplatesQuery = useQuery({
-    queryKey: ['shipments', 'ledger', 'bundle-templates', bundleSearch],
-    queryFn: () => fetchBundleTemplates({ search: bundleSearch || undefined, page: 1, page_size: 50 }),
-    enabled: boundKind === 'bundle',
-    placeholderData: keepPreviousData,
-  })
-  const bundleTemplateOptions = useMemo(() => {
-    const items = (bundleTemplatesQuery.data as any)?.items ?? []
-    return (items as any[])
-      .map((t: any) => ({
-        label: `${String(t?.template_code ?? '').trim()} ${String(t?.name ?? '').trim()}`.trim(),
-        value: String(t?.template_code ?? '').trim(),
-      }))
-      .filter((x: any) => x.value)
-  }, [bundleTemplatesQuery.data])
+  const boundTargetFilters = useMemo(() => {
+    if (boundTarget.kind === 'model') {
+      const code = String(boundTarget.model_code ?? '').trim()
+      const ver = String(boundTarget.published_version_label ?? '').trim()
+      return {
+        bound_target_kind: code ? ('model' as const) : undefined,
+        bound_model_code: code || undefined,
+        bound_version_label: ver || undefined,
+        bundle_preset_selector: undefined,
+      }
+    }
+    if (boundTarget.kind === 'bundle') {
+      const tpl = String(boundTarget.bundle_template_code ?? '').trim().toUpperCase()
+      const sel = String(boundTarget.bundle_preset_selector ?? '').trim().toUpperCase()
+      return {
+        bound_target_kind: tpl ? ('bundle' as const) : undefined,
+        bound_model_code: tpl ? `B-${tpl}` : undefined,
+        bound_version_label: undefined,
+        bundle_preset_selector: sel || undefined,
+      }
+    }
+    return {
+      bound_target_kind: undefined,
+      bound_model_code: undefined,
+      bound_version_label: undefined,
+      bundle_preset_selector: undefined,
+    }
+  }, [boundTarget])
 
   // Drawer (details)
   const [detailOpen, setDetailOpen] = useState(false)
@@ -461,14 +434,7 @@ const ShipmentLedgerPage = () => {
       setLedgerPage(1)
     }
     if (kind === 'bundle' && tpl) {
-      setBoundKind('bundle')
-      ledgerForm.setFieldsValue({
-        bound_target_kind: 'bundle',
-        bundle_template_code: tpl,
-        bundle_selector: sel ? [sel] : undefined,
-        channel: channel0,
-        sku_code: sku0,
-      })
+      setBoundTarget({ kind: 'bundle', bundle_template_code: tpl, bundle_preset_selector: sel })
       setLedgerFilters({
         bound_target_kind: 'bundle',
         bound_model_code: `B-${tpl}`,
@@ -799,36 +765,7 @@ const ShipmentLedgerPage = () => {
                 <Form
                   form={ledgerForm}
                   layout="inline"
-                  onValuesChange={(changed) => {
-                    if ('bound_target_kind' in changed) {
-                      const k = String((changed as any).bound_target_kind ?? 'any') as any
-                      const kk: 'any' | 'model' | 'bundle' = k === 'model' || k === 'bundle' ? k : 'any'
-                      setBoundKind(kk)
-                      setSelectedModelId(undefined)
-                      ledgerForm.setFieldsValue({ bound_model_id: undefined, bound_version_label: undefined, bundle_template_code: undefined, bundle_selector: undefined })
-                    }
-                  }}
                   onFinish={(values) => {
-                    const k0 = String(values.bound_target_kind ?? '').trim()
-                    const kind: 'any' | 'model' | 'bundle' = k0 === 'model' || k0 === 'bundle' ? k0 : 'any'
-                    const bundleTpl = String(values.bundle_template_code ?? '').trim().toUpperCase() || undefined
-                    const bundleSel = (() => {
-                      const v = (values as any).bundle_selector
-                      if (Array.isArray(v)) return String(v?.[0] ?? '').trim().toUpperCase() || undefined
-                      return String(v ?? '').trim().toUpperCase() || undefined
-                    })()
-                    const modelId = String(values.bound_model_id ?? '').trim() || undefined
-                    const modelHit = modelOptions.find((x: any) => x.value === modelId)
-                    const modelCode = modelHit?.code || undefined
-                    const versionLabel = String(values.bound_version_label ?? '').trim() || undefined
-
-                    // Compose `bound_model_code`:
-                    // - model: use 3-letter model code (e.g. OZU)
-                    // - bundle: use B-<template_code> (e.g. B-DB9EAE). Selector is filtered separately.
-                    let boundModelCode: string | undefined = undefined
-                    if (kind === 'model') boundModelCode = modelCode
-                    if (kind === 'bundle' && bundleTpl) boundModelCode = `B-${bundleTpl}`
-
                     const next = {
                       channel: values.channel ? String(values.channel).trim() : undefined,
                       sku_code: values.sku_code ? String(values.sku_code).trim() : undefined,
@@ -836,10 +773,7 @@ const ShipmentLedgerPage = () => {
                       product_link_id: values.product_link_id ? String(values.product_link_id).trim() : undefined,
                       spec_text: values.spec_text ? String(values.spec_text).trim() : undefined,
                       unresolved_reason: values.unresolved_reason ? String(values.unresolved_reason).trim() : undefined,
-                      bound_target_kind: kind === 'any' ? undefined : kind,
-                      bound_model_code: boundModelCode || undefined,
-                      bound_version_label: kind === 'model' ? versionLabel : undefined,
-                      bundle_preset_selector: kind === 'bundle' ? bundleSel : undefined,
+                      ...boundTargetFilters,
                     }
                     setLedgerFilters(next)
                     setLedgerPage(1)
@@ -851,73 +785,13 @@ const ShipmentLedgerPage = () => {
                   <Form.Item name="spec_text">
                     <Input style={{ width: 220 }} placeholder="交易规格" allowClear />
                   </Form.Item>
-                  <Form.Item name="bound_target_kind" initialValue="any">
-                    <Select
-                      style={{ width: 140 }}
-                      options={[
-                        { value: 'any', label: '模型/套装(全部)' },
-                        { value: 'model', label: '标准模型' },
-                        { value: 'bundle', label: '套装' },
-                      ]}
-                    />
-                  </Form.Item>
-                  {boundKind === 'model' ? (
-                    <>
-                      <Form.Item name="bound_model_id">
-                        <Select
-                          showSearch
-                          allowClear
-                          style={{ width: 180 }}
-                          placeholder="一级：模型"
-                          filterOption={false}
-                          onSearch={(s) => setModelSearch(String(s || ''))}
-                          options={modelOptions as any}
-                          onChange={(v) => {
-                            const id = String(v ?? '').trim() || undefined
-                            setSelectedModelId(id)
-                            ledgerForm.setFieldsValue({ bound_version_label: undefined })
-                          }}
-                        />
-                      </Form.Item>
-                      <Form.Item name="bound_version_label">
-                        <Select
-                          showSearch
-                          allowClear
-                          style={{ width: 220 }}
-                          placeholder="二级：标准版本"
-                          filterOption={(input, option) =>
-                            String((option as any)?.value ?? '')
-                              .toLowerCase()
-                              .includes(String(input || '').toLowerCase())
-                          }
-                          options={versionOptions as any}
-                        />
-                      </Form.Item>
-                    </>
-                  ) : null}
-                  {boundKind === 'bundle' ? (
-                    <>
-                      <Form.Item name="bundle_template_code">
-                        <Select
-                          showSearch
-                          allowClear
-                          style={{ width: 180 }}
-                          placeholder="一级：套装模板"
-                          filterOption={false}
-                          onSearch={(s) => setBundleSearch(String(s || ''))}
-                          options={bundleTemplateOptions as any}
-                        />
-                      </Form.Item>
-                      <Form.Item name="bundle_selector">
-                        <Select
-                          mode="tags"
-                          maxTagCount={1}
-                          style={{ width: 160 }}
-                          placeholder="二级：selector(可填AE)"
-                        />
-                      </Form.Item>
-                    </>
-                  ) : null}
+                  <BoundTargetPicker
+                    value={boundTarget}
+                    onChange={(v) => {
+                      setBoundTarget(v)
+                      // if user uses advanced filtering, they will click "查询"
+                    }}
+                  />
                   <Form.Item name="unresolved_reason">
                     <Select
                       allowClear

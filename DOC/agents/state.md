@@ -134,6 +134,19 @@
     - `frontend/src/services/planner.ts`
     - `frontend/src/pages/costing/SalesInsightsPage.tsx`
 
+- **最近校对（北京时间 GMT+8）**：2026-01-30（发货台账：模型/套装筛选改为可复用“目标选择器”）
+  - 背景：多个页面（发货台账/售后/作业中心等）的“模型/套装下拉”因远程搜索/二级选择分散在各页，容易出现“下拉不好用/状态互相打架”。
+  - 口径：
+    - 参考 `sku-master` 的交互：先选“目标类型”（标准模型/套装模块），再选“目标对象”。
+    - 标准模型：下拉远程搜索（仅在线发布），自动显示该模型的发布版本标签（用于对账）。
+    - 套装模块：下拉远程搜索套装模板 + selector（二级，优先从 `metadata.phrase_presets` 提供候选，仍支持手输）。
+  - 本轮产物（前端）：
+    - 新增可复用组件：`frontend/src/components/common/BoundTargetPicker.tsx`
+    - 发货台账接入：`frontend/src/pages/costing/ShipmentLedgerPage.tsx`（替换原先分散的绑定筛选下拉）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-27（数据洞察：首屏不再“空白”，默认轻量查询 + 记住筛选）
   - 现象：`/costing/insights/after-sales`、`/costing/insights/sales`、`/costing/insights/models` 进入页面首屏为空，必须点“查询”才有内容，体验弱于常见 ERP 报表页。
   - 处理策略（不新增重复列表，只让原列表首屏有真实数据）：

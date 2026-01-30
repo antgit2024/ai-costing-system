@@ -129,6 +129,7 @@ const AfterSalesInsightsPage = () => {
   const opsStroke = 'var(--ant-color-primary, #1677ff)'
   const factoryStroke = 'var(--ant-color-success, #52c41a)'
   const [showAdvanced, setShowAdvanced] = useState(false)
+  const dayGroupByFallbackWarnedRef = useRef(false)
 
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState<ReturnsRateBySkuResponse | null>(null)
@@ -224,21 +225,63 @@ const AfterSalesInsightsPage = () => {
           setDashboardComputedAt(String((snap as any)?.computed_at ?? '') || null)
           return snap.data as any
         } catch (e: any) {
-          if (Number(e?.response?.status) !== 404) setDashboardComputedAt(null)
+          const status = Number(e?.response?.status)
+          if (status === 422 && dashboardGroupBy === 'day') {
+            if (!dayGroupByFallbackWarnedRef.current) {
+              dayGroupByFallbackWarnedRef.current = true
+              message.warning('后端尚未支持按日趋势（group_by=day），已降级为按周展示')
+            }
+            try {
+              const snap2 = await fetchAfterSalesDashboardSnapshot({
+                start: String(rangeStartIso),
+                end: String(rangeEndIso),
+                group_by: 'week',
+                view: dashboardView,
+                channel,
+              })
+              setDashboardComputedAt(String((snap2 as any)?.computed_at ?? '') || null)
+              return snap2.data as any
+            } catch {
+              // ignore
+            }
+          }
+          if (status !== 404) setDashboardComputedAt(null)
         }
       }
       setDashboardComputedAt(null)
-      return fetchAfterSalesDashboard(
-        {
-          start: String(rangeStartIso),
-          end: String(rangeEndIso),
-          group_by: dashboardGroupBy,
-          channel,
-          top_n: 12,
-          view: dashboardView,
-        },
-        { timeoutMs: 60000 },
-      )
+      try {
+        return await fetchAfterSalesDashboard(
+          {
+            start: String(rangeStartIso),
+            end: String(rangeEndIso),
+            group_by: dashboardGroupBy,
+            channel,
+            top_n: 12,
+            view: dashboardView,
+          },
+          { timeoutMs: 60000 },
+        )
+      } catch (e: any) {
+        const status = Number(e?.response?.status)
+        if (status === 422 && dashboardGroupBy === 'day') {
+          if (!dayGroupByFallbackWarnedRef.current) {
+            dayGroupByFallbackWarnedRef.current = true
+            message.warning('后端尚未支持按日趋势（group_by=day），已降级为按周展示')
+          }
+          return fetchAfterSalesDashboard(
+            {
+              start: String(rangeStartIso),
+              end: String(rangeEndIso),
+              group_by: 'week',
+              channel,
+              top_n: 12,
+              view: dashboardView,
+            },
+            { timeoutMs: 60000 },
+          )
+        }
+        throw e
+      }
     },
     enabled: activeTab === 'dashboard' && dashboardAutoLoad && !!rangeStartIso && !!rangeEndIso,
     placeholderData: keepPreviousData,

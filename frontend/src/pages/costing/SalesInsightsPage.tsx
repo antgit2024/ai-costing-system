@@ -157,6 +157,7 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
 
   const didInitRef = useRef(false)
   const urlStateInitRef = useRef(false)
+  const dayGroupByFallbackWarnedRef = useRef(false)
 
   const watchedRange = Form.useWatch('range', form) as [dayjs.Dayjs, dayjs.Dayjs] | undefined
   const watchedShop = Form.useWatch('shop', form) as string | undefined
@@ -216,23 +217,63 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
           setDashboardComputedAt(String((snap as any)?.computed_at ?? '') || null)
           return snap.data as SalesProfitDashboardResponse
         } catch (e: any) {
-          // If cache missing, fall back to live.
-          if (Number(e?.response?.status) !== 404) {
-            setDashboardComputedAt(null)
+          const status = Number(e?.response?.status)
+          // If backend doesn't support group_by=day yet, degrade to week.
+          if (status === 422 && dashboardGroupBy === 'day') {
+            if (!dayGroupByFallbackWarnedRef.current) {
+              dayGroupByFallbackWarnedRef.current = true
+              message.warning('后端尚未支持按日趋势（group_by=day），已降级为按周展示')
+            }
+            try {
+              const snap2 = await fetchSalesProfitDashboardSnapshot({
+                start: String(rangeStartIso),
+                end: String(rangeEndIso),
+                group_by: 'week',
+                top_n: 12,
+                channel,
+              })
+              setDashboardComputedAt(String((snap2 as any)?.computed_at ?? '') || null)
+              return snap2.data as SalesProfitDashboardResponse
+            } catch {
+              // ignore and fall back to live
+            }
           }
+          // If cache missing, fall back to live.
+          if (status !== 404) setDashboardComputedAt(null)
         }
       }
       setDashboardComputedAt(null)
-      return fetchSalesProfitDashboard(
-        {
-          start: String(rangeStartIso),
-          end: String(rangeEndIso),
-          group_by: dashboardGroupBy,
-          channel,
-          top_n: 12,
-        },
-        { timeoutMs: 60000 },
-      )
+      try {
+        return await fetchSalesProfitDashboard(
+          {
+            start: String(rangeStartIso),
+            end: String(rangeEndIso),
+            group_by: dashboardGroupBy,
+            channel,
+            top_n: 12,
+          },
+          { timeoutMs: 60000 },
+        )
+      } catch (e: any) {
+        const status = Number(e?.response?.status)
+        if (status === 422 && dashboardGroupBy === 'day') {
+          if (!dayGroupByFallbackWarnedRef.current) {
+            dayGroupByFallbackWarnedRef.current = true
+            message.warning('后端尚未支持按日趋势（group_by=day），已降级为按周展示')
+          }
+          return fetchSalesProfitDashboard(
+            {
+              start: String(rangeStartIso),
+              end: String(rangeEndIso),
+              group_by: 'week',
+              channel,
+              top_n: 12,
+            },
+            { timeoutMs: 60000 },
+          )
+        }
+        throw e
+      }
     },
     enabled: !embedded && !!rangeStartIso && !!rangeEndIso,
     placeholderData: keepPreviousData,

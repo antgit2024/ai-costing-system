@@ -870,6 +870,8 @@
     - 解决页面偶发 “页面发生致命错误（unhandledrejection） Cannot read properties of undefined (reading '0')”
       - 根因：非自定义模式下 `validateFields()` 不一定返回 `range`，导致访问 `v.range[0]` 报错
       - 修复：售后页统一改用 `computedRange` 作为时间口径来源，并对自定义缺失做兜底提示
+    - 解决仪表盘加载失败（422）
+      - 兼容：若线上后端尚未部署 `group_by=day`，前端自动降级为按周请求，并提示一次
   - 验收命令（必须，全部 0 退出码）：
     - Frontend：`npm -C frontend run build`
     - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`

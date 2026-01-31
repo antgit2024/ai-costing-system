@@ -181,6 +181,17 @@
   - 如遇 `pg_hba.conf rejects ... no encryption`（服务端强制加密）：设置环境变量 **`PLANNER_PG_SSLMODE=require`**
   - 如遇 `server does not support SSL, but SSL was required`（链路/代理不支持 SSL 协商）：设置环境变量 **`PLANNER_PG_SSLMODE=disable`**
 
+### 20) 洞察类接口 500：MySQL/MariaDB 下时间分组函数不兼容（strftime/julianday）
+
+- **现象**：
+  - 打开洞察页（例如售后仪表盘 `/costing/insights/after-sales`）提示：`Request failed with status code 500`。
+  - 后端对应接口（例如 `/api/planner/analytics/after-sales/dashboard`）在 MySQL/MariaDB 环境执行时报 SQL 函数错误。
+- **根因**：
+  - 后端 `analytics_service` 的 “sqlite/mysql fallback” 若误用 sqlite 专用函数（如 `strftime/julianday/date(...,'weekday')`），在 MySQL/MariaDB 会直接报错。
+- **修复**：
+  - 升级到包含以下改动的版本（本仓库已落地）：
+    - `backend/src/planner/services/analytics_service.py`：为 `mysql/mariadb` 方言使用 `DATE_FORMAT/CONCAT/DATEDIFF` 实现 day/month/week 分组与 lag 计算。
+
 ### 13) 全站列表/记录都空或 500：DNS 被 Tailscale/NetworkManager 接管导致公网域名解析失败
 
 - **典型现象**：

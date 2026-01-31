@@ -101,6 +101,13 @@ def _group_time_expr(db: Session, column, group_by: Literal["day", "month"]):
         if group_by == "month":
             return func.date_trunc("month", column)
         return func.date_trunc("day", column)
+    if dialect in ("mysql", "mariadb"):
+        # MySQL/MariaDB: return a stable string label for grouping.
+        # - day:   "YYYY-MM-DD"
+        # - month: "YYYY-MM-01" (month bucket key)
+        if group_by == "month":
+            return func.date_format(column, "%Y-%m-01")
+        return func.date_format(column, "%Y-%m-%d")
     # sqlite / mysql fallback
     if group_by == "month":
         return func.strftime("%Y-%m-01", column)
@@ -116,6 +123,15 @@ def _group_time_expr_dash(db: Session, column, group_by: Literal["day", "week", 
             return func.date_trunc("month", column)
         # week: date_trunc('week') => week start (Mon) in postgres
         return func.date_trunc("week", column)
+    if dialect in ("mysql", "mariadb"):
+        # MySQL/MariaDB: use string keys (ordered lexicographically).
+        # We intentionally keep labels simple and stable; frontend only needs a readable period key.
+        if group_by == "day":
+            return func.date_format(column, "%Y-%m-%d")
+        if group_by == "month":
+            return func.date_format(column, "%Y-%m")
+        # ISO week key: "YYYY-WWW" (e.g. 2026-W05)
+        return func.concat(func.date_format(column, "%x"), "-W", func.date_format(column, "%v"))
     # sqlite / mysql fallback (best-effort)
     if group_by == "day":
         return func.strftime("%Y-%m-%d", column)
@@ -1339,6 +1355,12 @@ def after_sales_dashboard(
                 func.coalesce(models.AfterSalesLine.applied_at, models.AfterSalesLine.occurred_at) - models.ShipmentLine.completed_at,
             )
             / 86400.0
+        )
+    elif dialect in ("mysql", "mariadb"):
+        # datediff(a, b) = a - b in days (integer)
+        lag_days_expr = func.datediff(
+            func.coalesce(models.AfterSalesLine.applied_at, models.AfterSalesLine.occurred_at),
+            models.ShipmentLine.completed_at,
         )
     else:
         # sqlite best-effort

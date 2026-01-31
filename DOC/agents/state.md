@@ -20,6 +20,24 @@
 
 > 注：若需要对外一句话解释本项目——“以 SKU 绑定已发布标准版本为入口，在发货导入时解析交易规格并生成可追溯的 BOM 快照，用异常队列兜底，支撑扣库与成本核算对账”。
 
+- **最近校对（北京时间 GMT+8）**：2026-01-31（售后洞察仪表盘 500：兼容 MySQL/MariaDB 的时间分组/lag 计算）
+  - 背景：线上 `https://work.znma.com/costing/insights/after-sales/` 仪表盘提示 `Request failed with status code 500`；前端回退到实时接口时仍 500，说明后端 `/api/planner/analytics/after-sales/dashboard` 在生产环境存在兼容性问题。
+  - 推断根因：`analytics_service._group_time_expr(_dash)` 与 lag 计算的 “sqlite/mysql fallback” 实际使用了 sqlite 专用函数（`strftime/julianday/date(...,'weekday')`），在 MySQL/MariaDB 环境会直接 SQL 报错 → 500。
+  - 本轮产物（后端）：
+    - `backend/src/planner/services/analytics_service.py`
+      - 对 `mysql/mariadb` 方言补齐：
+        - `_group_time_expr`：改用 `DATE_FORMAT` 生成 `day/month` 分组 key
+        - `_group_time_expr_dash`：改用 `DATE_FORMAT + CONCAT` 生成 `day/month/week` 分组 key（week 使用 `YYYY-WWW`）
+        - lag 计算：改用 `DATEDIFF`（替代 sqlite 的 `julianday`）
+  - 验收命令（必须，全部 0 退出码）：
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Frontend：`npm -C frontend run build`
+  - 下一步：
+    - 线上部署后，建议用浏览器或 curl 复核：
+      - `GET /api/planner/analytics/after-sales/dashboard?start=...&end=...&group_by=week&view=ops`
+      - `GET /api/planner/analytics/after-sales/dashboard?start=...&end=...&group_by=week&view=factory`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-29（发货作业中心：快照重建 TAB 重构 + 多维筛选）
   - 背景：`/costing/shipments/ops` 的“快照重建（清空→再生成）”此前直接展示“本批次所有快照”，与“已完成（成本快照）”几乎重复；同时难以定位“已解绑但仍有快照”等真实问题行。
   - 口径（重新梳理）：

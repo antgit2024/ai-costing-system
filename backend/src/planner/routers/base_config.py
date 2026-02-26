@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, union_all
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from PIL import Image
 
 from ...config import settings
 from ...database import get_db
@@ -35,6 +36,37 @@ from openpyxl import Workbook
 
 router = APIRouter(prefix="/base-config", tags=["base-config"])
 logger = logging.getLogger(__name__)
+
+def _maybe_resize_image(
+    content: bytes,
+    *,
+    content_type: str | None,
+    size: int | None = None,
+    width: int | None = None,
+) -> tuple[bytes, str | None]:
+    target = size or width
+    if not target or target < 32 or not content:
+        return content, content_type
+
+    ct = (content_type or "").split(";", 1)[0].strip().lower()
+    if not ct.startswith("image/"):
+        return content, content_type
+
+    try:
+        with Image.open(io.BytesIO(content)) as img:
+            img = img.convert("RGB")
+            if width:
+                if img.width > width:
+                    ratio = width / img.width
+                    new_h = max(1, int(img.height * ratio))
+                    img = img.resize((width, new_h), Image.LANCZOS)
+            else:
+                img.thumbnail((size, size))
+            out = io.BytesIO()
+            img.save(out, format="JPEG", quality=80, optimize=True)
+            return out.getvalue(), "image/jpeg"
+    except Exception:
+        return content, content_type
 
 
 def _normalize_bom_unit(raw: Optional[str]) -> Optional[str]:
@@ -304,6 +336,7 @@ def download_material_image(
     material_id: str,
     image_index: int,
     size: Optional[int] = Query(None, ge=32, le=512),
+    w: Optional[int] = Query(None, ge=32, le=1024),
     force_refresh: bool = Query(False),
     db: Session = Depends(get_db),
 ) -> StreamingResponse:
@@ -353,8 +386,8 @@ def download_material_image(
         try:
             content = material_image_storage.read_local_bytes(local_ref)
             media_type = local_ref.content_type or "application/octet-stream"
-            # NOTE: we currently ignore thumbnail resize (no Pillow dependency); return original.
-            return StreamingResponse(io.BytesIO(content), media_type=media_type)
+            content2, media2 = _maybe_resize_image(content, content_type=media_type, size=size, width=w)
+            return StreamingResponse(io.BytesIO(content2), media_type=media2 or "application/octet-stream")
         except FileNotFoundError:
             # fallthrough to dingtalk download
             pass
@@ -393,8 +426,8 @@ def download_material_image(
             logger.warning("Failed to persist material image locally (material=%s idx=%s): %s", material_id, image_index, exc)
 
     # Thumbnail resize not implemented; return original
-    media_type = content_type or "application/octet-stream"
-    return StreamingResponse(io.BytesIO(attachment.content), media_type=media_type)
+    content2, media2 = _maybe_resize_image(attachment.content, content_type=content_type, size=size, width=w)
+    return StreamingResponse(io.BytesIO(content2), media_type=media2 or "application/octet-stream")
 
 
 @router.patch(

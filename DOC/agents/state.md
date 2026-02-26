@@ -3302,7 +3302,16 @@
   - 变更：
     - 抽屉新增“工序明细”Tab：按发货行的最新 BOM 快照（尺寸/数量）+ 当前版本工序配置，生成工序计价明细，便于核对工序成本口径
     - 台账列表列宽收紧：数量约缩 1/3；金额/成本/毛利/毛利率约缩 1/5
-    - 新增接口：`GET /shipments/lines/{shipment_line_id}/processes`
+  - 新增接口：`GET /shipments/lines/{shipment_line_id}/processes`
   - 本轮验收命令（必须，均已通过）：
     - `npm -C frontend run build`
     - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+
+### 本轮评审结论（2026-02-10 — 《BOM系统优化完整方案_最终版》）
+
+- **方案定位**：`DOC/基础表单/BOM系统优化完整方案_最终版.md` 作为“30% 复杂产品（多幅套装/非规则型）”的**扩展路线蓝图**，不改变当前已上线的“发货时再解析 + SKU→已发布标准版本 + BOM 快照/异常队列”主线；主线仍以 `DOC/costing/blueprints/sku_binding_bom_shipment_plan.md` 与 `DOC/costing/reviews/erp_guardrails_addendum_20251222.md` 为唯一口径。
+- **与现状对齐**：截止 2026-02-10，代码中尚未实现文档中的“子模型表/组合型产品模型表/编码提取日志表/产品模型编码 #SxVxFx 嵌入电商字段”等设计；生产环境只有 `spec_parse_snapshots/bom_snapshots/shipment_exception_queue` 这一套发货主链路，请在实施/培训中明确说明“编码方案目前仅是设计方案，尚未落地”。
+- **后续演进建议（供后续派单用）**：
+  - 当发货主链路（SKU 绑定工作台 + spec 预解析工作台 + 发货导入/异常重试 + 成本/利润/退货洞察）稳定运行后，再开启“组合型产品模型 + 自动编码”Phase，优先支持文档中的 **类型三：多幅套装（规则型）**，类型四（非规则型）仍通过人工 BOM 或模板化占位物料处理。
+  - 编码方案真正落地时，必须与 `spec_parse_snapshots/bom_snapshots` 打通：编码提取写入解析 trace，产品模型匹配结果写入 BOM 快照 trace，严格遵守“快照不回写、重跑产出新快照”的 Guardrails。
+  - 任意试点店铺在电商字段内嵌 `#SxVxFx` 编码前，需先完成“产品模型配置 UI + 编码自动生成 + 运营操作手册”，禁止人工随意造码；试点范围与回滚方案需单独由 Hub/Planner 评审后再派 Backend/Frontend 闭环任务单。

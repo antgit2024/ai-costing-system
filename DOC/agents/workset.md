@@ -2,7 +2,7 @@
 
 > 目的：把“上下文”从聊天迁到可引用的工作集；新 Agent 只需读这些，不要全仓扫描。
 
-> 最近校对（北京时间 GMT+8）：2026-01-25
+> 最近校对（北京时间 GMT+8）：2026-02-10
 
 ### 1) 前端：产品模型（迁移编辑器的核心工作区）
 
@@ -79,7 +79,7 @@
 - `DOC/index/extracted/variants_discussion_extracted_20251221T200250+0800.md`（变体讨论提炼件：禁止直读导出全文）
 - `DOC/index/extracted/shipment_xlsx_extracted_20260125T000000+0800.md`（发货单：强关联键（原始单号/商品链接ID/货品条码）提炼）
 - `DOC/index/extracted/after_sales_xlsx_extracted_20260125T000000+0800.md`（售后退货单：强关联键（网店订单号/商品链接Id/货品条码/申请时间）提炼）
-- `DOC/agents/task_log.md`（最新变更/决策记录）
+- `DOC/agents/task_log.md`（最新变更/决策记录：包括 2026-02-10 对《BOM系统优化完整方案_最终版》v2.0 的评审结论）
 
 ### 6) 环境文件治理（安全/可恢复）
 

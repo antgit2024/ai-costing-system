@@ -44,6 +44,8 @@
   - `grep -nF "### 项目定义（仓库单一真相：当前项目是什么）" DOC/agents/state.md`
 - BOM 系统优化方案（最终版）存在性：
   - `test -f "DOC/基础表单/BOM系统优化完整方案_最终版.md" && grep -nF "# BOM系统优化完整方案" DOC/基础表单/BOM系统优化完整方案_最终版.md`
+- BOM 系统优化方案评审结论（2026-02-10）已回填：
+  - `grep -nF "本轮评审结论（2026-02-10 — 《BOM系统优化完整方案_最终版》）" DOC/agents/state.md`
 - 行级变体运营规范文档存在性：
   - `grep -nF "## 标准模型：行级变体（Overlay）运营/实施规范（v0.1）" DOC/costing/manuals/standard_model_variants_ops_rules.md`
 - 发货时再解析（spec_hash 缓存）评审稿存在性：

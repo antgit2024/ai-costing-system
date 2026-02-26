@@ -7,6 +7,7 @@ from .config import settings
 from .planner.router import router as planner_router
 from .planner.services import metrics as metrics_service
 from .security.ip_allowlist import IPAllowlistMiddleware
+from .upstream_actions import router as upstream_actions_router
 
 app = FastAPI(title="AI Costing Planner API", version="0.1.0")
 
@@ -27,6 +28,7 @@ app.add_middleware(
 )
 
 app.include_router(planner_router, prefix=settings.planner_api_prefix)
+app.include_router(upstream_actions_router)
 if settings.metrics_enabled:
     app.include_router(metrics_service.router)
 

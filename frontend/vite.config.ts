@@ -48,6 +48,11 @@ export default defineConfig({
         target: 'http://127.0.0.1:8800',
         changeOrigin: true,
       },
+      // C1: 员工登录代理(POST /admin/auth/login + GET /admin/auth/me)
+      '/admin/auth': {
+        target: 'http://127.0.0.1:8800',
+        changeOrigin: true,
+      },
     },
     fs: {
       // Allow importing Markdown from repo root `DOC/` as the single source of truth

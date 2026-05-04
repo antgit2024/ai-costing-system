@@ -34,7 +34,7 @@ async def login(req: LoginRequest) -> Dict[str, Any]:
     成功响应直接透传 POD 的 `LoginResponse {access_token, token_type, staff: {...}}` ·
     前端拿到后自行存 access_token + staff 入 zustand。
     """
-    upstream = f"{settings.pod_login_proxy_url.rstrip('/')}/admin/staff/login"
+    upstream = f"{settings.pod_login_proxy_url.rstrip('/')}{settings.pod_login_path}"
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(

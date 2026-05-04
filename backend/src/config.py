@@ -76,8 +76,10 @@ class Settings(BaseSettings):
     # POD_JWT_SECRET_KEY 必须与 pod-design-platform/.env 中同名值完全一致 · 两边均不入库。
     pod_jwt_secret_key: str = Field("dev-secret-change-in-production", env="POD_JWT_SECRET_KEY")
     pod_jwt_algorithm: str = Field("HS256", env="POD_JWT_ALGORITHM")
-    # 登录代理转发 base url(指向 pod 后端) · /admin/auth/login 会 POST {url}/admin/staff/login
-    pod_login_proxy_url: str = Field("http://localhost:8000", env="POD_LOGIN_PROXY_URL")
+    # 登录代理转发 base url(指向 pod 后端) · /admin/auth/login 会 POST {url}{path}
+    pod_login_proxy_url: str = Field("http://localhost:8180", env="POD_LOGIN_PROXY_URL")
+    # POD 真实登录端点路径 · 派单 §3 写的是 `/admin/staff/login` 但 POD 实际挂在 `/api/pod/` 前缀下。
+    pod_login_path: str = Field("/api/pod/admin/staff/login", env="POD_LOGIN_PATH")
 
     # ===== Lightweight access control (pre-auth phase) =====
     # If set, only requests coming from these client IPs are allowed.

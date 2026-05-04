@@ -15,6 +15,7 @@ import { Link, useLocation } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 
 import TaskCenterDrawer from '@/components/common/TaskCenterDrawer'
+import UserMenu from '@/components/UserMenu'
 import { fetchTaskCenter } from '@/services/planner'
 import './appLayoutMenu.css'
 
@@ -267,7 +268,8 @@ const AppLayout = ({ children }: AppLayoutProps) => {
                     <div className="app-header-brand" aria-label="饰家如画®AI智慧数字工厂">
                       饰家如画®AI智慧数字工厂
                     </div>
-              <Space>
+              <Space size={12}>
+                <UserMenu />
                 <Badge count={runningCount} size="small" className={runningCount ? 'task-badge-blink' : undefined}>
                   <Button icon={<UnorderedListOutlined />} onClick={() => setTaskOpen(true)}>
                     任务列表

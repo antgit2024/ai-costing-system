@@ -6,6 +6,7 @@ import { ConfigProvider } from 'antd'
 import App from './App.tsx'
 import 'antd/dist/reset.css'
 import './index.css'
+import './utils/http'
 import { appTheme } from './theme/appTheme'
 
 const queryClient = new QueryClient()

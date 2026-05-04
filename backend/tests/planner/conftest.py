@@ -15,6 +15,7 @@ import src.compat  # noqa: E402,F401  # ensure ForwardRef patch before FastAPI i
 from fastapi.testclient import TestClient  # noqa: E402
 from src.database import Base, configure_engine, get_db  # noqa: E402
 from src.main import app  # noqa: E402
+from src.planner.dependencies import require_staff_role  # noqa: E402
 from src.planner.services import import_service  # noqa: E402
 from src.planner import models as _planner_models  # noqa: E402,F401  # ensure all tables are registered
 
@@ -86,6 +87,9 @@ def client(db_session, engine):
             pass
 
     app.dependency_overrides[get_db] = override_get_db
+    # COSTING-C1: 默认 override staff 守卫 · 等价"服务账号"身份(payload=None)·
+    # 单独测 require_staff_role 行为时再用专用 fixture 覆盖。
+    app.dependency_overrides[require_staff_role] = lambda: None
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()

@@ -2,6 +2,8 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import { Suspense, lazy } from 'react'
 import { Spin } from 'antd'
 import AppLayout from './components/layout/AppLayout'
+import AuthGuard from './components/AuthGuard'
+import LoginPage from './pages/LoginPage'
 
 const PlannerWorkspace = lazy(() => import('./pages/PlannerWorkspace'))
 const ScenarioBuilderPage = lazy(() => import('./pages/ScenarioBuilderPage'))
@@ -31,8 +33,8 @@ const ProfitInsightsPage = lazy(() => import('./pages/costing/ProfitInsightsPage
 const ShopInsightsPage = lazy(() => import('./pages/costing/ShopInsightsPage'))
 const SalesInsightsPage = lazy(() => import('./pages/costing/SalesInsightsPage'))
 
-const App = () => {
-  return (
+const ProtectedShell = () => (
+  <AuthGuard>
     <AppLayout>
       <Suspense
         fallback={
@@ -75,6 +77,15 @@ const App = () => {
         </Routes>
       </Suspense>
     </AppLayout>
+  </AuthGuard>
+)
+
+const App = () => {
+  return (
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/*" element={<ProtectedShell />} />
+    </Routes>
   )
 }
 

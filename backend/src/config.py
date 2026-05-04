@@ -68,7 +68,16 @@ class Settings(BaseSettings):
     # Admin key (very lightweight protection for admin-only maintenance endpoints).
     # If set, mutating endpoints guarded by `require_admin_key` will require header:
     #   X-PLANNER-ADMIN-KEY: <value>
+    # 自 COSTING-C1 起 · 同时作为「服务账号回退通道」(POD → ai-costing 算价 API)。
     planner_admin_key: str | None = Field(default=None, env="PLANNER_ADMIN_KEY")
+
+    # ===== POD 平台 SSO 共享密钥(2026-05 起 · 见 COSTING-C1)=====
+    # POD 是唯一 IdP · ai-costing 复用 POD 颁发的 staff JWT(typ='staff')。
+    # POD_JWT_SECRET_KEY 必须与 pod-design-platform/.env 中同名值完全一致 · 两边均不入库。
+    pod_jwt_secret_key: str = Field("dev-secret-change-in-production", env="POD_JWT_SECRET_KEY")
+    pod_jwt_algorithm: str = Field("HS256", env="POD_JWT_ALGORITHM")
+    # 登录代理转发 base url(指向 pod 后端) · /admin/auth/login 会 POST {url}/admin/staff/login
+    pod_login_proxy_url: str = Field("http://localhost:8000", env="POD_LOGIN_PROXY_URL")
 
     # ===== Lightweight access control (pre-auth phase) =====
     # If set, only requests coming from these client IPs are allowed.
@@ -92,6 +101,18 @@ class Settings(BaseSettings):
     llm_api_key: str | None = Field(default=None, env="PLANNER_LLM_API_KEY")
     llm_model: str = Field(default="qwen-plus", env="PLANNER_LLM_MODEL")
     llm_timeout_seconds: float = Field(default=20.0, env="PLANNER_LLM_TIMEOUT_SECONDS")
+
+    # ===== Background workers (in-process) =====
+    # Enable shipment import worker loop (polls queued shipment_import_batches and executes them).
+    planner_shipment_import_worker_enabled: bool = Field(default=True, env="PLANNER_SHIPMENT_IMPORT_WORKER_ENABLED")
+    # Poll interval seconds when idle (queued count = 0)
+    planner_shipment_import_worker_idle_sleep_seconds: float = Field(
+        default=2.0, env="PLANNER_SHIPMENT_IMPORT_WORKER_IDLE_SLEEP_SECONDS"
+    )
+    # Advisory lock key to ensure a single worker runs across uvicorn workers.
+    planner_shipment_import_worker_lock_key: int = Field(
+        default=880001, env="PLANNER_SHIPMENT_IMPORT_WORKER_LOCK_KEY"
+    )
 
     class Config:
         env_file = str(ENV_FILE)

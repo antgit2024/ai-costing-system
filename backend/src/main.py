@@ -6,6 +6,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from .planner.router import router as planner_router
 from .planner.services import metrics as metrics_service
+from .planner.services.shipment_import_worker import start_worker as start_shipment_import_worker
+from .routers.admin_auth import router as admin_auth_router
 from .security.ip_allowlist import IPAllowlistMiddleware
 from .upstream_actions import router as upstream_actions_router
 
@@ -27,10 +29,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(admin_auth_router)
 app.include_router(planner_router, prefix=settings.planner_api_prefix)
 app.include_router(upstream_actions_router)
 if settings.metrics_enabled:
     app.include_router(metrics_service.router)
+
+@app.on_event("startup")
+def _startup() -> None:
+    # Start lightweight in-process workers (guarded by advisory lock).
+    start_shipment_import_worker()
 
 
 @app.get("/api/health", tags=["Health"])

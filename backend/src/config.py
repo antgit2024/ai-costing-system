@@ -104,6 +104,20 @@ class Settings(BaseSettings):
     llm_model: str = Field(default="qwen-plus", env="PLANNER_LLM_MODEL")
     llm_timeout_seconds: float = Field(default=20.0, env="PLANNER_LLM_TIMEOUT_SECONDS")
 
+    # ===== Jackyun open API (商家自研应用) =====
+    # 入口（自研应用直连，不需要 token）。
+    # 业务参数走 biz_content;签名/超时/重试由集成层统一封装。
+    jackyun_api_base_url: str = Field(
+        default="https://openapi.jackyun.com/openapi/router",
+        env="JACKYUN_API_BASE_URL",
+    )
+    jackyun_app_key: str | None = Field(default=None, env="JACKYUN_APP_KEY")
+    jackyun_app_secret: str | None = Field(default=None, env="JACKYUN_APP_SECRET")
+    jackyun_api_version: str = Field(default="v1.0", env="JACKYUN_API_VERSION")
+    jackyun_timeout_seconds: float = Field(default=15.0, env="JACKYUN_TIMEOUT_SECONDS")
+    jackyun_max_retries: int = Field(default=2, env="JACKYUN_MAX_RETRIES")
+    jackyun_default_page_size: int = Field(default=50, env="JACKYUN_DEFAULT_PAGE_SIZE")
+
     # ===== Background workers (in-process) =====
     # Enable shipment import worker loop (polls queued shipment_import_batches and executes them).
     planner_shipment_import_worker_enabled: bool = Field(default=True, env="PLANNER_SHIPMENT_IMPORT_WORKER_ENABLED")
@@ -115,6 +129,37 @@ class Settings(BaseSettings):
     planner_shipment_import_worker_lock_key: int = Field(
         default=880001, env="PLANNER_SHIPMENT_IMPORT_WORKER_LOCK_KEY"
     )
+    # Snapshot retry sweep — fixes "⏳ 等出快照(系统处理中)" promise.
+    # When a SkuMaster gets bound AFTER the batch already finished
+    # processing (e.g. user manually adopts a model on PendingTab), the
+    # main batch worker won't loop back. This sweep periodically catches
+    # those stragglers. See shipment_import_service.sweep_bound_lines_missing_snapshot.
+    planner_shipment_snapshot_retry_enabled: bool = Field(
+        default=True, env="PLANNER_SHIPMENT_SNAPSHOT_RETRY_ENABLED"
+    )
+    planner_shipment_snapshot_retry_interval_seconds: float = Field(
+        default=300.0, env="PLANNER_SHIPMENT_SNAPSHOT_RETRY_INTERVAL_SECONDS"
+    )
+    planner_shipment_snapshot_retry_lookback_days: int = Field(
+        default=14, env="PLANNER_SHIPMENT_SNAPSHOT_RETRY_LOOKBACK_DAYS"
+    )
+    planner_shipment_snapshot_retry_max_lines_per_pass: int = Field(
+        default=200, env="PLANNER_SHIPMENT_SNAPSHOT_RETRY_MAX_LINES_PER_PASS"
+    )
+
+    # ===== SKU Governance: long-tail cogs fallback (Sprint 3-2) =====
+    # When a SKU is marked governance_status='do_not_model' (long-tail), we
+    # don't build a real model/BOM for it. To keep profit reports honest we
+    # estimate cogs as ``revenue * long_tail_cogs_rate`` and write a
+    # placeholder BomSnapshot tagged with kind='long_tail_fallback'. The
+    # rate is a single global number maintained by finance (default 0.55,
+    # i.e. 55% of revenue is assumed to be cogs). When this is disabled
+    # (set False), the line is silently skipped and contributes 0 cogs to
+    # the report (warning: this inflates margin).
+    long_tail_cogs_fallback_enabled: bool = Field(
+        default=True, env="LONG_TAIL_COGS_FALLBACK_ENABLED"
+    )
+    long_tail_cogs_rate: float = Field(default=0.55, env="LONG_TAIL_COGS_RATE")
 
     class Config:
         env_file = str(ENV_FILE)

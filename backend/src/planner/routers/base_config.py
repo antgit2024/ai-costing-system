@@ -6,7 +6,7 @@ import csv
 import io
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
@@ -36,6 +36,53 @@ from openpyxl import Workbook
 
 router = APIRouter(prefix="/base-config", tags=["base-config"])
 logger = logging.getLogger(__name__)
+
+_ACTIVE_MATERIAL_SYNC_STATUSES = {"pending", "running"}
+_BULK_MATERIAL_SYNC_COOLDOWN_MINUTES = 10
+
+
+def _is_bulk_material_sync_payload(payload: Dict[str, Any] | None) -> bool:
+    """Bulk YiDa sync scans the whole form; single-code sync is much cheaper."""
+
+    codes = (payload or {}).get("material_codes") or []
+    return not any(str(code).strip() for code in codes)
+
+
+def _guard_material_sync_quota(db: Session, *, payload: YidaMaterialSyncRequest) -> None:
+    active_job = (
+        db.query(models.MaterialSyncJob)
+        .filter(models.MaterialSyncJob.job_type == "materials")
+        .filter(models.MaterialSyncJob.status.in_(_ACTIVE_MATERIAL_SYNC_STATUSES))
+        .order_by(models.MaterialSyncJob.created_at.desc())
+        .first()
+    )
+    if active_job is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"已有物料同步任务正在执行（{active_job.status}，id={active_job.id}），请勿重复触发。",
+        )
+
+    if payload.material_codes:
+        return
+
+    cutoff = models.utcnow() - timedelta(minutes=_BULK_MATERIAL_SYNC_COOLDOWN_MINUTES)
+    recent_jobs = (
+        db.query(models.MaterialSyncJob)
+        .filter(models.MaterialSyncJob.job_type == "materials")
+        .filter(models.MaterialSyncJob.created_at >= cutoff)
+        .order_by(models.MaterialSyncJob.created_at.desc())
+        .limit(20)
+        .all()
+    )
+    for job in recent_jobs:
+        if _is_bulk_material_sync_payload(job.payload):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=(
+                    f"{_BULK_MATERIAL_SYNC_COOLDOWN_MINUTES}分钟内已触发过批量宜搭物料同步"
+                    f"（{job.status}，id={job.id}），为避免耗尽宜搭 API 限额，请稍后再试。"
+                ),
+            )
 
 def _maybe_resize_image(
     content: bytes,
@@ -162,6 +209,7 @@ def sync_yida_materials(
     config_path = Path(payload.config_path or settings.yida_materials_config_path)
     if not config_path.exists():
         raise HTTPException(status_code=400, detail=f"YiDa config not found: {config_path}")
+    _guard_material_sync_quota(db, payload=payload)
 
     job = models.MaterialSyncJob(
         job_type="materials",

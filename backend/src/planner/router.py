@@ -10,15 +10,18 @@ from .routers import (
     audit,
     base_config,
     benchmarks,
+    binding_targets,
     bom,
     bundle_templates,
     callbacks,
     codes,
     health,
     initiatives,
+    integrations,
     jobs,
     line_items,
     line_variants,
+    long_tail_strategies,
     packages,
     process_modules,
     processes,
@@ -51,6 +54,7 @@ guarded.include_router(approvals.router)
 guarded.include_router(jobs.router)
 guarded.include_router(benchmarks.router)
 guarded.include_router(audit.router)
+guarded.include_router(integrations.router)
 guarded.include_router(codes.router)
 guarded.include_router(base_config.router)
 guarded.include_router(process_modules.router)
@@ -60,6 +64,7 @@ guarded.include_router(product_models.router)
 guarded.include_router(product_model_versions.router)
 guarded.include_router(reports.router)
 guarded.include_router(line_variants.router)
+guarded.include_router(long_tail_strategies.router)
 guarded.include_router(shipping_rules.router)
 guarded.include_router(shipments.router)
 guarded.include_router(sku_master.router)
@@ -68,5 +73,6 @@ guarded.include_router(taxonomy.router)
 guarded.include_router(bundle_templates.router)
 guarded.include_router(bom.router)
 guarded.include_router(tmall_sku_template.router)
+guarded.include_router(binding_targets.router)
 
 router.include_router(guarded)

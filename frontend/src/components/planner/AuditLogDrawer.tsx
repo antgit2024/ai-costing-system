@@ -6,6 +6,7 @@ import SearchOutlined from '@ant-design/icons/lib/icons/SearchOutlined'
 import type { AxiosError } from 'axios'
 import type { AuditLogEntry } from '@/types/planner'
 import { fetchAuditLogs } from '@/services/planner'
+import { formatBeijingTime } from '@/utils/beijingTime'
 
 const { Text } = Typography
 
@@ -132,7 +133,7 @@ const AuditLogDrawer = ({ scenarioId, open, onClose }: AuditLogDrawerProps) => {
                 <Space size={8} wrap>
                   <Tag color="blue">{log.action}</Tag>
                   <Text strong>{log.actor_id}</Text>
-                  <Text type="secondary">{new Date(log.created_at).toLocaleString()}</Text>
+                  <Text type="secondary">{formatBeijingTime(log.created_at)}</Text>
                   {log.trace_id ? (
                     <Tooltip title="复制 Trace ID">
                       <Button size="small" icon={<CopyOutlined />} onClick={() => handleCopy(log.trace_id)}>

@@ -124,6 +124,10 @@ import type {
   ShipmentLineComputeSnapshotRequest,
   ShipmentLineComputeSnapshotResponse,
   ShipmentLineClearSnapshotsResponse,
+  ShipmentLinesAutoResolveRequest,
+  ShipmentLinesAutoResolvePreviewResponse,
+  ShipmentLinesAutoResolveExecuteResponse,
+  ShipmentLinesRecentStatsResponse,
   AfterSalesImportBatch,
   AfterSalesModelOptionsResponse,
   AfterSalesReasonOptionsResponse,
@@ -194,10 +198,13 @@ const mapBenchmarkFavorite = (favorite: any): BenchmarkFavorite => ({
   created_at: favorite.created_at,
 })
 
+import { installAuthInterceptors } from '@/utils/http'
+
 export const plannerClient = axios.create({
   baseURL: API_BASE_URL,
   timeout: 20000,
 })
+installAuthInterceptors(plannerClient)
 
 const adminHeaders = (): Record<string, string> => {
   if (!PLANNER_ADMIN_KEY) return {}
@@ -1551,6 +1558,41 @@ export type TmallSkuTemplatePreviewResponse = {
   header_mapping: Record<string, string>
 }
 
+export type TmallSkuGeneratorPersistedConfig = {
+  merchantSkuPrefix: string
+  merchantSkuSuffix: string
+  listingChannel?: 'tmall' | 'jd' | 'xhs' | 'douyin'
+  sizes: any[]
+  colors: any[]
+  mainPatternTypes: any[]
+  customSalesAttributes?: any[]
+  ui?: {
+    enableColorImages?: boolean
+    enableSizeImages?: boolean
+    enableColorRemarks?: boolean
+    enableSizeRemarks?: boolean
+    enablePatternRemarks?: boolean
+    includeMainPatternType?: boolean
+  }
+}
+
+export type TmallSkuGeneratorTemplate = {
+  id: string
+  name: string
+  type: '家居布艺' | '家居饰品'
+  published_at: string | null
+  matrix_count: number | null
+  archived: boolean
+  config: TmallSkuGeneratorPersistedConfig
+  created_at: string
+  updated_at: string
+}
+
+export type TmallSkuGeneratorTemplateListResponse = {
+  total: number
+  items: TmallSkuGeneratorTemplate[]
+}
+
 export const previewTmallSkuTemplate = async (payload: TmallSkuTemplateRequest): Promise<TmallSkuTemplatePreviewResponse> => {
   const resp = await plannerClient.post('/tmall/sku-template/preview', payload)
   return resp.data
@@ -1559,6 +1601,51 @@ export const previewTmallSkuTemplate = async (payload: TmallSkuTemplateRequest):
 export const exportTmallSkuTemplateXlsx = async (payload: TmallSkuTemplateRequest): Promise<Blob> => {
   const resp = await plannerClient.post('/tmall/sku-template/export', payload, { responseType: 'blob' })
   return resp.data as Blob
+}
+
+export const fetchTmallSkuGeneratorTemplates = async (params: {
+  search?: string
+  type?: string
+  include_archived?: boolean
+} = {}): Promise<TmallSkuGeneratorTemplateListResponse> => {
+  const resp = await plannerClient.get('/tmall/sku-template/generator-templates', {
+    params: sanitizeParams(params as Record<string, unknown>),
+  })
+  return resp.data
+}
+
+export const fetchTmallSkuGeneratorTemplate = async (templateId: string): Promise<TmallSkuGeneratorTemplate> => {
+  const resp = await plannerClient.get(`/tmall/sku-template/generator-templates/${encodeURIComponent(templateId)}`)
+  return resp.data
+}
+
+export const createTmallSkuGeneratorTemplate = async (payload: {
+  id: string
+  name: string
+  type: '家居布艺' | '家居饰品'
+  published_at?: string | null
+  matrix_count?: number | null
+  archived?: boolean
+  config: TmallSkuGeneratorPersistedConfig
+}): Promise<TmallSkuGeneratorTemplate> => {
+  const resp = await plannerClient.post('/tmall/sku-template/generator-templates', payload)
+  return resp.data
+}
+
+export const upsertTmallSkuGeneratorTemplate = async (
+  templateId: string,
+  payload: {
+    id: string
+    name: string
+    type: '家居布艺' | '家居饰品'
+    published_at?: string | null
+    matrix_count?: number | null
+    archived?: boolean
+    config: TmallSkuGeneratorPersistedConfig
+  },
+): Promise<TmallSkuGeneratorTemplate> => {
+  const resp = await plannerClient.put(`/tmall/sku-template/generator-templates/${encodeURIComponent(templateId)}`, payload)
+  return resp.data
 }
 
 // -----------------------------
@@ -1967,6 +2054,7 @@ export const executeShipmentsFromPreview = async (
   export_date?: string
   requested_by?: string
   mode?: '2025' | '2026'
+  process_snapshots?: boolean
   },
   opts: { signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<ShipmentImportBatch> => {
@@ -1995,6 +2083,180 @@ export const retryShipmentExceptions = async (
   payload: ShipmentExceptionRetryRequest,
 ): Promise<ShipmentExceptionRetryResponse> => {
   const response = await plannerClient.post('/shipments/exceptions/retry', payload)
+  return response.data
+}
+
+// ---------------------------------------------------------------------------
+// SKU Governance (Sprint 2-3 of "SKU 治理与按需建模")
+// 4 states: unmanaged | auto_bound | pending_model | do_not_model
+// Stored in SkuMaster.metadata_json.governance_status (no Alembic migration).
+// ---------------------------------------------------------------------------
+
+export type SkuGovernanceStatus = 'unmanaged' | 'auto_bound' | 'pending_model' | 'do_not_model'
+
+export interface SkuGovernanceSetRequest {
+  sku_codes: string[]
+  status: SkuGovernanceStatus
+  decided_by?: string
+  note?: string
+}
+
+export interface SkuGovernanceSetResponse {
+  updated: number
+  unchanged: number
+  missing: number
+}
+
+export interface SkuGovernanceListItem {
+  erp_sku_barcode: string
+  spec_text?: string | null
+  channel?: string | null
+  governance_status: SkuGovernanceStatus
+  governance_decided_at?: string | null
+  governance_decided_by?: string | null
+  governance_note?: string | null
+  last_shipment_at?: string | null
+  qty_window: number
+  revenue_window: number
+  line_count_window: number
+  updated_at?: string | null
+  long_tail_category?: string | null
+  long_tail_category_decided_at?: string | null
+  long_tail_category_decided_by?: string | null
+}
+
+export interface SkuLongTailCategorySetRequest {
+  sku_codes: string[]
+  category: string | null
+  actor?: string
+  note?: string
+}
+
+export interface SkuLongTailCategorySetResponse {
+  updated: number
+  unchanged: number
+  missing: number
+  cleared: number
+}
+
+export interface SkuGovernanceListResponse {
+  items: SkuGovernanceListItem[]
+  total: number
+  page: number
+  page_size: number
+  order_by: string
+  sales_window_days: number
+}
+
+export interface SkuGovernancePromoteResponse {
+  promoted: number
+  skipped: number
+  missing: number
+}
+
+export const setSkuGovernance = async (
+  payload: SkuGovernanceSetRequest,
+): Promise<SkuGovernanceSetResponse> => {
+  const response = await plannerClient.post('/sku-master/governance', payload)
+  return response.data
+}
+
+export const listSkuGovernance = async (
+  params: {
+    status: SkuGovernanceStatus
+    page?: number
+    page_size?: number
+    order_by?: 'shipment_score' | 'updated_at' | 'last_shipment_at'
+    sales_window_days?: number
+  },
+): Promise<SkuGovernanceListResponse> => {
+  const response = await plannerClient.get('/sku-master/governance', {
+    params: sanitizeParams(params),
+  })
+  return response.data
+}
+
+export const promoteSkuGovernanceFromModel = async (
+  payload: { sku_codes: string[]; decided_by?: string },
+): Promise<SkuGovernancePromoteResponse> => {
+  const response = await plannerClient.post('/sku-master/governance/promote-from-model', payload)
+  return response.data
+}
+
+/** Issue 28 follow-up: bulk write SkuMaster.metadata.long_tail_category.
+ * Pass `category: ''` (or null) to clear the override. Backend validates
+ * the category exists in the long-tail strategy table. */
+export const setSkuLongTailCategory = async (
+  payload: SkuLongTailCategorySetRequest,
+): Promise<SkuLongTailCategorySetResponse> => {
+  const response = await plannerClient.post('/sku-master/long-tail-category', payload)
+  return response.data
+}
+
+// ===== Auto-suggest long_tail_category (Issue 28 follow-up #2) =====
+
+export interface LongTailCategoryAutoSuggestItem {
+  sku_code: string
+  current_category?: string | null
+  suggested_category: string
+  matched_keyword: string
+  strategy_id: string
+  strategy_rate: number
+  spec_text?: string | null
+  product_name?: string | null
+}
+
+export interface LongTailCategoryAutoSuggestPreviewResponse {
+  scanned: number
+  already_labeled_skipped: number
+  no_match_count: number
+  limited: boolean
+  suggested: LongTailCategoryAutoSuggestItem[]
+  reason?: string | null
+}
+
+export interface LongTailCategoryAutoSuggestApplyResultItem {
+  category: string
+  sku_count: number
+  updated?: number
+  unchanged?: number
+  missing?: number
+  cleared?: number
+  error?: string | null
+}
+
+export interface LongTailCategoryAutoSuggestExecuteResponse
+  extends LongTailCategoryAutoSuggestPreviewResponse {
+  applied: number
+  apply_results: LongTailCategoryAutoSuggestApplyResultItem[]
+}
+
+export interface LongTailCategoryAutoSuggestRequest {
+  sku_codes?: string[]
+  include_already_labeled?: boolean
+  limit?: number
+  actor?: string
+}
+
+export const autoSuggestLongTailCategoryPreview = async (
+  payload: LongTailCategoryAutoSuggestRequest = {},
+): Promise<LongTailCategoryAutoSuggestPreviewResponse> => {
+  const response = await plannerClient.post(
+    '/sku-master/long-tail-category/auto-suggest/preview',
+    payload,
+    { timeout: 60_000 },
+  )
+  return response.data
+}
+
+export const autoSuggestLongTailCategoryExecute = async (
+  payload: LongTailCategoryAutoSuggestRequest = {},
+): Promise<LongTailCategoryAutoSuggestExecuteResponse> => {
+  const response = await plannerClient.post(
+    '/sku-master/long-tail-category/auto-suggest/execute',
+    payload,
+    { timeout: 120_000 },
+  )
   return response.data
 }
 
@@ -2073,6 +2335,130 @@ export const recomputeShipmentBomSnapshot = async (snapshot_id: string, payload?
   return response.data
 }
 
+// ============================================================================
+// Shipment Line Resolve - 上架员一键决策
+// ============================================================================
+//
+// 业务诉求: 上架员在「📦 业务管理 > 🚚 发货管理」对每条未处理的发货行
+// 做"一键决策",系统应该一步把所有事情做完(绑模型 + 设治理 + 出快照),
+// 不要让员工跨页面操作。
+//
+// Issue 29 (2026-05-07): 后端 POST /shipments/lines/{id}/resolve 上线后,
+// 这个函数内部从"前端串 4 个 API"改成"单次 POST"。所有调用方 0 改动 ——
+// 函数签名 / ShipmentLineResolveAction / ShipmentLineResolveResult 都不变。
+//
+// 收益:
+//   - adopt 从 4 次串行 RTT (~1.5-2s) 降到 1 次 (~250ms)
+//   - 后端单事务执行, 不再有"绑了但快照没出"的中间态
+//   - 失败时返回的 steps 还在原位置, 不影响错误展示
+// ============================================================================
+
+export type ShipmentLineResolveAction =
+  | { type: 'adopt'; modelId: string } // 用某个模型(从弹窗选完后)
+  | { type: 'mark_long_tail' } // 标长尾不建模
+  | { type: 'defer_modeling' } // 加入建模 backlog(等模型建好)
+
+export type ShipmentLineResolveResult = {
+  ok: boolean
+  snapshot?: BomSnapshot
+  error?: string
+  /** 为审计 / debug 保留的执行细节 */
+  steps: Array<{ step: string; ok: boolean; durationMs?: number; detail?: string }>
+}
+
+interface ShipmentLineResolveBackendStep {
+  step: string
+  ok: boolean
+  duration_ms?: number
+  detail?: string | null
+}
+
+interface ShipmentLineResolveBackendResponse {
+  ok: boolean
+  action: string
+  shipment_line_id: string
+  snapshot_id?: string | null
+  snapshot_action?: string | null
+  error?: string | null
+  steps: ShipmentLineResolveBackendStep[]
+}
+
+/**
+ * 一键决策: 单次 POST /shipments/lines/{id}/resolve, 后端单事务完成。
+ *
+ * 失败处理:
+ *   - 后端返回 ok=false 时, error / steps 都会带上下文。
+ *   - 网络层失败 (超时 / 4xx / 5xx) 由 catch 兜底, steps 用一条
+ *     'http_request' 占位, 保持原 UI 兼容。
+ *
+ * 性能预算 (2026-05-07 上线后):
+ *   - adopt: ~250ms (单次 POST, 含 bind + governance + snapshot)
+ *   - mark_long_tail / defer_modeling: ~80ms
+ */
+export const resolveShipmentLine = async (
+  line: { id: string; sku_code?: string | null },
+  action: ShipmentLineResolveAction,
+  opts: { operatorId?: string } = {},
+): Promise<ShipmentLineResolveResult> => {
+  const skuCode = String(line?.sku_code ?? '').trim()
+  const operatorId = (opts.operatorId ?? '').trim() || undefined
+
+  if (!skuCode) {
+    return {
+      ok: false,
+      error: '该发货行没有 SKU 编码,无法做治理决策',
+      steps: [{ step: 'precheck', ok: false, detail: 'missing sku_code' }],
+    }
+  }
+
+  const body: Record<string, unknown> = {
+    action: action.type,
+    operator_id: operatorId,
+  }
+  if (action.type === 'adopt') {
+    body.model_id = action.modelId
+  }
+
+  const t0 = Date.now()
+  try {
+    const response = await plannerClient.post<ShipmentLineResolveBackendResponse>(
+      `/shipments/lines/${encodeURIComponent(line.id)}/resolve`,
+      body,
+      { timeout: 60_000 },
+    )
+    const data = response.data
+    const steps: ShipmentLineResolveResult['steps'] = (data.steps ?? []).map((s) => ({
+      step: s.step,
+      ok: s.ok,
+      durationMs: s.duration_ms,
+      detail: s.detail ?? undefined,
+    }))
+
+    // BomSnapshot 完整对象不在响应里 (后端只返 snapshot_id),
+    // 调用方目前只用 result.snapshot 是否存在做"刷新台账"的判断,
+    // 用一个最小占位对象保持类型契约。需要完整字段的调用方应单独
+    // 调 GET /shipments/bom-snapshots/{id}。
+    const snapshot = data.snapshot_id
+      ? ({ id: data.snapshot_id } as unknown as BomSnapshot)
+      : undefined
+
+    return {
+      ok: data.ok,
+      snapshot,
+      error: data.error ?? undefined,
+      steps,
+    }
+  } catch (e: any) {
+    const detail = String(e?.response?.data?.detail || e?.message || e || 'unknown')
+    const durationMs = Date.now() - t0
+    return {
+      ok: false,
+      error: detail,
+      steps: [{ step: 'http_request', ok: false, durationMs, detail }],
+    }
+  }
+}
+
 export const computeShipmentLineSnapshot = async (
   shipment_line_id: string,
   payload: ShipmentLineComputeSnapshotRequest,
@@ -2082,12 +2468,133 @@ export const computeShipmentLineSnapshot = async (
   return response.data
 }
 
+// ============================================================================
+// Bulk resolve (Issue 29 follow-up p1-new-4)
+//
+// Folds PendingTab's `Promise.all + concurrency 8` fanout into one server
+// call. See backend shipment_import_service.bulk_resolve_shipment_lines.
+// Use this for batch-toolbar operations; for single-row "one-off" decisions
+// keep using resolveShipmentLine (it returns richer step audit).
+// ============================================================================
+
+export interface ShipmentLineBulkResolveItem {
+  shipment_line_id: string
+  action: 'adopt' | 'mark_long_tail' | 'defer_modeling'
+  /** required when action='adopt' */
+  model_id?: string
+}
+
+export interface ShipmentLineBulkResolveRequest {
+  items: ShipmentLineBulkResolveItem[]
+  operator_id?: string
+  note?: string
+  /** default false = best-effort (process all rows); true = bail on first failure */
+  stop_on_first_error?: boolean
+}
+
+export interface ShipmentLineBulkResolveResultItem {
+  shipment_line_id: string
+  ok: boolean
+  action: string
+  snapshot_id?: string | null
+  snapshot_action?: string | null
+  error?: string | null
+  duration_ms: number
+}
+
+export interface ShipmentLineBulkResolveResponse {
+  total: number
+  succeeded: number
+  failed: number
+  skipped_after_error: number
+  total_duration_ms: number
+  results: ShipmentLineBulkResolveResultItem[]
+}
+
+export const bulkResolveShipmentLines = async (
+  payload: ShipmentLineBulkResolveRequest,
+): Promise<ShipmentLineBulkResolveResponse> => {
+  const response = await plannerClient.post('/shipments/lines/bulk-resolve', payload, {
+    timeout: 600_000,
+  })
+  return response.data
+}
+
 export const clearShipmentLineSnapshots = async (payload: {
   shipment_line_ids: string[]
   operator_id?: string
   reason?: string
 }): Promise<ShipmentLineClearSnapshotsResponse> => {
   const response = await plannerClient.post('/shipments/lines/clear-snapshots', payload)
+  return response.data
+}
+
+// "⚡ 一键自动绑定" — recognize unbound SKUs in recent pending shipment lines
+// using the same keyword/code-hint algorithm as the legacy
+// /costing/sku-master "自动识别" tab, but scoped to actively-shipping SKUs
+// and following through with bind + immediate snapshot generation.
+export const autoResolvePendingShipmentLinesPreview = async (
+  payload: ShipmentLinesAutoResolveRequest = {},
+  opts: PlannerRequestOptions = {},
+): Promise<ShipmentLinesAutoResolvePreviewResponse> => {
+  const response = await plannerClient.post('/shipments/lines/auto-resolve/preview', payload, {
+    timeout: opts.timeoutMs ?? 30_000,
+    signal: opts.signal,
+  })
+  return response.data
+}
+
+export const autoResolvePendingShipmentLinesExecute = async (
+  payload: ShipmentLinesAutoResolveRequest = {},
+  opts: PlannerRequestOptions = {},
+): Promise<ShipmentLinesAutoResolveExecuteResponse> => {
+  const response = await plannerClient.post('/shipments/lines/auto-resolve/execute', payload, {
+    timeout: opts.timeoutMs ?? 60_000,
+    signal: opts.signal,
+  })
+  return response.data
+}
+
+// Page-header lightweight summary (~50ms): "上次同步 + 24h 新进 + 拆源"
+export const fetchShipmentLinesRecentStats = async (
+  params: { hours?: number; latest_runs_limit?: number } = {},
+  opts: PlannerRequestOptions = {},
+): Promise<ShipmentLinesRecentStatsResponse> => {
+  const response = await plannerClient.get('/shipments/lines/recent-stats', {
+    params: sanitizeParams(params as Record<string, unknown>),
+    timeout: opts.timeoutMs ?? 10_000,
+    signal: opts.signal,
+  })
+  return response.data
+}
+
+// Manual "🔁 回写快照" — operator-initiated catch-up for "已绑定但缺快照"
+// rows beyond the 14-day background sweep window.
+export interface RegenerateBoundSnapshotsResponse {
+  scanned: number
+  snapshots_created: number
+  snapshots_recomputed: number
+  skipped_already_done: number
+  failed: number
+  duration_ms: number
+  lookback_days: number
+  limit: number
+  failure_samples?: string[]
+}
+
+export const regenerateBoundPendingSnapshots = async (
+  params: { lookback_days?: number; limit?: number } = {},
+  opts: PlannerRequestOptions = {},
+): Promise<RegenerateBoundSnapshotsResponse> => {
+  const response = await plannerClient.post(
+    '/shipments/lines/regenerate-snapshots',
+    null,
+    {
+      params: sanitizeParams(params as Record<string, unknown>),
+      timeout: opts.timeoutMs ?? 60_000,
+      signal: opts.signal,
+    },
+  )
   return response.data
 }
 
@@ -2377,20 +2884,109 @@ export const fetchSkuMaster = async (
     bundle_preset_selector?: string
     preparse_state?: 'parsed' | 'unparsed'
     spec_mismatch?: boolean
+    /** SKU 数据质量状态筛选：'spu_attribute_conflict' | 'ok' | 不传 = 不限 */
+    data_quality_status?: 'spu_attribute_conflict' | 'ok'
     include_terms?: string
     exclude_terms?: string
     match_scope?: 'spec' | 'name'
+    excluded_sku_master_ids?: string[]
+    shop_spec_code_kind?: 'structured' | 'platform' | 'malformed' | 'nonstructured' | 'empty' | 'all'
     compute_total?: boolean
     include_bindings?: boolean
     include_parsed_fields?: boolean
   } = {},
+  opts: PlannerRequestOptions = {},
 ): Promise<SkuMasterListResponse> => {
-  const response = await plannerClient.get('/sku-master', { params: sanitizeParams(params) })
+  const response = await plannerClient.get('/sku-master', {
+    params: sanitizeParams(params),
+    timeout: opts.timeoutMs,
+    signal: opts.signal,
+  })
+  return response.data
+}
+
+/** 单条 SKU 重新评估"数据质量"标签（SPU 属性冲突）。 */
+export const recomputeSkuDataQuality = async (
+  skuMasterId: string,
+  payload: { lookback_days?: number } = {},
+): Promise<{
+  sku_master_id: string
+  data_quality_status: string | null
+  data_quality_evidence: import('@/types/planner').SkuDataQualityEvidence | null
+}> => {
+  const resp = await plannerClient.post(
+    `/sku-master/${skuMasterId}/data-quality/recompute`,
+    payload,
+  )
+  return resp.data
+}
+
+export interface ShopSpecCodeSummary {
+  total: number
+  structured: number
+  platform: number
+  malformed: number
+  empty: number
+}
+
+export const fetchShopSpecCodeSummary = async (
+  params: { channel?: string; bound_state?: 'bound' | 'unbound' | 'all' } = {},
+): Promise<ShopSpecCodeSummary> => {
+  const response = await plannerClient.get('/sku-master/shop-spec-code-summary', {
+    params: sanitizeParams(params),
+  })
   return response.data
 }
 
 export const fetchSkuMasterDetail = async (skuId: string): Promise<SkuMaster> => {
   const response = await plannerClient.get(`/sku-master/${skuId}`)
+  return response.data
+}
+
+export const resolveSkuMasterSuspectMisbind = async (
+  skuId: string,
+  payload: { requested_by?: string; note?: string } = {},
+): Promise<{
+  sku_master_id: string
+  erp_sku_barcode: string | null
+  suspect_misbind_resolved: boolean
+}> => {
+  const response = await plannerClient.post(
+    `/sku-master/${encodeURIComponent(String(skuId))}/suspect-misbind/resolve`,
+    payload,
+  )
+  return response.data
+}
+
+export const resolveSkuMasterSuspectMisbindByBarcode = async (
+  barcode: string,
+  payload: { requested_by?: string; note?: string } = {},
+): Promise<{
+  sku_master_id: string
+  erp_sku_barcode: string | null
+  suspect_misbind_resolved: boolean
+}> => {
+  const code = String(barcode || '').trim()
+  if (!code) throw new Error('barcode required')
+  const found = await fetchSkuMasterByBarcode(code, { limit: 1 })
+  const sm = found?.sku_master
+  if (!sm?.id) throw new Error(`未找到 SKU 主档：${code}`)
+  return resolveSkuMasterSuspectMisbind(String(sm.id), payload)
+}
+
+export const resolveSkuMasterSpecMismatch = async (
+  skuId: string,
+  payload: { requested_by?: string; note?: string } = {},
+): Promise<{
+  sku_master_id: string
+  erp_sku_barcode: string | null
+  spec_mismatch: boolean
+  spec_mismatch_resolved: boolean
+}> => {
+  const response = await plannerClient.post(
+    `/sku-master/${encodeURIComponent(String(skuId))}/spec-mismatch/resolve`,
+    payload,
+  )
   return response.data
 }
 
@@ -2413,6 +3009,51 @@ export const fetchPublishedStandardModels = async (params: {
   return response.data
 }
 
+// ============================================================
+// 通用 "绑定目标" 选择器（标准模型 + 套装模板二合一）
+// 配套后端：GET /api/planner/binding-targets
+// 业务背景：详见 components/common/TargetPicker.tsx 顶部 docstring 与
+// services/binding_target_service.py 顶部 docstring。
+// ============================================================
+export type BindingTargetVariant = {
+  variant_code: string
+  material_name: string | null
+  label: string
+}
+
+export type BindingTargetPreset = {
+  selector: string
+  label: string
+  // 'force' / 'parse'：决定天猫 SKU 模板生成的 token 前缀（Z-/B-）。
+  // 来自 BundleTemplate.metadata_json.phrase_presets[i].mode；缺省 'parse'。
+  mode: 'force' | 'parse'
+}
+
+export type BindingTargetItem = {
+  kind: 'model' | 'bundle'
+  id: string
+  code: string
+  name: string | null
+  // model-only
+  published_version_id?: string | null
+  version_label?: string | null
+  variants?: BindingTargetVariant[]
+  // bundle-only
+  presets?: BindingTargetPreset[]
+}
+
+export type BindingTargetSearchResponse = {
+  items: BindingTargetItem[]
+  truncated: boolean
+}
+
+export const fetchBindingTargets = async (
+  params: { search?: string; kind?: 'model' | 'bundle'; limit?: number } = {},
+): Promise<BindingTargetSearchResponse> => {
+  const response = await plannerClient.get('/binding-targets', { params: sanitizeParams(params) })
+  return response.data
+}
+
 type PlannerRequestOptions = {
   timeoutMs?: number
   signal?: AbortSignal
@@ -2424,6 +3065,12 @@ export const bindSkuMastersByModel = async (
   sku_master_ids: string[]
   requested_by?: string
   allow_rebind?: boolean
+  /**
+   * 可选：用户在 TargetPickerBrowserButton 显式选定的"最终绑定变体编码"（如 KB8-001）。
+   * 后端会规范化为大写写入 sku_master.metadata_json.bound_variant_code，列表/详情
+   * 接口直接读这个字段拼出 "麻感冰丝(KB8-001)" 类显示串。传 undefined / null = 不指定变体。
+   */
+  variant_code?: string | null
   },
   opts: PlannerRequestOptions = {},
 ): Promise<SkuMasterBindByModelResponse> => {
@@ -2495,6 +3142,7 @@ export const bindSkuMastersByModelBulk = async (
     exclude_terms?: string
     match_scope?: 'spec' | 'name' | 'auto' | 'spec_or_name'
     excluded_sku_master_ids?: string[]
+    variant_code?: string | null
   },
   opts: PlannerRequestOptions = {},
 ): Promise<{

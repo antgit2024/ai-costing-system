@@ -4,13 +4,14 @@ import BarChartOutlined from '@ant-design/icons/lib/icons/BarChartOutlined'
 import DatabaseOutlined from '@ant-design/icons/lib/icons/DatabaseOutlined'
 import DeploymentUnitOutlined from '@ant-design/icons/lib/icons/DeploymentUnitOutlined'
 import ExperimentOutlined from '@ant-design/icons/lib/icons/ExperimentOutlined'
+import InboxOutlined from '@ant-design/icons/lib/icons/InboxOutlined'
 import SettingOutlined from '@ant-design/icons/lib/icons/SettingOutlined'
 import ShopOutlined from '@ant-design/icons/lib/icons/ShopOutlined'
 import CloudSyncOutlined from '@ant-design/icons/lib/icons/CloudSyncOutlined'
 import UnorderedListOutlined from '@ant-design/icons/lib/icons/UnorderedListOutlined'
 import ToolOutlined from '@ant-design/icons/lib/icons/ToolOutlined'
 import type { MenuProps } from 'antd'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 
@@ -34,7 +35,57 @@ const subItemLabel = (text: string, to: string) => (
   </Link>
 )
 
+const parentMenuKeyByPath = (pathname: string): string => {
+  if (pathname.startsWith('/costing/biz/')) return '/costing/biz'
+
+  if (pathname.startsWith('/costing/materials')) return '/costing/base'
+  if (pathname.startsWith('/costing/virtual-materials')) return '/costing/base'
+  if (pathname.startsWith('/costing/structure-standards')) return '/costing/base'
+  if (pathname.startsWith('/costing/process-modules')) return '/costing/base'
+  if (pathname.startsWith('/costing/processes')) return '/costing/base'
+  if (pathname.startsWith('/costing/taxonomy')) return '/costing/base'
+
+  if (pathname.startsWith('/costing/sample-models')) return '/costing/models'
+  if (pathname.startsWith('/costing/standard-models')) return '/costing/models'
+  if (pathname.startsWith('/costing/bundle-templates')) return '/costing/models'
+
+  if (pathname.startsWith('/costing/product-listing')) return '/costing/listing'
+  if (pathname.startsWith('/costing/tmall-sku-generator')) return '/costing/listing'
+  if (pathname.startsWith('/costing/pricing-tools')) return '/costing/listing'
+
+  if (pathname.startsWith('/costing/products-info')) return '/costing/products'
+  if (pathname.startsWith('/costing/shipments') && !pathname.startsWith('/costing/shipments/ops')) {
+    return '/costing/products'
+  }
+  if (pathname.startsWith('/costing/shipping-rules')) return '/costing/products'
+
+  if (pathname.startsWith('/costing/integrations')) return '/costing/automation'
+  if (pathname.startsWith('/costing/shipments/ops')) return '/costing/automation'
+  if (pathname.startsWith('/costing/sku-master')) return '/costing/automation'
+  if (pathname.startsWith('/costing/spec-matching')) return '/costing/automation'
+  if (pathname.startsWith('/costing/admin/long-tail-cogs-rate')) return '/costing/automation'
+
+  if (pathname.startsWith('/costing/insights')) return '/costing/insights'
+  if (pathname.startsWith('/costing/production-scan')) return '/costing/tools'
+  if (pathname.startsWith('/planner')) return '/planner_group'
+  return '/costing/base'
+}
+
 const menuItems: MenuProps['items'] = [
+  {
+    key: '/costing/biz',
+    icon: <InboxOutlined />,
+    label: '业务管理',
+    children: [
+      { key: '/costing/biz/shipments', label: subItemLabel('🚚 发货管理', '/costing/biz/shipments') },
+      { key: '/costing/biz/after-sales', label: subItemLabel('🔄 售后管理', '/costing/biz/after-sales') },
+      {
+        key: '/costing/biz/pod-orders',
+        label: <span style={{ opacity: 0.4 }}>🖨 POD 订单管理（待接入）</span>,
+        disabled: true,
+      },
+    ],
+  },
   {
     key: '/costing/base',
     icon: <SettingOutlined />,
@@ -81,11 +132,14 @@ const menuItems: MenuProps['items'] = [
   {
     key: '/costing/automation',
     icon: <CloudSyncOutlined />,
-    label: '自动化/作业中心',
+    label: '系统运维',
     children: [
-      { key: '/costing/shipments/ops', label: subItemLabel('发货作业中心', '/costing/shipments/ops') },
+      { key: '/costing/integrations', label: subItemLabel('外部数据同步', '/costing/integrations') },
+      { key: '/costing/shipments/ops', label: subItemLabel('发货作业中心（高级）', '/costing/shipments/ops') },
       { key: '/costing/sku-master', label: subItemLabel('商品关联（SKU 主档）', '/costing/sku-master') },
       { key: '/costing/spec-matching', label: subItemLabel('规格解析（工作台）', '/costing/spec-matching') },
+      { key: '/costing/admin/long-tail-cogs-rate', label: subItemLabel('💰 长尾成本策略', '/costing/admin/long-tail-cogs-rate') },
+      { key: '/costing/system/target-picker-playground', label: subItemLabel('模型筛选器（演练）', '/costing/system/target-picker-playground') },
     ],
   },
   {
@@ -132,6 +186,7 @@ interface AppLayoutProps {
 const AppLayout = ({ children }: AppLayoutProps) => {
   const location = useLocation()
   const [taskOpen, setTaskOpen] = useState(false)
+  const [openKeys, setOpenKeys] = useState<string[]>(() => [parentMenuKeyByPath(location.pathname)])
   const hideSidebar = location.pathname.startsWith('/costing/production-scan')
 
   /**
@@ -167,6 +222,11 @@ const AppLayout = ({ children }: AppLayoutProps) => {
   const runningCount =
     taskProbeQuery.data?.runningCount ?? 0
 
+  useEffect(() => {
+    const currentParent = parentMenuKeyByPath(location.pathname)
+    setOpenKeys((prev) => (prev.includes(currentParent) ? prev : [...prev, currentParent]))
+  }, [location.pathname])
+
   const selectedKeys = useMemo(() => {
     if (location.pathname.startsWith('/planner/scenario-builder')) {
       return ['/planner/scenario-builder']
@@ -178,6 +238,12 @@ const AppLayout = ({ children }: AppLayoutProps) => {
       return ['/planner']
     }
     if (location.pathname.startsWith('/costing')) {
+      if (location.pathname.startsWith('/costing/biz/shipments')) {
+        return ['/costing/biz/shipments']
+      }
+      if (location.pathname.startsWith('/costing/biz/after-sales')) {
+        return ['/costing/biz/after-sales']
+      }
       if (location.pathname.startsWith('/costing/materials')) {
         return ['/costing/materials']
       }
@@ -224,6 +290,9 @@ const AppLayout = ({ children }: AppLayoutProps) => {
       if (location.pathname.startsWith('/costing/spec-matching')) {
         return ['/costing/spec-matching']
       }
+      if (location.pathname.startsWith('/costing/integrations')) {
+        return ['/costing/integrations']
+      }
       if (location.pathname.startsWith('/costing/insights/after-sales')) {
         return ['/costing/insights/after-sales']
       }
@@ -256,6 +325,8 @@ const AppLayout = ({ children }: AppLayoutProps) => {
               theme="dark"
               mode="inline"
               selectedKeys={selectedKeys}
+              openKeys={openKeys}
+              onOpenChange={(keys) => setOpenKeys(keys)}
               items={menuItems}
               style={{ borderInlineEnd: 0 }}
             />

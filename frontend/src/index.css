@@ -154,6 +154,20 @@ a {
   animation: taskBadgePulse 1.2s ease-in-out infinite;
 }
 
+/* Dark theme: make Switch "on" state visible but restrained. */
+.ant-switch.ant-switch-checked {
+  background: #2f4f73 !important;
+  box-shadow: 0 0 0 1px rgba(120, 150, 185, 0.22);
+}
+
+.ant-switch.ant-switch-checked:hover:not(.ant-switch-disabled) {
+  background: #3a5f87 !important;
+}
+
+.ant-switch.ant-switch-checked .ant-switch-handle::before {
+  background: #ffffff;
+}
+
 .app-content {
   padding: 16px 20px 28px;
   background: var(--app-bg);

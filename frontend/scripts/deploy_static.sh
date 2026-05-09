@@ -50,6 +50,15 @@ fi
 # 确保目标目录存在
 mkdir -p "${TARGET_DIR}"
 
+# 旧版本曾把 SPA 深链接目录（如 /costing/standard-models/index.html）发布到目标目录。
+# Nginx 的 `try_files $uri $uri/ /index.html` 会优先命中这些旧 index.html，导致页面加载旧 chunk。
+# 当前 Vite 构建只需要根 index.html + assets；发布前移走旧路由目录，让深链接统一回退根 index。
+for stale_route_dir in costing planner; do
+  if [[ -d "${TARGET_DIR}/${stale_route_dir}" && ! -e "${TMP_DIR}/${stale_route_dir}" ]]; then
+    mv "${TARGET_DIR}/${stale_route_dir}" "${TARGET_DIR}/${stale_route_dir}.__stale_$(date +%Y%m%d_%H%M%S)"
+  fi
+done
+
 if command -v rsync >/dev/null 2>&1; then
   # 1) assets：只增不删，避免旧页面动态 import 404
   if [[ -d "${TMP_DIR}/assets" ]]; then

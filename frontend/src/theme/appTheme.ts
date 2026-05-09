@@ -102,6 +102,17 @@ export const appTheme: ThemeConfig = {
       footerBg: '#111113',
       titleColor: 'rgba(244, 244, 245, 0.92)',
     },
+    Tabs: {
+      // 修复:全局 colorPrimary 是深灰(#2f2f33),Tabs 选中标签字色默认用 colorPrimary,
+      // 在深色背景下跟背景同色看不见。这里单独给 Tabs 配亮色字 + 蓝灰下划线,
+      // 跟主题保持一致(对齐 --color-theme-text-* 体系)。
+      itemColor: 'rgba(244, 244, 245, 0.55)',
+      itemHoverColor: 'rgba(244, 244, 245, 0.92)',
+      itemSelectedColor: 'rgba(244, 244, 245, 0.92)',
+      itemActiveColor: 'rgba(244, 244, 245, 0.92)',
+      inkBarColor: '#8da6c2',
+      titleFontSize: 14,
+    },
   },
 }
 

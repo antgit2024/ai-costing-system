@@ -1,6 +1,6 @@
 import { Card, Col, Descriptions, Empty, Row, Skeleton, Space, Statistic, Tag } from 'antd'
 import type { Initiative } from '@/types/planner'
-import dayjs from 'dayjs'
+import { formatBeijingTime } from '@/utils/beijingTime'
 
 interface InitiativeDetailCardProps {
   initiative?: Initiative | null
@@ -23,7 +23,7 @@ const InitiativeDetailCard = ({ initiative, loading }: InitiativeDetailCardProps
             <Col span={12}>
               <Statistic
                 title="目标上线时间"
-                value={initiative.target_launch_date ? dayjs(initiative.target_launch_date).format('YYYY-MM-DD') : 'N/A'}
+                value={initiative.target_launch_date ? formatBeijingTime(initiative.target_launch_date, 'YYYY-MM-DD') : 'N/A'}
               />
             </Col>
           </Row>

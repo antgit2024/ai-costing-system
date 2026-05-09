@@ -57,6 +57,7 @@ import PlannerJobDrawerLazy from '@/components/planner/PlannerJobDrawerLazy'
 import AuditLogDrawerLazy from '@/components/planner/AuditLogDrawerLazy'
 import { LINE_ITEM_TYPE_OPTIONS } from '@/constants/planner'
 import type { PlannerJobKind } from '@/types/planner'
+import { formatBeijingTime } from '@/utils/beijingTime'
 
 const { Title, Paragraph, Text } = Typography
 
@@ -517,7 +518,7 @@ const ScenarioBuilderPage = () => {
                         <Space size={12} wrap>
                           <Text type="secondary">Owner: {scenario.owner_id || '未指定'}</Text>
                           <Text type="secondary">
-                            更新: {scenario.updated_at ? new Date(scenario.updated_at).toLocaleString() : '—'}
+                            更新: {scenario.updated_at ? formatBeijingTime(scenario.updated_at) : '—'}
                           </Text>
                         </Space>
                         <Space size={8} wrap>
@@ -637,7 +638,7 @@ const ScenarioBuilderPage = () => {
                               <Space direction="vertical" size={4} style={{ width: '100%' }}>
                                 <Space size={8} wrap>
                                   <Text strong>{log.actor_id}</Text>
-                                  <Text type="secondary">{new Date(log.created_at).toLocaleString()}</Text>
+                                  <Text type="secondary">{formatBeijingTime(log.created_at)}</Text>
                                   {log.trace_id ? (
                                     <Tooltip title="复制 Trace ID">
                                       <Button size="small" type="link" onClick={() => copyText(log.trace_id!)}>

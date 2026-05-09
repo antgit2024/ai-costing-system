@@ -31,6 +31,7 @@ import {
 import { usePlannerStore } from '@/store/plannerStore'
 import { SCENARIO_STATUS_OPTIONS } from '@/constants/planner'
 import PlannerJobDrawerLazy from '@/components/planner/PlannerJobDrawerLazy'
+import { formatBeijingTime } from '@/utils/beijingTime'
 
 const { Text } = Typography
 
@@ -219,12 +220,12 @@ const ScenarioListPage = () => {
     {
       title: '更新时间',
       dataIndex: 'updated_at',
-      render: (value: string) => (value ? new Date(value).toLocaleString() : '--'),
+      render: (value: string) => (value ? formatBeijingTime(value) : '--'),
     },
     {
       title: '上次导出',
       dataIndex: 'last_exported_at',
-      render: (value: string | null) => (value ? new Date(value).toLocaleString() : '尚未导出'),
+      render: (value: string | null) => (value ? formatBeijingTime(value) : '尚未导出'),
     },
     {
       title: '操作',

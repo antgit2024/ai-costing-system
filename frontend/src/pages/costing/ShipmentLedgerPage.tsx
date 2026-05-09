@@ -36,7 +36,12 @@ import {
   fetchSkuMasterByBarcode,
 } from '@/services/planner'
 import type { ShipmentLineListItem, ShipmentLineListResponse } from '@/types/planner'
-import BoundTargetPicker, { type BoundTargetPickerValue } from '@/components/common/BoundTargetPicker'
+import { formatBeijingTime } from '@/utils/beijingTime'
+// 通用绑定目标选择器（弹窗浏览模式）；本页 bundle 路径需把 bound_model_code 拼成 `B-${tpl}`，
+// 与通用 helper 的 bundle_template_code 不同，因此 boundTargetFilters 自己派生（见下方 useMemo）。
+import { ShopSpecCodeCell } from '@/components/common/ShopSpecCodeCell'
+import { TargetPickerBrowserButton } from '@/components/common/TargetPicker'
+import type { TargetSelection } from '@/components/common/TargetPicker'
 
 const { Title, Text } = Typography
 
@@ -233,13 +238,22 @@ const ShipmentLedgerPage = () => {
     return f ? { field: f, order: ord } : {}
   })
 
-  const [boundTarget, setBoundTarget] = useState<BoundTargetPickerValue>({ kind: 'any' })
+  const [boundTarget, setBoundTarget] = useState<TargetSelection | null>(null)
   const [showAdvancedBinding, setShowAdvancedBinding] = useState(false)
 
+  // 派生 ledger 后端 query 字段。本页的 bundle 路径有特殊形式：bound_model_code = `B-${tpl}` —— 历史
+  // 后端按这个形式索引发货行，所以保留，不能用 helper 的通用 `bundle_template_code`。
   const boundTargetFilters = useMemo(() => {
+    const empty = {
+      bound_target_kind: undefined as 'model' | 'bundle' | undefined,
+      bound_model_code: undefined as string | undefined,
+      bound_version_label: undefined as string | undefined,
+      bundle_preset_selector: undefined as string | undefined,
+    }
+    if (!boundTarget) return empty
     if (boundTarget.kind === 'model') {
-      const code = String(boundTarget.model_code ?? '').trim()
-      const ver = String(boundTarget.published_version_label ?? '').trim()
+      const code = (boundTarget.model_code || '').trim()
+      const ver = (boundTarget.version_label || '').trim()
       return {
         bound_target_kind: code ? ('model' as const) : undefined,
         bound_model_code: code || undefined,
@@ -247,38 +261,28 @@ const ShipmentLedgerPage = () => {
         bundle_preset_selector: undefined,
       }
     }
-    if (boundTarget.kind === 'bundle') {
-      const tpl = String(boundTarget.bundle_template_code ?? '').trim().toUpperCase()
-      const sel = String(boundTarget.bundle_preset_selector ?? '').trim().toUpperCase()
-      return {
-        bound_target_kind: tpl ? ('bundle' as const) : undefined,
-        bound_model_code: tpl ? `B-${tpl}` : undefined,
-        bound_version_label: undefined,
-        bundle_preset_selector: sel || undefined,
-      }
-    }
+    const tpl = (boundTarget.bundle_code || '').trim().toUpperCase()
+    const sel = (boundTarget.preset_selector || '').trim().toUpperCase()
     return {
-      bound_target_kind: undefined,
-      bound_model_code: undefined,
+      bound_target_kind: tpl ? ('bundle' as const) : undefined,
+      bound_model_code: tpl ? `B-${tpl}` : undefined,
       bound_version_label: undefined,
-      bundle_preset_selector: undefined,
+      bundle_preset_selector: sel || undefined,
     }
   }, [boundTarget])
 
   const boundTargetSummary = useMemo(() => {
+    if (!boundTarget) return null
     if (boundTarget.kind === 'model') {
-      const code = String(boundTarget.model_code ?? '').trim()
+      const code = (boundTarget.model_code || '').trim()
       if (!code) return null
-      const label = String(boundTarget.published_version_label ?? '').trim()
-      return label ? `${code}（${label}）` : code
+      const ver = (boundTarget.version_label || '').trim()
+      return ver ? `${code}（${ver}）` : code
     }
-    if (boundTarget.kind === 'bundle') {
-      const tpl = String(boundTarget.bundle_template_code ?? '').trim().toUpperCase()
-      if (!tpl) return null
-      const sel = String(boundTarget.bundle_preset_selector ?? '').trim().toUpperCase()
-      return sel ? `B-${tpl}-${sel}` : `B-${tpl}`
-    }
-    return null
+    const tpl = (boundTarget.bundle_code || '').trim().toUpperCase()
+    if (!tpl) return null
+    const sel = (boundTarget.preset_selector || '').trim().toUpperCase()
+    return sel ? `B-${tpl}-${sel}` : `B-${tpl}`
   }, [boundTarget])
 
   // Drawer (details)
@@ -451,7 +455,17 @@ const ShipmentLedgerPage = () => {
       setLedgerPage(1)
     }
     if (kind === 'bundle' && tpl) {
-      setBoundTarget({ kind: 'bundle', bundle_template_code: tpl, bundle_preset_selector: sel })
+      // URL 注水反向构造 selection：bundle_id 暂留空字符串 —— 用户后续打开 picker 时会
+      // 重新选取并补齐；这里仅用于 boundTargetFilters/Summary 派生显示。
+      setBoundTarget({
+        kind: 'bundle',
+        bundle_id: '',
+        bundle_code: tpl,
+        bundle_name: null,
+        preset_selector: sel || null,
+        preset_label: null,
+        preset_mode: null, // URL 注水时无 mode 信息；用户在 picker 里重新选时会补全
+      })
       setLedgerFilters({
         bound_target_kind: 'bundle',
         bound_model_code: `B-${tpl}`,
@@ -476,6 +490,14 @@ const ShipmentLedgerPage = () => {
     },
     { title: '店铺', dataIndex: 'channel', width: 140, ellipsis: true },
     { title: '货品条码', dataIndex: 'sku_code', width: 170, ellipsis: true },
+    {
+      // 商家编码：网店端"商家编码 / 商家货号"，吉客云 raw_row.detail.tradeGoodsno；老 Excel raw_row.商家编码。
+      // 视觉分级（共用 ShopSpecCodeCell）：可自动匹配 / 平台默认ID / 不规范 / 未同步。
+      title: '商家编码',
+      dataIndex: 'shop_spec_code',
+      width: 230,
+      render: (v) => <ShopSpecCodeCell value={safeString(v).trim() || null} />,
+    },
     { title: '订单号', dataIndex: 'order_no', width: 215, ellipsis: true },
     {
       title: '问题标记',
@@ -504,10 +526,19 @@ const ShipmentLedgerPage = () => {
         const name = safeString(r?.bound_model_name).trim()
         if (!code) return '-'
         const isBundle = code.startsWith('B-') || code.startsWith('Z-')
+        // 与 sku-master 列表语义一致：有具体变体优先展示 "麻感冰丝(KB8-001)"，
+        // 兜底（按模型基础线绑定，不指定变体）才回退到模型名。
+        const variantLabel = safeString(r?.bound_variant_label).trim()
         return (
           <span>
             <Tag color={isBundle ? 'purple' : 'blue'}>{code}</Tag>
-            {name ? <span style={{ color: '#666' }}> {name}</span> : null}
+            {variantLabel ? (
+              <Tag color="cyan" style={{ marginInlineStart: 4 }}>
+                {variantLabel}
+              </Tag>
+            ) : name ? (
+              <span style={{ color: '#666' }}> {name}</span>
+            ) : null}
           </span>
         )
       },
@@ -807,12 +838,14 @@ const ShipmentLedgerPage = () => {
                   </Button>
                   {!showAdvancedBinding && boundTargetSummary ? <Tag>{boundTargetSummary}</Tag> : null}
                   {showAdvancedBinding ? (
-                    <BoundTargetPicker
+                    <TargetPickerBrowserButton
                       value={boundTarget}
                       onChange={(v) => {
                         setBoundTarget(v)
                         // user still needs to click "查询" to apply
                       }}
+                      buttonProps={{ size: 'small' }}
+                      placeholder="选择模型/套装（筛选）"
                     />
                   ) : null}
                   <Form.Item name="unresolved_reason">
@@ -920,7 +953,7 @@ const ShipmentLedgerPage = () => {
             <Card size="small" title="关键信息">
               <Descriptions size="small" column={2}>
                 <Descriptions.Item label="发货日期">
-                  {detailRow.completed_at ? dayjs(detailRow.completed_at).format('YYYY-MM-DD') : '-'}
+                  {detailRow.completed_at ? formatBeijingTime(detailRow.completed_at, 'YYYY-MM-DD') : '-'}
                 </Descriptions.Item>
                 <Descriptions.Item label="处理状态">
                   {safeString((detailRow as any)?.status) === 'processed' ? (
@@ -935,7 +968,13 @@ const ShipmentLedgerPage = () => {
                       <Tag color={String((detailRow as any)?.bound_model_code).startsWith('B-') || String((detailRow as any)?.bound_model_code).startsWith('Z-') ? 'purple' : 'blue'}>
                         {safeString((detailRow as any)?.bound_model_code)}
                       </Tag>
-                      {safeString((detailRow as any)?.bound_model_name) ? <span style={{ color: '#666' }}> {safeString((detailRow as any)?.bound_model_name)}</span> : null}
+                      {safeString((detailRow as any)?.bound_variant_label) ? (
+                        <Tag color="cyan" style={{ marginInlineStart: 4 }}>
+                          {safeString((detailRow as any)?.bound_variant_label)}
+                        </Tag>
+                      ) : safeString((detailRow as any)?.bound_model_name) ? (
+                        <span style={{ color: '#666' }}> {safeString((detailRow as any)?.bound_model_name)}</span>
+                      ) : null}
                     </span>
                   ) : (
                     '-'
@@ -974,6 +1013,181 @@ const ShipmentLedgerPage = () => {
                     })()}
                   </span>
                 </Descriptions.Item>
+              </Descriptions>
+            </Card>
+
+            <Card
+              size="small"
+              title={
+                <Space size={6}>
+                  <span>上游 ERP 字段（吉客云原始口径）</span>
+                  <Tooltip title="字段来自 wms.order.query-info.page.v2，迁移 0036 后落库为独立列。空值表示上游未提供（如订单未发货、付款时间未回写等）。">
+                    <Text type="secondary" style={{ cursor: 'help', fontSize: 12 }}>
+                      ⓘ
+                    </Text>
+                  </Tooltip>
+                </Space>
+              }
+            >
+              <Descriptions size="small" column={3} bordered>
+                <Descriptions.Item label="发货单号">
+                  {safeString((detailRow as any)?.shipment_no) || '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="ERP订单号">
+                  {safeString((detailRow as any)?.erp_order_no) || '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="平台订单号">
+                  {safeString((detailRow as any)?.platform_order_no) || '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="订单状态">
+                  {(() => {
+                    const s = safeString((detailRow as any)?.order_status_name).trim()
+                    if (!s) return '-'
+                    const color = s.includes('完成') || s.includes('已发')
+                      ? 'green'
+                      : s.includes('配货') || s.includes('待')
+                        ? 'orange'
+                        : s.includes('取消') || s.includes('退')
+                          ? 'red'
+                          : 'blue'
+                    return <Tag color={color}>{s}</Tag>
+                  })()}
+                </Descriptions.Item>
+                <Descriptions.Item label="交易类型">
+                  {(() => {
+                    const t = (detailRow as any)?.trade_type
+                    const msg = safeString((detailRow as any)?.trade_type_msg).trim()
+                    if (t === undefined || t === null) return '-'
+                    return msg ? `${t} · ${msg}` : String(t)
+                  })()}
+                </Descriptions.Item>
+                <Descriptions.Item label="客户名">
+                  {safeString((detailRow as any)?.customer_name) || '-'}
+                </Descriptions.Item>
+
+                <Descriptions.Item label="下单时间">
+                  {(detailRow as any)?.ordered_at ? formatBeijingTime((detailRow as any).ordered_at, 'YYYY-MM-DD HH:mm') : '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="付款时间">
+                  {(detailRow as any)?.paid_at ? formatBeijingTime((detailRow as any).paid_at, 'YYYY-MM-DD HH:mm') : '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="发货时间">
+                  {(detailRow as any)?.sent_at ? formatBeijingTime((detailRow as any).sent_at, 'YYYY-MM-DD HH:mm') : '-'}
+                </Descriptions.Item>
+
+                <Descriptions.Item label="物流公司">
+                  {(() => {
+                    const name = safeString((detailRow as any)?.logistic_name).trim()
+                    const code = safeString((detailRow as any)?.logistic_code).trim()
+                    if (!name && !code) return '-'
+                    return code ? `${name || '-'} (${code})` : name
+                  })()}
+                </Descriptions.Item>
+                <Descriptions.Item label="配送方式">
+                  {safeString((detailRow as any)?.logistic_type_name) || '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="物流单号">
+                  {(() => {
+                    const no = safeString((detailRow as any)?.logistic_no).trim()
+                    if (!no) return '-'
+                    return (
+                      <Text copyable={{ text: no }} style={{ fontFamily: 'monospace' }}>
+                        {no}
+                      </Text>
+                    )
+                  })()}
+                </Descriptions.Item>
+
+                <Descriptions.Item label="仓库">
+                  {(() => {
+                    const name = safeString((detailRow as any)?.warehouse_name).trim()
+                    const code = safeString((detailRow as any)?.warehouse_code).trim()
+                    if (!name && !code) return '-'
+                    return code ? `${name || '-'} (${code})` : name
+                  })()}
+                </Descriptions.Item>
+                <Descriptions.Item label="波次号">
+                  {safeString((detailRow as any)?.wave_no) || '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="验货开始">
+                  {(detailRow as any)?.check_started_at
+                    ? formatBeijingTime((detailRow as any).check_started_at, 'YYYY-MM-DD HH:mm')
+                    : '-'}
+                </Descriptions.Item>
+
+                <Descriptions.Item label="拣货员">
+                  {safeString((detailRow as any)?.picker) || '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="打包员">
+                  {safeString((detailRow as any)?.packer) || '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="验货员">
+                  {safeString((detailRow as any)?.checker) || '-'}
+                </Descriptions.Item>
+
+                <Descriptions.Item label="货品名称" span={2}>
+                  {safeString((detailRow as any)?.goods_name) || '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="货品编号">
+                  {safeString((detailRow as any)?.goods_no) || '-'}
+                </Descriptions.Item>
+
+                <Descriptions.Item label="货品分类">
+                  {safeString((detailRow as any)?.category_name) || '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="单位">
+                  {safeString((detailRow as any)?.unit_of_measure) || '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="是否赠品">
+                  {(detailRow as any)?.is_gift === true ? (
+                    <Tag color="purple">赠品</Tag>
+                  ) : (detailRow as any)?.is_gift === false ? (
+                    <Tag>正常</Tag>
+                  ) : (
+                    '-'
+                  )}
+                </Descriptions.Item>
+
+                <Descriptions.Item label="单价">
+                  {formatMoney((detailRow as any)?.unit_price)}
+                </Descriptions.Item>
+                <Descriptions.Item label="实际数量">
+                  {(() => {
+                    const a = (detailRow as any)?.actual_qty
+                    return a === null || a === undefined || a === '' ? '-' : String(a)
+                  })()}
+                </Descriptions.Item>
+                <Descriptions.Item label="单价×数量 vs 总金额">
+                  {(() => {
+                    const up = Number((detailRow as any)?.unit_price ?? NaN)
+                    const q = Number((detailRow as any)?.qty ?? NaN)
+                    const rev = Number((detailRow as any)?.revenue_amount ?? NaN)
+                    if (!Number.isFinite(up) || !Number.isFinite(q) || !Number.isFinite(rev)) return '-'
+                    const expect = up * q
+                    const diff = expect - rev
+                    if (Math.abs(diff) < 0.01) return <Tag color="green">一致</Tag>
+                    return (
+                      <Tooltip
+                        title={`理论应收=单价×数量=${expect.toFixed(2)}；实际入账=${rev.toFixed(2)}；差异=${diff > 0 ? '-' : '+'}${Math.abs(diff).toFixed(2)}（疑似折扣/优惠券）`}
+                      >
+                        <Tag color={diff > 0 ? 'orange' : 'red'}>
+                          {diff > 0 ? '折扣' : '溢价'} {diff > 0 ? '-' : '+'}¥{Math.abs(diff).toFixed(2)}
+                        </Tag>
+                      </Tooltip>
+                    )
+                  })()}
+                </Descriptions.Item>
+
+                {(detailRow as any)?.seller_memo ? (
+                  <Descriptions.Item label="卖家备注" span={3}>
+                    <Text type="secondary">{safeString((detailRow as any)?.seller_memo)}</Text>
+                  </Descriptions.Item>
+                ) : null}
+                {(detailRow as any)?.buyer_memo ? (
+                  <Descriptions.Item label="买家留言" span={3}>
+                    <Text type="secondary">{safeString((detailRow as any)?.buyer_memo)}</Text>
+                  </Descriptions.Item>
+                ) : null}
               </Descriptions>
             </Card>
 
@@ -1134,7 +1348,9 @@ const ShipmentLedgerPage = () => {
                     '-'
                   )}
                 </Descriptions.Item>
-                <Descriptions.Item label="商家编码">{safeString((detailRow as any)?.shop_spec_code) || '-'}</Descriptions.Item>
+                <Descriptions.Item label="商家编码">
+                  <ShopSpecCodeCell value={safeString((detailRow as any)?.shop_spec_code).trim() || null} />
+                </Descriptions.Item>
                 <Descriptions.Item label="平台规格Id">{safeString((detailRow as any)?.platform_sku_id) || '-'}</Descriptions.Item>
                 <Descriptions.Item label="套装锚点">
                   {safeString((detailRow as any)?.bundle_template_code) ? (

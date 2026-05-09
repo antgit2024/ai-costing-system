@@ -4,27 +4,31 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 
 import BatchWorkbench from './components/BatchWorkbench'
 import BulkCostingTab from './components/BulkCostingTab'
+import GovernanceBacklogTab from './components/GovernanceBacklogTab'
 import ImportWizardModal from './components/ImportWizardModal'
 
 const { Title, Text } = Typography
+
+type ShipmentOpsTabKey = 'documents' | 'modeling_backlog' | 'long_tail' | 'bulk'
 
 export default function ShipmentOpsPage() {
   const navigate = useNavigate()
   const [sp] = useSearchParams()
 
-  const initialTab = useMemo(() => {
-    const t = String(sp.get('tab') ?? '').trim()
+  const initialTab: ShipmentOpsTabKey = useMemo(() => {
+    const t = String(sp.get('tab') ?? '').trim() as ShipmentOpsTabKey
     if (t === 'bulk') return 'bulk'
+    if (t === 'modeling_backlog') return 'modeling_backlog'
+    if (t === 'long_tail') return 'long_tail'
     if (String(sp.get('from') ?? '').trim() === 'ledger') return 'bulk'
     return 'documents'
   }, [sp])
 
-  const [activeTab, setActiveTab] = useState<'documents' | 'bulk'>(initialTab as any)
+  const [activeTab, setActiveTab] = useState<ShipmentOpsTabKey>(initialTab)
   const [importOpen, setImportOpen] = useState(false)
 
   useEffect(() => {
-    // keep in sync when user navigates with query params
-    setActiveTab(initialTab as any)
+    setActiveTab(initialTab)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialTab])
 
@@ -50,12 +54,22 @@ export default function ShipmentOpsPage() {
       <div style={{ marginTop: 12 }}>
         <Tabs
           activeKey={activeTab}
-          onChange={(k) => setActiveTab(k as any)}
+          onChange={(k) => setActiveTab(k as ShipmentOpsTabKey)}
           items={[
             {
               key: 'documents',
               label: '单据/待处理/快照',
               children: <BatchWorkbench onOpenImport={() => setImportOpen(true)} />,
+            },
+            {
+              key: 'modeling_backlog',
+              label: '建模 Backlog',
+              children: <GovernanceBacklogTab status="pending_model" />,
+            },
+            {
+              key: 'long_tail',
+              label: '长尾 SKU',
+              children: <GovernanceBacklogTab status="do_not_model" />,
             },
             {
               key: 'bulk',

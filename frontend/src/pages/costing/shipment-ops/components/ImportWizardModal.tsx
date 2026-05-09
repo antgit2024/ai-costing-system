@@ -1,4 +1,4 @@
-import { Alert, Button, DatePicker, Modal, Segmented, Space, Typography, Upload, Input, message } from 'antd'
+import { Alert, Button, Checkbox, DatePicker, Modal, Segmented, Space, Typography, Upload, Input, message } from 'antd'
 import dayjs from 'dayjs'
 import { useMemo, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
@@ -35,6 +35,7 @@ export default function ImportWizardModal(props: {
   const [exportDate, setExportDate] = useState<string | undefined>(undefined)
   const [requestedBy, setRequestedBy] = useState<string>('planner_user')
   const [mode, setMode] = useState<'2026' | '2025'>('2026')
+  const [processSnapshots, setProcessSnapshots] = useState(true)
   const [preview, setPreview] = useState<ShipmentImportPreviewResponse | null>(null)
 
   const fileSizeHint = useMemo(() => {
@@ -77,8 +78,10 @@ export default function ImportWizardModal(props: {
           export_date: preview.export_date ?? exportDate,
           requested_by: requestedBy?.trim() || undefined,
           mode,
+          process_snapshots: processSnapshots,
         },
-        { timeoutMs: 60000 },
+        // Use service default (30min) - execute can be long for large batches.
+        {},
       )
       return resp
     },
@@ -155,6 +158,9 @@ export default function ImportWizardModal(props: {
               { label: '2025（不落快照）', value: '2025' },
             ]}
           />
+          <Checkbox checked={!processSnapshots} onChange={(e) => setProcessSnapshots(!e.target.checked)}>
+            仅导入（不处理）
+          </Checkbox>
           <Button type="primary" onClick={() => previewMutation.mutate()} loading={previewMutation.isPending} disabled={!file}>
             预览
           </Button>

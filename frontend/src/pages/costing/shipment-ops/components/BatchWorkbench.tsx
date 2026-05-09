@@ -1,9 +1,9 @@
-import { Alert, Button, Card, Checkbox, Col, DatePicker, Input, Row, Segmented, Select, Space, Table, Tabs, Tag, Typography, message, Modal } from 'antd'
+import { Alert, Button, Card, Checkbox, Col, DatePicker, Dropdown, Input, Row, Segmented, Select, Space, Table, Tabs, Tag, Typography, message, Modal } from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 
 import {
   fetchShipmentImportBatch,
@@ -15,8 +15,11 @@ import {
   recomputeShipmentBomSnapshot,
   retryShipmentExceptions,
   clearShipmentLineSnapshots,
+  setSkuGovernance,
+  type SkuGovernanceStatus,
 } from '@/services/planner'
 import type { BomSnapshot, ShipmentException, ShipmentImportBatch, ShipmentLineListItem } from '@/types/planner'
+import { formatBeijingTime } from '@/utils/beijingTime'
 
 const { Text } = Typography
 const { RangePicker } = DatePicker
@@ -27,16 +30,14 @@ const safeString = (v: unknown): string => {
 }
 
 const formatTime = (v?: string | null) => {
-  if (!v) return '-'
-  const d = dayjs(v)
-  return d.isValid() ? d.format('YYYY-MM-DD HH:mm:ss') : String(v)
+  return formatBeijingTime(v, 'YYYY-MM-DD HH:mm:ss')
 }
 
 const formatBatchStatus = (statusRaw: unknown): { label: string; color?: string } => {
   const s0 = safeString(statusRaw).trim()
   const s = s0.toLowerCase()
   if (!s) return { label: '未知', color: 'default' }
-  if (s === 'success') return { label: '成功', color: 'green' }
+  if (s === 'success' || s === 'succeeded') return { label: '成功', color: 'green' }
   if (s === 'processing') return { label: '处理中', color: 'blue' }
   if (s === 'failed') return { label: '失败', color: 'red' }
   if (s === 'pending' || s === 'queued') return { label: '排队中', color: 'default' }
@@ -56,12 +57,15 @@ const formatExceptionReason = (reasonRaw: unknown): string => {
     MODEL_VERSION_NOT_PUBLISHED: '模型版本未发布',
     MISSING_SKU_CODE: '缺条码',
     MISSING_SKU: '缺条码',
+    MODEL_PENDING: '建模中（已加入 backlog）',
   }
   return map[r] ? `${map[r]}（${r}）` : r0
 }
 
+
 export default function BatchWorkbench(props: { onOpenImport: () => void }) {
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
   const [sp, setSp] = useSearchParams()
 
   const [batchPage, setBatchPage] = useState(1)
@@ -333,6 +337,116 @@ export default function BatchWorkbench(props: { onOpenImport: () => void }) {
     exceptionsQuery.refetch()
     queryClient.invalidateQueries({ queryKey: ['shipments', 'bom-snapshots'] })
   }
+
+  // ---------- SKU Governance actions (Sprint 2-4) ----------
+  // Used by both row-level "操作" buttons and the batch "批量治理…" menu.
+  // The 4 governance actions map cleanly to operator decisions made in
+  // the exception queue:
+  //   bind-existing-model -> jump to /costing/sku-master to use the
+  //                          existing bind UI (avoids duplicating the
+  //                          model selector here)
+  //   build-new-model     -> jump to /costing/product-models/new with a
+  //                          prefilled spec_text & from_sku
+  //   add-to-backlog      -> set governance_status='pending_model'
+  //   mark-long-tail      -> set governance_status='do_not_model'
+  // After a status change, refetch the exception list — do_not_model
+  // SKUs disappear from the queue on the next sync; pending_model rows
+  // remain but show the new MODEL_PENDING reason.
+  const collectSkuFromException = (r: any): { sku?: string; spec?: string } => ({
+    sku: safeString(r?.sku_code).trim() || undefined,
+    spec: safeString(r?.spec_text).trim() || undefined,
+  })
+
+  const setGovernanceForSkus = async (
+    skuCodes: string[],
+    status: SkuGovernanceStatus,
+    actionLabel: string,
+  ) => {
+    if (!skuCodes.length) {
+      message.info('请选择至少一个有效 SKU')
+      return
+    }
+    const ok = await new Promise<boolean>((resolve) => {
+      Modal.confirm({
+        title: `${actionLabel}（${skuCodes.length} 个 SKU）`,
+        content: `将设置 governance_status='${status}'。该决策对该 SKU 永久生效，下次同步即按新状态处理。`,
+        okText: '确认',
+        cancelText: '取消',
+        onOk: () => resolve(true),
+        onCancel: () => resolve(false),
+      })
+    })
+    if (!ok) return
+    try {
+      const res = await setSkuGovernance({
+        sku_codes: skuCodes,
+        status,
+        decided_by: operatorId.trim() || undefined,
+        note: `set from BatchWorkbench (batch=${selectedBatchId})`,
+      })
+      message.success(
+        `${actionLabel}完成：updated=${res.updated}, unchanged=${res.unchanged}, missing=${res.missing}`,
+      )
+      setExcSelectedRowKeys([])
+      exceptionsQuery.refetch()
+    } catch (err: any) {
+      message.error(`${actionLabel}失败：${err?.response?.data?.detail ?? err?.message ?? 'unknown'}`)
+    }
+  }
+
+  const navigateToBuildNewModel = (sku?: string, spec?: string) => {
+    const params = new URLSearchParams()
+    if (sku) params.set('from_sku', sku)
+    if (spec) params.set('prefill_spec', spec)
+    const qs = params.toString()
+    navigate(`/costing/product-models/new${qs ? `?${qs}` : ''}`)
+  }
+
+  const navigateToBindExistingModel = (sku?: string) => {
+    if (!sku) {
+      message.info('该行没有 SKU 条码，无法绑定')
+      return
+    }
+    // Reuse the dedicated SKU-master binding UI rather than embedding
+    // a model picker here. Pass `?focus=` so the page can scroll to
+    // the right row (existing convention; if the page ignores it the
+    // operator just searches manually).
+    navigate(`/costing/sku-master?search=${encodeURIComponent(sku)}&focus=${encodeURIComponent(sku)}`)
+  }
+
+  const collectSelectedSkus = (): string[] => {
+    const keys = excSelectedRowKeys as any[]
+    if (!keys.length) return []
+    const rows = filteredExceptions.filter((r: any) => keys.includes(String(r.id)))
+    const set = new Set<string>()
+    rows.forEach((r: any) => {
+      const s = safeString(r?.sku_code).trim()
+      if (s) set.add(s)
+    })
+    return Array.from(set)
+  }
+
+  const bulkGovernanceMenuItems = [
+    {
+      key: 'pending_model',
+      label: '加入建模 backlog（pending_model）',
+      onClick: () =>
+        setGovernanceForSkus(collectSelectedSkus(), 'pending_model', '加入建模 backlog'),
+    },
+    {
+      key: 'do_not_model',
+      label: '标记为长尾·不建模（do_not_model）',
+      onClick: () =>
+        setGovernanceForSkus(collectSelectedSkus(), 'do_not_model', '标记为长尾·不建模'),
+    },
+    { type: 'divider' as const },
+    {
+      key: 'unmanaged',
+      label: '撤回治理决策（恢复 unmanaged）',
+      onClick: () =>
+        setGovernanceForSkus(collectSelectedSkus(), 'unmanaged', '撤回治理决策'),
+    },
+  ]
 
   const runBulkRecomputeSnapshots = async () => {
     const rows = (snapshotsQuery.data ?? []) as BomSnapshot[]
@@ -629,8 +743,61 @@ export default function BatchWorkbench(props: { onOpenImport: () => void }) {
           )
         },
       },
+      {
+        title: '治理动作',
+        key: 'governance_actions',
+        width: 280,
+        fixed: 'right' as const,
+        render: (_v, r: any) => {
+          const { sku, spec } = collectSkuFromException(r)
+          const disabled = !sku
+          const menuItems = [
+            {
+              key: 'bind',
+              label: '绑定到现有模型…',
+              onClick: () => navigateToBindExistingModel(sku),
+            },
+            {
+              key: 'build',
+              label: '建模并绑定…',
+              onClick: () => navigateToBuildNewModel(sku, spec),
+            },
+            { type: 'divider' as const },
+            {
+              key: 'pending',
+              label: '加入建模 backlog',
+              onClick: () =>
+                sku &&
+                setGovernanceForSkus([sku], 'pending_model', '加入建模 backlog'),
+            },
+            {
+              key: 'long_tail',
+              label: '标记为长尾·不建模',
+              onClick: () =>
+                sku && setGovernanceForSkus([sku], 'do_not_model', '标记为长尾·不建模'),
+            },
+            { type: 'divider' as const },
+            {
+              key: 'revert',
+              label: '撤回治理决策',
+              onClick: () =>
+                sku && setGovernanceForSkus([sku], 'unmanaged', '撤回治理决策'),
+            },
+          ]
+          return (
+            <Dropdown menu={{ items: menuItems }} trigger={['click']} disabled={disabled}>
+              <Button size="small" disabled={disabled}>
+                治理…
+              </Button>
+            </Dropdown>
+          )
+        },
+      },
     ],
-    [],
+    // governance handlers depend on operatorId / selectedBatchId via closure;
+    // re-render is fine since this is a memoised columns array used in the
+    // exceptions table only.
+    [operatorId, selectedBatchId, filteredExceptions, excSelectedRowKeys],
   )
 
   const bindingTextFromSnapshot = (r: any): { code: string; name?: string } | null => {
@@ -1196,6 +1363,13 @@ export default function BatchWorkbench(props: { onOpenImport: () => void }) {
                             <Button type="primary" onClick={bulkHandleSelectedExceptions} disabled={!excSelectedRowKeys.length}>
                               处理所选（生成快照）
                             </Button>
+                            <Dropdown
+                              menu={{ items: bulkGovernanceMenuItems }}
+                              trigger={['click']}
+                              disabled={!excSelectedRowKeys.length}
+                            >
+                              <Button disabled={!excSelectedRowKeys.length}>批量治理…</Button>
+                            </Dropdown>
                             <Button onClick={() => exceptionsQuery.refetch()} loading={exceptionsQuery.isFetching}>
                               刷新
                             </Button>

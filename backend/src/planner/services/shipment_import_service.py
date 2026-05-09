@@ -3,23 +3,81 @@ from __future__ import annotations
 import hashlib
 import io
 import re
+import os
+import subprocess
+import sys
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from openpyxl import load_workbook
 from openpyxl.utils.datetime import from_excel
-from sqlalchemy import and_, func, or_
+from sqlalchemy import and_, exists, func, literal, or_
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import joinedload
 
 from .. import models
-from . import bom_generation_service, product_model_service, spec_parser_service, sku_master_service
+from ...config import settings
+from ...database import SessionLocal
+from . import (
+    bom_generation_service,
+    long_tail_strategy_service,
+    product_model_service,
+    spec_parser_service,
+    sku_master_service,
+)
 
 
 PARSER_VERSION = "v1"
 PREVIEW_CACHE_DIR = Path("logs") / "shipment_previews"
+
+
+def _extract_shop_spec_code_from_line(line: Any) -> Optional[str]:
+    """
+    从 ShipmentLine 抽取"商家编码"（merchant SKU），按可靠度排序：
+      1. line.metadata_json.shop_spec_code（最新协议；新版 jackyun mapper / Excel 路径都写）
+      2. line.product_link_id（旧版 jackyun mapper 把 tradeGoodsno 写在这）
+      3. raw_row_json.detail.tradeGoodsno（吉客云 detail 段；老批次兜底）
+      4. raw_row_json.shipment.goodsDetail[*].tradeGoodsno（极少数嵌套场景）
+      5. raw_row_json 顶层中文/英文别名（手工 Excel 路径）
+
+    返回 None 表示真没有；调用方应避免用空串覆盖已有值。
+    """
+    if line is None:
+        return None
+    try:
+        meta = dict(getattr(line, "metadata_json", None) or {})
+        v = meta.get("shop_spec_code")
+        if v not in (None, "", "null"):
+            return str(v).strip() or None
+
+        plid = getattr(line, "product_link_id", None)
+        if plid not in (None, "", "null"):
+            return str(plid).strip() or None
+
+        rr = dict(getattr(line, "raw_row_json", None) or {})
+        det = rr.get("detail") if isinstance(rr, dict) else None
+        if isinstance(det, dict):
+            v = det.get("tradeGoodsno") or det.get("tradeGoodsNo")
+            if v not in (None, "", "null"):
+                return str(v).strip() or None
+        ship = rr.get("shipment") if isinstance(rr, dict) else None
+        if isinstance(ship, dict):
+            gd = ship.get("goodsDetail")
+            if isinstance(gd, list):
+                for g in gd:
+                    if isinstance(g, dict):
+                        v = g.get("tradeGoodsno") or g.get("tradeGoodsNo")
+                        if v not in (None, "", "null"):
+                            return str(v).strip() or None
+        for key in ("规格编码", "规格编码(网店)", "商家编码", "shop_spec_code", "merchant_sku"):
+            v = rr.get(key) if isinstance(rr, dict) else None
+            if v not in (None, "", "null"):
+                return str(v).strip() or None
+    except Exception:  # noqa: BLE001
+        return None
+    return None
 
 
 def _sha1_bytes(data: bytes) -> str:
@@ -106,6 +164,14 @@ def _norm_str(value: Any) -> Optional[str]:
     return s or None
 
 
+def _clip(value: Optional[str], max_len: int) -> Optional[str]:
+    if not value:
+        return None
+    if len(value) <= max_len:
+        return value
+    return value[:max_len]
+
+
 def _norm_header(value: Any) -> Optional[str]:
     """
     Normalize Excel header cells for robustness across ERP export variants:
@@ -146,6 +212,8 @@ SHIPMENT_FIELD_ALIASES: Dict[str, List[str]] = {
     "shop_spec_code": ["规格编码（网店）", "商家编码", "shop_spec_code", "merchant_sku"],
     # Mapping dimension (1 barcode -> many platform_sku_id)
     "platform_sku_id": ["平台规格Id（网店）", "platform_sku_id", "platformSkuId"],
+    # Optional tag for downstream filtering (e.g. 刷单/正常/补发)
+    "tag": ["标记", "标签", "tag"],
 }
 
 
@@ -197,13 +265,39 @@ def _guess_spec_text(row: List[Any]) -> Optional[str]:
 
 
 def _normalize_rows_from_xlsx(file_bytes: bytes) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-    wb = load_workbook(io.BytesIO(file_bytes), data_only=True)
+    wb = load_workbook(io.BytesIO(file_bytes), data_only=True, read_only=True)
     ws = wb.active
-    rows = list(ws.iter_rows(values_only=True))
-    if not rows:
+    # Some ERP/WPS exports write an invalid worksheet dimension like ref="A1"
+    # even though sheetData contains the full table. In openpyxl read-only mode
+    # that makes iter_rows stop at A1 and preview becomes "总行0".
+    if hasattr(ws, "reset_dimensions"):
+        try:
+            ws.reset_dimensions()
+        except Exception:
+            pass
+    it = ws.iter_rows(values_only=True)
+
+    # Read a small prefix to detect header row reliably.
+    prefix: List[Tuple[Any, ...]] = []
+    for _ in range(50):
+        try:
+            prefix.append(next(it))
+        except StopIteration:
+            break
+    if not prefix:
         return [], [{"warning": "EMPTY_FILE"}]
 
-    headers = _build_header_index(list(rows[0]))
+    alias_pool = {(_norm_header(x) or str(x)).strip() for xs in SHIPMENT_FIELD_ALIASES.values() for x in xs}
+    best_idx = 0
+    best_score = -1
+    for idx, r in enumerate(prefix):
+        cells = [(_norm_header(c) or "") for c in list(r or [])]
+        score = sum(1 for c in cells if c and c in alias_pool)
+        if score > best_score:
+            best_score = score
+            best_idx = idx
+
+    headers = _build_header_index(list(prefix[best_idx]))
     warnings: List[Dict[str, Any]] = []
 
     def _warn(code: str, **extra: Any) -> None:
@@ -218,8 +312,10 @@ def _normalize_rows_from_xlsx(file_bytes: bytes) -> Tuple[List[Dict[str, Any]], 
         _warn("MISSING_HEADERS", missing_fields=missing_fields)
 
     normalized: List[Dict[str, Any]] = []
-    for i, row in enumerate(rows[1:], start=2):
-        row_list = list(row)
+
+    # 1) Remaining rows in prefix after header
+    for i, row in enumerate(prefix[best_idx + 1 :], start=best_idx + 2):
+        row_list = list(row or [])
         # skip fully empty rows
         if not any(v not in (None, "") for v in row_list):
             continue
@@ -241,6 +337,7 @@ def _normalize_rows_from_xlsx(file_bytes: bytes) -> Tuple[List[Dict[str, Any]], 
         shop_spec_code = _norm_str(_get_field(row_list, headers, "shop_spec_code"))
         # 维度：平台规格Id（网店）
         platform_sku_id = _norm_str(_get_field(row_list, headers, "platform_sku_id"))
+        tag = _norm_str(_get_field(row_list, headers, "tag"))
 
         raw_row: Dict[str, Any] = {}
         for name, idx in headers.items():
@@ -258,12 +355,62 @@ def _normalize_rows_from_xlsx(file_bytes: bytes) -> Tuple[List[Dict[str, Any]], 
                 "sku_code": sku_code,
                 "shop_spec_code": shop_spec_code,
                 "platform_sku_id": platform_sku_id,
+                "tag": tag,
                 "spec_text": spec_text,
                 "qty": qty,
                 "revenue_amount": revenue_amount,
                 "raw_row": _json_safe(raw_row),
             }
         )
+
+    # 2) Stream the rest rows (iterator continues after prefix)
+    row_i = len(prefix) + 1
+    for row in it:
+        row_list = list(row or [])
+        if not any(v not in (None, "") for v in row_list):
+            row_i += 1
+            continue
+
+        shipment_no = _norm_str(_get_field(row_list, headers, "shipment_no"))
+        order_no = _norm_str(_get_field(row_list, headers, "order_no"))
+        product_link_id = _norm_str(_get_field(row_list, headers, "product_link_id"))
+        completed_at = _parse_excel_datetime(_get_field(row_list, headers, "completed_at"))
+        channel = _norm_str(_get_field(row_list, headers, "channel"))
+        sku_code = _norm_str(_get_field(row_list, headers, "sku_code"))
+        spec_text = _norm_str(_get_field(row_list, headers, "spec_text"))
+        if not spec_text:
+            spec_text = _guess_spec_text(row_list)
+        qty = _to_decimal(_get_field(row_list, headers, "qty"))
+        revenue_amount = _to_decimal(_get_field(row_list, headers, "revenue_amount"))
+        shop_spec_code = _norm_str(_get_field(row_list, headers, "shop_spec_code"))
+        platform_sku_id = _norm_str(_get_field(row_list, headers, "platform_sku_id"))
+        tag = _norm_str(_get_field(row_list, headers, "tag"))
+
+        raw_row: Dict[str, Any] = {}
+        for name, idx in headers.items():
+            if idx < len(row_list):
+                raw_row[name] = row_list[idx]
+
+        normalized.append(
+            {
+                "row_index": row_i,
+                "shipment_no": shipment_no,
+                "order_no": order_no,
+                "product_link_id": product_link_id,
+                "completed_at": completed_at,
+                "channel": channel,
+                "sku_code": sku_code,
+                "shop_spec_code": shop_spec_code,
+                "platform_sku_id": platform_sku_id,
+                "tag": tag,
+                "spec_text": spec_text,
+                "qty": qty,
+                "revenue_amount": revenue_amount,
+                "raw_row": _json_safe(raw_row),
+            }
+        )
+        row_i += 1
+
     return normalized, warnings
 
 
@@ -319,6 +466,289 @@ def _enqueue_exception(
     db.add(exc)
     db.flush()
     return exc
+
+
+def _generate_long_tail_fallback_snapshot(
+    db: Session,
+    *,
+    batch: models.ShipmentImportBatch,
+    line: models.ShipmentLine,
+) -> Optional[models.BomSnapshot]:
+    """Sprint 3-2 / Issue 28: build a placeholder BomSnapshot +
+    ShipmentCostingResult for a long-tail SKU using a per-category rate.
+
+    Why: SKUs marked ``governance_status='do_not_model'`` skip BOM
+    generation, but profit reports still need a cogs estimate so margins
+    aren't artificially inflated. The rate comes from
+    ``long_tail_strategy_service.resolve_rate_for_sku`` which picks (in
+    order): manual category override → keyword strategy → 'default'
+    strategy → ``settings.long_tail_cogs_rate``.
+
+    The chosen rate + source + category + matched_keyword are written into
+    ``trace_json``, so historical reports remain auditable even after the
+    strategy table changes. Re-runs are idempotent (existing snapshot
+    returned as-is).
+    """
+    sku_code = (line.sku_code or "").strip()
+    if not sku_code:
+        return None
+
+    existing = (
+        db.query(models.BomSnapshot)
+        .filter(models.BomSnapshot.shipment_line_id == line.id)
+        .first()
+    )
+    if existing is not None:
+        return existing
+
+    sku_master = (
+        db.query(models.SkuMaster)
+        .filter(models.SkuMaster.erp_sku_barcode == sku_code)
+        .first()
+    )
+    resolved = long_tail_strategy_service.resolve_rate_for_sku(
+        db, sku=sku_master, sku_code=sku_code
+    )
+    rate = float(resolved.rate)
+    revenue = line.revenue_amount or Decimal("0")
+    qty = line.qty if line.qty is not None else Decimal("1")
+    fallback_cogs = (Decimal(str(revenue)) * Decimal(str(rate))).quantize(Decimal("0.01"))
+
+    note_pieces = [
+        "SKU is marked governance_status='do_not_model'; cogs estimated "
+        f"as revenue * {rate}.",
+    ]
+    if resolved.source == "manual":
+        note_pieces.append(f"strategy: 人工标 long_tail_category='{resolved.category}'")
+    elif resolved.source == "keyword":
+        note_pieces.append(
+            f"strategy: 关键字命中 category='{resolved.category}', keyword='{resolved.matched_keyword}'"
+        )
+    elif resolved.source == "default_strategy":
+        note_pieces.append("strategy: 兜底策略 category='default'")
+    else:
+        note_pieces.append("strategy: 全局 settings.long_tail_cogs_rate")
+
+    trace: Dict[str, Any] = {
+        "kind": "long_tail_fallback",
+        "long_tail_cogs_rate": rate,
+        "rate_source": resolved.source,
+        "strategy_id": resolved.strategy_id,
+        "strategy_category": resolved.category,
+        "matched_keyword": resolved.matched_keyword,
+        "shipment_line_id": line.id,
+        "batch_id": batch.id,
+        "revenue_at_compute": str(revenue),
+        "fallback_cogs": str(fallback_cogs),
+        "note": " | ".join(note_pieces),
+    }
+    snap = models.BomSnapshot(
+        batch_id=batch.id,
+        shipment_line_id=line.id,
+        shipment_no=line.shipment_no,
+        sku_code=sku_code,
+        model_version_id=None,
+        spec_hash=None,
+        qty=Decimal(str(qty)),
+        final_lines_json=[],
+        trace_json=_json_safe(trace),
+        generated_at=_utcnow(),
+    )
+    db.add(snap)
+    db.flush()
+
+    # Persist a costing result so profit reports can sum cogs without
+    # special-casing long-tail SKUs.
+    existing_costing = (
+        db.query(models.ShipmentCostingResult)
+        .filter(models.ShipmentCostingResult.shipment_line_id == line.id)
+        .first()
+    )
+    if existing_costing is None:
+        costing = models.ShipmentCostingResult(
+            batch_id=batch.id,
+            shipment_line_id=line.id,
+            mode="2026",
+            sku_code=sku_code,
+            model_version_id=None,
+            spec_hash=None,
+            qty=Decimal(str(qty)),
+            cost_total=fallback_cogs,
+            cost_material_total=fallback_cogs,
+            computed_at=_utcnow(),
+            metadata_json=_json_safe(
+                {
+                    "kind": "long_tail_fallback",
+                    "long_tail_cogs_rate": rate,
+                    "rate_source": resolved.source,
+                    "strategy_id": resolved.strategy_id,
+                    "strategy_category": resolved.category,
+                    "matched_keyword": resolved.matched_keyword,
+                    "revenue_at_compute": str(revenue),
+                }
+            ),
+        )
+        db.add(costing)
+        db.flush()
+
+    return snap
+
+
+def _finalize_shipment_line(
+    db: Session,
+    *,
+    batch: models.ShipmentImportBatch,
+    line: models.ShipmentLine,
+    channel: Optional[str] = None,
+    shop_spec_code: Optional[str] = None,
+    platform_sku_id: Optional[str] = None,
+    spec_text_norm: Optional[str] = None,
+    autobackfill_source: str = "shipment_autobackfill",
+    extra_metadata: Optional[Dict[str, Any]] = None,
+    mode: str = "2026",
+    process_snapshots: bool = True,
+) -> Optional[models.BomSnapshot]:
+    """
+    Per-line "post-create" pipeline shared by both shipment-line producers:
+
+    - Excel path  (``import_shipment_xlsx``)  - line just inserted from xlsx row
+    - Jackyun path (``process_existing_shipment_lines``) - line already in DB
+       from ``integrations.jackyun.mappers.shipment.upsert_shipment_from_payload``
+
+    What it does, in order:
+      1. Copy bundle-template metadata from SkuMaster onto the line
+         (so BOM snapshot trace can preserve bundle anchors).
+      2. ``ensure_from_shipment`` - autobackfill SkuMaster if first-seen,
+         refresh ``_shipment_seen`` metadata otherwise. Idempotent.
+      3. Revision chain: if a previous active line for the same
+         ``revision_group_hash`` exists, mark them superseded.
+      4. Generate ``BomSnapshot`` (or persist deduction artifacts only,
+         depending on mode + ``process_snapshots``).
+
+    Returns the BomSnapshot if one was created, else None.
+
+    NOTE: callers are responsible for committing. This function only
+    flushes to make ids visible.
+    """
+    sku_code = line.sku_code
+    spec_text = line.spec_text
+    shipment_no = line.shipment_no
+
+    try:
+        sm = sku_master_service.get_by_barcode(db, sku_code or "")
+        sm_meta = dict(getattr(sm, "metadata_json", None) or {}) if sm else {}
+        bt_code = sm_meta.get("bundle_template_code")
+        bt_id = sm_meta.get("bundle_template_id")
+        bt_sel = sm_meta.get("bundle_preset_selector")
+        if bt_code not in (None, "") or bt_id not in (None, "") or bt_sel not in (None, ""):
+            meta_line = dict(line.metadata_json or {})
+            meta_line.setdefault("bundle_template_id", bt_id)
+            meta_line.setdefault("bundle_template_code", bt_code)
+            meta_line.setdefault("bundle_preset_selector", bt_sel)
+            line.metadata_json = {k: v for k, v in meta_line.items() if v not in (None, "")}
+    except Exception:
+        # best-effort only; do not fail shipment processing
+        pass
+
+    sm_metadata: Dict[str, Any] = {
+        "source": autobackfill_source,
+        # keys aligned with sku_master_service._update_shipment_seen expectations
+        "batch_id": batch.id,
+        "shipment_import_batch_id": batch.id,
+        "shipment_line_id": line.id,
+        "shipment_no": shipment_no,
+        "spec_hash": _sha1_text(spec_text_norm) if spec_text_norm else None,
+        "shop_spec_code": shop_spec_code,
+        "platform_sku_id": platform_sku_id,
+    }
+    if extra_metadata:
+        sm_metadata.update({k: v for k, v in extra_metadata.items() if v is not None})
+
+    sm_row = sku_master_service.ensure_from_shipment(
+        db,
+        erp_sku_barcode=sku_code or "",
+        spec_text=spec_text,
+        channel=channel or line.channel,
+        metadata=sm_metadata,
+    )
+
+    # ----- Governance gating (Sprint 2-2 of "SKU 治理与按需建模") -----
+    # Operators classify each SkuMaster.metadata_json.governance_status
+    # via BatchWorkbench. The worker reacts:
+    #   do_not_model     -> silently skip parsing & exception queue (long-tail
+    #                       SKU; cost is filled later by the long-tail fallback,
+    #                       Sprint 3-2). Operators are not pestered again.
+    #   pending_model    -> still enqueue exception (so it stays visible in
+    #                       BatchWorkbench), but with reason='MODEL_PENDING'
+    #                       so the UI can present a different action set
+    #                       ("modeling in progress, do not bind manually").
+    #   unmanaged        -> default path; SKU_NOT_BOUND etc.
+    #   auto_bound       -> default path; will produce a BomSnapshot.
+    governance_status = sku_master_service.get_sku_governance_status(sm_row)
+    if governance_status == sku_master_service.GOVERNANCE_DO_NOT_MODEL:
+        meta_line = dict(line.metadata_json or {})
+        meta_line["skipped_reason"] = "governance:do_not_model"
+        line.metadata_json = _json_safe(meta_line)
+        # Sprint 3-2: long-tail fallback. Generate a placeholder snapshot
+        # + costing row using the global rate, so profit reports include
+        # an estimated cogs (instead of zero, which inflates margin).
+        # Disabled via settings.long_tail_cogs_fallback_enabled=False
+        # for ops that prefer "no number > wrong number".
+        if process_snapshots and getattr(
+            settings, "long_tail_cogs_fallback_enabled", True
+        ):
+            return _generate_long_tail_fallback_snapshot(db, batch=batch, line=line)
+        return None
+    if governance_status == sku_master_service.GOVERNANCE_PENDING_MODEL:
+        _enqueue_exception(
+            db,
+            batch_id=batch.id,
+            shipment_line_id=line.id,
+            reason="MODEL_PENDING",
+            message="SKU 已加入建模 backlog，等待模型建好后自动绑定",
+            payload={"sku_code": sku_code, "governance_status": governance_status},
+        )
+        batch.exception_rows = (batch.exception_rows or 0) + 1
+        return None
+
+    if line.revision_group_hash:
+        prevs = (
+            db.query(models.ShipmentLine)
+            .filter(
+                models.ShipmentLine.revision_group_hash == line.revision_group_hash,
+                models.ShipmentLine.id != line.id,
+                models.ShipmentLine.is_archived.is_(False),
+                models.ShipmentLine.is_active.is_(True),
+            )
+            .order_by(models.ShipmentLine.revision_no.desc())
+            .all()
+        )
+        if prevs:
+            line.revision_no = (prevs[0].revision_no or 1) + 1
+            for p in prevs:
+                p.is_active = False
+                p.superseded_by_id = line.id
+
+    if not process_snapshots:
+        return None
+
+    persist_snapshot = str(mode or "2026") != "2025"
+    if persist_snapshot:
+        existing_snapshot = (
+            db.query(models.BomSnapshot)
+            .filter(models.BomSnapshot.shipment_line_id == line.id)
+            .first()
+        )
+        if existing_snapshot:
+            return existing_snapshot
+        snap = _generate_bom_snapshot(db, batch=batch, line=line, persist_snapshot=True, mode=mode)
+        if snap is None:
+            batch.exception_rows = (batch.exception_rows or 0) + 1
+        return snap
+
+    # 2025 mode: no per-line snapshots; still persist deduction artifacts
+    _generate_bom_snapshot(db, batch=batch, line=line, persist_snapshot=False, mode=mode)
+    return None
 
 
 def _generate_bom_snapshot(
@@ -562,6 +992,7 @@ def import_shipment_xlsx(
     export_date: Optional[str],
     requested_by: Optional[str],
     mode: str = "2026",
+    process_snapshots: bool = True,
 ) -> models.ShipmentImportBatch:
     file_hash = _sha1_bytes(file_bytes)
     batch = (
@@ -595,8 +1026,14 @@ def import_shipment_xlsx(
         batch.warnings_json = []
         batch.result_json = {}
 
+    # Persist "processing" status early so UI can reflect long-running imports.
+    db.commit()
+    db.refresh(batch)
+
     rows, warnings = _normalize_rows_from_xlsx(file_bytes)
     batch.warnings_json = warnings
+
+    chunk = max(int(getattr(settings, "csv_import_chunk_size", 500) or 500), 50)
 
     for payload in rows:
         batch.total_rows += 1
@@ -635,12 +1072,12 @@ def import_shipment_xlsx(
         line = models.ShipmentLine(
             batch_id=batch.id,
             row_index=int(payload.get("row_index") or 0),
-            shipment_no=shipment_no,
-            order_no=payload.get("order_no"),
-            product_link_id=payload.get("product_link_id"),
+            shipment_no=_clip(shipment_no, 255),
+            order_no=_clip(payload.get("order_no"), 255),
+            product_link_id=_clip(payload.get("product_link_id"), 255),
             completed_at=payload.get("completed_at"),
-            channel=payload.get("channel"),
-            sku_code=sku_code,
+            channel=_clip(payload.get("channel"), 255),
+            sku_code=_clip(sku_code, 255),
             spec_text=spec_text,
             spec_hash=_sha1_text(spec_text_norm) if spec_text_norm else None,
             qty=qty,
@@ -649,6 +1086,7 @@ def import_shipment_xlsx(
             revision_group_hash=revision_group,
             revision_no=1,
             is_active=True,
+            tag=(payload.get("tag") or None),
             raw_row_json=payload.get("raw_row") or {},
             normalize_warnings_json=[],
             metadata_json={
@@ -663,77 +1101,28 @@ def import_shipment_xlsx(
         db.add(line)
         db.flush()
 
-        # Bundle anchor (Phase0): if SKU master has a bundle binding, carry it to shipment_lines metadata.
-        # This enables bundle-level auditing & analytics without recomputing historical snapshots.
-        try:
-            sm = sku_master_service.get_by_barcode(db, sku_code or "")
-            sm_meta = dict(getattr(sm, "metadata_json", None) or {}) if sm else {}
-            bt_code = sm_meta.get("bundle_template_code")
-            bt_id = sm_meta.get("bundle_template_id")
-            bt_sel = sm_meta.get("bundle_preset_selector")
-            if bt_code not in (None, "") or bt_id not in (None, "") or bt_sel not in (None, ""):
-                meta_line = dict(line.metadata_json or {})
-                meta_line.setdefault("bundle_template_id", bt_id)
-                meta_line.setdefault("bundle_template_code", bt_code)
-                meta_line.setdefault("bundle_preset_selector", bt_sel)
-                line.metadata_json = {k: v for k, v in meta_line.items() if v not in (None, "")}
-        except Exception:
-            # best-effort only; do not fail shipment import
-            pass
-
-        # SKU master autobackfill (MVP): if barcode not in sku_master, create minimal record for next imports.
-        sku_master_service.ensure_from_shipment(
-            db,
-            erp_sku_barcode=sku_code or "",
-            spec_text=spec_text,
-            channel=payload.get("channel"),
-            metadata={
-                "source": "shipment_autobackfill",
-                # keep keys aligned with sku_master_service._update_shipment_seen expectations
-                "batch_id": batch.id,
-                "shipment_import_batch_id": batch.id,
-                "shipment_line_id": line.id,
-                "shipment_no": shipment_no,
-                "spec_hash": _sha1_text(spec_text_norm) if spec_text_norm else None,
-                "shop_spec_code": payload.get("shop_spec_code"),
-                "platform_sku_id": payload.get("platform_sku_id"),
-            },
-        )
-
-        # revision chain: if same (shipment_no, sku_code, spec_text) but different qty/amount, mark old active as superseded
-        prevs = (
-            db.query(models.ShipmentLine)
-            .filter(
-                models.ShipmentLine.revision_group_hash == revision_group,
-                models.ShipmentLine.id != line.id,
-                models.ShipmentLine.is_archived.is_(False),
-                models.ShipmentLine.is_active.is_(True),
-            )
-            .order_by(models.ShipmentLine.revision_no.desc())
-            .all()
-        )
-        if prevs:
-            line.revision_no = (prevs[0].revision_no or 1) + 1
-            for p in prevs:
-                p.is_active = False
-                p.superseded_by_id = line.id
-
         batch.inserted_rows += 1
 
-        persist_snapshot = str(mode or "2026") != "2025"
-        if persist_snapshot:
-            existing_snapshot = (
-                db.query(models.BomSnapshot)
-                .filter(models.BomSnapshot.shipment_line_id == line.id)
-                .first()
-            )
-            if not existing_snapshot:
-                snap = _generate_bom_snapshot(db, batch=batch, line=line, persist_snapshot=True, mode=mode)
-                if not snap:
-                    batch.exception_rows += 1
-        else:
-            # 2025 mode: no per-line snapshots; still persist deduction artifacts
-            _generate_bom_snapshot(db, batch=batch, line=line, persist_snapshot=False, mode=mode)
+        _finalize_shipment_line(
+            db,
+            batch=batch,
+            line=line,
+            channel=payload.get("channel"),
+            shop_spec_code=payload.get("shop_spec_code"),
+            platform_sku_id=payload.get("platform_sku_id"),
+            spec_text_norm=spec_text_norm,
+            autobackfill_source="shipment_autobackfill",
+            mode=mode,
+            process_snapshots=process_snapshots,
+        )
+
+        # Periodic commit for large imports:
+        # - reduce long-running transactions / row locks
+        # - make progress visible in UI (total/inserted/exception counts)
+        if batch.total_rows % chunk == 0:
+            batch.updated_at = _utcnow()
+            db.commit()
+            db.refresh(batch)
 
     batch.status = "success"
     batch.result_json = {
@@ -746,6 +1135,147 @@ def import_shipment_xlsx(
             "exception_rows": batch.exception_rows,
         },
     }
+    db.commit()
+    db.refresh(batch)
+    return batch
+
+
+def process_existing_shipment_lines(
+    db: Session,
+    *,
+    batch_id: str,
+    mode: str = "2026",
+    process_snapshots: bool = True,
+    autobackfill_source: str = "jackyun_autobackfill",
+) -> models.ShipmentImportBatch:
+    """
+    Worker entry point for batches whose ``ShipmentLine`` rows are already
+    in the database (Jackyun integration path; potentially other future
+    integration sources).
+
+    Differs from ``import_shipment_xlsx`` only in the source of lines:
+      - xlsx path:    rows come from a parsed Excel file
+      - this path:    lines were upserted by an integration mapper
+                      (e.g. ``integrations.jackyun.mappers.shipment``)
+
+    Per-line work is delegated to the shared ``_finalize_shipment_line`` so
+    that the BOM-generation / model-binding / exception-queue behaviour is
+    identical between Excel and integration paths.
+
+    Idempotent: BomSnapshot reuses the per-line existing snapshot (see
+    ``_finalize_shipment_line``); ``ensure_from_shipment`` is idempotent;
+    revision chain only fires when there is a real prior active row.
+    Re-running on the same batch is therefore safe (and used by
+    ``_repair_terminal_processing_batches`` indirectly).
+
+    The integration mapper already set ``batch.total_rows`` and
+    ``batch.inserted_rows`` based on its own insert/update split; we do
+    NOT touch those counters here. We only update ``exception_rows`` (via
+    ``_finalize_shipment_line``) and the final ``status`` / ``result_json``.
+    """
+    batch = db.get(models.ShipmentImportBatch, batch_id)
+    if not batch:
+        raise ValueError(f"ShipmentImportBatch {batch_id!r} 不存在")
+
+    if batch.status not in ("processing", "queued"):
+        # Worker contract: _claim_next_queued_batch already flipped to
+        # 'processing'. Treat anything terminal as a no-op so a buggy retry
+        # doesn't double-process.
+        return batch
+
+    if batch.status == "queued":
+        batch.status = "processing"
+        batch.updated_at = _utcnow()
+        db.commit()
+        db.refresh(batch)
+
+    chunk = max(int(getattr(settings, "csv_import_chunk_size", 500) or 500), 50)
+
+    lines = (
+        db.query(models.ShipmentLine)
+        .filter(
+            models.ShipmentLine.batch_id == batch.id,
+            models.ShipmentLine.is_archived.is_(False),
+        )
+        .order_by(models.ShipmentLine.row_index.asc())
+        .all()
+    )
+
+    # exception_rows is recomputed from scratch by _finalize_shipment_line
+    # to keep semantics identical to xlsx path. Reset before the loop so a
+    # second run doesn't double-count.
+    batch.exception_rows = 0
+    processed = 0
+    for line in lines:
+        spec_text = line.spec_text or ""
+        spec_text_norm = (
+            spec_parser_service.normalize_tx_spec_text(spec_text) if spec_text else ""
+        )
+        meta = dict(getattr(line, "metadata_json", None) or {})
+        # 商家编码：优先用 line.metadata（新版 jackyun mapper 已经写入），
+        # 历史行兜底从 ShipmentLine.product_link_id（旧 mapper 把 tradeGoodsno 写在这）
+        # 或 raw_row.detail.tradeGoodsno 兜底，确保旧批次重跑也能补到 shop_spec_code。
+        shop_spec_code = meta.get("shop_spec_code") or _extract_shop_spec_code_from_line(line)
+        _finalize_shipment_line(
+            db,
+            batch=batch,
+            line=line,
+            channel=line.channel,
+            shop_spec_code=shop_spec_code,
+            platform_sku_id=meta.get("platform_sku_id"),
+            spec_text_norm=spec_text_norm,
+            autobackfill_source=autobackfill_source,
+            extra_metadata={
+                "source_system": getattr(line, "source_system", None),
+                "source_record_id": getattr(line, "source_record_id", None),
+                "source_line_id": getattr(line, "source_line_id", None),
+            },
+            mode=mode,
+            process_snapshots=process_snapshots,
+        )
+        processed += 1
+        if processed % chunk == 0:
+            batch.updated_at = _utcnow()
+            db.commit()
+            db.refresh(batch)
+
+    snapshot_count = (
+        db.query(func.count(models.BomSnapshot.id))
+        .filter(models.BomSnapshot.batch_id == batch.id)
+        .scalar()
+        or 0
+    )
+    exception_count = (
+        db.query(func.count(models.ShipmentExceptionQueue.id))
+        .filter(models.ShipmentExceptionQueue.batch_id == batch.id)
+        .scalar()
+        or 0
+    )
+    costing_count = (
+        db.query(func.count(models.ShipmentCostingResult.id))
+        .filter(models.ShipmentCostingResult.batch_id == batch.id)
+        .scalar()
+        or 0
+    )
+
+    batch.status = "success"
+    batch.exception_rows = int(exception_count)
+    prev_result = dict(batch.result_json or {})
+    batch.result_json = {
+        **prev_result,
+        "batch_id": batch.id,
+        "file_hash": batch.file_hash,
+        "counts": {
+            "total_rows": batch.total_rows,
+            "inserted_rows": batch.inserted_rows,
+            "skipped_rows": batch.skipped_rows,
+            "exception_rows": int(exception_count),
+            "bom_snapshots": int(snapshot_count),
+            "costing_results": int(costing_count),
+        },
+        "processed_lines": processed,
+    }
+    batch.updated_at = _utcnow()
     db.commit()
     db.refresh(batch)
     return batch
@@ -903,6 +1433,7 @@ def execute_shipment_xlsx_from_preview(
     export_date: Optional[str],
     requested_by: Optional[str],
     mode: str = "2026",
+    process_snapshots: bool = True,
 ) -> models.ShipmentImportBatch:
     """
     Execute import using cached preview file (by file_hash).
@@ -921,7 +1452,120 @@ def execute_shipment_xlsx_from_preview(
         export_date=export_date,
         requested_by=requested_by,
         mode=mode,
+        process_snapshots=process_snapshots,
     )
+
+
+def preview_cache_exists(preview_id: str) -> bool:
+    pid = (preview_id or "").strip()
+    if not pid:
+        return False
+    return _preview_cache_path(pid).exists()
+
+
+def process_execute_from_preview_job(
+    batch_id: str,
+    *,
+    preview_id: str,
+    file_name: Optional[str],
+    export_date: Optional[str],
+    requested_by: Optional[str],
+    mode: str = "2026",
+) -> None:
+    """
+    Background task entrypoint for /shipments/import/execute.
+    Runs the heavy import in a new DB session to avoid request timeouts.
+    """
+    session: Session = SessionLocal()
+    try:
+        execute_shipment_xlsx_from_preview(
+            session,
+            preview_id=preview_id,
+            file_name=file_name,
+            export_date=export_date,
+            requested_by=requested_by,
+            mode=mode,
+        )
+    except Exception as exc:  # noqa: BLE001 - background task must not crash worker
+        try:
+            session.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            batch = session.get(models.ShipmentImportBatch, batch_id)
+            if batch:
+                batch.status = "failed"
+                batch.result_json = {
+                    "error": str(exc)[:500],
+                    "stage": "execute_from_preview",
+                }
+                session.commit()
+        except Exception:  # noqa: BLE001
+            try:
+                session.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+    finally:
+        session.close()
+
+
+def spawn_execute_from_preview_job(
+    batch_id: str,
+    *,
+    preview_id: str,
+    file_name: Optional[str],
+    export_date: Optional[str],
+    requested_by: Optional[str],
+    mode: str = "2026",
+) -> None:
+    """
+    Spawn a detached process to run the heavy import, so the API worker is not blocked.
+    """
+    pid = (preview_id or "").strip()
+    if not pid:
+        raise ValueError("preview_id 不能为空")
+    if not preview_cache_exists(pid):
+        raise ValueError("预览缓存文件不存在，请重新预览上传")
+
+    backend_dir = Path(__file__).resolve().parents[3]
+    script = backend_dir / "scripts" / "run_shipment_execute_from_preview.py"
+    if not script.exists():
+        raise ValueError("后台执行脚本缺失，请联系管理员")
+
+    cmd = [
+        sys.executable,
+        str(script),
+        "--batch-id",
+        str(batch_id),
+        "--preview-id",
+        str(pid),
+        "--mode",
+        str(mode or "2026"),
+    ]
+    if file_name:
+        cmd += ["--file-name", str(file_name)]
+    if export_date:
+        cmd += ["--export-date", str(export_date)]
+    if requested_by:
+        cmd += ["--requested-by", str(requested_by)]
+
+    # Detach: do not block API process; capture output for debugging.
+    log_dir = backend_dir / "logs" / "jobs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    out_path = log_dir / f"shipment_execute_{batch_id}.log"
+    with out_path.open("ab") as fp:
+        env = dict(os.environ)
+        # Ensure backend root is importable for `import src.*`
+        existing_pp = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = f"{backend_dir}:{existing_pp}" if existing_pp else str(backend_dir)
+        subprocess.Popen(  # noqa: S603,S607 - internal trusted command, args are not shell-expanded
+            cmd,
+            cwd=str(backend_dir),
+            stdout=fp,
+            stderr=subprocess.STDOUT,
+            env=env,
+            start_new_session=True,
+        )
 
 
 def get_batch(db: Session, batch_id: str) -> Optional[models.ShipmentImportBatch]:
@@ -1581,41 +2225,23 @@ def list_shipment_lines(
 
     # Active SKU -> model binding (BundleAsModel is represented as model_code like "B-XXXXYY").
     #
-    # Root-cause fix for slow queries:
-    # - Avoid correlated scalar_subquery() per row
-    # - Build ONE binding subquery and LEFT JOIN it on shipment_lines.sku_code
+    # Perf history (read this BEFORE refactoring):
+    # ----------------------------------------------
+    # v1: 6 correlated scalar_subquery per row → slow (Issue 31, 2026-05-07).
+    # v2: ONE binding subquery + LEFT JOIN with row_number() OVER PARTITION BY
+    #     sku_code rn=1 → looked clean but Postgres planner picked
+    #     Nested Loop Left Join (Materialize binding_sq → 83552 rows, scanned
+    #     2156 times = 180 MILLION join-filter comparisons), 30+s on prod.
+    # v3 (current): bare LEFT JOIN sku_model_version_mapping. We can drop
+    #     row_number() entirely because the table already has a partial
+    #     UNIQUE INDEX ``ux_sku_model_version_mapping_sku_code_active`` ON
+    #     (sku_code) WHERE is_active=true AND is_archived=false. Each active
+    #     SKU has at most ONE row, so a direct join is both correct AND lets
+    #     the planner do a cheap unique-index lookup per outer row.
+    #     Real-world impact: 已完成 30天 30s → ~0.3s (100×).
     m = models.SkuModelVersionMapping
     v = models.ProductModelVersion
     pm = models.ProductModel
-    binding_sq = (
-        db.query(
-            m.sku_code.label("sku_code"),
-            m.model_version_id.label("model_version_id"),
-            pm.model_code.label("bound_model_code"),
-            pm.model_name.label("bound_model_name"),
-            v.version_label.label("bound_version_label"),
-            func.nullif(
-                func.upper(func.coalesce(v.metadata_json["bundle_preset_selector"].as_string(), "")),
-                "",
-            ).label("bundle_preset_selector"),
-            func.row_number()
-            .over(
-                partition_by=m.sku_code,
-                order_by=(m.updated_at.desc(), m.created_at.desc()),
-            )
-            .label("rn"),
-        )
-        .select_from(m)
-        .join(v, v.id == m.model_version_id)
-        .join(pm, pm.id == v.model_id)
-        .filter(
-            m.is_archived.is_(False),
-            m.is_active.is_(True),
-            v.is_archived.is_(False),
-            pm.is_archived.is_(False),
-        )
-        .subquery()
-    )
 
     q = (
         db.query(
@@ -1629,19 +2255,32 @@ def list_shipment_lines(
         unresolved_message_sq.label("unresolved_message"),
         cost_mode_sq.label("cost_mode"),
         cost_total_sq.label("cost_total"),
-        binding_sq.c.model_version_id.label("bound_model_version_id"),
-        binding_sq.c.bound_model_code.label("bound_model_code"),
-        binding_sq.c.bound_model_name.label("bound_model_name"),
-        binding_sq.c.bound_version_label.label("bound_version_label"),
-        binding_sq.c.bundle_preset_selector.label("bundle_preset_selector"),
+        # IMPORTANT: read model_version_id from v.id, not m.model_version_id.
+        # If the version was archived after binding, the LEFT JOIN below
+        # NULLs out v/pm columns; using v.id keeps "no usable binding" a
+        # single coherent state (all NULL) instead of a half-bound ghost
+        # (id present but model_code/name/label NULL). Matches v2 behavior
+        # where binding_sq INNER JOINed v and pm with is_archived=false.
+        v.id.label("bound_model_version_id"),
+        pm.id.label("bound_model_id"),
+        pm.model_code.label("bound_model_code"),
+        pm.model_name.label("bound_model_name"),
+        v.version_label.label("bound_version_label"),
+        func.nullif(
+            func.upper(func.coalesce(v.metadata_json["bundle_preset_selector"].as_string(), "")),
+            "",
+        ).label("bundle_preset_selector"),
         )
         .outerjoin(
-            binding_sq,
+            m,
             and_(
-                binding_sq.c.sku_code == models.ShipmentLine.sku_code,
-                binding_sq.c.rn == 1,
+                m.sku_code == models.ShipmentLine.sku_code,
+                m.is_active.is_(True),
+                m.is_archived.is_(False),
             ),
         )
+        .outerjoin(v, and_(v.id == m.model_version_id, v.is_archived.is_(False)))
+        .outerjoin(pm, and_(pm.id == v.model_id, pm.is_archived.is_(False)))
         .filter(
         models.ShipmentLine.is_archived.is_(False),
         models.ShipmentLine.is_active.is_(True),
@@ -1653,55 +2292,132 @@ def list_shipment_lines(
         if bid:
             q = q.filter(models.ShipmentLine.batch_id == bid)
 
-    # "疑似绑错" heuristic (SQL-side filter for pagination correctness).
-    # NOTE: This is intentionally a SOFT guardrail; it may contain false positives.
-    def _has_any(col, keys: List[str]):
-        col2 = func.coalesce(col, "")
-        return or_(*[col2.ilike(f"%{k}%") for k in (keys or []) if str(k).strip()])
-
-    sample_siquan_dian = _has_any(models.ShipmentLine.spec_text, ["丝圈", "地垫"])
-    sample_baozhen = _has_any(models.ShipmentLine.spec_text, ["抱枕", "枕套"])
-    sample_ditan = _has_any(models.ShipmentLine.spec_text, ["地毯"])
-    sample_zhuodian = _has_any(models.ShipmentLine.spec_text, ["桌垫"])
-    sample_zhuangshihua = _has_any(models.ShipmentLine.spec_text, ["装饰画", "画框", "挂画"])
-    sample_any = or_(sample_siquan_dian, sample_baozhen, sample_ditan, sample_zhuodian, sample_zhuangshihua)
-
-    # Target hits: check both model_name and model_code (some users only remember codes)
-    target_siquan_dian = or_(
-        _has_any(binding_sq.c.bound_model_name, ["丝圈", "地垫"]),
-        _has_any(binding_sq.c.bound_model_code, ["丝圈", "地垫"]),
-    )
-    target_baozhen = or_(
-        _has_any(binding_sq.c.bound_model_name, ["抱枕", "枕套"]),
-        _has_any(binding_sq.c.bound_model_code, ["抱枕", "枕套"]),
-    )
-    target_ditan = or_(_has_any(binding_sq.c.bound_model_name, ["地毯"]), _has_any(binding_sq.c.bound_model_code, ["地毯"]))
-    target_zhuodian = or_(_has_any(binding_sq.c.bound_model_name, ["桌垫"]), _has_any(binding_sq.c.bound_model_code, ["桌垫"]))
-    target_zhuangshihua = or_(
-        _has_any(binding_sq.c.bound_model_name, ["装饰画", "画框", "挂画"]),
-        _has_any(binding_sq.c.bound_model_code, ["装饰画", "画框", "挂画"]),
-    )
-    target_any = or_(target_siquan_dian, target_baozhen, target_ditan, target_zhuodian, target_zhuangshihua)
-
+    # "疑似绑错" SQL-side filter — used by ``suspected_mismatch=true`` filter so the
+    # paginated total matches what the user sees row-by-row.
+    #
+    # 数据源：每个已发布 standard 模型的 ``metadata.recognition_keywords``
+    # （= 运营在标准模型编辑里维护的关键词，跟 Tier 1 行级精筛同源）。
+    # 反向索引 keyword → set(model_id of owners)；SQL 拼成：
+    #   OR( spec_text ILIKE %kw% AND pm.id NOT IN (该关键词的拥有模型集合) )
+    # 即"发货命中某关键词，但当前绑定模型不是该关键词的拥有者 → 疑似绑错"。
+    #
+    # 多个模型共享同一关键词时也安全（NOT IN 一次排除全部拥有者）。
+    # 完全没配 recognition_keywords 的模型 → 不参与任何 SQL 子句 → 计数 0
+    # （行为与 Tier 1 行级精筛一致：运营没给信号就不报警）。
     has_target_binding = or_(
-        binding_sq.c.bound_model_code.isnot(None),
-        binding_sq.c.bound_model_name.isnot(None),
+        pm.model_code.isnot(None),
+        pm.model_name.isnot(None),
     )
-    suspected_mismatch_pred = and_(
-        has_target_binding,
-        or_(
-            and_(sample_siquan_dian, target_baozhen),
-            and_(sample_baozhen, target_siquan_dian),
-            and_(sample_zhuangshihua, target_baozhen),
-            and_(sample_baozhen, target_zhuangshihua),
-            and_(sample_zhuodian, target_baozhen),
-            and_(sample_baozhen, target_zhuodian),
-            and_(sample_ditan, target_baozhen),
-            and_(sample_baozhen, target_ditan),
-            # Softer case (align with sku-master preview): sample hits a category but target contains none.
-            and_(sample_any, ~target_any),
-        ),
-    )
+    # 反向索引来自两个层级（OR 合并）：
+    #   1) 模型级：ProductModel.metadata.recognition_keywords
+    #   2) 变体级：ProductModelLineVariant.conditions_json.spec_contains_all / _any
+    #              ── "伞型模型" 场景必须靠它，例如 OZU 模型本身只配"丝圈地垫"，
+    #              但 OZU-002 变体覆盖"皮革桌垫"。没有变体级合并，
+    #              发货含"皮革桌垫"且绑 OZU 会被误判为"应该绑 F6A"。
+    kw_owners: Dict[str, set] = {}
+    try:
+        kw_index_rows = (
+            db.query(models.ProductModel)
+            .join(
+                models.ProductModelVersion,
+                models.ProductModelVersion.model_id == models.ProductModel.id,
+            )
+            .filter(
+                models.ProductModel.is_archived.is_(False),
+                models.ProductModelVersion.is_archived.is_(False),
+                models.ProductModelVersion.version_kind == "standard",
+                models.ProductModelVersion.version_status == "published",
+            )
+            .all()
+        )
+    except Exception:  # noqa: BLE001
+        kw_index_rows = []
+    # Tier A: 模型级
+    for _km in kw_index_rows:
+        meta_km = _km.metadata_json or {}
+        raw_km = meta_km.get("recognition_keywords") if isinstance(meta_km, dict) else None
+        if not isinstance(raw_km, list):
+            continue
+        for _x in raw_km:
+            kk = str(_x or "").strip()
+            if not kk:
+                continue
+            kw_owners.setdefault(kk, set()).add(str(_km.id))
+    # Tier B: 变体级（spec_contains_all / spec_contains_any 中的非系统 token）
+    try:
+        version_to_model = {
+            str(v.id): str(v.model_id)
+            for v in (
+                db.query(
+                    models.ProductModelVersion.id,
+                    models.ProductModelVersion.model_id,
+                )
+                .filter(
+                    models.ProductModelVersion.is_archived.is_(False),
+                    models.ProductModelVersion.version_kind == "standard",
+                    models.ProductModelVersion.version_status == "published",
+                )
+                .all()
+            )
+        }
+        if version_to_model:
+            variant_rows = (
+                db.query(
+                    models.ProductModelLineVariant.version_id,
+                    models.ProductModelLineVariant.conditions_json,
+                )
+                .filter(
+                    models.ProductModelLineVariant.is_archived.is_(False),
+                    models.ProductModelLineVariant.version_id.in_(list(version_to_model.keys())),
+                )
+                .all()
+            )
+            for ver_id, cond in variant_rows:
+                if not isinstance(cond, dict):
+                    continue
+                mid = version_to_model.get(str(ver_id))
+                if not mid:
+                    continue
+                for ck in ("spec_contains_all", "spec_contains_any"):
+                    tokens = cond.get(ck) or []
+                    if not isinstance(tokens, list):
+                        continue
+                    for tok in tokens:
+                        ts = str(tok or "").strip()
+                        # 跳过系统 token（如 ``MODEL:OZU`` / ``ATTR:xxx``，
+                        # 它们是 spec 解析时由代码注入的而非真品类词）。
+                        if not ts or ":" in ts:
+                            continue
+                        kw_owners.setdefault(ts, set()).add(mid)
+    except Exception:  # noqa: BLE001
+        # 变体级合并失败不应阻塞 Tier A；保留模型级反向索引继续工作。
+        pass
+    suspect_clauses = []
+    for _kw, _mids in kw_owners.items():
+        if not _kw or not _mids:
+            continue
+        suspect_clauses.append(
+            and_(
+                func.coalesce(models.ShipmentLine.spec_text, "").ilike(f"%{_kw}%"),
+                ~pm.id.in_(list(_mids)),
+            )
+        )
+    if suspect_clauses:
+        # 排除运营已显式声明"绑定正确"的 SKU
+        # （SkuMaster.metadata.suspect_misbind_resolved=True）。
+        # 这些 SKU 不出现在「只看疑似绑错」总数和列表里，但绑定本身不变。
+        not_resolved = ~exists().where(
+            and_(
+                models.SkuMaster.erp_sku_barcode == models.ShipmentLine.sku_code,
+                models.SkuMaster.is_archived.is_(False),
+                models.SkuMaster.metadata_json["suspect_misbind_resolved"].as_boolean() == True,  # noqa: E712
+            )
+        )
+        suspected_mismatch_pred = and_(has_target_binding, or_(*suspect_clauses), not_resolved)
+    else:
+        # 还没有任何模型配 recognition_keywords → 该过滤器恒为 False（计数 0）。
+        # 这是符合预期的：避免在"运营完全没维护关键词"时仍误报。
+        suspected_mismatch_pred = literal(False)
 
     if start is not None:
         q = q.filter(models.ShipmentLine.completed_at >= start)
@@ -1722,27 +2438,36 @@ def list_shipment_lines(
         q = q.filter(models.ShipmentLine.spec_text.ilike(pat))
 
     # Binding filters (current effective binding on SKU).
+    # NOTE: All binding filters use ``pm.*`` / ``v.*`` directly (the LEFT JOIN
+    # tables) rather than the old binding_sq subquery — see the perf-history
+    # comment above the query for context.
     if bound_model_code:
         pat = f"%{str(bound_model_code).strip()}%"
-        q = q.filter(func.coalesce(binding_sq.c.bound_model_code, "").ilike(pat))
+        q = q.filter(func.coalesce(pm.model_code, "").ilike(pat))
     if bound_version_label:
         vlab = str(bound_version_label).strip()
         if vlab:
-            q = q.filter(binding_sq.c.bound_version_label == vlab)
+            q = q.filter(v.version_label == vlab)
     if bundle_preset_selector:
         sel = str(bundle_preset_selector).strip().upper()
         if sel:
-            q = q.filter(binding_sq.c.bundle_preset_selector == sel)
+            q = q.filter(
+                func.nullif(
+                    func.upper(func.coalesce(v.metadata_json["bundle_preset_selector"].as_string(), "")),
+                    "",
+                )
+                == sel
+            )
     if bound_target_kind:
         k = str(bound_target_kind).strip().lower()
         if k in ("bundle", "bundles"):
-            q = q.filter(or_(binding_sq.c.bound_model_code.ilike("B-%"), binding_sq.c.bound_model_code.ilike("Z-%")))
+            q = q.filter(or_(pm.model_code.ilike("B-%"), pm.model_code.ilike("Z-%")))
         elif k in ("model", "models", "standard"):
             q = q.filter(
                 and_(
-                    binding_sq.c.bound_model_code.isnot(None),
-                    ~binding_sq.c.bound_model_code.ilike("B-%"),
-                    ~binding_sq.c.bound_model_code.ilike("Z-%"),
+                    pm.model_code.isnot(None),
+                    ~pm.model_code.ilike("B-%"),
+                    ~pm.model_code.ilike("Z-%"),
                 )
             )
 
@@ -1755,7 +2480,7 @@ def list_shipment_lines(
         # “待生成”口径：当前为待处理，且已具备生成快照所需的最小条件（有条码、有规格、有有效绑定）
         q = q.filter(
             ~processed_pred,
-            binding_sq.c.model_version_id.isnot(None),
+            v.id.isnot(None),
             func.nullif(func.trim(func.coalesce(models.ShipmentLine.sku_code, "")), "").isnot(None),
             func.nullif(func.trim(func.coalesce(models.ShipmentLine.spec_text, "")), "").isnot(None),
         )
@@ -1763,7 +2488,7 @@ def list_shipment_lines(
         # “需重建”口径：已有快照（已处理），但快照记录的 model_version_id 与当前绑定不一致（包含“已清空绑定但有快照”）
         q = q.filter(
             has_bom,
-            func.coalesce(binding_sq.c.model_version_id, "") != func.coalesce(latest_snapshot_model_version_id_sq, ""),
+            func.coalesce(v.id, "") != func.coalesce(latest_snapshot_model_version_id_sq, ""),
         )
     if unresolved_reason:
         rr = str(unresolved_reason).strip()
@@ -1819,6 +2544,7 @@ def list_shipment_lines(
         _cost_mode0,
         _cost_total0,
         _bound_model_version_id0,
+        _bound_model_id0_x,
         _bound_model_code0,
         _bound_model_name0,
         _bound_version_label0,
@@ -1840,6 +2566,100 @@ def list_shipment_lines(
             if c is not None:
                 snap_cost[str(sid)] = c
 
+    # ---- 变体展示（bound_variant_code / bound_variant_label）----
+    # 与 sku_master_service._attach_active_version_bindings 同语义：
+    # 直接读 SkuMaster.metadata_json.bound_variant_code（人工 / 自动绑定时已落库），
+    # 再去 ProductModelLineVariant.metadata_json.display_name 拼出"麻感冰丝(KB8-001)"。
+    # 不做 spec→variant 反推，保持唯一来源。
+    page_sku_codes: List[str] = []
+    for (
+        _line0v,
+        _has0v,
+        _has2v,
+        _cleared0v,
+        _bsid0v,
+        _smid0v,
+        _ur0v,
+        _um0v,
+        _cm0v,
+        _ct0v,
+        _bvid0v,
+        _bmid0v,
+        _bmc0v,
+        _bmn0v,
+        _bvl0v,
+        _bps0v,
+    ) in rows:
+        sc = str(getattr(_line0v, "sku_code", "") or "").strip()
+        if sc:
+            page_sku_codes.append(sc)
+    sku_to_variant_code: Dict[str, str] = {}
+    if page_sku_codes:
+        sm_rows = (
+            db.query(models.SkuMaster.erp_sku_barcode, models.SkuMaster.metadata_json)
+            .filter(models.SkuMaster.erp_sku_barcode.in_(list(set(page_sku_codes))))
+            .all()
+        )
+        for bc, meta_json in sm_rows:
+            mj = meta_json or {}
+            code = str(mj.get("bound_variant_code") or "").strip().upper()
+            if bc and code:
+                sku_to_variant_code[str(bc)] = code
+    variant_label_by_key: Dict[Tuple[str, str], str] = {}  # (version_id, variant_code) → label
+    if sku_to_variant_code:
+        # 收集本页用到的 (version_id, variant_code)
+        version_ids_for_variant: List[str] = []
+        for (
+            _line0v,
+            _has0v,
+            _has2v,
+            _cleared0v,
+            _bsid0v,
+            _smid0v,
+            _ur0v,
+            _um0v,
+            _cm0v,
+            _ct0v,
+            _bvid0v,
+            _bmid0v_x,
+            _bmc0v,
+            _bmn0v,
+            _bvl0v,
+            _bps0v,
+        ) in rows:
+            sc = str(getattr(_line0v, "sku_code", "") or "").strip()
+            if not sc:
+                continue
+            if sc not in sku_to_variant_code:
+                continue
+            vid = str(_bvid0v or "").strip()
+            if vid:
+                version_ids_for_variant.append(vid)
+        if version_ids_for_variant:
+            line_variants = (
+                db.query(models.ProductModelLineVariant)
+                .filter(
+                    models.ProductModelLineVariant.version_id.in_(list(set(version_ids_for_variant))),
+                    models.ProductModelLineVariant.is_archived.is_(False),
+                )
+                .all()
+            )
+            for vr in line_variants:
+                vmeta = vr.metadata_json or {}
+                vc = str(vmeta.get("variant_code") or "").strip().upper()
+                if not vc:
+                    continue
+                display_name = str(vmeta.get("display_name") or "").strip() or None
+                material_name: Optional[str] = display_name
+                if not material_name:
+                    for it in vr.items or []:
+                        n = str(getattr(it, "material_name", "") or "").strip()
+                        if n:
+                            material_name = n
+                            break
+                label = f"{material_name}({vc})" if material_name else vc
+                variant_label_by_key[(str(vr.version_id), vc)] = label
+
     # Snapshot trace for "尺寸疑似异常" check (need latest snapshot measurement_mm for snapshot ids on page).
     snap_trace: Dict[str, Dict[str, Any]] = {}
     if bool(include_issue_hints):
@@ -1856,6 +2676,7 @@ def list_shipment_lines(
             _cost_mode0,
             _cost_total0,
             _bound_model_version_id0,
+            _bound_model_id0,
             _bound_model_code0,
             _bound_model_name0,
             _bound_version_label0,
@@ -1874,6 +2695,44 @@ def list_shipment_lines(
                 if sid:
                     snap_trace[str(sid)] = (tjson or {}) if isinstance(tjson, dict) else {}
 
+    # Batch query "运营已声明绑定正确" 的 SKU 集合 + 「数据质量状态」
+    # 行级 hint 用 resolved 集合跳过精筛
+    # （SQL 端在 suspected_mismatch=True 时已经在 query 里排除，但「看全部」视图
+    #  会让 resolved SKU 也出现，需要在行级精筛 suppress 红 Tag 才一致）。
+    # 同一次查询顺便取出 data_quality_status（SPU 错配标识），避免再来一趟 DB。
+    page_sku_codes_for_resolved: List[str] = []
+    for (_l0,) in [(r[0],) for r in rows]:
+        sc0 = str(getattr(_l0, "sku_code", "") or "").strip()
+        if sc0:
+            page_sku_codes_for_resolved.append(sc0)
+    suspect_misbind_resolved_skus: set = set()
+    sku_data_quality_status_map: Dict[str, str] = {}
+    if page_sku_codes_for_resolved:
+        try:
+            for sm_code, sm_meta in (
+                db.query(
+                    models.SkuMaster.erp_sku_barcode,
+                    models.SkuMaster.metadata_json,
+                )
+                .filter(
+                    models.SkuMaster.erp_sku_barcode.in_(list(set(page_sku_codes_for_resolved))),
+                    models.SkuMaster.is_archived.is_(False),
+                )
+                .all()
+            ):
+                if not sm_code:
+                    continue
+                code_s = str(sm_code)
+                meta_d = sm_meta if isinstance(sm_meta, dict) else {}
+                if meta_d.get("suspect_misbind_resolved") is True:
+                    suspect_misbind_resolved_skus.add(code_s)
+                dq = meta_d.get("data_quality_status")
+                if isinstance(dq, str) and dq:
+                    sku_data_quality_status_map[code_s] = dq
+        except Exception:  # noqa: BLE001
+            suspect_misbind_resolved_skus = set()
+            sku_data_quality_status_map = {}
+
     items: List[Dict[str, Any]] = []
     for (
         line,
@@ -1887,6 +2746,7 @@ def list_shipment_lines(
         cost_mode,
         cost_total,
         bound_model_version_id,
+        bound_model_id,
         bound_model_code,
         bound_model_name,
         bound_version_label,
@@ -1899,6 +2759,30 @@ def list_shipment_lines(
         meta = dict(getattr(line, "metadata_json", None) or {})
         raw_row = dict(getattr(line, "raw_row_json", None) or {})
         # Best-effort fallback for historical rows (before we started persisting these fields).
+        # Sources covered:
+        #   - 手工 Excel 导入：raw_row.规格编码 / 商家编码 / merchant_sku
+        #   - 聚水潭 (jackyun) 同步：raw_row.detail.tradeGoodsno（detail 由 _ingest_jackyun 写入）
+        #     兜底再去 raw_row.shipment.goodsDetail[0].tradeGoodsno（极少数嵌套场景）
+        def _from_jackyun_detail(rr: Dict[str, Any]) -> Optional[str]:
+            try:
+                det = rr.get("detail") if isinstance(rr, dict) else None
+                if isinstance(det, dict):
+                    v = det.get("tradeGoodsno") or det.get("tradeGoodsNo")
+                    if v not in (None, "", "null"):
+                        return str(v).strip()
+                ship = rr.get("shipment") if isinstance(rr, dict) else None
+                if isinstance(ship, dict):
+                    gd = ship.get("goodsDetail")
+                    if isinstance(gd, list) and gd:
+                        for g in gd:
+                            if isinstance(g, dict):
+                                v = g.get("tradeGoodsno") or g.get("tradeGoodsNo")
+                                if v not in (None, "", "null"):
+                                    return str(v).strip()
+            except Exception:  # noqa: BLE001
+                return None
+            return None
+
         shop_spec_code = (
             meta.get("shop_spec_code")
             # raw_row_json keys are normalized by _norm_header (often stripping trailing "(网店)" notes)
@@ -1907,6 +2791,8 @@ def list_shipment_lines(
             or raw_row.get("商家编码")
             or raw_row.get("shop_spec_code")
             or raw_row.get("merchant_sku")
+            # 聚水潭：raw_row.detail.tradeGoodsno（核心入口）
+            or _from_jackyun_detail(raw_row)
         )
         platform_sku_id = (
             meta.get("platform_sku_id")
@@ -1933,25 +2819,36 @@ def list_shipment_lines(
         size_anomaly_detail: Optional[str] = None
 
         if include_hints:
-            # Soft warning: "疑似绑错" (keyword mismatch between transaction spec and bound target label).
-            # Use the SAME keyword groups as sku-master bind preview to keep behavior consistent.
-            target_label = f"{str(bound_model_code or '').strip()} {str(bound_model_name or '').strip()}".strip()
-            try:
-                norm_spec = spec_parser_service.normalize_tx_spec_text(getattr(line, "spec_text", None))
-            except Exception:  # noqa: BLE001
-                norm_spec = getattr(line, "spec_text", None)
-            norm_spec = str(norm_spec or "").strip()
-            if norm_spec and target_label:
+            # 运营已声明该 SKU 绑定正确（suspect_misbind_resolved=True）→ 跳过精筛
+            sku_code_for_resolve = str(getattr(line, "sku_code", "") or "").strip()
+            if sku_code_for_resolve and sku_code_for_resolve in suspect_misbind_resolved_skus:
+                mismatch_warnings = []
+                suspected = False
+            else:
+                # Soft warning: "疑似绑错" (keyword mismatch between transaction spec and bound target label).
+                # Use the SAME keyword groups as sku-master bind preview to keep behavior consistent.
+                target_label = f"{str(bound_model_code or '').strip()} {str(bound_model_name or '').strip()}".strip()
                 try:
-                    mismatch_warnings = sku_master_service._mismatch_warnings_by_keywords(  # noqa: SLF001
-                        sample_text=norm_spec,
-                        sku_spec_text=None,
-                        product_name=None,
-                        target_label=target_label,
-                    )
+                    norm_spec = spec_parser_service.normalize_tx_spec_text(getattr(line, "spec_text", None))
                 except Exception:  # noqa: BLE001
-                    mismatch_warnings = []
-            suspected = bool(mismatch_warnings)
+                    norm_spec = getattr(line, "spec_text", None)
+                norm_spec = str(norm_spec or "").strip()
+                if norm_spec and target_label:
+                    try:
+                        # 行级精筛：优先吃运营在标准模型里维护的 recognition_keywords，
+                        # 没命中就回退硬编码 5 组品类（向后兼容）。这里传 db + bound_model_id
+                        # 启用 Tier 1（统一关键词体系）。
+                        mismatch_warnings = sku_master_service._mismatch_warnings_by_keywords(  # noqa: SLF001
+                            sample_text=norm_spec,
+                            sku_spec_text=None,
+                            product_name=None,
+                            target_label=target_label,
+                            db=db,
+                            bound_model_id=str(bound_model_id) if bound_model_id else None,
+                        )
+                    except Exception:  # noqa: BLE001
+                        mismatch_warnings = []
+                suspected = bool(mismatch_warnings)
 
             # Soft warning: "尺寸疑似异常" (parsed spec area vs snapshot measurement area).
             area_m2: Optional[float] = None
@@ -1996,6 +2893,7 @@ def list_shipment_lines(
                 "completed_at": getattr(line, "completed_at", None),
                 "channel": getattr(line, "channel", None),
                 "sku_code": getattr(line, "sku_code", None),
+                "tag": getattr(line, "tag", None),
                 "shop_spec_code": (str(shop_spec_code).strip() if shop_spec_code not in (None, "") else None),
                 "platform_sku_id": (str(platform_sku_id).strip() if platform_sku_id not in (None, "") else None),
                 "bundle_template_code": (str(bundle_template_code).strip() if bundle_template_code not in (None, "") else None),
@@ -2015,6 +2913,26 @@ def list_shipment_lines(
                 ),
                 "bound_model_code": (str(bound_model_code).strip() if bound_model_code not in (None, "") else None),
                 "bound_model_name": (str(bound_model_name).strip() if bound_model_name not in (None, "") else None),
+                # 变体展示（与 sku-master 列表统一来源：sku_master.metadata_json.bound_variant_code）
+                "bound_variant_code": (
+                    sku_to_variant_code.get(str(getattr(line, "sku_code", "") or "").strip())
+                    if getattr(line, "sku_code", None)
+                    else None
+                ),
+                "bound_variant_label": (
+                    variant_label_by_key.get(
+                        (
+                            str(bound_model_version_id or "").strip(),
+                            sku_to_variant_code.get(str(getattr(line, "sku_code", "") or "").strip(), ""),
+                        )
+                    )
+                    if (
+                        getattr(line, "sku_code", None)
+                        and bound_model_version_id
+                        and sku_to_variant_code.get(str(getattr(line, "sku_code", "") or "").strip())
+                    )
+                    else None
+                ),
                 "bound_version_label": (
                     str(bound_version_label).strip() if bound_version_label not in (None, "") else None
                 ),
@@ -2032,6 +2950,44 @@ def list_shipment_lines(
                 "mismatch_warnings": mismatch_warnings,
                 "suspected_size_anomaly": bool(suspected_size_anomaly),
                 "size_anomaly_detail": size_anomaly_detail,
+                # SPU 错配标识：来自 SkuMaster.metadata.data_quality_status，
+                # 跟绑定/计费流程独立，仅用于 UI 灰色 Tag 提示运营。
+                "sku_data_quality_status": (
+                    sku_data_quality_status_map.get(str(line.sku_code))
+                    if getattr(line, "sku_code", None)
+                    else None
+                ),
+                # Jackyun v2 extensions (migration 0036). Plain getattr —
+                # legacy rows may be NULL until backfill script runs.
+                "erp_order_no": getattr(line, "erp_order_no", None),
+                "platform_order_no": getattr(line, "platform_order_no", None),
+                "sent_at": getattr(line, "sent_at", None),
+                "paid_at": getattr(line, "paid_at", None),
+                "ordered_at": getattr(line, "ordered_at", None),
+                "check_started_at": getattr(line, "check_started_at", None),
+                "order_status_name": getattr(line, "order_status_name", None),
+                "trade_type": getattr(line, "trade_type", None),
+                "trade_type_msg": getattr(line, "trade_type_msg", None),
+                "customer_name": getattr(line, "customer_name", None),
+                "logistic_no": getattr(line, "logistic_no", None),
+                "logistic_name": getattr(line, "logistic_name", None),
+                "logistic_type_name": getattr(line, "logistic_type_name", None),
+                "logistic_code": getattr(line, "logistic_code", None),
+                "warehouse_code": getattr(line, "warehouse_code", None),
+                "warehouse_name": getattr(line, "warehouse_name", None),
+                "wave_no": getattr(line, "wave_no", None),
+                "picker": getattr(line, "picker", None),
+                "packer": getattr(line, "packer", None),
+                "checker": getattr(line, "checker", None),
+                "seller_memo": getattr(line, "seller_memo", None),
+                "buyer_memo": getattr(line, "buyer_memo", None),
+                "unit_price": getattr(line, "unit_price", None),
+                "unit_of_measure": getattr(line, "unit_of_measure", None),
+                "category_name": getattr(line, "category_name", None),
+                "goods_name": getattr(line, "goods_name", None),
+                "goods_no": getattr(line, "goods_no", None),
+                "is_gift": getattr(line, "is_gift", None),
+                "actual_qty": getattr(line, "actual_qty", None),
             }
         )
 
@@ -2172,6 +3128,173 @@ def compute_snapshot_for_shipment_line(
         db.rollback()
 
     return {"action": "created", "shipment_line_id": str(line.id), "bom_snapshot_id": str(snap2.id), "detail": None}
+
+
+# ----------------------------------------------------------------------------
+# Snapshot retry sweep — fixes the "⏳ 等出快照(系统处理中)" tooltip promise.
+#
+# Background:
+#   The main shipment_import_worker only loops over batches in status
+#   ('queued', 'processing'). Once a batch goes to 'success', the worker
+#   never revisits it. But the UI shows ⏳ "等出快照" for any line whose
+#   SKU has a binding but no snapshot — that state is reachable when:
+#
+#     1. Batch finishes with the SKU unbound → exception queued + no snapshot.
+#     2. Operator (or auto-resolve) later binds the SKU.
+#     3. The line still has no snapshot until SOMETHING re-runs the
+#        finalize step. With only the queue-driven worker, that never
+#        happens automatically — leaving the ⏳ tag as an empty promise.
+#
+#   This sweep makes the promise true: every N seconds (driven by
+#   shipment_import_worker._loop), find pending lines whose SKU is bound,
+#   and call compute_snapshot_for_shipment_line(overwrite=False) on each.
+#
+#   compute_snapshot_for_shipment_line is idempotent for lines that already
+#   got a snapshot (returns action='skipped'); for the bound-no-snapshot
+#   ones it goes through _generate_bom_snapshot and produces the snapshot
+#   exactly the same way the original batch path would.
+# ----------------------------------------------------------------------------
+
+
+def sweep_bound_lines_missing_snapshot(
+    db: Session,
+    *,
+    lookback_days: int = 14,
+    limit: int = 200,
+) -> Dict[str, Any]:
+    """Find pending ShipmentLine rows whose SKU has an active binding
+    and produce snapshots for them. Best-effort: per-row exceptions are
+    swallowed and recorded as failed counts so a single bad SKU doesn't
+    halt the sweep.
+
+    Performance budget:
+      - lookback 14d × LIMIT 200 keeps the sweep ~O(seconds) at
+        production scale (~13k pending lines, ~78k SkuMaster).
+      - Window kept at 14d (was widened to 60d briefly on 2026-05-07
+        but reverted same day per user feedback): bind_sku_to_version
+        now eagerly triggers per-SKU snapshot for ALL ages, so this
+        background sweep is purely a defensive backstop for hook
+        failures and bulk-bind paths that bypassed the hook. For
+        operator-initiated wider catch-up (e.g. month-end audit), use
+        the manual button via POST /shipments/lines/regenerate-snapshots
+        which calls this same function with lookback_days=90 by default.
+      - Sweep runs out of band of the main batch worker — its idleness
+        cost when there's nothing to do is one indexed SELECT.
+
+    Returns
+    -------
+    {
+      "scanned": int,
+      "snapshots_created": int,
+      "snapshots_recomputed": int,
+      "skipped_already_done": int,    # snapshot existed (rare; race condition)
+      "failed": int,
+      "duration_ms": int,
+      "lookback_days": int,
+      "limit": int,
+    }
+    """
+    bulk_t0 = _utcnow()
+    cutoff_at = bulk_t0 - timedelta(days=max(int(lookback_days or 14), 1))
+
+    # Same predicate as list_shipment_lines pending path: lines with no
+    # BomSnapshot AND no ShipmentCostingResult (or snapshot was cleared).
+    has_bom = (
+        db.query(models.BomSnapshot.id)
+        .filter(models.BomSnapshot.shipment_line_id == models.ShipmentLine.id)
+        .exists()
+    )
+    has_costing = (
+        db.query(models.ShipmentCostingResult.id)
+        .filter(models.ShipmentCostingResult.shipment_line_id == models.ShipmentLine.id)
+        .exists()
+    )
+    cleared_pred = func.nullif(
+        func.trim(func.coalesce(models.ShipmentLine.metadata_json["snapshot_cleared_at"].as_string(), "")),
+        "",
+    ).isnot(None)
+    pending_pred = ~and_(or_(has_bom, has_costing), ~cleared_pred)
+
+    # Critical filter: line.sku_code must have an active binding in
+    # SkuModelVersionMapping. Joining keeps this O(1) per line instead of
+    # the per-row N+1 that bit us in Issue 26 / 31.
+    binding_exists = (
+        db.query(models.SkuModelVersionMapping.id)
+        .filter(
+            models.SkuModelVersionMapping.sku_code == models.ShipmentLine.sku_code,
+            models.SkuModelVersionMapping.is_active.is_(True),
+            models.SkuModelVersionMapping.is_archived.is_(False),
+        )
+        .exists()
+    )
+
+    rows = (
+        db.query(models.ShipmentLine)
+        .filter(
+            models.ShipmentLine.is_archived.is_(False),
+            models.ShipmentLine.is_active.is_(True),
+            models.ShipmentLine.completed_at.isnot(None),
+            models.ShipmentLine.completed_at >= cutoff_at,
+            models.ShipmentLine.sku_code.isnot(None),
+            pending_pred,
+            binding_exists,
+        )
+        .order_by(models.ShipmentLine.completed_at.asc())  # oldest first → fairness
+        .limit(max(int(limit or 200), 1))
+        .all()
+    )
+
+    snapshots_created = 0
+    snapshots_recomputed = 0
+    skipped_already = 0
+    failed = 0
+    failure_samples: List[str] = []
+
+    for line in rows:
+        line_id = str(line.id)
+        try:
+            res = compute_snapshot_for_shipment_line(
+                db,
+                shipment_line_id=line_id,
+                operator_id="snapshot_retry_worker",
+                overwrite=False,
+            )
+            action = (res or {}).get("action")
+            if action == "created":
+                snapshots_created += 1
+            elif action == "recomputed":
+                snapshots_recomputed += 1
+            elif action == "skipped":
+                skipped_already += 1
+            else:
+                # 'failed' or unknown — don't blow up; the line will hit
+                # the next sweep again (or the operator will see the
+                # exception in the queue).
+                failed += 1
+                detail = (res or {}).get("detail") or action or "unknown"
+                if len(failure_samples) < 5:
+                    failure_samples.append(f"{line_id[:8]}:{str(detail)[:80]}")
+        except Exception as exc:  # noqa: BLE001
+            failed += 1
+            try:
+                db.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+            if len(failure_samples) < 5:
+                failure_samples.append(f"{line_id[:8]}:{str(exc)[:80]}")
+
+    duration_ms = int((_utcnow() - bulk_t0).total_seconds() * 1000)
+    return {
+        "scanned": len(rows),
+        "snapshots_created": snapshots_created,
+        "snapshots_recomputed": snapshots_recomputed,
+        "skipped_already_done": skipped_already,
+        "failed": failed,
+        "duration_ms": duration_ms,
+        "lookback_days": int(lookback_days),
+        "limit": int(limit),
+        "failure_samples": failure_samples,
+    }
 
 
 def clear_shipment_line_snapshots(
@@ -2549,3 +3672,1189 @@ def retry_exceptions_by_batch(
         "items": items,
     }
 
+
+# ============================================================================
+# Auto-resolve pending shipment lines (Phase 1.5 of "业务管理 / 发货管理")
+# ----------------------------------------------------------------------------
+# Background:
+#   The legacy "/costing/sku-master > 自动识别" tab can batch-bind unbound
+#   SkuMaster rows to published standard models via keyword recognition
+#   (see sku_master_service.auto_bind_preview/auto_bind_execute).
+#
+#   The new "/costing/biz/shipments > 🔴 待处理" tab only had MANUAL row-level
+#   actions, missing this critical automation. Operators reported that the
+#   new page felt like a regression because it forced one-by-one decisions
+#   for SKUs that the system already knew how to bind.
+#
+#   These two functions bridge the gap: they run the same recognition
+#   algorithm, but scoped to SKUs that actually appear in recent pending
+#   shipment lines (instead of the full ~78k unbound SkuMaster pool, of
+#   which the long tail hasn't shipped in months). After binding, they
+#   immediately generate BomSnapshot for the affected lines and resolve
+#   their SKU_NOT_BOUND exceptions, so operators see lines disappear from
+#   the pending queue in seconds.
+# ============================================================================
+
+
+def _list_pending_shipment_line_sku_codes(
+    db: Session,
+    *,
+    cutoff_at: datetime,
+    sku_codes: Optional[List[str]] = None,
+) -> List[Tuple[str, List[models.ShipmentLine]]]:
+    """
+    Returns [(sku_code, [lines...])] for "pending" shipment lines that landed
+    in our DB within ``cutoff_at`` (``ShipmentLine.created_at >= cutoff_at``)
+    and whose sku_code has NO active SkuModelVersionMapping.
+
+    "Pending" definition (mirrors ``list_shipment_lines``):
+      A line is pending when it has neither a ``BomSnapshot`` nor a
+      ``ShipmentCostingResult``, or its snapshot was soft-invalidated via
+      ``metadata_json.snapshot_cleared_at``. ``ShipmentLine.status`` is a
+      DERIVED column at query time, not a stored field, so we replicate the
+      same predicate here.
+
+    Why bind status check here (instead of just relying on the snapshot
+    absence):
+      - A line may be "snapshot-less" because the SKU just got bound by a
+        concurrent operator and the worker hasn't picked it up yet. In that
+        case we should NOT try to bind again. Always verify against
+        ``get_active_sku_binding`` before declaring an SKU "unbound".
+    """
+    has_bom = (
+        db.query(models.BomSnapshot.id)
+        .filter(models.BomSnapshot.shipment_line_id == models.ShipmentLine.id)
+        .exists()
+    )
+    has_costing = (
+        db.query(models.ShipmentCostingResult.id)
+        .filter(models.ShipmentCostingResult.shipment_line_id == models.ShipmentLine.id)
+        .exists()
+    )
+    cleared_pred = func.nullif(
+        func.trim(func.coalesce(models.ShipmentLine.metadata_json["snapshot_cleared_at"].as_string(), "")),
+        "",
+    ).isnot(None)
+    pending_pred = ~and_(or_(has_bom, has_costing), ~cleared_pred)
+
+    # Time window anchor: ``created_at`` (the moment the row landed in our DB),
+    # NOT ``completed_at`` (the moment the customer marked it as delivered).
+    #
+    # Why this matters - bug observed 2026-05-07:
+    #   Original code required ``completed_at IS NOT NULL`` AND
+    #   ``completed_at >= cutoff_at``. That silently dropped TWO common
+    #   business cases from the auto-bind candidate pool:
+    #     1. Fresh Jackyun sync rows where the upstream ``finishTime`` /
+    #        ``sendTime`` were not yet populated (so completed_at was NULL,
+    #        even though the row landed in our DB minutes ago and is the
+    #        most urgent thing to process).
+    #     2. Excel-imported old rows where completed_at sits outside the
+    #        30-day window (e.g. dispatched in March, only loaded into the
+    #        new system in May) - operators still want them auto-bound.
+    #   Effect: 8 of 8 obviously-recognizable SKUs (key model: 皮革桌垫,
+    #   丝圈地垫) were missed by the "⚡ 自动绑定" banner.
+    q = db.query(models.ShipmentLine).filter(
+        models.ShipmentLine.is_archived.is_(False),
+        models.ShipmentLine.is_active.is_(True),
+        models.ShipmentLine.created_at >= cutoff_at,
+        pending_pred,
+    )
+    norm_codes: Optional[List[str]] = None
+    if sku_codes is not None:
+        norm_codes = sorted({(c or "").strip() for c in sku_codes if (c or "").strip()})
+        if not norm_codes:
+            return []
+        q = q.filter(models.ShipmentLine.sku_code.in_(norm_codes))
+    lines = (
+        q.order_by(models.ShipmentLine.created_at.desc())
+        .limit(20000)
+        .all()
+    )
+
+    by_sku: Dict[str, List[models.ShipmentLine]] = {}
+    for line in lines:
+        sku = (line.sku_code or "").strip()
+        if not sku:
+            continue
+        by_sku.setdefault(sku, []).append(line)
+
+    if not by_sku:
+        return []
+
+    # PERF: previously this loop called product_model_service.get_active_sku_binding(db, sku)
+    # once per SKU. With ~5,800 unbound SKUs that meant ~5,800 sequential round-trips
+    # → ~90s API latency (front-end "正在分析..." appeared to hang). Replace with one
+    # IN(...) query, chunked at 1,000 (PG/MySQL safe upper bound), to drop to <1s.
+    sku_keys: List[str] = list(by_sku.keys())
+    bound_skus: set[str] = set()
+    CHUNK = 1000
+    for i in range(0, len(sku_keys), CHUNK):
+        chunk = sku_keys[i : i + CHUNK]
+        rows = (
+            db.query(models.SkuModelVersionMapping.sku_code)
+            .filter(
+                models.SkuModelVersionMapping.sku_code.in_(chunk),
+                models.SkuModelVersionMapping.is_active.is_(True),
+                models.SkuModelVersionMapping.is_archived.is_(False),
+            )
+            .all()
+        )
+        for row in rows:
+            code = (row[0] or "").strip()
+            if code:
+                bound_skus.add(code)
+
+    out: List[Tuple[str, List[models.ShipmentLine]]] = []
+    for sku, lst in by_sku.items():
+        if sku in bound_skus:
+            continue
+        out.append((sku, lst))
+    return out
+
+
+def auto_resolve_pending_shipment_lines_preview(
+    db: Session,
+    *,
+    days: int = 30,
+    limit: int = 500,
+    sku_codes: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """
+    Identify pending shipment lines whose SKU can be auto-recognized to a
+    published standard model (no writes).
+
+    Algorithm:
+      1. Find pending shipment lines created within the last ``days`` days.
+      2. Group by sku_code, keeping only sku_codes with NO active binding.
+      3. Run the same recognition engine as ``sku_master_service.auto_bind_preview``,
+         scoped to those sku_codes (so we don't waste CPU on the long-tail
+         SkuMaster pool).
+      4. Return one candidate per sku_code (the first matching line is
+         attached as a representative for the UI), plus aggregate stats.
+
+    Returns:
+      {
+        "scanned_days": int,
+        "total_pending_lines": int,            # raw pending lines scanned
+        "unique_unbound_skus": int,            # distinct unbound sku_code
+        "candidates_count": int,               # SKUs the system can recognize
+        "items": [
+          {
+            "shipment_line_id": str,           # representative line id
+            "shipment_line_count_for_sku": int,# how many pending lines share this sku
+            "sku_code": str,
+            "channel": str | None,
+            "spec_text": str | None,
+            "model_id": str,
+            "model_code": str,
+            "model_name": str,
+            "version_id": str,
+            "version_label": str | None,
+            "match_method": "model_code_hint" | "model_keyword",
+            "matched_keyword": str | None,
+          },
+          ...
+        ]
+      }
+    """
+    days = max(min(int(days or 30), 365), 1)
+    limit = max(min(int(limit or 500), 5000), 1)
+    cutoff_at = _utcnow().replace(tzinfo=None) - timedelta(days=days)
+
+    sku_to_lines = _list_pending_shipment_line_sku_codes(
+        db, cutoff_at=cutoff_at, sku_codes=sku_codes,
+    )
+    total_pending_lines = sum(len(lst) for _, lst in sku_to_lines)
+    unbound_sku_codes = [sku for sku, _ in sku_to_lines]
+    if not unbound_sku_codes:
+        return {
+            "scanned_days": days,
+            "total_pending_lines": total_pending_lines,
+            "unique_unbound_skus": 0,
+            "candidates_count": 0,
+            "items": [],
+        }
+
+    # Defensive catch-up: the recognition engine scans SkuMaster, not
+    # ShipmentLine directly. Jackyun mapper + finalize pipeline both call
+    # ensure_from_shipment, but if a new ingestion path creates shipment_lines
+    # without that side-effect (or the worker is lagging), auto-resolve would
+    # otherwise miss a perfectly recognizable SKU. Create/refresh the minimal
+    # SkuMaster rows from representative pending lines before matching.
+    for sku, lines in sku_to_lines:
+        if not sku or not lines:
+            continue
+        rep = lines[0]
+        try:
+            sku_master_service.ensure_from_shipment(
+                db,
+                erp_sku_barcode=sku,
+                spec_text=rep.spec_text,
+                channel=rep.channel,
+                metadata={
+                    "source": "shipment_auto_resolve_catchup",
+                    "shipment_line_id": rep.id,
+                    "shipment_no": rep.shipment_no,
+                    "batch_id": rep.batch_id,
+                    "source_system": getattr(rep, "source_system", None),
+                    "source_record_id": getattr(rep, "source_record_id", None),
+                    "source_line_id": getattr(rep, "source_line_id", None),
+                },
+            )
+        except Exception:
+            # Best-effort. If ensure fails, auto_bind_preview simply won't
+            # return that SKU and the operator can still handle it manually.
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            continue
+
+    # Reuse the recognition engine. ``restrict_to_sku_codes`` keeps it cheap.
+    sku_preview = sku_master_service.auto_bind_preview(
+        db,
+        limit=limit,
+        scan_limit=max(len(unbound_sku_codes), 1000),
+        restrict_to_sku_codes=unbound_sku_codes,
+    )
+    sku_items: List[Dict[str, Any]] = list(sku_preview.get("items") or [])
+    sku_match_map: Dict[str, Dict[str, Any]] = {
+        str(it.get("erp_sku_barcode") or ""): it for it in sku_items
+    }
+
+    items: List[Dict[str, Any]] = []
+    for sku, lines in sku_to_lines:
+        match = sku_match_map.get(sku)
+        if not match:
+            continue
+        rep = lines[0]
+        items.append({
+            "shipment_line_id": rep.id,
+            "shipment_line_count_for_sku": len(lines),
+            "sku_code": sku,
+            "channel": rep.channel,
+            "spec_text": rep.spec_text,
+            "model_id": match.get("model_id"),
+            "model_code": match.get("model_code"),
+            "model_name": match.get("model_name"),
+            "version_id": match.get("published_version_id"),
+            "version_label": match.get("version_label"),
+            "match_method": match.get("match_method"),
+            "matched_keyword": match.get("matched_keyword"),
+        })
+        if len(items) >= limit:
+            break
+
+    return {
+        "scanned_days": days,
+        "total_pending_lines": total_pending_lines,
+        "unique_unbound_skus": len(unbound_sku_codes),
+        "candidates_count": len(items),
+        "items": items,
+    }
+
+
+def auto_resolve_pending_shipment_lines_execute(
+    db: Session,
+    *,
+    days: int = 30,
+    limit: int = 500,
+    requested_by: Optional[str] = None,
+    sku_codes: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """
+    Execute auto-resolution for pending shipment lines:
+      1. Run preview to get candidates (sku -> recommended model_version).
+      2. For each unique sku_code: bind to the recommended version
+         (skipping if already bound by a concurrent operator).
+      3. For each pending shipment line whose sku just got bound:
+         a. Generate BomSnapshot via ``_generate_bom_snapshot``.
+         b. Mark related ``ShipmentExceptionQueue`` rows with
+            reason='SKU_NOT_BOUND' as resolved (resolution.action='auto_resolve').
+         c. Flip ``ShipmentLine.status`` to 'processed'.
+      4. Commit per-line so partial progress is durable on errors.
+
+    Args:
+        days, limit, sku_codes: forwarded to preview.
+        requested_by: optional operator id stamped onto bindings + resolutions
+            for audit.
+
+    Returns:
+      {
+        "scanned_days": int,
+        "preview": <preview response dict, but BEFORE execution>,
+        "bound_skus_count": int,         # SKUs newly bound by this run
+        "skipped_already_bound": int,    # SKUs that became bound in a race
+        "snapshots_created": int,
+        "lines_resolved": int,
+        "exceptions_resolved": int,
+        "bind_errors": [{"sku_code": ..., "error": ...}],
+        "snapshot_errors": [{"shipment_line_id": ..., "sku_code": ..., "error": ...}],
+        "items": [<per-line outcome>],
+      }
+    """
+    preview = auto_resolve_pending_shipment_lines_preview(
+        db, days=days, limit=limit, sku_codes=sku_codes,
+    )
+    items_in: List[Dict[str, Any]] = list(preview.get("items") or [])
+    if not items_in:
+        return {
+            "scanned_days": preview.get("scanned_days"),
+            "preview": preview,
+            "bound_skus_count": 0,
+            "skipped_already_bound": 0,
+            "snapshots_created": 0,
+            "lines_resolved": 0,
+            "exceptions_resolved": 0,
+            "bind_errors": [],
+            "snapshot_errors": [],
+            "items": [],
+        }
+
+    op = (requested_by or "").strip() or None
+    bind_errors: List[Dict[str, Any]] = []
+    snapshot_errors: List[Dict[str, Any]] = []
+    bound_skus: List[str] = []
+    skipped_already_bound = 0
+    snapshots_created = 0
+    lines_resolved = 0
+    exceptions_resolved = 0
+    out_items: List[Dict[str, Any]] = []
+
+    # Step 1+2: bind sku -> version (one bind per unique sku)
+    by_sku: Dict[str, Dict[str, Any]] = {}
+    for it in items_in:
+        sku = str(it.get("sku_code") or "").strip()
+        if sku and sku not in by_sku:
+            by_sku[sku] = it
+
+    # Issue 0.0i: snapshot pre-bind pending line ids per SKU. The bind hook
+    # will eagerly create snapshots for these, but we still need to walk
+    # them after bind to (a) attribute the snapshot to this execute() call,
+    # and (b) resolve any open SKU_NOT_BOUND exception rows.
+    # Also record which lines had OPEN exceptions before the bind ran;
+    # the hook's compute_snapshot_for_shipment_line will resolve them
+    # internally, and we want to attribute that resolution to THIS
+    # execute() call (so the UI accurately reports "解决异常 N 条").
+    candidate_sku_codes = list(by_sku.keys())
+    pre_bind_pending_line_ids_by_sku: Dict[str, List[str]] = {}
+    pre_bind_open_exception_line_ids: set[str] = set()
+    if candidate_sku_codes:
+        cutoff_pre = _utcnow().replace(tzinfo=None) - timedelta(days=max(min(int(days or 30), 365), 1))
+        has_bom_pre = (
+            db.query(models.BomSnapshot.id)
+            .filter(models.BomSnapshot.shipment_line_id == models.ShipmentLine.id)
+            .exists()
+        )
+        has_costing_pre = (
+            db.query(models.ShipmentCostingResult.id)
+            .filter(models.ShipmentCostingResult.shipment_line_id == models.ShipmentLine.id)
+            .exists()
+        )
+        cleared_pre = func.nullif(
+            func.trim(func.coalesce(models.ShipmentLine.metadata_json["snapshot_cleared_at"].as_string(), "")),
+            "",
+        ).isnot(None)
+        pending_pre = ~and_(or_(has_bom_pre, has_costing_pre), ~cleared_pre)
+        pre_rows = (
+            db.query(models.ShipmentLine.id, models.ShipmentLine.sku_code)
+            .filter(
+                models.ShipmentLine.is_archived.is_(False),
+                models.ShipmentLine.is_active.is_(True),
+                models.ShipmentLine.created_at >= cutoff_pre,
+                models.ShipmentLine.sku_code.in_(candidate_sku_codes),
+                pending_pre,
+            )
+            .all()
+        )
+        for lid, sk in pre_rows:
+            pre_bind_pending_line_ids_by_sku.setdefault(str(sk), []).append(str(lid))
+
+        # Snapshot which of those lines had OPEN exceptions right now.
+        # After bind, hook's compute_snapshot will resolve these — we'll
+        # attribute the resolution count back to execute() in step 3.
+        all_pre_line_ids = [
+            lid for ids in pre_bind_pending_line_ids_by_sku.values() for lid in ids
+        ]
+        if all_pre_line_ids:
+            open_exc_rows = (
+                db.query(models.ShipmentExceptionQueue.shipment_line_id)
+                .filter(
+                    models.ShipmentExceptionQueue.shipment_line_id.in_(all_pre_line_ids),
+                    models.ShipmentExceptionQueue.resolved_at.is_(None),
+                )
+                .distinct()
+                .all()
+            )
+            pre_bind_open_exception_line_ids = {str(r[0]) for r in open_exc_rows}
+
+    for sku, it in by_sku.items():
+        if product_model_service.get_active_sku_binding(db, sku):
+            skipped_already_bound += 1
+            continue
+        ver_id = str(it.get("version_id") or "").strip()
+        if not ver_id:
+            bind_errors.append({"sku_code": sku, "error": "missing version_id"})
+            continue
+        try:
+            product_model_service.bind_sku_to_version(
+                db,
+                sku_code=sku,
+                version_id=ver_id,
+                source_system="shipment_auto_resolve",
+                metadata={
+                    "requested_by": op,
+                    "binding_method": it.get("match_method") or "auto",
+                    "matched_keyword": it.get("matched_keyword"),
+                    "skip_prefix_check": True,
+                    "trigger": "auto_resolve_pending_shipment_lines",
+                },
+            )
+            bound_skus.append(sku)
+        except Exception as exc:  # noqa: BLE001
+            bind_errors.append({"sku_code": sku, "error": str(exc)})
+
+    db.commit()
+
+    if not bound_skus:
+        return {
+            "scanned_days": preview.get("scanned_days"),
+            "preview": preview,
+            "bound_skus_count": 0,
+            "skipped_already_bound": skipped_already_bound,
+            "snapshots_created": 0,
+            "lines_resolved": 0,
+            "exceptions_resolved": 0,
+            "bind_errors": bind_errors,
+            "snapshot_errors": [],
+            "items": [],
+        }
+
+    # Step 3: walk the lines we recorded as pending BEFORE bind. Most of
+    # them now have a snapshot (created by the bind hook in
+    # product_model_service.bind_sku_to_version, Issue 0.0i). For each:
+    #   - if snapshot already exists → attribute it to this execute() call
+    #   - if snapshot still missing → run _generate_bom_snapshot (defensive,
+    #     handles bind-hook failures swallowed by the hook's try/except)
+    # In either case, resolve any open SKU_NOT_BOUND exception rows.
+    bound_set = set(bound_skus)
+    pre_bind_line_ids: List[str] = []
+    for sku in bound_set:
+        pre_bind_line_ids.extend(pre_bind_pending_line_ids_by_sku.get(sku, []))
+    pending_lines = (
+        db.query(models.ShipmentLine)
+        .filter(
+            models.ShipmentLine.id.in_(pre_bind_line_ids) if pre_bind_line_ids else False,
+        )
+        .order_by(models.ShipmentLine.created_at.desc())
+        .all()
+    ) if pre_bind_line_ids else []
+
+    now = _utcnow()
+    for line in pending_lines:
+        # Snapshot key fields up-front so we can still report them in error
+        # cases even if ``line`` becomes detached after a rollback.
+        sku = (line.sku_code or "").strip()
+        line_id = line.id
+        line_batch_id = line.batch_id
+        outcome: Dict[str, Any] = {
+            "shipment_line_id": line_id,
+            "sku_code": sku,
+            "status": "ok",
+            "bom_snapshot_id": None,
+            "error": None,
+        }
+
+        batch = db.get(models.ShipmentImportBatch, line_batch_id) if line_batch_id else None
+        if not batch:
+            outcome["status"] = "skipped_no_batch"
+            outcome["error"] = "shipment line has no batch"
+            out_items.append(outcome)
+            continue
+
+        try:
+            existing = (
+                db.query(models.BomSnapshot)
+                .filter(models.BomSnapshot.shipment_line_id == line_id)
+                .first()
+            )
+            if existing:
+                snap = existing
+            else:
+                snap = _generate_bom_snapshot(db, batch=batch, line=line, persist_snapshot=True)
+            if snap is None:
+                outcome["status"] = "snapshot_failed"
+                outcome["error"] = "snapshot generation returned None (see exception queue)"
+                out_items.append(outcome)
+                snapshot_errors.append({
+                    "shipment_line_id": line_id,
+                    "sku_code": sku,
+                    "error": "snapshot None",
+                })
+                db.commit()
+                continue
+
+            snap_id = snap.id
+            # Issue 0.0i: bind_sku_to_version now eagerly creates snapshots
+            # for ALL pending lines of the bound SKU. When that hook runs,
+            # the snapshot already exists by the time we get here. We MUST
+            # still attribute it to this execute() call — the user clicked
+            # "⚡ 一键自动绑定" once and expects the snapshot count to
+            # reflect what the click produced (whether hook-eager or
+            # explicit). Without this, the UI shows "绑定 N 个 / 出快照 0
+            # 条" which is misleading.
+            snapshots_created += 1
+            outcome["bom_snapshot_id"] = snap_id
+
+            # NOTE: ShipmentLine.status is a derived field (presence of
+            # BomSnapshot/ShipmentCostingResult), not a stored column. Now
+            # that ``snap`` exists, ``list_shipment_lines`` will naturally
+            # report this row as 'processed' on the next refresh.
+            lines_resolved += 1
+
+            # Resolve any open SKU_NOT_BOUND exception(s) attached to this line.
+            # NOTE: ShipmentExceptionQueue does NOT use SoftDeleteMixin
+            # (no is_archived column). Use only resolved_at as the open marker.
+            open_excs = (
+                db.query(models.ShipmentExceptionQueue)
+                .filter(
+                    models.ShipmentExceptionQueue.shipment_line_id == line_id,
+                    models.ShipmentExceptionQueue.resolved_at.is_(None),
+                )
+                .all()
+            )
+            for exc_row in open_excs:
+                exc_row.resolved_at = now
+                exc_row.message = "resolved_by_auto_resolve"
+                payload0 = dict(getattr(exc_row, "payload_json", {}) or {})
+                payload0["resolution"] = {
+                    "action": "auto_resolve",
+                    "resolved_at": now.isoformat(),
+                    "resolved_by": op,
+                    "resolved_bom_snapshot_id": snap_id,
+                    "trigger": "auto_resolve_pending_shipment_lines",
+                }
+                exc_row.payload_json = _json_safe(payload0)
+                db.add(exc_row)
+                exceptions_resolved += 1
+            # Issue 0.0i: if hook (inside bind_sku_to_version) already
+            # resolved this line's exceptions, the open_excs query above
+            # found nothing — but the operator did cause this resolution
+            # by clicking ⚡. Attribute one count per line that had an
+            # open exception immediately before the bind.
+            if not open_excs and line_id in pre_bind_open_exception_line_ids:
+                exceptions_resolved += 1
+
+            db.commit()
+        except Exception as exc:  # noqa: BLE001
+            db.rollback()
+            outcome["status"] = "error"
+            outcome["error"] = str(exc)
+            snapshot_errors.append({
+                "shipment_line_id": line_id,
+                "sku_code": sku,
+                "error": str(exc),
+            })
+
+        out_items.append(outcome)
+
+    return {
+        "scanned_days": preview.get("scanned_days"),
+        "preview": preview,
+        "bound_skus_count": len(bound_skus),
+        "skipped_already_bound": skipped_already_bound,
+        "snapshots_created": snapshots_created,
+        "lines_resolved": lines_resolved,
+        "exceptions_resolved": exceptions_resolved,
+        "bind_errors": bind_errors,
+        "snapshot_errors": snapshot_errors,
+        "items": out_items,
+    }
+
+
+def get_recent_shipment_line_stats(
+    db: Session,
+    *,
+    hours: int = 24,
+    latest_runs_limit: int = 5,
+) -> Dict[str, Any]:
+    """
+    Lightweight summary for the new 「📦 业务管理 → 🚚 发货管理 → 🔴 待处理」
+    page header strip. Returns:
+
+      {
+        "window_hours": 24,
+        "as_of": "<utc iso>",
+        "total_new_lines": 102,                # ShipmentLine.created_at >= cutoff
+        "by_source_system": [
+          {"source_system": "jackyun", "count": 102},
+          {"source_system": "excel_upload", "count": 0},
+          {"source_system": null, "count": 0},
+        ],
+        "latest_runs": [                       # IntegrationSyncRun, source_system=jackyun + sync_type=shipment_pull
+          {                                    # latest 5 by finished_at (succeeded or failed)
+            "id": "...", "source_system": "jackyun", "sync_type": "shipment_pull",
+            "status": "succeeded", "inserted_rows": 102, "updated_rows": 0,
+            "started_at": "...", "finished_at": "...", "triggered_by": "ui-quick",
+          },
+          ...
+        ],
+      }
+
+    Performance: ~50ms (3 cheap COUNT/GROUP BY + 1 ORDER BY LIMIT) — safe to call
+    from the page header on every navigation.
+    """
+    hours_clamped = max(min(int(hours or 24), 24 * 30), 1)
+    runs_limit = max(min(int(latest_runs_limit or 5), 50), 1)
+    cutoff_at = _utcnow().replace(tzinfo=None) - timedelta(hours=hours_clamped)
+
+    # 1. Total new shipment lines in window (one COUNT)
+    total_new = (
+        db.query(func.count(models.ShipmentLine.id))
+        .filter(
+            models.ShipmentLine.is_archived.is_(False),
+            models.ShipmentLine.is_active.is_(True),
+            models.ShipmentLine.created_at >= cutoff_at,
+        )
+        .scalar()
+        or 0
+    )
+
+    # 2. Per source breakdown (one GROUP BY)
+    rows = (
+        db.query(
+            models.ShipmentLine.source_system,
+            func.count(models.ShipmentLine.id),
+        )
+        .filter(
+            models.ShipmentLine.is_archived.is_(False),
+            models.ShipmentLine.is_active.is_(True),
+            models.ShipmentLine.created_at >= cutoff_at,
+        )
+        .group_by(models.ShipmentLine.source_system)
+        .all()
+    )
+    by_source: List[Dict[str, Any]] = []
+    for src, cnt in rows:
+        by_source.append({
+            "source_system": (str(src) if src else None),
+            "count": int(cnt or 0),
+        })
+    by_source.sort(key=lambda x: -x["count"])
+
+    # 3. Latest sync runs (limited)
+    runs = (
+        db.query(models.IntegrationSyncRun)
+        .filter(
+            models.IntegrationSyncRun.source_system == "jackyun",
+            models.IntegrationSyncRun.sync_type == "shipment_pull",
+        )
+        .order_by(
+            models.IntegrationSyncRun.finished_at.is_(None),
+            models.IntegrationSyncRun.finished_at.desc(),
+            models.IntegrationSyncRun.started_at.desc(),
+        )
+        .limit(runs_limit)
+        .all()
+    )
+    latest_runs: List[Dict[str, Any]] = []
+    for r in runs:
+        latest_runs.append({
+            "id": r.id,
+            "source_system": r.source_system,
+            "sync_type": r.sync_type,
+            "status": r.status,
+            "inserted_rows": int(r.inserted_rows or 0),
+            "updated_rows": int(r.updated_rows or 0),
+            "error_rows": int(r.error_rows or 0),
+            "started_at": r.started_at.isoformat() if r.started_at else None,
+            "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+            "triggered_by": r.triggered_by,
+            "error_message": r.error_message,
+        })
+
+    # 4. Failed sync runs in the same window (one COUNT) + the most recent
+    #    failed run for the user to drill into. PendingTab shows a red
+    #    Alert if recent_failed_runs_count > 0, so silent failures don't
+    #    get scrolled off the latest_runs list and disappear (Issue 0.0h).
+    recent_failed_runs_count = (
+        db.query(func.count(models.IntegrationSyncRun.id))
+        .filter(
+            models.IntegrationSyncRun.source_system == "jackyun",
+            models.IntegrationSyncRun.sync_type == "shipment_pull",
+            models.IntegrationSyncRun.status == "failed",
+            # Use started_at as the anchor: a failed run might never set
+            # finished_at if the worker process crashed.
+            models.IntegrationSyncRun.started_at >= cutoff_at,
+        )
+        .scalar()
+        or 0
+    )
+    latest_failed_run_obj = (
+        db.query(models.IntegrationSyncRun)
+        .filter(
+            models.IntegrationSyncRun.source_system == "jackyun",
+            models.IntegrationSyncRun.sync_type == "shipment_pull",
+            models.IntegrationSyncRun.status == "failed",
+            models.IntegrationSyncRun.started_at >= cutoff_at,
+        )
+        .order_by(models.IntegrationSyncRun.started_at.desc())
+        .first()
+    )
+    latest_failed_run: Optional[Dict[str, Any]] = None
+    if latest_failed_run_obj is not None:
+        r = latest_failed_run_obj
+        latest_failed_run = {
+            "id": r.id,
+            "source_system": r.source_system,
+            "sync_type": r.sync_type,
+            "status": r.status,
+            "inserted_rows": int(r.inserted_rows or 0),
+            "updated_rows": int(r.updated_rows or 0),
+            "error_rows": int(r.error_rows or 0),
+            "started_at": r.started_at.isoformat() if r.started_at else None,
+            "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+            "triggered_by": r.triggered_by,
+            "error_message": r.error_message,
+        }
+
+    return {
+        "window_hours": hours_clamped,
+        "as_of": _utcnow().isoformat(),
+        "total_new_lines": int(total_new),
+        "by_source_system": by_source,
+        "latest_runs": latest_runs,
+        "recent_failed_runs_count": int(recent_failed_runs_count),
+        "latest_failed_run": latest_failed_run,
+    }
+
+
+# ============================================================================
+# Issue 29 — POST /shipments/lines/{id}/resolve  (one-shot bind+spec+snapshot)
+# ============================================================================
+#
+# Until 2026-05-07 the frontend orchestrated 3-4 sequential REST calls per
+# row to do one "adopt model" decision (lookup SkuMaster → bind → set
+# governance → compute snapshot). That meant:
+#   1. ~1.5-2s of network round-trips per row (visible in PendingTab).
+#   2. Partial failure handling lived in the browser. If step 3 succeeded
+#      and step 4 failed, the SKU ended up bound + auto_bound but with no
+#      snapshot — and the user just saw a vague error.
+#   3. Bulk operations had to be Promise.all'd at concurrency 8 from the
+#      frontend (see PendingTab.tsx BULK_CONCURRENCY).
+#
+# This server-side function takes a ShipmentLine + an action and runs the
+# whole pipeline in one transaction, returning a structured step audit so
+# the UI can still render "step 3 failed because X" if needed.
+#
+# Action menu (mirrors frontend ShipmentLineResolveAction):
+#   - 'adopt'           → bind SkuMaster to model_id, set governance=auto_bound,
+#                         recompute/generate BOM snapshot. Requires model_id.
+#   - 'mark_long_tail'  → governance=do_not_model. (Snapshot picks long-tail
+#                         fallback rate next time worker runs; we do NOT
+#                         force a snapshot here because the user might still
+#                         be batch-tagging long_tail_category afterwards.)
+#   - 'defer_modeling'  → governance=pending_model. Same rationale: snapshot
+#                         is intentionally deferred (no model is bound yet).
+# ============================================================================
+
+
+_RESOLVE_ACTIONS = ("adopt", "mark_long_tail", "defer_modeling")
+
+
+def resolve_shipment_line(
+    db: Session,
+    *,
+    shipment_line_id: str,
+    action: str,
+    model_id: Optional[str] = None,
+    operator_id: Optional[str] = None,
+    note: Optional[str] = None,
+) -> Dict[str, Any]:
+    """One-shot resolver for a single shipment line. See module banner above.
+
+    Returns
+    -------
+    {
+      "ok": bool,
+      "action": str,
+      "shipment_line_id": str,
+      "snapshot_id": Optional[str],
+      "snapshot_action": Optional[str],   # generated|recomputed|skipped|failed
+      "error": Optional[str],
+      "steps": [
+        {"step": str, "ok": bool, "duration_ms": int, "detail": Optional[str]}
+      ],
+    }
+    """
+    if action not in _RESOLVE_ACTIONS:
+        raise ValueError(
+            f"unknown action {action!r}; allowed={list(_RESOLVE_ACTIONS)}"
+        )
+
+    lid = (shipment_line_id or "").strip()
+    if not lid:
+        raise ValueError("shipment_line_id 不能为空")
+
+    line = db.get(models.ShipmentLine, lid)
+    if not line or getattr(line, "is_archived", False):
+        raise ValueError("发货行不存在或已归档")
+
+    sku_code = (getattr(line, "sku_code", None) or "").strip()
+    if not sku_code:
+        return {
+            "ok": False,
+            "action": action,
+            "shipment_line_id": str(line.id),
+            "snapshot_id": None,
+            "snapshot_action": None,
+            "error": "该发货行缺 sku_code, 无法做治理决策",
+            "steps": [{"step": "precheck", "ok": False, "duration_ms": 0, "detail": "missing sku_code"}],
+        }
+
+    steps: List[Dict[str, Any]] = []
+
+    def _step(name: str, fn):
+        t0 = datetime.now(timezone.utc)
+        try:
+            result = fn()
+            dur = int((datetime.now(timezone.utc) - t0).total_seconds() * 1000)
+            steps.append({"step": name, "ok": True, "duration_ms": dur, "detail": None})
+            return result
+        except Exception as exc:  # noqa: BLE001 — surface to caller
+            dur = int((datetime.now(timezone.utc) - t0).total_seconds() * 1000)
+            steps.append(
+                {
+                    "step": name,
+                    "ok": False,
+                    "duration_ms": dur,
+                    "detail": str(exc) or exc.__class__.__name__,
+                }
+            )
+            raise
+
+    try:
+        # ----- defer_modeling / mark_long_tail = governance-only paths -----
+        if action == "defer_modeling":
+            _step(
+                "set_governance_pending_model",
+                lambda: sku_master_service.set_sku_governance(
+                    db,
+                    sku_codes=[sku_code],
+                    status=sku_master_service.GOVERNANCE_PENDING_MODEL,
+                    decided_by=operator_id,
+                    note=note or "发货管理-加入建模 backlog",
+                ),
+            )
+            db.commit()
+            return {
+                "ok": True,
+                "action": action,
+                "shipment_line_id": str(line.id),
+                "snapshot_id": None,
+                "snapshot_action": None,
+                "error": None,
+                "steps": steps,
+            }
+
+        if action == "mark_long_tail":
+            _step(
+                "set_governance_do_not_model",
+                lambda: sku_master_service.set_sku_governance(
+                    db,
+                    sku_codes=[sku_code],
+                    status=sku_master_service.GOVERNANCE_DO_NOT_MODEL,
+                    decided_by=operator_id,
+                    note=note or "发货管理-标记长尾",
+                ),
+            )
+            db.commit()
+            return {
+                "ok": True,
+                "action": action,
+                "shipment_line_id": str(line.id),
+                "snapshot_id": None,
+                "snapshot_action": None,
+                "error": None,
+                "steps": steps,
+            }
+
+        # ----- adopt = bind + auto_bound + snapshot (the heavy path) -----
+        if not model_id:
+            return {
+                "ok": False,
+                "action": action,
+                "shipment_line_id": str(line.id),
+                "snapshot_id": None,
+                "snapshot_action": None,
+                "error": "adopt 缺 model_id",
+                "steps": steps,
+            }
+
+        sku_master = _step(
+            "lookup_sku_master",
+            lambda: db.query(models.SkuMaster)
+            .filter(models.SkuMaster.erp_sku_barcode == sku_code)
+            .filter(models.SkuMaster.is_archived.is_(False))
+            .first(),
+        )
+        if sku_master is None:
+            return {
+                "ok": False,
+                "action": action,
+                "shipment_line_id": str(line.id),
+                "snapshot_id": None,
+                "snapshot_action": None,
+                "error": f"未找到 SKU 主档(barcode={sku_code}); 请先确保发货同步已建档",
+                "steps": steps,
+            }
+        sku_master_id = str(sku_master.id)
+
+        _step(
+            "bind_sku_to_model",
+            lambda: sku_master_service.bind_sku_master_by_model(
+                db,
+                model_id=str(model_id),
+                sku_master_ids=[sku_master_id],
+                requested_by=operator_id,
+                allow_rebind=True,
+            ),
+        )
+
+        _step(
+            "set_governance_auto_bound",
+            lambda: sku_master_service.set_sku_governance(
+                db,
+                sku_codes=[sku_code],
+                status=sku_master_service.GOVERNANCE_AUTO_BOUND,
+                decided_by=operator_id,
+                note=note or "发货管理-一键采纳模型",
+            ),
+        )
+
+        snap_resp = _step(
+            "compute_snapshot",
+            lambda: compute_snapshot_for_shipment_line(
+                db,
+                shipment_line_id=str(line.id),
+                operator_id=operator_id,
+                overwrite=True,
+            ),
+        )
+        # compute_snapshot already commits internally; commit again is a no-op.
+        db.commit()
+
+        snap_action = (snap_resp or {}).get("action")
+        snap_id = (snap_resp or {}).get("bom_snapshot_id")
+        snap_detail = (snap_resp or {}).get("detail")
+
+        # snapshot=failed is a "soft fail" — earlier steps did succeed
+        # (binding + governance) but BOM generation hit an issue. We
+        # surface it but keep ok=True for the binding side because that's
+        # what the user actually clicked. UI uses snapshot_action to know.
+        return {
+            "ok": True,
+            "action": action,
+            "shipment_line_id": str(line.id),
+            "snapshot_id": snap_id,
+            "snapshot_action": snap_action,
+            "error": snap_detail if snap_action == "failed" else None,
+            "steps": steps,
+        }
+
+    except ValueError as exc:
+        db.rollback()
+        return {
+            "ok": False,
+            "action": action,
+            "shipment_line_id": str(line.id),
+            "snapshot_id": None,
+            "snapshot_action": None,
+            "error": str(exc),
+            "steps": steps,
+        }
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        return {
+            "ok": False,
+            "action": action,
+            "shipment_line_id": str(line.id),
+            "snapshot_id": None,
+            "snapshot_action": None,
+            "error": str(exc) or exc.__class__.__name__,
+            "steps": steps,
+        }
+
+
+# ----------------------------------------------------------------------------
+# Issue 29 follow-up — POST /shipments/lines/bulk-resolve
+#
+# Folds the frontend's `Promise.all + concurrency 8` loop in PendingTab into
+# a single server-side call. Each row still goes through resolve_shipment_line
+# (which commits/rollbacks per-row), so a single bad row never blocks the
+# rest. We deliberately keep "best effort" (stop_on_first_error=False) as
+# the default — it matches what the UI was already doing.
+#
+# Why per-row commits instead of one big transaction:
+#   - resolve_shipment_line('adopt') already does 4 sub-steps; if we wrapped
+#     N rows in one transaction, a SQL constraint failure on row 99 would
+#     undo rows 1..98 of governance/binding work — nasty surprise.
+#   - Per-row commit also means the UI can refetch mid-stream and watch the
+#     queue shrink, identical to the old frontend-fanout behavior.
+# ----------------------------------------------------------------------------
+
+
+def bulk_resolve_shipment_lines(
+    db: Session,
+    *,
+    items: List[Dict[str, Any]],
+    operator_id: Optional[str] = None,
+    note: Optional[str] = None,
+    stop_on_first_error: bool = False,
+) -> Dict[str, Any]:
+    """Run resolve_shipment_line for every entry in ``items``.
+
+    Each item: ``{"shipment_line_id": str, "action": str, "model_id"?: str}``.
+    Item-level ``operator_id`` / ``note`` are inherited from the call args
+    (kept simple; operators normally tag a whole batch the same way).
+
+    Returns
+    -------
+    {
+      "total": int,
+      "succeeded": int,
+      "failed": int,
+      "skipped_after_error": int,
+      "total_duration_ms": int,
+      "results": [
+        {
+          "shipment_line_id": str,
+          "ok": bool,
+          "action": str,
+          "snapshot_id": Optional[str],
+          "snapshot_action": Optional[str],
+          "error": Optional[str],
+          "duration_ms": int,
+        }, ...
+      ],
+    }
+
+    Errors that resolve_shipment_line raises (ValueError on missing line,
+    unknown action) are caught here and turned into per-row failures so
+    one bad row never tanks the whole batch.
+    """
+    if not isinstance(items, list):
+        raise ValueError("items must be a list")
+    if not items:
+        return {
+            "total": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "skipped_after_error": 0,
+            "total_duration_ms": 0,
+            "results": [],
+        }
+
+    bulk_t0 = datetime.now(timezone.utc)
+    results: List[Dict[str, Any]] = []
+    succeeded = 0
+    failed = 0
+    skipped = 0
+    halt = False
+
+    for idx, raw in enumerate(items):
+        if halt:
+            results.append(
+                {
+                    "shipment_line_id": str((raw or {}).get("shipment_line_id") or ""),
+                    "ok": False,
+                    "action": str((raw or {}).get("action") or ""),
+                    "snapshot_id": None,
+                    "snapshot_action": None,
+                    "error": "skipped after earlier failure (stop_on_first_error=true)",
+                    "duration_ms": 0,
+                }
+            )
+            skipped += 1
+            continue
+
+        if not isinstance(raw, dict):
+            results.append(
+                {
+                    "shipment_line_id": "",
+                    "ok": False,
+                    "action": "",
+                    "snapshot_id": None,
+                    "snapshot_action": None,
+                    "error": f"items[{idx}] must be an object",
+                    "duration_ms": 0,
+                }
+            )
+            failed += 1
+            if stop_on_first_error:
+                halt = True
+            continue
+
+        line_id = str(raw.get("shipment_line_id") or "").strip()
+        action = str(raw.get("action") or "").strip()
+        model_id = raw.get("model_id")
+        item_t0 = datetime.now(timezone.utc)
+        try:
+            res = resolve_shipment_line(
+                db,
+                shipment_line_id=line_id,
+                action=action,
+                model_id=str(model_id).strip() if model_id else None,
+                operator_id=operator_id,
+                note=note,
+            )
+            duration_ms = int((datetime.now(timezone.utc) - item_t0).total_seconds() * 1000)
+            row = {
+                "shipment_line_id": str(res.get("shipment_line_id") or line_id),
+                "ok": bool(res.get("ok")),
+                "action": str(res.get("action") or action),
+                "snapshot_id": res.get("snapshot_id"),
+                "snapshot_action": res.get("snapshot_action"),
+                "error": res.get("error"),
+                "duration_ms": duration_ms,
+            }
+        except ValueError as exc:
+            duration_ms = int((datetime.now(timezone.utc) - item_t0).total_seconds() * 1000)
+            row = {
+                "shipment_line_id": line_id,
+                "ok": False,
+                "action": action,
+                "snapshot_id": None,
+                "snapshot_action": None,
+                "error": str(exc),
+                "duration_ms": duration_ms,
+            }
+        except Exception as exc:  # noqa: BLE001
+            duration_ms = int((datetime.now(timezone.utc) - item_t0).total_seconds() * 1000)
+            row = {
+                "shipment_line_id": line_id,
+                "ok": False,
+                "action": action,
+                "snapshot_id": None,
+                "snapshot_action": None,
+                "error": str(exc) or exc.__class__.__name__,
+                "duration_ms": duration_ms,
+            }
+
+        results.append(row)
+        if row["ok"]:
+            succeeded += 1
+        else:
+            failed += 1
+            if stop_on_first_error:
+                halt = True
+
+    total_duration_ms = int((datetime.now(timezone.utc) - bulk_t0).total_seconds() * 1000)
+    return {
+        "total": len(items),
+        "succeeded": succeeded,
+        "failed": failed,
+        "skipped_after_error": skipped,
+        "total_duration_ms": total_duration_ms,
+        "results": results,
+    }

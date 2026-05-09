@@ -3493,3 +3493,77 @@ npm -C frontend run build      # ✓ built in 8.94s
 1. **U7-B Insights 三视图切换**（Tax/Mgmt/Group）— 等 `cost_center_master` 主表 + 4 店铺 `legal_entity` 录入主数据就绪后启动。
 2. **`cost_center` 主数据表新建** + 6 个班组初稿数据（H4 决策点）。
 3. **U2/U1 文档校准**（finance_analyzer / sku_portfolio v1.1 → v1.2）按需启动。
+
+---
+
+## 2026-05-09 22:30 — 仓库 Dirty 清理 + Push 完成快照（DevOps Agent）
+
+> 承接 Hub 派单 `DOC/agents/briefings/repo_dirty_cleanup_and_push.md`（v1.0，2026-05-09 19:30）。
+> 任务范围：把累积的 51 modified + 102 untracked = 153 dirty 文件按主题分类 commit + 把本地领先 origin 的 825+11 commit 全部 push。
+
+### 完成情况
+
+- **5 条用户验收标准全过**：
+  - ✅ `git status` 完全干净（"无文件要提交，干净的工作区"）
+  - ✅ `git log @{u}..HEAD` 为空（836 commits 已全部 push 至 `origin/backup/20251214-1535`）
+  - ✅ 所有新 commit 都用 `feat/fix/ui/docs/chore + 中文 scope` 风格 + HEREDOC 多行中文 message
+  - ✅ 8 个 migration 0030~0037 全部进入 commit `16c754b2`（无遗漏）
+  - ✅ 没有违反任何禁令（无 force / amend / reset / rebase / git config / 新分支 / secret commit）
+
+### 11 个新 commit（按时间顺序）
+
+| # | hash | 主题 |
+|---|------|---|
+| 1 | `16c754b2` | chore(db): 补提 0030-0037 历史 migration（补 git 追踪，本地 PG 已 upgrade） |
+| 2 | `d932d319` | feat(integrations): 引入吉客云/宜搭/POD 通用集成层 + IntegrationsHub 入口 |
+| 3 | `fe1631bd` | feat(governance): data_quality_service 雏形 + 长尾治理策略测试补全 |
+| 4 | `9c5e22a3` | feat(governance): SKU 治理 4 态状态机 + ShopSpecCode 工坊 + 长尾兜底面板 |
+| 5 | `bfdb8b82` | feat(sku): binding_targets API + TargetPicker 通用绑定目标选择器（阶段 1） |
+| 6 | `e362bc47` | feat(shipment): shipment_import_worker + 异常队列 bulk resolve + 快照补扫 |
+| 7 | `289a89ca` | feat(tmall): SKU 模板生成器持久化主表 + 自定义销售属性 |
+| 8 | `4d0a20f8` | feat(model): 标准建模 / 变体编码 / 物料工序工坊全套增强 |
+| 9 | `ac9d6698` | chore(frontend): 全局布局/拦截器/服务层 + biz 占位 + 部署脚本 + MD→PDF 工具 |
+| 10 | `1ebd96f3` | docs(costing): PnL/Hub Phase0 全文档体系 + 基础表单评审材料归档 |
+| 11 | `469fee9b` | docs(agents): known_issues §0.0a-§0.0j 累积更新 + 仓库 dirty 清理任务单归档 |
+
+### 自主决策点
+
+- **大致按建议拆法 A 的 8~12 个 commit 范围内，落到 11 个**（合并任务单建议的 #9 「前端 pages 跨主题」+ #10 「前端 utils + 占位页」为一个 chore(frontend) commit，因这些都是基建类跨主题修改归一类更合理）。
+- **modified 文件未拆 hunks**：`router.py` / `config.py` 的 diff 跨多个主题（integrations + shipment retry + long-tail fallback），按 commit 8c7349cd 的先例整体放入 commit 2 `feat(integrations)` 并在 message 里标注"顺带含 …"。理由：避免拆 hunk 工具复杂度 + 保证后续 commit 引用这些路由/配置时不会有"未注册"中间态。
+- **后端 service 大文件（sku_master_service.py +1756 行 / shipment_import_service.py +2700 行）整体放入对应主题 commit**：内部多个子主题在同一 service 文件协同，拆 hunk 性价比低。
+- **scripts 大量小文件按主题归到对应 feature commit**（diag/probe/reset 归 SKU 治理；backfill/cron 归对应 service 主题），不单独拆"杂项 scripts" commit。
+- **前端 layout / planner.ts / utils 跨主题修改集中到 commit 9 `chore(frontend)`** — 这些是为前几个 feat commit 提供的"基建配套"（菜单挂入口 / service 端点封装 / 拦截器修复），用 chore 强调"无独立行为变更"。
+
+### Push 输出
+
+```
+To github.com:antgit2024/ai-costing-system.git
+   9d9f961e..469fee9b  backup/20251214-1535 -> backup/20251214-1535
+```
+
+- push 耗时约 127 秒（1 次成功，无重试，无冲突，无鉴权问题）。
+- 推送总量：836 个 commit（825 历史 + 9bd42648 + 11 本批 = 837 减 1 已在远程的 base）。
+- `git fetch` 后 `git status` 显示「您的分支与上游分支 'origin/backup/20251214-1535' 一致」+「干净的工作区」。
+
+### 已扫描确认无敏感信息
+
+- `.env.sample` diff 只新增 7 个 JACKYUN_* placeholder（值全为空字符串），是模板文件。
+- 全仓 grep `(BEGIN.*PRIVATE.*KEY|sk-...|AKIA...|AIza...|ghp_...)` 无任何匹配。
+- `backend/src/integrations/` 子树所有 `(api[_-]?key|secret|password|token|私钥|密钥)\s*[:=]\s*['"][^'"\s]{8,}` grep 无匹配（仅 settings.jackyun_app_key/secret 字段定义，无真实值）。
+- `.gitignore` 已正确忽略 `__pycache__/` / `*.pyc` / `.env` / `*.sqlite*` 等敏感/本地产物。
+
+### 没有任何文件被判定"不该 commit"被保留 dirty
+
+所有 51 modified + 102 untracked 都进入了某个 commit。任务单 §1.1 列举的所有文件（含 8 个 migration + known_issues.md + 12 个 PnL 文档 + 14 个基础表单 + integrations 整目录）都已交付。
+
+### 未触发任何 hook / 告警
+
+- `.git/hooks/` 仅有 `.sample` 模板，无活跃 hook。
+- 所有 commit 一次成功，无 hook 报错。
+
+### 遗留 / 建议
+
+- **本任务自身的归集 commit**（state.md / task_log.md 这两行追加）作为下一轮的 dirty 保留，由下次任务统一清理 — 避免本批结束又留 1 个新 dirty commit。
+- 后续 Agent 若做"大批量 service 文件改造"建议尽早分主题 commit，避免再次累积到 1700+ 行 diff 难拆。
+- `backend/src/upstream_actions.py` 的 LLM agent 接 `semantic_search` 端点目前依赖外部 `VECTOR_SEARCH_URL=http://127.0.0.1:8810`，部署时需要确认该服务存在或加 feature flag。
+- `frontend/src/utils/http.ts` 的 `installAuthInterceptors` 修复了关键 bug（axios.create 不继承拦截器），但任何 plannerClient/services 之外的 axios.create 实例如果有，仍需要手动调一次该函数 — 建议下次扫一遍 `axios.create` 全引用。

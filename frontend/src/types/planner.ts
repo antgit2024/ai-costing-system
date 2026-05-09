@@ -13,6 +13,29 @@ export interface Initiative {
   updated_at: string
 }
 
+// ---------------------------------------------------------------------------
+// Cost Rate Hub v1.3 — Insights cost-quality badge (U7-A)
+// ---------------------------------------------------------------------------
+// 给 4 个 Insights 看板（Profit / Shop / Sales / AfterSales）每行附带一枚
+// 「成本可信度」徽章，由后端 `Hub.resolve_overhead_rate` 的 hit_layer 推导。
+// 字段是 optional：旧前端忽略未知字段不会崩；新前端若拿到 undefined 就显示
+// 占位 `-`。
+export type CostQualityLevel = 'green' | 'yellow' | 'red'
+export type CostQualityHitLayer =
+  | 'model'
+  | 'category'
+  | 'cost_center'
+  | 'global'
+  | 'metadata_json'
+  | 'hard_fallback'
+
+export interface CostQualityBadge {
+  level: CostQualityLevel
+  hit_layer: CostQualityHitLayer
+  source: string
+  updated_at?: string | null
+}
+
 export interface PaginatedResponse<T> {
   total: number
   page: number
@@ -1791,6 +1814,7 @@ export interface ReturnsRateBySkuItem {
   shipped_amount: string
   refund_amount: string
   refund_rate?: string | null
+  cost_quality?: CostQualityBadge | null
 }
 
 export interface ReturnsRateBySkuResponse {
@@ -1815,6 +1839,7 @@ export interface ProfitBySkuItem {
   net_revenue: string
   net_profit: string
   net_margin?: string | null
+  cost_quality?: CostQualityBadge | null
 }
 
 export interface ProfitBySkuResponse {
@@ -1854,6 +1879,7 @@ export interface ProfitByModelItem {
   line_count?: number
   costed_line_count?: number
   missing_costing_line_count?: number
+  cost_quality?: CostQualityBadge | null
 }
 
 export interface ProfitByModelResponse {
@@ -1897,6 +1923,7 @@ export interface ModelInsightsSummaryItem {
   top_version_status?: string | null
   top_version_label?: string | null
   version_count?: number
+  cost_quality?: CostQualityBadge | null
 }
 
 export interface ModelInsightsSummaryResponse {
@@ -2053,6 +2080,7 @@ export interface ReturnsRateByChannelItem {
   refund_amount: string
   refund_rate?: string | null
   shipment_lines_total: number
+  cost_quality?: CostQualityBadge | null
 }
 
 export interface ReturnsRateByChannelResponse {
@@ -2079,6 +2107,7 @@ export interface ProfitByChannelItem {
   shipment_lines_total: number
   lines_with_bom_snapshots: number
   lines_missing_costing: number
+  cost_quality?: CostQualityBadge | null
 }
 
 export interface ProfitByChannelResponse {
@@ -2124,6 +2153,7 @@ export interface SalesLineItem {
   bom_snapshot_id?: string | null
   status: 'costed' | 'missing_snapshot' | 'missing_costing' | 'unknown'
   note?: string | null
+  cost_quality?: CostQualityBadge | null
 }
 
 export interface SalesLinesResponse {

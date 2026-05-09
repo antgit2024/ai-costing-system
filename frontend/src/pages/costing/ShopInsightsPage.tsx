@@ -17,6 +17,7 @@ import type {
   ReturnsRateByChannelItem,
   ReturnsRateByChannelResponse,
 } from '@/types/planner'
+import { CostQualityBadge } from '@/components/costing/CostQualityBadge'
 
 type GroupBy = 'day' | 'month'
 
@@ -75,6 +76,13 @@ const ShopInsightsPage = () => {
       { title: '退款金额', dataIndex: 'refund_amount', key: 'refund_amount', width: 110, render: formatMoney },
       { title: '净利润', dataIndex: 'net_profit', key: 'net_profit', width: 110, render: formatMoney },
       { title: '净利率', dataIndex: 'net_margin', key: 'net_margin', width: 100, render: formatPercent },
+      {
+        title: '成本可信度',
+        key: 'cost_quality',
+        width: 110,
+        align: 'center',
+        render: (_, r) => <CostQualityBadge badge={r.cost_quality} size="small" />,
+      },
     ],
     [],
   )
@@ -90,6 +98,13 @@ const ShopInsightsPage = () => {
       { title: '发货金额', dataIndex: 'shipped_amount', key: 'shipped_amount', width: 120, render: formatMoney },
       { title: '退款金额', dataIndex: 'refund_amount', key: 'refund_amount', width: 120, render: formatMoney },
       { title: '退款率(额)', dataIndex: 'refund_rate', key: 'refund_rate', width: 120, render: formatPercent },
+      {
+        title: '成本可信度',
+        key: 'cost_quality',
+        width: 110,
+        align: 'center',
+        render: (_, r) => <CostQualityBadge badge={r.cost_quality} size="small" />,
+      },
     ],
     [],
   )
@@ -373,7 +388,7 @@ const ShopInsightsPage = () => {
                     columns={profitColumns}
                     dataSource={filteredProfitItems}
                     pagination={{ pageSize: 50, showSizeChanger: true }}
-                    scroll={{ x: 1250 }}
+                    scroll={{ x: 1360 }}
                   />
                 </>
               ),
@@ -417,7 +432,7 @@ const ShopInsightsPage = () => {
                     columns={returnsColumns}
                     dataSource={dataReturns?.items ?? []}
                     pagination={{ pageSize: 50, showSizeChanger: true }}
-                    scroll={{ x: 1150 }}
+                    scroll={{ x: 1260 }}
                   />
                 </>
               ),

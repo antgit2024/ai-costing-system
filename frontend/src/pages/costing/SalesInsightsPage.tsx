@@ -35,6 +35,7 @@ import {
   refreshSalesProfitDashboardSnapshot,
 } from '@/services/planner'
 import type { SalesLineItem, SalesLinesResponse, SalesProfitDashboardResponse, SalesProfitDashboardTopModelItem, SalesProfitDashboardTopSkuItem } from '@/types/planner'
+import { CostQualityBadge } from '@/components/costing/CostQualityBadge'
 
 const STORAGE_KEY = 'insights.sales.lastQuery.v1'
 
@@ -514,6 +515,13 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
       { title: '商品链接ID', dataIndex: 'product_link_id', width: 180, ellipsis: true, render: (v) => String(v ?? '-') },
       { title: '标记', dataIndex: 'mark', width: 120, ellipsis: true, render: (v) => String(v ?? '-') },
       { title: '备注', dataIndex: 'note', width: 220, ellipsis: true, render: (v) => String(v ?? '-') },
+      {
+        title: '成本可信度',
+        key: 'cost_quality',
+        width: 110,
+        align: 'center',
+        render: (_v, r) => <CostQualityBadge badge={r.cost_quality} size="small" />,
+      },
     ],
     [],
   )

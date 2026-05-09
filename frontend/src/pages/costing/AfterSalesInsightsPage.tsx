@@ -44,6 +44,7 @@ import type {
 } from '@/types/planner'
 import BoundTargetPicker from '@/components/common/BoundTargetPicker'
 import type { BoundTargetPickerFilters, BoundTargetPickerValue } from '@/components/common/BoundTargetPicker'
+import { CostQualityBadge } from '@/components/costing/CostQualityBadge'
 
 type GroupBy = 'day' | 'month'
 
@@ -322,6 +323,13 @@ const AfterSalesInsightsPage = () => {
       { title: '发货金额', dataIndex: 'shipped_amount', key: 'shipped_amount', width: 120, render: formatMoney },
       { title: '退款金额', dataIndex: 'refund_amount', key: 'refund_amount', width: 120, render: formatMoney },
       { title: '退款率(额)', dataIndex: 'refund_rate', key: 'refund_rate', width: 120, render: formatPercent },
+      {
+        title: '成本可信度',
+        key: 'cost_quality',
+        width: 110,
+        align: 'center',
+        render: (_, r) => <CostQualityBadge badge={r.cost_quality} size="small" />,
+      },
     ],
     [],
   )

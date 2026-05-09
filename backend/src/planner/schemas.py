@@ -45,6 +45,39 @@ VariantTriggerType = Literal["sku_contains", "area_gte", "perimeter_gte"]
 VariantActionType = Literal["replace_material", "add_material"]
 LineVariantAction = Literal["replace_bundle", "replace_self", "remove_self", "add_siblings"]
 
+# ---------------------------------------------------------------------------
+# Cost Rate Hub v1.3 — analytics 可信度徽章 (U7-A)
+# ---------------------------------------------------------------------------
+# 给 4 个 Insights 看板 (Profit / Shop / Sales / AfterSales) 每行附上一枚
+# 「成本可信度」徽章，由 `Hub.resolve_overhead_rate` 的 hit_layer 推导。
+#
+# - level: 3 色（green / yellow / red）, 与 Ant Design Tag color 对齐
+# - hit_layer: 命中链的哪一层（model > category > cost_center > global > metadata_json > hard_fallback）
+# - source: 'cost_rate_hub' | 'metadata_json' | 'long_tail_legacy' | 'hardcoded_0.30' 等
+# - updated_at: 命中行的 updated_at（ISO8601），用于「数据多旧」提示
+#
+# 聚合规则：当一行表示多个 SKU/订单时取最差 level（保守显示）。
+CostQualityLevel = Literal["green", "yellow", "red"]
+CostQualityHitLayer = Literal[
+    "model",
+    "category",
+    "cost_center",
+    "global",
+    "metadata_json",
+    "hard_fallback",
+]
+
+
+class CostQualityBadge(BaseModel):
+    level: CostQualityLevel
+    hit_layer: CostQualityHitLayer
+    source: str
+    updated_at: Optional[str] = None
+
+    class Config:
+        # Allow building from dict / dataclass-like objects directly.
+        orm_mode = True
+
 
 def _decimal_to_str(value: Decimal) -> str:
     normalized = value.normalize()
@@ -2918,6 +2951,8 @@ class ReturnsRateBySkuItem(BaseModel):
     shipped_amount: Decimal
     refund_amount: Decimal
     refund_rate: Optional[Decimal] = None
+    # U7-A 成本可信度徽章（聚合，按发货线背后的 model 取最差 level）；老前端忽略未知字段
+    cost_quality: Optional[CostQualityBadge] = None
 
     class Config:
         json_encoders = {Decimal: _decimal_to_str}
@@ -3056,6 +3091,8 @@ class ProfitBySkuItem(BaseModel):
     net_revenue: Decimal
     net_profit: Decimal
     net_margin: Optional[Decimal] = None
+    # U7-A 成本可信度徽章（聚合，按发货线背后的 model 取最差 level）
+    cost_quality: Optional[CostQualityBadge] = None
 
     class Config:
         json_encoders = {Decimal: _decimal_to_str}
@@ -3100,6 +3137,8 @@ class ProfitByModelItem(BaseModel):
     line_count: int = 0
     costed_line_count: int = 0
     missing_costing_line_count: int = 0
+    # U7-A 成本可信度徽章（按 model_id 直接 resolve 4 层链）
+    cost_quality: Optional[CostQualityBadge] = None
 
     class Config:
         json_encoders = {Decimal: _decimal_to_str}
@@ -3146,6 +3185,8 @@ class ModelInsightsSummaryItem(BaseModel):
     top_version_status: Optional[str] = None
     top_version_label: Optional[str] = None
     version_count: int = 0
+    # U7-A 成本可信度徽章（按 model_id 直接 resolve 4 层链）
+    cost_quality: Optional[CostQualityBadge] = None
 
     class Config:
         json_encoders = {Decimal: _decimal_to_str}
@@ -3372,6 +3413,8 @@ class ReturnsRateByChannelItem(BaseModel):
     refund_amount: Decimal
     refund_rate: Optional[Decimal] = None
     shipment_lines_total: int = 0
+    # U7-A 成本可信度徽章（聚合该 channel 下所有发货线背后的 model）
+    cost_quality: Optional[CostQualityBadge] = None
 
     class Config:
         json_encoders = {Decimal: _decimal_to_str}
@@ -3401,6 +3444,8 @@ class ProfitByChannelItem(BaseModel):
     shipment_lines_total: int = 0
     lines_with_bom_snapshots: int = 0
     lines_missing_costing: int = 0
+    # U7-A 成本可信度徽章（聚合该 channel 下所有发货线背后的 model）
+    cost_quality: Optional[CostQualityBadge] = None
 
     class Config:
         json_encoders = {Decimal: _decimal_to_str}
@@ -3455,6 +3500,8 @@ class SalesLineItem(BaseModel):
     bom_snapshot_id: Optional[str] = None
     status: str = "unknown"  # costed | missing_snapshot | missing_costing
     note: Optional[str] = None
+    # U7-A 成本可信度徽章（每行的 model 直接 resolve 4 层链；未绑模型 → red）
+    cost_quality: Optional[CostQualityBadge] = None
 
     class Config:
         json_encoders = {Decimal: _decimal_to_str}

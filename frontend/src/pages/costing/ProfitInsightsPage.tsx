@@ -14,6 +14,7 @@ import type {
   ModelInsightsSummaryItem,
   ModelInsightsSummaryResponse,
 } from '@/types/planner'
+import { CostQualityBadge } from '@/components/costing/CostQualityBadge'
 
 const STORAGE_KEY = 'insights.models.lastQuery.v1'
 
@@ -489,6 +490,13 @@ const ProfitInsightsPage = () => {
         render: (_v: any, r) => formatQty(((r as any)?.returned_qty ?? '-') as any),
       },
       { title: '退货金额', dataIndex: 'refund_amount', width: 110, align: 'right', render: (v) => formatMoney(v as any) },
+      {
+        title: '成本可信度',
+        key: 'cost_quality',
+        width: 110,
+        align: 'center',
+        render: (_v, r) => <CostQualityBadge badge={(r as any).cost_quality} size="small" />,
+      },
     ],
     [],
   )
@@ -650,7 +658,7 @@ const ProfitInsightsPage = () => {
                 },
               })}
               rowClassName={(r) => (String(r.model_code ?? '') === String(selectedModelCode ?? '') ? 'ant-table-row-selected' : '')}
-              scroll={{ x: 980 }}
+              scroll={{ x: 1090 }}
             />
           </Card>
         </Col>

@@ -9,7 +9,7 @@ from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from .. import models
-from . import bom_generation_service, product_model_service
+from . import bom_generation_service, cost_quality_service, product_model_service
 
 
 _BUNDLE_MODEL_CODE_RE = re.compile(r"^B-(?P<tpl>[A-Z0-9]{4})(?P<sel>[A-Z]{2})$", re.IGNORECASE)
@@ -1555,6 +1555,18 @@ def returns_rate_by_sku(
             "refund_amount": r.refund_amount,
         }
 
+    # U7-A: roll up cost_quality per (period, channel, sku_code) bucket.
+    quality_lookup = cost_quality_service.build_overhead_quality_lookup(db)
+    model_ids_by_key = _model_ids_per_period_channel_sku(
+        db,
+        start=start,
+        end=end,
+        group_by=group_by,
+        channel=channel,
+        sku_code=sku_code,
+        by_sku=True,
+    )
+
     items: List[Dict[str, Any]] = []
     for r in ship_rows:
         key = (str(r.period), str(r.channel or ""), str(r.sku_code or ""))
@@ -1565,6 +1577,18 @@ def returns_rate_by_sku(
         refund_amount = Decimal(str(ret["refund_amount"] or 0))
         return_rate = (returned_qty / shipped_qty) if shipped_qty > 0 else None
         refund_rate = (refund_amount / shipped_amount) if shipped_amount > 0 else None
+
+        mids = model_ids_by_key.get(key) or []
+        if mids:
+            badges = [
+                cost_quality_service.derive_badge_for_model(quality_lookup, model_id=m)
+                for m in mids
+            ]
+            cost_quality = cost_quality_service.aggregate_quality(badges)
+        else:
+            cost_quality = cost_quality_service.derive_badge_for_model(
+                quality_lookup, model_id=None
+            )
 
         items.append(
             {
@@ -1577,6 +1601,7 @@ def returns_rate_by_sku(
                 "shipped_amount": shipped_amount,
                 "refund_amount": refund_amount,
                 "refund_rate": refund_rate,
+                "cost_quality": cost_quality,
             }
         )
 
@@ -1671,16 +1696,41 @@ def returns_rate_by_channel(
             "refund_amount": r.refund_amount,
         }
 
+    # U7-A: roll up cost_quality per (period, channel) bucket.
+    quality_lookup = cost_quality_service.build_overhead_quality_lookup(db)
+    model_ids_by_key = _model_ids_per_period_channel_sku(
+        db,
+        start=start,
+        end=end,
+        group_by=group_by,
+        channel=channel,
+        by_sku=False,
+    )
+
     items: List[Dict[str, Any]] = []
     for r in ship_rows:
-        key = (str(r.period), str(r.channel or ""))
-        ret = ret_map.get(key) or {"returned_qty": Decimal("0"), "refund_amount": Decimal("0")}
+        key2 = (str(r.period), str(r.channel or ""))
+        key = (str(r.period), str(r.channel or ""), "")
+        ret = ret_map.get(key2) or {"returned_qty": Decimal("0"), "refund_amount": Decimal("0")}
         shipped_qty = Decimal(str(r.shipped_qty or 0))
         shipped_amount = Decimal(str(r.shipped_amount or 0))
         returned_qty = Decimal(str(ret["returned_qty"] or 0))
         refund_amount = Decimal(str(ret["refund_amount"] or 0))
         return_rate = (returned_qty / shipped_qty) if shipped_qty > 0 else None
         refund_rate = (refund_amount / shipped_amount) if shipped_amount > 0 else None
+
+        mids = model_ids_by_key.get(key) or []
+        if mids:
+            badges = [
+                cost_quality_service.derive_badge_for_model(quality_lookup, model_id=m)
+                for m in mids
+            ]
+            cost_quality = cost_quality_service.aggregate_quality(badges)
+        else:
+            cost_quality = cost_quality_service.derive_badge_for_model(
+                quality_lookup, model_id=None
+            )
+
         items.append(
             {
                 "period": str(r.period),
@@ -1692,6 +1742,7 @@ def returns_rate_by_channel(
                 "refund_amount": refund_amount,
                 "refund_rate": refund_rate,
                 "shipment_lines_total": int(r.shipment_lines_total or 0),
+                "cost_quality": cost_quality,
             }
         )
 
@@ -1773,6 +1824,114 @@ def _period_key(dt: datetime, group_by: Literal["day", "month"]) -> str:
     if group_by == "month":
         return f"{dt.year:04d}-{dt.month:02d}-01"
     return dt.date().isoformat()
+
+
+def _model_ids_per_period_channel_sku(
+    db: Session,
+    *,
+    start: datetime,
+    end: datetime,
+    group_by: Literal["day", "month"],
+    channel: Optional[str] = None,
+    sku_code: Optional[str] = None,
+    by_sku: bool = True,
+) -> Dict[Tuple[str, str, str], List[str]]:
+    """U7-A helper: find all distinct model_ids attributed to shipment lines
+    bucketed by ``(period, channel, sku_code)`` (or just ``(period, channel)``
+    when ``by_sku=False``). Used by returns_rate / profit_by_sku /
+    profit_by_channel to attach a roll-up cost_quality badge.
+
+    Implementation: ONE query joining ShipmentCostingResult and BomSnapshot
+    (latest snapshot per shipment_line_id), coalescing model_version_id and
+    looking up ProductModel.id. Distinct values per bucket only — keeps the
+    in-memory set small even for hundreds of thousands of shipment lines.
+
+    Returns ``{}`` (empty) when there are no attributed lines; callers
+    should treat unmapped buckets as "no model" → hard_fallback red.
+    """
+    res_sq = (
+        db.query(
+            models.ShipmentCostingResult.shipment_line_id.label("shipment_line_id"),
+            models.ShipmentCostingResult.model_version_id.label("model_version_id"),
+        )
+        .subquery()
+    )
+
+    snap_sq = (
+        db.query(
+            models.BomSnapshot.shipment_line_id.label("shipment_line_id"),
+            models.BomSnapshot.model_version_id.label("model_version_id"),
+        )
+        .filter(models.BomSnapshot.shipment_line_id.isnot(None))
+        .order_by(models.BomSnapshot.shipment_line_id.asc(), models.BomSnapshot.created_at.desc())
+        .distinct(models.BomSnapshot.shipment_line_id)
+        .subquery()
+    )
+
+    mv_id_expr = func.coalesce(res_sq.c.model_version_id, snap_sq.c.model_version_id)
+
+    # NB: we deliberately don't group_by in SQL — we accumulate distinct
+    # model_ids per bucket in Python. The row count is bounded by
+    # shipment_lines in [start, end), which is the same scan cost as the
+    # existing service queries; we just need model attribution next to
+    # period/channel/sku_code keys.
+    cols: List[Any] = [
+        models.ShipmentLine.completed_at.label("completed_at"),
+        models.ShipmentLine.channel.label("channel"),
+    ]
+    if by_sku:
+        cols.append(models.ShipmentLine.sku_code.label("sku_code"))
+    cols.append(models.ProductModel.id.label("model_id"))
+
+    q = (
+        db.query(*cols)
+        .outerjoin(res_sq, models.ShipmentLine.id == res_sq.c.shipment_line_id)
+        .outerjoin(snap_sq, models.ShipmentLine.id == snap_sq.c.shipment_line_id)
+        .outerjoin(
+            models.ProductModelVersion,
+            and_(
+                models.ProductModelVersion.id == mv_id_expr,
+                models.ProductModelVersion.is_archived.is_(False),
+            ),
+        )
+        .outerjoin(
+            models.ProductModel,
+            and_(
+                models.ProductModel.id == models.ProductModelVersion.model_id,
+                models.ProductModel.is_archived.is_(False),
+            ),
+        )
+        .filter(
+            models.ShipmentLine.completed_at.isnot(None),
+            models.ShipmentLine.completed_at >= start,
+            models.ShipmentLine.completed_at < end,
+            models.ShipmentLine.is_archived.is_(False),
+        )
+    )
+    if channel:
+        q = q.filter(models.ShipmentLine.channel == channel)
+    if sku_code:
+        q = q.filter(models.ShipmentLine.sku_code == sku_code)
+
+    out: Dict[Tuple[str, str, str], set] = {}
+    for row in q.all():
+        completed_at = row.completed_at
+        if completed_at is None:
+            continue
+        period = _period_key(completed_at, group_by)
+        ch = str(row.channel or "")
+        if by_sku:
+            sk = str(getattr(row, "sku_code", "") or "")
+            key = (period, ch, sk)
+        else:
+            key = (period, ch, "")
+        bucket = out.setdefault(key, set())
+        mid = str(getattr(row, "model_id", None) or "").strip()
+        if mid:
+            bucket.add(mid)
+
+    # Materialize as sorted lists so callers can iterate deterministically.
+    return {k: sorted(v) for k, v in out.items()}
 
 
 def profit_by_sku(
@@ -1936,6 +2095,20 @@ def profit_by_sku(
             bucket["refund_amount"] += ref["refund_amount"]
             bucket["returned_qty"] += ref["returned_qty"]
 
+    # U7-A: per-bucket cost_quality (rolled up over the model_ids that the
+    # shipment lines for this (period, channel, sku_code) actually mapped
+    # to). Both helpers run a single query each — no N+1.
+    quality_lookup = cost_quality_service.build_overhead_quality_lookup(db)
+    model_ids_by_key = _model_ids_per_period_channel_sku(
+        db,
+        start=start,
+        end=end,
+        group_by=group_by,
+        channel=channel,
+        sku_code=sku_code,
+        by_sku=True,
+    )
+
     items: List[Dict[str, Any]] = []
     for _, b in sorted(agg.items(), key=lambda kv: kv[0]):
         revenue = b["revenue_amount"]
@@ -1947,6 +2120,21 @@ def profit_by_sku(
         net_profit = net_revenue - cost
         net_margin = (net_profit / net_revenue) if net_revenue > 0 else None
 
+        key = (str(b["period"]), str(b["channel"] or ""), str(b["sku_code"] or ""))
+        mids = model_ids_by_key.get(key) or []
+        if mids:
+            badges = [
+                cost_quality_service.derive_badge_for_model(quality_lookup, model_id=m)
+                for m in mids
+            ]
+            cost_quality = cost_quality_service.aggregate_quality(badges)
+        else:
+            # No model attribution → fall through to global / hard_fallback
+            # so the user sees red and knows the cost is hard-coded.
+            cost_quality = cost_quality_service.derive_badge_for_model(
+                quality_lookup, model_id=None
+            )
+
         items.append(
             {
                 **{k: v for k, v in b.items() if k not in ("lines_with_bom",)},
@@ -1955,6 +2143,7 @@ def profit_by_sku(
                 "net_revenue": net_revenue,
                 "net_profit": net_profit,
                 "net_margin": net_margin,
+                "cost_quality": cost_quality,
             }
         )
 
@@ -2142,6 +2331,18 @@ def profit_by_channel(
                 total_missing_costing += 1
             bucket["cost_amount"] += _d(cost)
 
+    # U7-A: per-channel-period cost_quality (roll-up over all underlying
+    # model_ids for that bucket).
+    quality_lookup = cost_quality_service.build_overhead_quality_lookup(db)
+    model_ids_by_key = _model_ids_per_period_channel_sku(
+        db,
+        start=start,
+        end=end,
+        group_by=group_by,
+        channel=channel,
+        by_sku=False,
+    )
+
     items: List[Dict[str, Any]] = []
     for _, b in sorted(base.items(), key=lambda kv: kv[0]):
         revenue = b["revenue_amount"]
@@ -2152,6 +2353,20 @@ def profit_by_channel(
         net_revenue = revenue - refund
         net_profit = net_revenue - cost
         net_margin = (net_profit / net_revenue) if net_revenue > 0 else None
+
+        key = (str(b["period"]), str(b["channel"] or ""), "")
+        mids = model_ids_by_key.get(key) or []
+        if mids:
+            badges = [
+                cost_quality_service.derive_badge_for_model(quality_lookup, model_id=m)
+                for m in mids
+            ]
+            cost_quality = cost_quality_service.aggregate_quality(badges)
+        else:
+            cost_quality = cost_quality_service.derive_badge_for_model(
+                quality_lookup, model_id=None
+            )
+
         items.append(
             {
                 "period": b["period"],
@@ -2169,6 +2384,7 @@ def profit_by_channel(
                 "shipment_lines_total": int(b["shipment_lines_total"]),
                 "lines_with_bom_snapshots": int(b["lines_with_bom_snapshots"]),
                 "lines_missing_costing": int(b["lines_missing_costing"]),
+                "cost_quality": cost_quality,
             }
         )
 
@@ -2428,6 +2644,11 @@ def profit_by_model(
                 bucket["cost_overhead_amount"] += _d(o)
                 bucket["cost_amount"] += _d(total)
 
+    # U7-A: prefetch overhead_rate cost_rate_master rows once for the whole
+    # response so each (period, channel, model) item gets a cost_quality
+    # badge without an extra DB hit per item.
+    quality_lookup = cost_quality_service.build_overhead_quality_lookup(db)
+
     items: List[Dict[str, Any]] = []
     for _, b in sorted(agg.items(), key=lambda kv: kv[0]):
         # resolve top version (by revenue)
@@ -2464,6 +2685,9 @@ def profit_by_model(
                 "net_revenue": net_revenue,
                 "net_profit": net_profit,
                 "net_margin": net_margin,
+                "cost_quality": cost_quality_service.derive_badge_for_model(
+                    quality_lookup, model_id=str(b.get("model_id") or "") or None
+                ),
             }
         )
 
@@ -2570,6 +2794,7 @@ def sales_lines(
         db.query(
             m.sku_code.label("sku_code"),
             m.model_version_id.label("model_version_id"),
+            pm.id.label("bound_model_id"),
             pm.model_code.label("bound_model_code"),
             pm.model_name.label("bound_model_name"),
             v.version_label.label("bound_version_label"),
@@ -2604,6 +2829,7 @@ def sales_lines(
             res_sq.c.cost_overhead_total,
             res_sq.c.model_version_id,
             res_sq.c.spec_hash,
+            binding_sq.c.bound_model_id,
             binding_sq.c.bound_model_code,
             binding_sq.c.bound_model_name,
         )
@@ -2671,6 +2897,10 @@ def sales_lines(
     with_bom = 0
     missing_costing = 0
 
+    # U7-A: prefetch overhead_rate cost_rate_master rows once for the page
+    # so per-line cost_quality is a pure dict lookup (no N+1).
+    quality_lookup = cost_quality_service.build_overhead_quality_lookup(db)
+
     for (
         line,
         result_line_id,
@@ -2682,6 +2912,7 @@ def sales_lines(
         cost_overhead_total,
         model_version_id,
         spec_hash,
+        bound_model_id,
         bound_model_code,
         bound_model_name,
     ) in rows:
@@ -2752,6 +2983,7 @@ def sales_lines(
         elif status == "missing_costing":
             mark = "缺成本"
 
+        bound_model_id_str = str(bound_model_id).strip() if bound_model_id not in (None, "") else None
         items.append(
             {
                 "shipment_line_id": str(line.id),
@@ -2782,8 +3014,91 @@ def sales_lines(
                 "bom_snapshot_id": str(bom_snapshot_id) if has_snap else None,
                 "status": status,
                 "note": note,
+                "cost_quality": cost_quality_service.derive_badge_for_model(
+                    quality_lookup, model_id=bound_model_id_str
+                ),
             }
         )
+
+    # ---- 变体展示（bound_variant_code / bound_variant_label）----
+    # 与 sku_master_service._attach_active_version_bindings、shipment_import_service.list_shipment_lines
+    # 完全同源：直接读 SkuMaster.metadata_json.bound_variant_code（绑定时已落库，
+    # 人工/自动两条路都写），再按 (version_id, variant_code) 查
+    # ProductModelLineVariant.metadata_json.display_name 拼 "麻感冰丝(KB8-001)"。
+    # 不做 spec→variant 反推，唯一来源。
+    page_skus: List[str] = []
+    page_versions: List[str] = []
+    for it in items:
+        sc = str(it.get("sku_code") or "").strip()
+        if sc:
+            page_skus.append(sc)
+    sku_to_variant: Dict[str, str] = {}
+    if page_skus:
+        sm_rows = (
+            db.query(models.SkuMaster.erp_sku_barcode, models.SkuMaster.metadata_json)
+            .filter(models.SkuMaster.erp_sku_barcode.in_(list(set(page_skus))))
+            .all()
+        )
+        for bc, mj in sm_rows:
+            mjj = mj or {}
+            code = str(mjj.get("bound_variant_code") or "").strip().upper()
+            if bc and code:
+                sku_to_variant[str(bc)] = code
+    # 收集本页用到的 version_ids（来自 ShipmentLine 当前激活绑定的 model_version_id 或 BomSnapshot 的 model_version_id）
+    if sku_to_variant:
+        # 拿到与 SKU 当前激活的版本，用 SkuModelVersionMapping
+        active_map = (
+            db.query(
+                models.SkuModelVersionMapping.sku_code,
+                models.SkuModelVersionMapping.model_version_id,
+            )
+            .filter(
+                models.SkuModelVersionMapping.is_active.is_(True),
+                models.SkuModelVersionMapping.sku_code.in_(list(sku_to_variant.keys())),
+            )
+            .all()
+        )
+        sku_to_active_version: Dict[str, str] = {str(s): str(v) for s, v in active_map if s and v}
+        version_ids = list({sku_to_active_version[s] for s in sku_to_variant.keys() if s in sku_to_active_version})
+        variant_label_by_key: Dict[Tuple[str, str], str] = {}
+        if version_ids:
+            line_variants = (
+                db.query(models.ProductModelLineVariant)
+                .filter(
+                    models.ProductModelLineVariant.version_id.in_(version_ids),
+                    models.ProductModelLineVariant.is_archived.is_(False),
+                )
+                .all()
+            )
+            for vr in line_variants:
+                vmeta = vr.metadata_json or {}
+                vc = str(vmeta.get("variant_code") or "").strip().upper()
+                if not vc:
+                    continue
+                display_name = str(vmeta.get("display_name") or "").strip() or None
+                material_name: Optional[str] = display_name
+                if not material_name:
+                    for it2 in vr.items or []:
+                        n = str(getattr(it2, "material_name", "") or "").strip()
+                        if n:
+                            material_name = n
+                            break
+                label = f"{material_name}({vc})" if material_name else vc
+                variant_label_by_key[(str(vr.version_id), vc)] = label
+        for it in items:
+            sc = str(it.get("sku_code") or "").strip()
+            if not sc or sc not in sku_to_variant:
+                it["bound_variant_code"] = None
+                it["bound_variant_label"] = None
+                continue
+            vc = sku_to_variant[sc]
+            vid = sku_to_active_version.get(sc)
+            it["bound_variant_code"] = vc
+            it["bound_variant_label"] = variant_label_by_key.get((vid or "", vc)) if vid else vc
+    else:
+        for it in items:
+            it["bound_variant_code"] = None
+            it["bound_variant_label"] = None
 
     return {
         "start": start.isoformat(),
@@ -3403,6 +3718,10 @@ def model_insights_summary(
                 bucket["cost_overhead_amount"] += _d(o)
                 bucket["cost_amount"] += _d(total)
 
+    # U7-A: prefetch overhead_rate cost_rate_master rows once for the whole
+    # response so each model row gets a cost_quality badge without N+1.
+    quality_lookup = cost_quality_service.build_overhead_quality_lookup(db)
+
     items: List[Dict[str, Any]] = []
     for _, b in agg.items():
         ver_rev = b.pop("_ver_rev", {}) or {}
@@ -3438,6 +3757,9 @@ def model_insights_summary(
                 "net_revenue": net_revenue,
                 "net_profit": net_profit,
                 "net_margin": net_margin,
+                "cost_quality": cost_quality_service.derive_badge_for_model(
+                    quality_lookup, model_id=str(b.get("model_id") or "") or None
+                ),
             }
         )
 

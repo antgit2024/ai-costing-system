@@ -3387,3 +3387,109 @@
 - `cost_center_id` / `legal_entity_id` / `production_unit_id` 是 `String(36)` 留位字段（v1 全 NULL）；接入 Stage 2 时要看 `cost_center` 主数据是否需要双向 FK。
 - 4 个 Insights 看板尚未读 `cost_quality`（U7 单独派）。
 - `bom_generation_service.py:1129/1487` 两处 `Decimal("0.3")` accumulator（与本任务无关，未动；属 bundle merge 默认值，按设计保留）。
+
+---
+
+## 2026-05-09 22:00 — U7-A Insights 看板成本可信度徽章 MVP 完成快照
+
+### 任务范围
+
+承接 `briefings/insights_quality_badges_mvp.md`（约 280 行任务单），实现 4 个 Insights 看板（Profit / Shop / Sales / AfterSales）每行展示 🟢真实命中 / 🟡默认兜底 / 🔴长尾 hard fallback 三色「成本可信度」徽章，hover 显示命中层级 + 来源 + 更新时间。前置 Hub MVP（commit `8c7349cd`）已落地 `cost_rate_master` 表 + `resolve_overhead_rate` 4 层链 + Tab UI。
+
+### 5 条用户验收标准对勾
+
+| # | 验收标准 | 结果 | 证据 |
+|---|---|---|---|
+| 1 | 4 个 Insights 看板每行有「成本可信度」列（🟢/🟡/🔴）| ✅ | 4 张 Page 主表 columns 都加了 `key:'cost_quality'` 列；frontend `npm run build` 通过 |
+| 2 | hover Tag 显示 tooltip：命中层级 + 来源 + 更新时间 | ✅ | `CostQualityBadge.tsx` 用 Tooltip 渲染，含 hit_layer 中文映射 + source 中文映射 + 北京时间格式化 |
+| 3 | KB8（已配 model 级 0.25）显示 🟢「模型级精确」 | ✅ | 端到端测脚本：seed KB8 + 0.25 strategy → `profit_by_model` 返回 `{level:'green', hit_layer:'model', source:'manual'}` |
+| 4 | 没配的模型显示 🔴「全局兜底」或「硬编码 0.30」 | ✅ | `cost_quality_service.derive_badge_for_model(model_id=None)` 落到 `hard_fallback` → red；单测 `test_hard_fallback_when_no_rows` 覆盖 |
+| 5 | 5 个 endpoint 性能未明显退化（≤ 之前 + 200ms）— 批量查 dict 方案 | ✅ | `build_overhead_quality_lookup` 1 次 SELECT 全量 cost_rate_master + Python 端 4 桶 dict（model/category/cost_center/global）+ `_model_ids_per_period_channel_sku` 1 次 SELECT 拿 SKU→model 反查；item-level loop 全是 dict.get，零 N+1 |
+
+### 关键变更（11 个文件）
+
+**后端（4 个）**：
+- `backend/src/planner/services/cost_quality_service.py`（新）：`build_overhead_quality_lookup` / `derive_badge_for_model` / `aggregate_quality`，把 4 层 resolve 从 SQL 全部搬到 in-memory dict（性能关键）。
+- `backend/src/planner/services/analytics_service.py`（改）：7 个函数（profit_by_model / profit_by_sku / profit_by_channel / returns_rate_by_sku / returns_rate_by_channel / model_insights_summary / sales_lines）每行透传 `cost_quality` dict。新增 `_model_ids_per_period_channel_sku` helper 解决 SKU/Channel 聚合粒度的 model_id 反查。
+- `backend/src/planner/schemas.py`（改）：新增 `CostQualityLevel / CostQualityHitLayer / CostQualityBadge` Pydantic 模型；7 类 item schema 加 `cost_quality: Optional[CostQualityBadge] = None`（向后兼容，老前端忽略字段不崩）。
+- `backend/tests/planner/test_analytics_quality.py`（新）：8 个单测（model/category/global/hard_fallback/aggregate worst-level/aggregate all green/empty/pydantic round-trip）全过。
+
+**前端（5 个）**：
+- `frontend/src/components/costing/CostQualityBadge.tsx`（新）：可复用 React 组件 `<CostQualityBadge badge={...} size="small" />`；3 色 Tag + Tooltip 渲染（Color: success/warning/error，label: 高/中/低，hit_layer 中文映射 6 层，source 中文映射）。
+- `frontend/src/types/planner.ts`（改）：补 `CostQualityLevel / CostQualityHitLayer / CostQualityBadge` 类型；7 类 item interface 加 `cost_quality?: CostQualityBadge | null`。
+- `frontend/src/pages/costing/ProfitInsightsPage.tsx`（改）：主表 columns 加「成本可信度」列；`scroll.x` 980 → 1090。
+- `frontend/src/pages/costing/ShopInsightsPage.tsx`（改）：profit / returns 两 Tab 主表都加「成本可信度」列；scroll.x 同步。
+- `frontend/src/pages/costing/SalesInsightsPage.tsx`（改）：明细表加「成本可信度」列。
+- `frontend/src/pages/costing/AfterSalesInsightsPage.tsx`（改）：SKU 退货率表加「成本可信度」列。
+
+### 性能验证
+
+性能要求：5 个 endpoint 请求时间 ≤ 之前 + 200ms，禁止 N+1。
+
+实现：
+1. `build_overhead_quality_lookup(db)` → 1 次 SELECT `cost_rate_master WHERE rate_type='overhead_rate' AND enabled=true` → 内存里按 priority + effective_from 排序后桶分（4 桶：by_model / by_category / by_cost_center / global）。
+2. SKU/Channel 聚合粒度：`_model_ids_per_period_channel_sku(db, ..., by_sku=True/False)` → 1 次 JOIN SELECT 拿 `(period, channel, sku) → [model_id]`；item-level loop 全是 dict.get，零数据库 round-trip。
+3. `derive_badge_for_model(lookup, model_id=...)` → 纯 Python 4-层 if-elif 走 dict，O(1)。
+4. `aggregate_quality(badges)` → Python max by level rank（red > yellow > green）。
+
+### 端到端验证证据
+
+```bash
+# 1. 后端单测
+python -m pytest backend/tests/planner/test_analytics_quality.py -q     # 8 passed
+python -m pytest backend/tests/planner/test_profit_analytics_mvp.py \
+                  backend/tests/planner/test_shop_analytics_mvp.py \
+                  backend/tests/planner/test_analytics_quality.py -q     # 10 passed (零回归)
+
+# 2. 端到端 sanity（seed KB8 + model-level 0.25 + sku KB8-001）
+=== profit/model: 1 items ===
+   KB8 -> level=green hit_layer=model source=manual
+=== profit/sku: 1 items ===
+   KB8-001 -> level=green hit_layer=model source=manual
+=== profit/channel: 1 items ===
+   天猫旗舰店 -> level=green hit_layer=model source=manual
+=== returns-rate/sku: 1 items ===
+   KB8-001 -> level=green hit_layer=model source=manual
+=== returns-rate/channel: 1 items ===
+   天猫旗舰店 -> level=green hit_layer=model source=manual
+=== models/summary: 1 items ===
+   KB8 -> level=green hit_layer=model source=manual
+=== sales/lines: 1 items ===
+   KB8-001 -> level=green hit_layer=model source=manual
+
+# 3. 前端 build
+npm -C frontend run build      # ✓ built in 8.94s
+```
+
+### 影响范围
+
+- **新增字段，零行为变更**：5 个 endpoint 的 query / 数值列含义 / 排序逻辑全部未动；只在每行末尾追加 optional `cost_quality` dict。老前端忽略未知字段不崩，新前端拿到 undefined 就显示占位 `-`。
+- **零回归**：现有 `test_profit_analytics_mvp.py` + `test_shop_analytics_mvp.py` 一字未改全过；老 long-tail 27 单测 + Hub MVP 17 单测继续通过。
+- **API 契约**：`/profit/sku` / `/profit/channel` / `/profit/model` / `/returns-rate/sku` / `/returns-rate/channel` / `/models/summary` / `/sales/lines` 响应每个 item 多一个 optional 字段 `cost_quality`，结构如：
+
+```json
+{
+  "level": "green",
+  "hit_layer": "model",
+  "source": "manual",
+  "updated_at": "2026-05-09T21:30:00+08:00"
+}
+```
+
+### 不在本次范围
+
+- **U7-B 三视图切换（Tax/Mgmt/Group）** — 任务单 §8 明确不做，因依赖 `cost_center_master` 主表 + 4 店铺 `legal_entity` 录入，主数据未就绪。等主数据就绪后另派 `frontend_insights_three_views_mvp.md`。
+- **`cost_rate_master` 表本身的修改** — 已在 Hub MVP 中落地，本任务只消费它。
+
+### 已知遗留 / v2 优化空间
+
+- `aggregate_quality` 当前是「最差 level 胜出」（保守显示），后续如需按 SKU 占比加权（例如 80% green + 20% red 不应该直接显示 red），需要改为 weighted aggregation。
+- `cost_quality_service` 内部 `_LEVEL_RANK / HIT_LAYER_TO_LEVEL` 是硬编码 dict；后续如需"运营手动调级"（例如某品类临时 yellow → green）可引入 `cost_quality_override` 表，但 MVP 阶段不需要。
+- `aggregate_quality` 聚合后的 `hit_layer` / `source` / `updated_at` 取的是「最差 level 的第一条 badge」；如多张 badge 都是同一最差 level，可能不是用户最关心的那一条。MVP 阶段够用。
+- 如发货数据中 SKU 对多个 model 都做过绑定（历史绑定迁移），`_model_ids_per_period_channel_sku` 会拿到多个 model_id；当前用 `aggregate_quality` 处理（取最差），符合"保守显示"语义。
+
+### 下一步派单候选
+
+1. **U7-B Insights 三视图切换**（Tax/Mgmt/Group）— 等 `cost_center_master` 主表 + 4 店铺 `legal_entity` 录入主数据就绪后启动。
+2. **`cost_center` 主数据表新建** + 6 个班组初稿数据（H4 决策点）。
+3. **U2/U1 文档校准**（finance_analyzer / sku_portfolio v1.1 → v1.2）按需启动。

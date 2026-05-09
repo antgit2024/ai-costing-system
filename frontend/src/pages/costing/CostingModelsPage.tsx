@@ -37,7 +37,6 @@ import {
   SwapOutlined,
   StopOutlined,
 } from '@ant-design/icons'
-import dayjs from 'dayjs'
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import './CostingModelsPage.css'
@@ -78,6 +77,7 @@ import {
   deriveStandardFromSampleVersion,
 } from '@/services/planner'
 import { normalizeUnit } from '@/utils/unit'
+import { formatBeijingTime } from '@/utils/beijingTime'
 import type {
   Material,
   MaterialQueryParams,
@@ -1505,7 +1505,7 @@ const CostingModelsPage = () => {
       title: '更新时间',
       dataIndex: 'updated_at',
       width: 170,
-      render: (v: string) => dayjs(v).format('YYYY-MM-DD HH:mm'),
+      render: (v: string) => formatBeijingTime(v, 'YYYY-MM-DD HH:mm'),
     },
     {
       title: '操作',

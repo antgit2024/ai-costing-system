@@ -35,7 +35,6 @@ import {
   Radio,
 } from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
-import dayjs from 'dayjs'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
@@ -61,6 +60,7 @@ import type {
   MaterialSyncLogResponse,
 } from '@/types/planner'
 import { MATERIAL_STATUS_OPTIONS } from '@/constants/planner'
+import { formatBeijingTime } from '@/utils/beijingTime'
 import {
   CALCULATION_METHOD_OPTIONS,
   getCalculationMethodLabel,
@@ -849,10 +849,10 @@ const MaterialMasterPage = () => {
           : '全量同步宜搭物料'
     const content =
       mode === 'new_only'
-        ? '将扫描宜搭表单，仅把“本地不存在的物料”新增进来；已存在的物料不会被更新。确认继续？'
+        ? '将扫描宜搭全表，仅把“本地不存在的物料”新增进来；已存在的物料不会被更新。为保护宜搭 API 限额，批量同步 10 分钟内只能触发一次。确认继续？'
         : mode === 'core_fields'
-          ? '将扫描宜搭表单，仅更新关键字段：入库单价/单位、采购单价/单位、采购→入库换算（公式）、采购规格；不会覆盖其它主数据字段。确认继续？'
-          : '将立即触发 YiDa 全量同步任务（新增+更新多数字段，raw_form_data 会全量覆盖），可能需要几分钟完成。确认继续？'
+          ? '将扫描宜搭全表，仅更新关键字段：入库单价/单位、采购单价/单位、采购→入库换算（公式）、采购规格；不会覆盖其它主数据字段。为保护宜搭 API 限额，批量同步 10 分钟内只能触发一次。确认继续？'
+          : '将立即触发 YiDa 全量同步任务（新增+更新多数字段，raw_form_data 会全量覆盖），可能需要几分钟完成。为保护宜搭 API 限额，批量同步 10 分钟内只能触发一次。确认继续？'
     Modal.confirm({
       title,
       content,
@@ -924,8 +924,7 @@ const MaterialMasterPage = () => {
         }
       }
     } catch (error) {
-      const err = error as Error
-      message.error(err.message || '同步失败，请稍后重试')
+      message.error(getErrorMessage(error) || '同步失败，请稍后重试')
     } finally {
       setSyncing(false)
     }
@@ -1209,7 +1208,7 @@ const MaterialMasterPage = () => {
       dataIndex: 'started_at',
       key: 'started_at',
       width: 200,
-      render: (value: string) => dayjs(value).format('YYYY-MM-DD HH:mm'),
+      render: (value: string) => formatBeijingTime(value, 'YYYY-MM-DD HH:mm'),
     },
     {
       title: '结束时间',
@@ -1217,7 +1216,7 @@ const MaterialMasterPage = () => {
       key: 'finished_at',
       width: 200,
       render: (value?: string | null) =>
-        value ? dayjs(value).format('YYYY-MM-DD HH:mm') : '-',
+        value ? formatBeijingTime(value, 'YYYY-MM-DD HH:mm') : '-',
     },
   ]
 
@@ -1341,7 +1340,7 @@ const MaterialMasterPage = () => {
                   {getUsageLabel(getUsageClass(editingMaterial))}
                 </Descriptions.Item>
                 <Descriptions.Item label="最近同步">
-                  {dayjs(editingMaterial.updated_at).format('YYYY-MM-DD HH:mm')}
+                  {formatBeijingTime(editingMaterial.updated_at, 'YYYY-MM-DD HH:mm')}
                 </Descriptions.Item>
               </Descriptions>
             ),

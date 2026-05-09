@@ -166,7 +166,6 @@ import {
   EyeOutlined,
   EditOutlined,
 } from '@ant-design/icons'
-import dayjs from 'dayjs'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Key } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -197,6 +196,7 @@ import {
   updateVirtualMaterial,
 } from '@/services/planner'
 import { CALCULATION_METHOD_OPTIONS, getCalculationMethodLabel } from '@/constants/calculationMethods'
+import { formatBeijingTime } from '@/utils/beijingTime'
 import MaterialDrawer from '@/components/costing/MaterialDrawer'
 
 const { Title, Text } = Typography
@@ -1275,7 +1275,7 @@ const VirtualMaterialsPage = () => {
       dataIndex: 'updated_at',
       key: 'updated_at',
       width: 200,
-      render: (value: string) => dayjs(value).format('YYYY-MM-DD HH:mm'),
+      render: (value: string) => formatBeijingTime(value, 'YYYY-MM-DD HH:mm'),
     },
     {
       title: '操作',
@@ -1464,7 +1464,7 @@ const VirtualMaterialsPage = () => {
                   {currentVirtualMaterial.status === 'active' ? '启用' : '草稿'}
                 </Tag>
                 <Text type="secondary">
-                  更新于 {dayjs(currentVirtualMaterial.updated_at).format('YYYY-MM-DD HH:mm')}
+                  更新于 {formatBeijingTime(currentVirtualMaterial.updated_at, 'YYYY-MM-DD HH:mm')}
                 </Text>
               </>
             ) : null}

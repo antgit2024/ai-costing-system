@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Alert, Button, Card, Col, Input, InputNumber, Modal, Row, Select, Space, Switch, Table, Tag, Typography, message } from 'antd'
+import { Alert, Button, Card, Col, Input, InputNumber, Modal, Row, Select, Space, Switch, Table, Tag, Tooltip, Typography, message } from 'antd'
 // ColumnsType used by legacy rule list UI (removed)
 import { DeleteOutlined, EditOutlined, PlayCircleOutlined } from '@ant-design/icons'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -16,6 +16,7 @@ import {
 } from '@/services/planner'
 import MaterialPickerDrawer from '@/components/costing/MaterialPickerDrawer'
 import { normalizeUnit as normalizeUnitText } from '@/utils/unit'
+import { formatBeijingTime } from '@/utils/beijingTime'
 import type {
   BomGenerateResponse,
   LineVariantAction,
@@ -195,6 +196,58 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
     if (!raw) return null
     return `MODEL:${raw.toUpperCase()}`
   }, [modelCode])
+
+  const normalizeVariantCode = (v: unknown): string => String(v ?? '').trim().toUpperCase()
+
+  const existingVariantCodes = useMemo(() => {
+    const out = new Set<string>()
+    const add = (v: unknown) => {
+      const s = normalizeVariantCode(v)
+      if (s) out.add(s)
+    }
+    for (const row of modalRows) {
+      const meta: any = row.metadata_json ?? {}
+      add(meta.variant_code)
+      for (const t of [...(row.token_any ?? []), ...(row.token_all ?? [])]) {
+        const raw = normalizeVariantCode(t)
+        const s = raw.startsWith('SKU:') ? raw.slice(4) : raw
+        if (modelCode && s.startsWith(`${String(modelCode).trim().toUpperCase()}-`)) add(s)
+      }
+    }
+    for (const v of variants as any[]) {
+      const meta: any = v?.metadata ?? {}
+      add(meta.variant_code)
+      const cond: any = v?.conditions ?? {}
+      for (const t of [...asStringArray(cond?.spec_contains_any), ...asStringArray(cond?.spec_contains_all)]) {
+        const raw = normalizeVariantCode(t)
+        const s = raw.startsWith('SKU:') ? raw.slice(4) : raw
+        if (modelCode && s.startsWith(`${String(modelCode).trim().toUpperCase()}-`)) add(s)
+      }
+    }
+    return out
+  }, [modalRows, modelCode, variants])
+
+  // ⚠️ 变体编码（KB8-001）是变体的"身份证"——一旦分配，**永不变化**，不可编辑。
+  //   - 在新增 token 一级时一次性自动分配并写入 metadata_json.variant_code
+  //   - 已有 variant_code 的行（modalRows / variants），下次新增时跳过这些号码避免冲突
+  //   - 后续操作（编辑 token / 维度 / 启停 / 保存…）都不会动它
+  // 这是为了让运营把它填到天猫商家编码后保持稳定锚点，不会因为产品模型其他改动而漂移。
+  const allocateNextVariantCode = (extraTaken?: Iterable<string>): string | null => {
+    const taken = new Set<string>(existingVariantCodes)
+    if (extraTaken) {
+      for (const v of extraTaken) {
+        const s = normalizeVariantCode(v)
+        if (s) taken.add(s)
+      }
+    }
+    const prefix = String(modelCode ?? '').trim().toUpperCase()
+    if (!prefix) return null
+    for (let i = 1; i <= 999; i += 1) {
+      const code = `${prefix}-${String(i).padStart(3, '0')}`
+      if (!taken.has(code)) return code
+    }
+    return null
+  }
 
   // Base line defaults (β/α/覆盖率/损耗% / 计量方式) for better UX when creating replacement items.
   const baseLineQuery = useQuery({
@@ -899,6 +952,23 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
 
   const addModalRow = () => {
     const key = `tmp-${Date.now()}-${Math.random().toString(16).slice(2)}`
+    // 仅 token 类型一级才自动分配变体编码（size/area/perimeter/diameter 是子规则，不需要独立编码）
+    let metadataJson: Record<string, any> = {}
+    if (draftTriggerType === 'token') {
+      // 把当前编辑会话中"还没保存到数据库"的临时新增行的 variant_code 也算进 taken，
+      // 避免连续点两次"新增一级"分配到同一个号
+      const extraTaken = new Set<string>()
+      for (const row of modalRows) {
+        const c = normalizeVariantCode((row.metadata_json as any)?.variant_code)
+        if (c) extraTaken.add(c)
+      }
+      const code = allocateNextVariantCode(extraTaken)
+      if (!code) {
+        message.error(modelCode ? '可用变体编码已满（001-999）' : '缺少模型编码，无法新增变体（请先在产品模型保存模型编码）')
+        return
+      }
+      metadataJson = { variant_code: code, variant_code_source: 'auto' }
+    }
     setModalRows((prev) => [
       ...prev,
       {
@@ -906,7 +976,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
         enabled: false,
         trigger_type: draftTriggerType,
         parent_variant_id: null,
-        metadata_json: {},
+        metadata_json: metadataJson,
         dirty: true,
         token_mode: 'all',
         op: 'gte',
@@ -1102,7 +1172,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                         })}
                         columns={[
                           {
-                            title: 'TOKEN表达式',
+                            title: '触发关键词',
                             render: (_: any, r: ModalRuleRow) => {
                               const mode = inferTokenMode(r)
                               const tokenArr = mode === 'all' ? r.token_all : r.token_any
@@ -1112,7 +1182,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                               return (
                                 <Space direction="vertical" size={2} style={{ width: '100%' }}>
                                   <Space wrap size={6}>
-                                    <Tag color="blue">{mode === 'all' ? 'token(all)' : 'token(any)'}</Tag>
+                                    <Tag color="blue">{mode === 'all' ? '全部命中' : '任一命中'}</Tag>
                                     {hasChild ? <Tag color="orange">二级:{childLabel}</Tag> : <Tag>无二级</Tag>}
                                   </Space>
                                   <Space wrap size={6}>
@@ -1190,6 +1260,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
 
                       const parentMode = inferTokenMode(parent)
                       const parentTokenStr = (parentMode === 'all' ? parent.token_all : parent.token_any).join(',')
+                      const parentVariantCode = normalizeVariantCode((parent.metadata_json as any)?.variant_code)
 
                       return (
                         <Space direction="vertical" size={12} style={{ width: '100%' }}>
@@ -1212,14 +1283,16 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                                 <Row gutter={8} align="middle" wrap={false}>
                                   <Col flex="auto">
                                     <Space wrap size={8}>
-                                      <Tag color="blue">TOKEN 条件表达式</Tag>
+                                      <Tooltip title="触发关键词：商品规格里包含这些词时，本变体生效（替换为指定材料/工艺）。例如填“麻感冰丝, 麻感沙发垫”后，SKU 属性出现任一关键词都会命中。">
+                                        <Tag color="blue">触发关键词</Tag>
+                                      </Tooltip>
                                       <Select
                                         size="small"
                                         value={parentMode}
-                                        style={{ width: 120 }}
+                                        style={{ width: 140 }}
                                         options={[
-                                          { label: 'token(all)', value: 'all' },
-                                          { label: 'token(any)', value: 'any' },
+                                          { label: '全部命中(all)', value: 'all' },
+                                          { label: '任一命中(any)', value: 'any' },
                                         ]}
                                         onChange={(v) => {
                                           const next = (v as any) ?? 'all'
@@ -1241,15 +1314,65 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                                       />
                                       <Input
                                         size="small"
-                                        style={{ width: 220 }}
+                                        style={{ width: 240 }}
                                         value={parentTokenStr}
-                                        placeholder="token 可空，逗号分隔"
+                                        placeholder="关键词可空，逗号分隔多个"
                                         onChange={(e) => {
                                           const arr = splitTokens(e.target.value)
                                           updateModalRow(parent.key, parentMode === 'all' ? { token_all: arr } : { token_any: arr })
                                         }}
                                       />
+                                      {parentVariantCode ? (
+                                        <Tooltip title="变体编码是变体的“身份证”，新增时一次性自动分配、永不可改。把它填到天猫商家编码（如 KB8-001 或 KB8-001-TMALL）即可绕开 TOKEN 直接命中本变体。">
+                                          <Tag color="purple" style={{ fontFamily: 'monospace' }}>
+                                            变体编码：{parentVariantCode}（不可改）
+                                          </Tag>
+                                        </Tooltip>
+                                      ) : (
+                                        <Tooltip title="历史数据没有变体编码：该变体仍按 TOKEN 表达式命中。删除并重新新增即可获得变体编码。">
+                                          <Tag color="default">无变体编码（历史数据）</Tag>
+                                        </Tooltip>
+                                      )}
                                       {hasChild ? <Tag color="orange">存在二级：一级仅作 token 门槛（可空）</Tag> : <Tag color="green">无二级：本级替换生效</Tag>}
+                                    </Space>
+                                  </Col>
+                                </Row>
+                              </Col>
+
+                              {/*
+                                对客显示 —— 标准模型列表"货品映射"列、SKU Master / 筛选器 /
+                                天猫页等所有"展示变体"的地方都按 `display_name → items[0].material_name`
+                                的优先级取展示名。空值即沿用物料名（向后兼容）。
+                                典型场景：兜底变体的实际物料是内部库存名"布料隔針蜂窝本白"，
+                                但卖家秀想给客人展示成"麻感冰丝"——填这里，不影响 BOM/成本。
+                              */}
+                              <Col span={24}>
+                                <Row gutter={8} align="middle" wrap={false}>
+                                  <Col flex="auto">
+                                    <Space wrap size={8} align="center">
+                                      <Tooltip title="只影响展示（标准模型列表“货品映射”列、SKU Master、天猫页、筛选器等）。BOM 与成本仍按真实替换物料计算，不受影响。留空则沿用替换物料的内部库存名。">
+                                        <Tag color="cyan">对客显示</Tag>
+                                      </Tooltip>
+                                      <Input
+                                        size="small"
+                                        style={{ width: 240 }}
+                                        allowClear
+                                        placeholder="例如：麻感冰丝（留空则用物料名）"
+                                        value={String(((parent.metadata_json as any)?.display_name) ?? '')}
+                                        onChange={(e) => {
+                                          const next = e.target.value
+                                          const meta = { ...((parent.metadata_json ?? {}) as any) }
+                                          if (next.trim()) {
+                                            meta.display_name = next
+                                          } else {
+                                            delete meta.display_name
+                                          }
+                                          updateModalRow(parent.key, { metadata_json: meta } as any)
+                                        }}
+                                      />
+                                      <Text type="secondary" style={{ fontSize: 12 }}>
+                                        仅展示用，不改 BOM
+                                      </Text>
                                     </Space>
                                   </Col>
                                 </Row>
@@ -1798,10 +1921,10 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                           <Select
                             size="small"
                             value={mode}
-                            style={{ width: 120 }}
+                            style={{ width: 140 }}
                             options={[
-                              { label: 'token(all)', value: 'all' },
-                              { label: 'token(any)', value: 'any' },
+                              { label: '全部命中(all)', value: 'all' },
+                              { label: '任一命中(any)', value: 'any' },
                             ]}
                             onChange={(v) => {
                               const next = (v as TokenMode) ?? 'all'
@@ -2116,7 +2239,7 @@ export default function LineVariantDrawer(props: LineVariantDrawerProps) {
                     }
                     description={
                       <div style={{ fontSize: 12 }}>
-                        <div>时间：{new Date(lastPreviewAt).toLocaleString()}</div>
+                        <div>时间：{formatBeijingTime(lastPreviewAt)}</div>
                         {lastPreviewOk && lastPreviewSummary ? (
                           <>
                             <div>spec_text：{lastPreviewSummary.spec_text}</div>

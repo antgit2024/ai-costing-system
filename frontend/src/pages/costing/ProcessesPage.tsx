@@ -29,11 +29,11 @@ import {
   message,
 } from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
-import dayjs from 'dayjs'
 import { useEffect, useMemo, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery } from '@tanstack/react-query'
 import { isAxiosError } from 'axios'
 import { normalizeUnit } from '@/utils/unit'
+import { formatBeijingTime } from '@/utils/beijingTime'
 import GuideDrawer from '@/components/common/GuideDrawer'
 import ProcessAIDrawer from '@/components/costing/ProcessAIDrawer'
 
@@ -589,7 +589,7 @@ const ProcessesPage = () => {
       title: '更新时间',
       dataIndex: 'updated_at',
       width: 150,
-      render: (value: string) => dayjs(value).format('YYYY-MM-DD HH:mm'),
+      render: (value: string) => formatBeijingTime(value, 'YYYY-MM-DD HH:mm'),
     },
     {
       title: '操作',

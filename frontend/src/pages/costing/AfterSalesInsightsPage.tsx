@@ -42,8 +42,14 @@ import type {
   AfterSalesDashboardResponse,
   PaginatedAfterSalesLinesResponse,
 } from '@/types/planner'
-import BoundTargetPicker from '@/components/common/BoundTargetPicker'
-import type { BoundTargetPickerFilters, BoundTargetPickerValue } from '@/components/common/BoundTargetPicker'
+// 通用绑定目标选择器（弹窗浏览模式）；filters 派生与原 BoundTargetPickerFilters 同形，
+// 后端字段名 bound_model_code / bundle_template_code / bundle_preset_selector 沿用。
+import {
+  TargetPickerBrowserButton,
+  targetSelectionToBoundFilters,
+  renderTargetSelectionTags,
+} from '@/components/common/TargetPicker'
+import type { TargetSelection } from '@/components/common/TargetPicker'
 import { CostQualityBadge } from '@/components/costing/CostQualityBadge'
 
 type GroupBy = 'day' | 'month'
@@ -157,8 +163,8 @@ const AfterSalesInsightsPage = () => {
   const didInitRef = useRef(false)
   const [uploadDrawerOpen, setUploadDrawerOpen] = useState(false)
   const [batchesDrawerOpen, setBatchesDrawerOpen] = useState(false)
-  const [boundTarget, setBoundTarget] = useState<BoundTargetPickerValue>({ kind: 'any' })
-  const [boundTargetFilters, setBoundTargetFilters] = useState<BoundTargetPickerFilters>({})
+  const [boundTarget, setBoundTarget] = useState<TargetSelection | null>(null)
+  const boundTargetFilters = useMemo(() => targetSelectionToBoundFilters(boundTarget), [boundTarget])
 
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState<string | null>(null)
@@ -643,13 +649,15 @@ const AfterSalesInsightsPage = () => {
           {showAdvanced ? (
             <>
               <Form.Item label="模型/套装">
-                <BoundTargetPicker
-                  value={boundTarget}
-                  onChange={(next, filters) => {
-                    setBoundTarget(next)
-                    setBoundTargetFilters(filters)
-                  }}
-                />
+                <Space size={8} wrap>
+                  <TargetPickerBrowserButton
+                    value={boundTarget}
+                    onChange={setBoundTarget}
+                    buttonProps={{ size: 'small' }}
+                    placeholder="选择模型/套装（筛选）"
+                  />
+                  {renderTargetSelectionTags(boundTarget)}
+                </Space>
               </Form.Item>
               <Form.Item label="链接ID" name="product_link_id">
                 <Input placeholder="可选：product_link_id（明细/钻取）" style={{ width: 220 }} allowClear />
@@ -727,14 +735,12 @@ const AfterSalesInsightsPage = () => {
               >
                 重置
               </Button>
-              {showAdvanced ? (
-                <>
-                  <Button onClick={() => setUploadDrawerOpen(true)}>上传/导入</Button>
-                  <Button onClick={() => setBatchesDrawerOpen(true)} loading={batchesQuery.isFetching}>
-                    导入记录
-                  </Button>
-                </>
-              ) : null}
+              <Button type="primary" onClick={() => setUploadDrawerOpen(true)}>
+                上传/导入售后退货
+              </Button>
+              <Button onClick={() => setBatchesDrawerOpen(true)} loading={batchesQuery.isFetching}>
+                导入记录
+              </Button>
               {lastImportSummary ? (
                 <Typography.Text type="secondary" ellipsis style={{ maxWidth: 520 }}>
                   最近导入：{lastImportSummary}
@@ -1201,7 +1207,7 @@ const AfterSalesInsightsPage = () => {
                     columns={columns}
                     dataSource={data?.items ?? []}
                     pagination={{ pageSize: 50, showSizeChanger: true }}
-                    scroll={{ x: 1100 }}
+                    scroll={{ x: 1210 }}
                   />
                 </>
               ),
@@ -1286,6 +1292,8 @@ const AfterSalesInsightsPage = () => {
                   return
                 }
                 setUploading(true)
+                const msgKey = 'after_sales_import'
+                message.open({ key: msgKey, type: 'loading', content: '正在上传并导入…（大文件可能需要几十秒）', duration: 0 })
                 try {
                   const resp = await importAfterSalesXlsx({
                     file: uploadFile,
@@ -1295,11 +1303,18 @@ const AfterSalesInsightsPage = () => {
                   setLastImportSummary(
                     `batch=${resp.id} 插入${resp.inserted_rows} 跳过${resp.skipped_rows} 异常${resp.exception_rows}`,
                   )
-                  message.success('售后退货单导入成功')
+                  message.open({ key: msgKey, type: 'success', content: '售后退货单导入成功', duration: 3 })
                   setUploadFile(null)
                   batchesQuery.refetch()
+                  setUploadDrawerOpen(false)
+                  setBatchesDrawerOpen(true)
                 } catch (e: any) {
-                  message.error(String(e?.response?.data?.detail ?? e?.message ?? e))
+                  message.open({
+                    key: msgKey,
+                    type: 'error',
+                    content: `导入失败：${String(e?.response?.data?.detail ?? e?.message ?? e)}`,
+                    duration: 6,
+                  })
                 } finally {
                   setUploading(false)
                 }

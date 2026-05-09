@@ -41,7 +41,8 @@ def require_admin_key(
 
 
 # 允许访问 ai-costing 全域 router 的角色白名单 · 见 COSTING-C1 §3.B
-_ALLOWED_STAFF_ROLES = {"admin", "operator", "finance"}
+# POD 的工厂管理员也需要进入算价后台查看/维护工厂侧成本资料。
+_ALLOWED_STAFF_ROLES = {"admin", "operator", "finance", "factory_admin"}
 
 
 def require_staff_role(

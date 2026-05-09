@@ -38,12 +38,12 @@ import {
   RobotOutlined,
   StopOutlined,
 } from '@ant-design/icons'
-import dayjs from 'dayjs'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Key } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { normalizeUnit } from '@/utils/unit'
+import { formatBeijingTime } from '@/utils/beijingTime'
 import {
   activateProcessModule,
   copyProcessModule,
@@ -1008,7 +1008,7 @@ const ProcessModulesPage = () => {
       dataIndex: 'updated_at',
       key: 'updated_at',
       width: 150,
-      render: (value: string) => dayjs(value).format('YYYY-MM-DD HH:mm'),
+      render: (value: string) => formatBeijingTime(value, 'YYYY-MM-DD HH:mm'),
     },
     {
       title: '操作',

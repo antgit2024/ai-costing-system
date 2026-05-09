@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react'
-import dayjs from 'dayjs'
 import { Button, Card, Col, Input, Modal, Row, Select, Space, Switch, Table, Tag, Tooltip, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useQuery } from '@tanstack/react-query'
@@ -16,6 +15,7 @@ import {
 } from '@/services/planner'
 import type { ProductModel } from '@/types/planner'
 import ProductModelEditorDrawer from '@/components/costing/ProductModelEditorDrawer'
+import { formatBeijingTime } from '@/utils/beijingTime'
 
 const { Title, Text } = Typography
 
@@ -75,7 +75,10 @@ export default function StandardModelsPage() {
   const [category, setCategory] = useState<string | undefined>(undefined)
   const [includeArchived, setIncludeArchived] = useState(false)
   const [page] = useState(1)
-  const [pageSize] = useState(50)
+  // NOTE: 标准模型页会先拉取“全部主模型”再按“标准入口/存在标准版本/有发布标准”做前端过滤。
+  // page_size 过小会导致满足条件的模型在分页阶段被截掉（曾经 50 时只显示 1 条 YS2）。
+  // 这里直接使用后端上限 200；若未来主模型总数超过 200，需要改为后端按 version_kind/entry_context 过滤。
+  const [pageSize] = useState(200)
 
   const [editorOpen, setEditorOpen] = useState(false)
   const [editingModelId, setEditingModelId] = useState<string | null>(null)
@@ -262,41 +265,89 @@ export default function StandardModelsPage() {
     { title: '品类', dataIndex: 'category', width: 70, render: (v: any) => String(v ?? '').trim() || '-' },
     { title: '模型名称', dataIndex: 'model_name', width: 160 },
     {
-      title: '货品映射',
-      width: 420,
+      // 原"货品映射"在这里展示的是 model.metadata_json.recognition_keywords，
+      // 用途是 sku-master 自动绑定时的关键词兜底（详见型号识别规则页签）。
+      // 它本质是"识别用关键词标签"，不是真正映射到天猫商家编码的"货品"，因此正名为"关键词标签"。
+      // 真正的"货品映射"由下面新增的列承载，展示该模型已发布标准版本下的所有变体编码（KB8-001 / KB8-002 ...）。
+      title: '关键词标签',
+      width: 280,
       render: (_: any, r: any) => {
         const meta: any = (r as any)?.metadata_json ?? {}
         const raw = Array.isArray(meta?.recognition_keywords) ? meta.recognition_keywords : []
-        const keywords = raw
-          .map((x: any) => String(x ?? '').trim())
-          .filter((x: string) => x)
-        // de-dup preserve order
         const seen = new Set<string>()
         const uniq: string[] = []
-        for (const k of keywords) {
-          if (seen.has(k)) continue
-          seen.add(k)
-          uniq.push(k)
+        for (const x of raw) {
+          const s = String(x ?? '').trim()
+          if (!s || seen.has(s)) continue
+          seen.add(s)
+          uniq.push(s)
         }
         if (!uniq.length) return <Text type="secondary">-</Text>
-
-        const show = uniq.slice(0, 3)
+        const show = uniq.slice(0, 4)
         const rest = uniq.length - show.length
-        const content = (
-          <Space size={6} wrap>
+        const tags = (
+          <Space size={4} wrap>
             {show.map((k) => (
-              <KeywordPill key={k} keyword={k} />
+              <Tag key={k} style={{ marginInlineEnd: 0 }}>
+                {k}
+              </Tag>
+            ))}
+            {rest > 0 ? <Tag color="default">+{rest}</Tag> : null}
+          </Space>
+        )
+        if (rest <= 0) return tags
+        return (
+          <Tooltip
+            getPopupContainer={() => document.body}
+            title={
+              <Space size={4} wrap>
+                {uniq.map((k) => (
+                  <Tag key={k} style={{ marginInlineEnd: 0 }}>
+                    {k}
+                  </Tag>
+                ))}
+              </Space>
+            }
+          >
+            {tags}
+          </Tooltip>
+        )
+      },
+    },
+    {
+      // 真正的"货品映射"：模型已发布标准版本下所有变体的"物料名(变体编码)"摘要，
+      // 例如 仿羊绒(KB8-001) / 多尼尔(KB8-002)。
+      // 每个变体 = 一种可对外的"货品"，运营把变体编码填到天猫商家编码即可锚定。
+      title: '货品映射',
+      width: 420,
+      render: (_: any, r: any) => {
+        const briefs: Array<{ variant_code: string; material_name?: string | null }> = Array.isArray(
+          (r as any)?.current_published_variant_codes,
+        )
+          ? (r as any).current_published_variant_codes
+          : []
+        if (!briefs.length) return <Text type="secondary">-</Text>
+        const formatLabel = (b: { variant_code: string; material_name?: string | null }) => {
+          const name = String(b.material_name ?? '').trim()
+          const code = String(b.variant_code ?? '').trim()
+          return name ? `${name}(${code})` : code
+        }
+        const show = briefs.slice(0, 4)
+        const rest = briefs.length - show.length
+        const pills = (
+          <Space size={6} wrap>
+            {show.map((b) => (
+              <KeywordPill key={b.variant_code} keyword={formatLabel(b)} />
             ))}
             {rest > 0 ? (
               <span
                 style={{
-                  // 与 KeywordPill 统一风格（中性彩色通过 alpha 压亮度）
                   display: 'inline-block',
                   padding: '1px 8px',
                   borderRadius: 999,
-                  border: '1px solid var(--app-border)',
-                  background: 'var(--app-bg-elevated)',
-                  color: 'var(--app-text-muted)',
+                  border: '1px solid var(--ant-color-border)',
+                  background: 'var(--ant-color-fill-tertiary)',
+                  color: 'var(--ant-color-text-secondary)',
                   fontSize: 11,
                   lineHeight: '18px',
                   whiteSpace: 'nowrap',
@@ -307,20 +358,19 @@ export default function StandardModelsPage() {
             ) : null}
           </Space>
         )
-
-        if (rest <= 0) return content
+        if (rest <= 0) return pills
         return (
           <Tooltip
             getPopupContainer={() => document.body}
             title={
               <Space size={6} wrap>
-                {uniq.map((k) => (
-                  <KeywordPill key={k} keyword={k} />
+                {briefs.map((b) => (
+                  <KeywordPill key={b.variant_code} keyword={formatLabel(b)} />
                 ))}
               </Space>
             }
           >
-            {content}
+            {pills}
           </Tooltip>
         )
       },
@@ -408,8 +458,7 @@ export default function StandardModelsPage() {
       render: (v: any) => {
         const s = String(v ?? '').trim()
         if (!s) return '-'
-        const d = dayjs(s)
-        return d.isValid() ? d.format('YYYY-MM-DD HH:mm') : s
+        return formatBeijingTime(s, 'YYYY-MM-DD HH:mm')
       },
     },
     {
@@ -532,7 +581,10 @@ export default function StandardModelsPage() {
           <Title level={3} style={{ marginBottom: 4 }}>
             标准模型
           </Title>
-          <Text type="secondary">标准模型以“标准版本（100×100cm×1）”为核算单元，支持发布与SKU绑定。</Text>
+          <Space direction="vertical" size={2}>
+            <Text type="secondary">1、按“结构 + 工艺 + 计价公式”建产品模型，不按销售品名建，也不单纯按材质建。</Text>
+            <Text type="secondary">2、标准模型负责“一个物品怎么算成本”，套装模板负责“多个物品怎么组合销售 / 组合出 BOM”。</Text>
+          </Space>
         </div>
       </div>
 
@@ -552,7 +604,7 @@ export default function StandardModelsPage() {
                 allowClear
                 value={mappingSearch}
                 onChange={(e) => setMappingSearch(e.target.value)}
-                placeholder="搜索货品映射（关键词）"
+                placeholder="搜索关键词标签（识别关键词）"
                 style={{ width: 260 }}
               />
               <Select

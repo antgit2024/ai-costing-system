@@ -103,6 +103,40 @@ def _serialize_model(db: Session, model: models.ProductModel) -> schemas.Product
     if published_std:
         result.current_published_standard_version_id = published_std.id
         result.current_published_standard_version_label = published_std.version_label
+        # 抽取该已发布版本下所有变体的"货品映射"摘要（变体编码 + 替换物料名）。
+        # 用于"标准模型列表 - 货品映射"列，例如：仿羊绒(KB8-001) / 多尼尔(KB8-002)
+        variant_rows = (
+            db.query(models.ProductModelLineVariant)
+            .filter(
+                models.ProductModelLineVariant.version_id == published_std.id,
+                models.ProductModelLineVariant.is_archived.is_(False),
+            )
+            .all()
+        )
+        seen: set[str] = set()
+        briefs: list[schemas.VariantCodeBrief] = []
+        for vr in variant_rows:
+            meta = vr.metadata_json or {}
+            code = str(meta.get("variant_code") or "").strip().upper()
+            if not code or code in seen:
+                continue
+            seen.add(code)
+            # 展示名优先级：
+            #   1. metadata_json.display_name（用户显式填的"对客显示名"，如"麻感冰丝"）
+            #   2. items[0].material_name（兜底：实际替换物料的内部库存名，如"布料隔針蜂窝本白"）
+            # 这样运营可以在变体编辑里把内部物料名（"布料隔針蜂窝本白"）换成卖家秀对客名（"麻感冰丝"），
+            # 而不影响 BOM / 成本计算（material_code / material_ref_id 仍指向真实物料）。
+            display_name = str(meta.get("display_name") or "").strip() or None
+            material_name: Optional[str] = display_name
+            if not material_name:
+                for it in vr.items or []:
+                    name = str(getattr(it, "material_name", "") or "").strip()
+                    if name:
+                        material_name = name
+                        break
+            briefs.append(schemas.VariantCodeBrief(variant_code=code, material_name=material_name))
+        briefs.sort(key=lambda b: b.variant_code)
+        result.current_published_variant_codes = briefs
 
     # Latest sample version (for list thumbnails) - prefer versions with images to reduce 404s
     # Note: image URLs are served by `/api/planner/product-model-versions/{version_id}/images/{idx}`.

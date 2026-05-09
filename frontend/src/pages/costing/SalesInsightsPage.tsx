@@ -13,6 +13,7 @@ import {
   Statistic,
   Table,
   Tabs,
+  Tag,
   Tooltip,
   Typography,
   message,
@@ -26,8 +27,14 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { InfoCircleOutlined } from '@ant-design/icons'
 import { LeftOutlined, RightOutlined } from '@ant-design/icons'
 
-import BoundTargetPicker from '@/components/common/BoundTargetPicker'
-import type { BoundTargetPickerFilters, BoundTargetPickerValue } from '@/components/common/BoundTargetPicker'
+// 通用绑定目标选择器（弹窗浏览模式）；输出 selection → 用 targetSelectionToBoundFilters 派生与原 BoundTargetPickerFilters 同形的扁平字段，
+// 后端 query body 对接代码（bound_model_code / bundle_template_code / bundle_preset_selector）零改动。
+import {
+  TargetPickerBrowserButton,
+  targetSelectionToBoundFilters,
+  renderTargetSelectionTags,
+} from '@/components/common/TargetPicker'
+import type { TargetSelection } from '@/components/common/TargetPicker'
 import {
   fetchSalesLines,
   fetchSalesProfitDashboard,
@@ -36,6 +43,7 @@ import {
 } from '@/services/planner'
 import type { SalesLineItem, SalesLinesResponse, SalesProfitDashboardResponse, SalesProfitDashboardTopModelItem, SalesProfitDashboardTopSkuItem } from '@/types/planner'
 import { CostQualityBadge } from '@/components/costing/CostQualityBadge'
+import { formatBeijingTime } from '@/utils/beijingTime'
 
 const STORAGE_KEY = 'insights.sales.lastQuery.v1'
 
@@ -66,11 +74,7 @@ const formatDateToDay = (raw?: string | null) => {
 }
 
 const formatDateTime = (raw?: string | null) => {
-  if (!raw) return '-'
-  const s = String(raw)
-  const d = dayjs(s)
-  if (!d.isValid()) return s
-  return d.format('YYYY-MM-DD HH:mm:ss')
+  return formatBeijingTime(raw, 'YYYY-MM-DD HH:mm:ss')
 }
 
 const Sparkline = ({
@@ -144,8 +148,9 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
   const [periodMode, setPeriodMode] = useState<SalesPeriodMode>('custom')
   const [anchorDate, setAnchorDate] = useState(() => dayjs().subtract(1, 'day').startOf('day'))
   const [showAdvanced, setShowAdvanced] = useState(false)
-  const [boundTarget, setBoundTarget] = useState<BoundTargetPickerValue>({ kind: 'any' })
-  const [boundTargetFilters, setBoundTargetFilters] = useState<BoundTargetPickerFilters>({})
+  // 通用绑定目标 selection；filters 用 useMemo 派生（与旧 BoundTargetPickerFilters 同形）
+  const [boundTarget, setBoundTarget] = useState<TargetSelection | null>(null)
+  const boundTargetFilters = useMemo(() => targetSelectionToBoundFilters(boundTarget), [boundTarget])
   const [lastQuery, setLastQuery] = useState<{
     start: string
     end: string
@@ -385,8 +390,7 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
       order_no: undefined,
       product_link_id: undefined,
     })
-    setBoundTarget({ kind: 'any' })
-    setBoundTargetFilters({})
+    setBoundTarget(null)
 
     const range = computedRange as unknown as [dayjs.Dayjs, dayjs.Dayjs]
     const base = {
@@ -433,15 +437,22 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
       {
         title: '模型/套装（绑定）',
         key: 'bound_model',
-        width: 260,
+        width: 280,
         render: (_v, r) => {
           const code = String((r as any)?.bound_model_code ?? '').trim()
           const name = String((r as any)?.bound_model_name ?? '').trim()
-          const s = [code, name].filter(Boolean).join(' ')
-          if (!s) return '-'
+          // 优先展示具体变体（如 "麻感冰丝(KB8-001)"），与 sku-master / 发货页同语义；
+          // 没绑变体（兜底"按模型基础线"）才回退到 model 名。
+          const variantLabel = String((r as any)?.bound_variant_label ?? '').trim()
+          if (!code && !variantLabel) return '-'
           return (
-            <span style={{ display: 'inline-block', maxWidth: 250, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {s}
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, maxWidth: 270, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {code ? <Tag color="blue" style={{ marginInlineEnd: 0 }}>{code}</Tag> : null}
+              {variantLabel ? (
+                <Tag color="cyan" style={{ marginInlineEnd: 0 }}>{variantLabel}</Tag>
+              ) : name ? (
+                <span style={{ color: '#666' }}>{name}</span>
+              ) : null}
             </span>
           )
         },
@@ -840,13 +851,15 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
           {showAdvanced ? (
             <>
               <Form.Item label="模型/套装">
-                <BoundTargetPicker
-                  value={boundTarget}
-                  onChange={(next, filters) => {
-                    setBoundTarget(next)
-                    setBoundTargetFilters(filters)
-                  }}
-                />
+                <Space size={8} wrap>
+                  <TargetPickerBrowserButton
+                    value={boundTarget}
+                    onChange={setBoundTarget}
+                    buttonProps={{ size: 'small' }}
+                    placeholder="选择模型/套装（筛选）"
+                  />
+                  {renderTargetSelectionTags(boundTarget)}
+                </Space>
               </Form.Item>
               <Form.Item label="原始单号" name="order_no">
                 <Input placeholder="可选：order_no" style={{ width: 180 }} allowClear />
@@ -966,7 +979,7 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
                       {useSnapshot && dashboardComputedAt ? (
                         <Typography.Text type="secondary">数据更新时间：{formatDateTime(dashboardComputedAt)}</Typography.Text>
                       ) : null}
-                      <Typography.Text type="secondary">时间口径：按发货完成时间（成本口径一致）</Typography.Text>
+                      <Typography.Text type="secondary">时间口径：按发货时间（成本口径一致）</Typography.Text>
                     </Space>
                   </div>
 

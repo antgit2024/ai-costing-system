@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import dayjs from 'dayjs'
 import {
   Alert,
   Button,
@@ -47,6 +46,7 @@ import {
   UnlockOutlined,
 } from '@ant-design/icons'
 import { normalizeUnit } from '@/utils/unit'
+import { formatBeijingTime } from '@/utils/beijingTime'
 import GuideDrawer from '@/components/common/GuideDrawer'
 import derivePerSqmGuide from '@doc/costing/manuals/guides/derive_standard_per_sqm_tablecloth_example.md?raw'
 import sampleLinesGuide from '@doc/costing/manuals/guides/sample_lines_guide.md?raw'
@@ -299,7 +299,6 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   const [activeTab, setActiveTab] = useState<'basic' | 'versions' | 'lines'>('lines')
   // 标准模型：型号识别规则（用于 SKU 自动绑定模型）
   const [recognitionDraftKeywords, setRecognitionDraftKeywords] = useState<string[]>([])
-  const [recognitionNewKeyword, setRecognitionNewKeyword] = useState<string>('')
   const [recognitionValidateResult, setRecognitionValidateResult] = useState<
     { ok: boolean; normalized_keywords: string[]; conflicts: Record<string, string> } | null
   >(null)
@@ -501,7 +500,6 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     const kws = Array.isArray(meta.recognition_keywords) ? meta.recognition_keywords.map((x: any) => String(x)) : []
     setRecognitionDraftKeywords(kws)
     setRecognitionValidateResult(null)
-    setRecognitionNewKeyword('')
   }, [entryContext, modelQuery.data])
 
   const versionsQuery = useQuery({
@@ -1174,7 +1172,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     // Choose version (IMPORTANT: do NOT override user's current selection on every refetch).
     // - first open: initialVersionId (if exists)
     // - otherwise: keep current selectedVersionId if it still exists
-    // - fallback: latest draft of desired kind > first of desired kind
+    // - fallback：见下方"默认版本"算法
     const current = String(selectedVersionId ?? '').trim()
     if (current && items.some((v) => v.id === current)) {
       return
@@ -1183,10 +1181,18 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
       setSelectedVersionId(initialVersionId)
       return
     }
-    const preferred =
-      items.find((v) => v.version_kind === desiredKind && v.version_status === 'draft') ??
-      items.find((v) => v.version_kind === desiredKind) ??
-      null
+    // 默认版本算法（修复 BUG：避免误选"已归档草稿"导致清单显示历史占位物料如 VM00023）：
+    //   1) 永远跳过 is_archived（"显示已归档" toggle 只用于让用户手动看到/切换，不应作为默认）
+    //   2) 标准入口（standard）：优先 published > 否则 draft > 否则任意非归档版本
+    //   3) 打样入口（sample）：保留原行为，draft 优先 > 任意非归档版本
+    const live = items.filter((v) => !(v as any).is_archived && v.version_kind === desiredKind)
+    const isStandardEntry = desiredKind === 'standard'
+    const preferred = isStandardEntry
+      ? live.find((v) => v.version_status === 'published') ??
+        live.find((v) => v.version_status === 'draft') ??
+        live[0] ??
+        null
+      : live.find((v) => v.version_status === 'draft') ?? live[0] ?? null
     setSelectedVersionId(preferred?.id ?? null)
   }, [versionsQuery.data, desiredKind, initialVersionId, selectedVersionId])
 
@@ -2496,10 +2502,6 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
   const [versionOpLoading, setVersionOpLoading] = useState(false)
   const [derivingStandardFromSampleId, setDerivingStandardFromSampleId] = useState<string | null>(null)
 
-  const hasPublishedStandardVersion = useMemo(() => {
-    return (versions ?? []).some((v: any) => String(v?.version_kind ?? '') === 'standard' && String(v?.version_status ?? '') === 'published')
-  }, [versions])
-
   const stripCopySuffixIfAny = (label: string): string => {
     const s = String(label ?? '').trim()
     // 兼容旧行为：去掉末尾 “（复制）”
@@ -3050,18 +3052,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                       name="model_name"
                       rules={[{ required: true, message: entryContext === 'sample' ? '请输入打样名称' : '请输入模型名称' }]}
                     >
-                      <Tooltip
-                        title={
-                          entryContext !== 'sample' && hasPublishedStandardVersion
-                            ? '该模型已有“已发布标准版本”，为避免线上映射口径变化，模型名称已锁定不可编辑。'
-                            : undefined
-                        }
-                      >
-                        <Input
-                          style={{ width: 260 }}
-                          disabled={entryContext !== 'sample' && hasPublishedStandardVersion}
-                        />
-                      </Tooltip>
+                      <Input style={{ width: 260 }} />
                     </Form.Item>
                     {entryContext === 'sample' ? (
                       <Form.Item label="打样人员" name="sample_owner">
@@ -3253,7 +3244,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                           title: '创建时间',
                           dataIndex: 'created_at',
                           width: 140,
-                          render: (v: any) => (v ? dayjs(String(v)).format('YYYY-MM-DD HH:mm') : '-'),
+                          render: (v: any) => (v ? formatBeijingTime(String(v), 'YYYY-MM-DD HH:mm') : '-'),
                         },
                         {
                           title: '模型生成',
@@ -3396,7 +3387,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                           title: '创建时间',
                           dataIndex: 'created_at',
                           width: 140,
-                          render: (v: any) => (v ? dayjs(String(v)).format('YYYY-MM-DD HH:mm') : '-'),
+                          render: (v: any) => (v ? formatBeijingTime(String(v), 'YYYY-MM-DD HH:mm') : '-'),
                         },
                         {
                           title: '操作',
@@ -3565,150 +3556,130 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
             ? [
                 {
                   key: 'recognition',
-                  label: '型号识别规则',
+                  label: '型号识别关键词',
                   children: (
-                    <Card size="small" title="型号识别规则（用于 SKU 自动绑定模型）">
+                    <Card size="small" title="型号识别关键词（用于 SKU 自动绑定 P3 兜底 + 规格差异智能判定）">
                       <Alert
                         type="info"
                         showIcon
-                        message="说明"
-                        description="这里维护“模型级别”的识别关键词（需全局唯一，避免自动绑定歧义）。自动链路：先识别模型→再进入该模型唯一在线发布标准版本→再用行级变体生成最终BOM。"
+                        message="操作方式与“套装标签”一致：输入后回车 / 逗号添加，点 × 删除；保存时自动入库。"
+                        description={
+                          <div style={{ lineHeight: 1.7 }}>
+                            <div>
+                              例：OZU（丝圈地垫）可填：<Text code>丝圈</Text>、<Text code>丝圈地垫</Text>。
+                              交易规格包含“丝圈地垫”时即可命中 OZU。
+                            </div>
+                            <div style={{ color: '#666' }}>
+                              <b>关键词不强制全局唯一</b>：自动绑定优先级为
+                              P0 商家编码 → P1/P2 规格码 hint → P3 关键词兜底；
+                              P3 已具备歧义保护（多模型命中时跳过，不会错绑），
+                              重复关键词只会让该 SKU 走人工绑定，不会"绑错"。
+                              如有冲突保存时仍会提示，便于你决定是否改名。
+                            </div>
+                          </div>
+                        }
                         style={{ marginBottom: 12 }}
                       />
-                      <Text type="secondary">
-                        例：OZU（丝圈地垫）可配置关键词：丝圈、丝圈地垫。交易规格包含“丝圈地垫”时即可命中 OZU 模型。
-                      </Text>
-                      <div style={{ marginTop: 12 }}>
-                        <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                          <Card size="small" title="关键词维护（列表式）">
-                            <Space wrap style={{ width: '100%' }}>
-                              <Input
-                                style={{ width: 320 }}
-                                value={recognitionNewKeyword}
-                                onChange={(e) => setRecognitionNewKeyword(e.target.value)}
-                                placeholder="输入关键词，例如：丝圈地垫 / 丝圈"
-                                onPressEnter={() => {
-                                  const v = recognitionNewKeyword.trim()
-                                  if (!v) return
-                                  setRecognitionDraftKeywords((prev) => [...prev, v])
-                                  setRecognitionNewKeyword('')
-                                  setRecognitionValidateResult(null)
-                                }}
-                              />
-                              <Button
-                                onClick={() => {
-                                  const v = recognitionNewKeyword.trim()
-                                  if (!v) return
-                                  setRecognitionDraftKeywords((prev) => [...prev, v])
-                                  setRecognitionNewKeyword('')
-                                  setRecognitionValidateResult(null)
-                                }}
-                              >
-                                添加
-                              </Button>
-                              <Button
-                                onClick={async () => {
-                                  const m = modelQuery.data as any
-                                  if (!m?.id) return
-                                  setRecognitionValidating(true)
+                      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                        <Select
+                          mode="tags"
+                          style={{ width: '100%' }}
+                          value={recognitionDraftKeywords}
+                          tokenSeparators={[',', '，', ' ']}
+                          placeholder="输入关键词后回车 / 逗号 / 空格添加，例如：丝圈地垫 丝圈"
+                          onChange={(vals) => {
+                            const arr = (Array.isArray(vals) ? vals : [])
+                              .map((x: any) => String(x).trim())
+                              .filter(Boolean)
+                            setRecognitionDraftKeywords(arr)
+                            setRecognitionValidateResult(null)
+                          }}
+                        />
+                        <Space wrap>
+                          <Button
+                            type="primary"
+                            onClick={async () => {
+                              const m = modelQuery.data as any
+                              if (!m?.id) return
+                              setRecognitionSaving(true)
+                              try {
+                                const meta = { ...(m?.metadata_json ?? {}) }
+                                meta.recognition_keywords = recognitionDraftKeywords
+                                await updateProductModel(String(m.id), { metadata_json: meta })
+                                message.success('已保存')
+                                await queryClient.invalidateQueries({ queryKey: ['product-model', String(m.id)] })
+                                // 保存后立即检查冲突（软告警），运营第一时间看到
+                                if (recognitionDraftKeywords.length > 0) {
                                   try {
                                     const res = await validateProductModelRecognitionKeywords(String(m.id), {
                                       keywords: recognitionDraftKeywords,
                                     })
                                     setRecognitionValidateResult(res as any)
-                                    // 回填规范化后的关键词（去空格/去重/大写）
-                                    setRecognitionDraftKeywords(res.normalized_keywords ?? [])
-                                    message.success(res.ok ? '校验通过' : '校验未通过（存在冲突）')
-                                  } catch (e: any) {
-                                    message.error(e?.response?.data?.detail ?? e?.message ?? '校验失败')
-                                  } finally {
-                                    setRecognitionValidating(false)
+                                  } catch {
+                                    /* 后端校验接口失败不影响保存提示 */
                                   }
-                                }}
-                                loading={recognitionValidating}
-                              >
-                                校验
-                              </Button>
-                              <Button
-                                type="primary"
-                                onClick={async () => {
-                                  const m = modelQuery.data as any
-                                  if (!m?.id) return
-                                  setRecognitionSaving(true)
-                                  try {
-                                    const meta = { ...(m?.metadata_json ?? {}) }
-                                    meta.recognition_keywords = recognitionDraftKeywords
-                                    await updateProductModel(String(m.id), { metadata_json: meta })
-                                    message.success('已保存')
-                                    await queryClient.invalidateQueries({ queryKey: ['product-model', String(m.id)] })
-                                  } catch (e: any) {
-                                    message.error(e?.response?.data?.detail ?? e?.message ?? '保存失败')
-                                  } finally {
-                                    setRecognitionSaving(false)
-                                  }
-                                }}
-                                loading={recognitionSaving}
-                              >
-                                保存
-                              </Button>
-                            </Space>
-
-                            {recognitionValidateResult ? (
-                              <div style={{ marginTop: 12 }}>
-                                {recognitionValidateResult.ok ? (
-                                  <Alert type="success" showIcon message="校验通过：关键词在已发布标准模型集合内唯一" />
-                                ) : (
-                                  <Alert
-                                    type="error"
-                                    showIcon
-                                    message="校验失败：关键词冲突（需全局唯一）"
-                                    description={
-                                      <div>
-                                        {Object.entries(recognitionValidateResult.conflicts ?? {}).map(([k, other]) => (
-                                          <div key={k}>
-                                            <Text strong>{k}</Text> 已被模型 <Text code>{other}</Text> 使用
-                                          </div>
-                                        ))}
-                                      </div>
-                                    }
-                                  />
-                                )}
-                              </div>
-                            ) : null}
-
-                            <div style={{ marginTop: 12 }}>
-                              <Table
-                                size="small"
-                                rowKey={(r) => r.keyword}
-                                pagination={false}
-                                dataSource={recognitionDraftKeywords.map((k) => ({ keyword: k }))}
-                                columns={[
-                                  { title: '关键词', dataIndex: 'keyword' },
-                                  {
-                                    title: '操作',
-                                    width: 120,
-                                    render: (_: any, r: any) => (
-                                      <Button
-                                        size="small"
-                                        danger
-                                        onClick={() => {
-                                          setRecognitionDraftKeywords((prev) => prev.filter((x) => x !== r.keyword))
-                                          setRecognitionValidateResult(null)
-                                        }}
-                                      >
-                                        删除
-                                      </Button>
-                                    ),
-                                  },
-                                ]}
-                              />
-                            </div>
-                          </Card>
-                          <Text type="secondary">
-                            提示：同一模型内允许“包含关系”（如：丝圈地垫 ⊃ 丝圈），匹配时系统会优先使用更长更具体的关键词；但跨模型必须唯一，否则自动绑定会产生歧义。
-                          </Text>
+                                } else {
+                                  setRecognitionValidateResult(null)
+                                }
+                              } catch (e: any) {
+                                message.error(e?.response?.data?.detail ?? e?.message ?? '保存失败')
+                              } finally {
+                                setRecognitionSaving(false)
+                              }
+                            }}
+                            loading={recognitionSaving}
+                          >
+                            保存
+                          </Button>
+                          <Button
+                            onClick={async () => {
+                              const m = modelQuery.data as any
+                              if (!m?.id) return
+                              setRecognitionValidating(true)
+                              try {
+                                const res = await validateProductModelRecognitionKeywords(String(m.id), {
+                                  keywords: recognitionDraftKeywords,
+                                })
+                                setRecognitionValidateResult(res as any)
+                                setRecognitionDraftKeywords(res.normalized_keywords ?? recognitionDraftKeywords)
+                                message.success(res.ok ? '检查通过：无冲突' : '存在冲突（仍可保存，仅作提醒）')
+                              } catch (e: any) {
+                                message.error(e?.response?.data?.detail ?? e?.message ?? '检查失败')
+                              } finally {
+                                setRecognitionValidating(false)
+                              }
+                            }}
+                            loading={recognitionValidating}
+                          >
+                            冲突检查
+                          </Button>
                         </Space>
-                      </div>
+
+                        {recognitionValidateResult ? (
+                          recognitionValidateResult.ok ? (
+                            <Alert type="success" showIcon message="检查通过：当前关键词在已发布标准模型集合内唯一" />
+                          ) : (
+                            <Alert
+                              type="warning"
+                              showIcon
+                              message="检测到关键词冲突（已允许保存，仅作提醒）"
+                              description={
+                                <div>
+                                  {Object.entries(recognitionValidateResult.conflicts ?? {}).map(([k, other]) => (
+                                    <div key={k}>
+                                      <Text strong>{k}</Text> 也被模型 <Text code>{String(other)}</Text> 使用
+                                    </div>
+                                  ))}
+                                  <div style={{ marginTop: 6, color: '#666' }}>
+                                    自动绑定遇到此关键词的 SKU 会跳过 P3 兜底（不会错绑），
+                                    若希望该词独占当前模型请改名。
+                                  </div>
+                                </div>
+                              }
+                            />
+                          )
+                        ) : null}
+                      </Space>
                     </Card>
                   ),
                 },

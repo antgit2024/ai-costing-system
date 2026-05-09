@@ -2763,6 +2763,9 @@ export default function BundleTemplatesPage() {
               </Space>
             }
           >
+            <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+              标准模型负责“一个物品怎么算成本”，套装模板负责“多个物品怎么组合销售 / 组合出 BOM”。
+            </Text>
             <Space wrap style={{ marginBottom: 12 }}>
               <Input.Search
                 style={{ width: 280 }}

@@ -9,7 +9,6 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from openpyxl import load_workbook
 from openpyxl.utils.datetime import from_excel
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
@@ -97,6 +96,8 @@ AFTER_SALES_FIELD_ALIASES: Dict[str, List[str]] = {
     "allocated_refund_amount": ["分摊后退货金额", "分摊后退款金额", "allocated_refund_amount"],
     # optional trace fields
     "customer_account": ["客户账号", "customer_account"],
+    # Optional tag for downstream filtering (e.g. 刷单退货/正常退货/补发关联等)
+    "tag": ["标记", "标签", "tag"],
 }
 
 
@@ -243,6 +244,7 @@ def _normalize_rows_from_xlsx(file_bytes: bytes) -> Tuple[List[Dict[str, Any]], 
         actual_return_qty = _to_decimal(_get_field(row_list, headers, "actual_return_qty"))
         refund_amount = _to_decimal(_get_field(row_list, headers, "refund_amount"))
         allocated_refund_amount = _to_decimal(_get_field(row_list, headers, "allocated_refund_amount"))
+        tag = _norm_str(_get_field(row_list, headers, "tag"))
 
         raw_row: Dict[str, Any] = {}
         for name, idx in headers.items():
@@ -308,6 +310,7 @@ def _normalize_rows_from_xlsx(file_bytes: bytes) -> Tuple[List[Dict[str, Any]], 
                 "actual_return_qty": actual_return_qty,
                 "refund_amount": refund_amount,
                 "allocated_refund_amount": allocated_refund_amount,
+                "tag": tag,
                 "raw_row": _json_safe(raw_row),
                 "normalize_warnings": _json_safe(normalize_warnings),
             }
@@ -428,6 +431,18 @@ def import_after_sales_xlsx(
                 payload.setdefault("normalize_warnings", [])
                 payload["normalize_warnings"].append(sku_warn)
 
+        exists = (
+            db.query(models.AfterSalesLine)
+            .filter(
+                models.AfterSalesLine.external_line_key_hash == external_line_key_hash,
+                models.AfterSalesLine.is_archived.is_(False),
+            )
+            .first()
+        )
+        if exists:
+            batch.skipped_rows += 1
+            continue
+
         line = models.AfterSalesLine(
             batch_id=batch.id,
             row_index=int(payload.get("row_index") or 0),
@@ -449,18 +464,14 @@ def import_after_sales_xlsx(
             allocated_refund_amount=payload.get("allocated_refund_amount"),
             sku_code=sku_code,
             external_line_key_hash=external_line_key_hash,
+            tag=(payload.get("tag") or None),
             raw_row_json=_json_safe(payload.get("raw_row") or {}),
             normalize_warnings_json=_json_safe(payload.get("normalize_warnings") or []),
             metadata_json={"parser_version": PARSER_VERSION},
         )
         db.add(line)
-        try:
-            db.flush()
-            batch.inserted_rows += 1
-        except IntegrityError:
-            db.rollback()
-            batch.skipped_rows += 1
-            continue
+        db.flush()
+        batch.inserted_rows += 1
 
         # Exception queue for unresolved sku_code (for model-level attribution)
         if not sku_code:

@@ -1,12 +1,12 @@
 import { Card, Col, Input, Row, Select, Space, Table, Tag, Tooltip, Typography } from 'antd'
 import InfoCircleOutlined from '@ant-design/icons/lib/icons/InfoCircleOutlined'
 import type { ColumnsType } from 'antd/es/table'
-import dayjs from 'dayjs'
 import { useEffect, useMemo, useState } from 'react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 
 import { fetchBundleTemplates, fetchPublishedStandardModels, fetchSkuMaster } from '@/services/planner'
 import type { SkuMaster } from '@/types/planner'
+import { formatBeijingTime } from '@/utils/beijingTime'
 
 const { Text, Title } = Typography
 
@@ -14,9 +14,7 @@ const DEFAULT_PAGE_SIZE = 100
 const PAGE_SIZE_STORAGE_KEY = 'costing_product_info_page_size_v1'
 
 const formatTime = (v?: string | null) => {
-  if (!v) return '-'
-  const d = dayjs(v)
-  return d.isValid() ? d.format('YYYY-MM-DD HH:mm:ss') : String(v)
+  return formatBeijingTime(v, 'YYYY-MM-DD HH:mm:ss')
 }
 
 const safeString = (v: unknown): string => {

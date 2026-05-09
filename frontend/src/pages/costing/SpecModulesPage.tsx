@@ -1,41 +1,51 @@
-import dayjs from 'dayjs'
-import { useMemo, useState } from 'react'
-import { Button, Card, Col, Input, Modal, Row, Select, Space, Table, Tag, Typography } from 'antd'
+import { useEffect, useMemo, useState } from 'react'
+import { Button, Card, Col, Input, message, Modal, Row, Select, Space, Table, Tag, Typography } from 'antd'
 import { Link, useNavigate } from 'react-router-dom'
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons'
 
-import { loadTemplateIndex, upsertTemplateMeta, type SpecModuleType, type TmallSkuTemplateMeta } from './tmallSkuGeneratorTemplates'
+import { createTmallSkuGeneratorTemplate, fetchTmallSkuGeneratorTemplates } from '@/services/planner'
+import { type SpecModuleType, type TmallSkuGeneratorPersistedConfigV1, type TmallSkuTemplateMeta } from './tmallSkuGeneratorTemplates'
+import { formatBeijingTime } from '@/utils/beijingTime'
 
 const { Title, Text } = Typography
-
-const ensureSeed = (): TmallSkuTemplateMeta[] => {
-  const cur = loadTemplateIndex()
-  if (cur.length) return cur
-  const now = new Date().toISOString()
-  const seed: TmallSkuTemplateMeta = {
-    id: 'mvp',
-    name: '天猫布艺 SKU规格生成器（MVP）',
-    type: '家居布艺',
-    published_at: now,
-    matrix_count: null,
-  }
-  upsertTemplateMeta(seed)
-  return [seed]
-}
 
 export default function SpecModulesPage() {
   const navigate = useNavigate()
   const [refreshKey, setRefreshKey] = useState(0)
+  const [loading, setLoading] = useState(false)
+  const [rows, setRows] = useState<TmallSkuTemplateMeta[]>([])
   const [search, setSearch] = useState('')
   const [type, setType] = useState<SpecModuleType | undefined>(undefined)
   const [createOpen, setCreateOpen] = useState(false)
   const [createName, setCreateName] = useState('未命名模板')
   const [createType, setCreateType] = useState<SpecModuleType>('家居布艺')
 
-  const rows = useMemo(() => {
-    // refreshKey triggers re-eval (localStorage)
-    void refreshKey
-    return ensureSeed()
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      setLoading(true)
+      try {
+        const resp = await fetchTmallSkuGeneratorTemplates({ include_archived: false })
+        if (cancelled) return
+        setRows(
+          (resp.items ?? []).map((x) => ({
+            id: x.id,
+            name: x.name,
+            type: x.type,
+            published_at: x.published_at,
+            matrix_count: x.matrix_count,
+            archived: x.archived,
+          })),
+        )
+      } catch (e: any) {
+        if (!cancelled) message.error(`加载规格模块失败：${String(e?.message ?? e)}`)
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
   }, [refreshKey])
 
   const filtered = useMemo(() => {
@@ -49,7 +59,7 @@ export default function SpecModulesPage() {
     })
   }, [rows, search, type])
 
-  const onCreate = () => {
+  const onCreate = async () => {
     const id = `t_${Date.now().toString(36)}`
     const now = new Date().toISOString()
     const meta: TmallSkuTemplateMeta = {
@@ -59,10 +69,40 @@ export default function SpecModulesPage() {
       published_at: now,
       matrix_count: 0,
     }
-    upsertTemplateMeta(meta)
-    setCreateOpen(false)
-    setRefreshKey((x) => x + 1)
-    navigate(`/costing/tmall-sku-generator/${id}`)
+    // 为新模板写入一份「真正空白」的初始 config：
+    // - 必须显式落库（即便里面是空数组），让详情页 lazy init 能识别为「有 config」从而尊重空内容；
+    // - 不预填任何示例（颜色分类/尺寸/主图案类型），让运营从零开始配置。
+    const blankCfg: TmallSkuGeneratorPersistedConfigV1 = {
+      merchantSkuPrefix: 'BZPB008XXXXX-',
+      merchantSkuSuffix: '',
+      sizes: [],
+      colors: [],
+      mainPatternTypes: [],
+      ui: {
+        enableColorImages: true,
+        enableSizeImages: false,
+        enableColorRemarks: true,
+        enableSizeRemarks: true,
+        enablePatternRemarks: false,
+        includeMainPatternType: true,
+      },
+    }
+    try {
+      await createTmallSkuGeneratorTemplate({
+        id,
+        name: meta.name,
+        type: meta.type,
+        published_at: now,
+        matrix_count: 0,
+        archived: false,
+        config: blankCfg,
+      })
+      setCreateOpen(false)
+      setRefreshKey((x) => x + 1)
+      navigate(`/costing/tmall-sku-generator/${id}`)
+    } catch (e: any) {
+      message.error(`创建模板失败：${String(e?.message ?? e)}`)
+    }
   }
 
   return (
@@ -120,6 +160,7 @@ export default function SpecModulesPage() {
             <Table<TmallSkuTemplateMeta>
               rowKey="id"
               dataSource={filtered}
+              loading={loading}
               pagination={false}
               scroll={{ x: 900 }}
               columns={[
@@ -148,8 +189,7 @@ export default function SpecModulesPage() {
                   render: (v: any) => {
                     const s = String(v ?? '').trim()
                     if (!s) return <Text type="secondary">-</Text>
-                    const d = dayjs(s)
-                    return d.isValid() ? d.format('YYYY-MM-DD HH:mm') : s
+                    return formatBeijingTime(s, 'YYYY-MM-DD HH:mm')
                   },
                 },
                 {
@@ -173,7 +213,7 @@ export default function SpecModulesPage() {
       <Modal
         title="新建模板"
         open={createOpen}
-        okText="创建并进入"
+        okText="保存到服务器并进入"
         cancelText="取消"
         onOk={onCreate}
         onCancel={() => setCreateOpen(false)}
@@ -188,7 +228,7 @@ export default function SpecModulesPage() {
               { label: '家居饰品', value: '家居饰品' },
             ]}
           />
-          <Text type="secondary">当前先用浏览器本地存储做模板管理；后续可接入后端发布/版本化。</Text>
+          <Text type="secondary">创建后会写入服务器数据库；其他电脑/账号进入列表也能看到。</Text>
         </Space>
       </Modal>
     </div>

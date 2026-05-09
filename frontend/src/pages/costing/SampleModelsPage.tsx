@@ -1,5 +1,4 @@
 import { useMemo, useState } from 'react'
-import dayjs from 'dayjs'
 import { Button, Card, Col, Input, Modal, Row, Select, Space, Switch, Table, Tag, Tooltip, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useQuery } from '@tanstack/react-query'
@@ -7,6 +6,7 @@ import { useQuery } from '@tanstack/react-query'
 import { archiveSampleVersionsOnly, createProductModel, fetchProductModels, fetchTaxonomyItems } from '@/services/planner'
 import type { ProductModel } from '@/types/planner'
 import ProductModelEditorDrawer from '@/components/costing/ProductModelEditorDrawer'
+import { formatBeijingTime } from '@/utils/beijingTime'
 
 const { Title, Text } = Typography
 
@@ -26,7 +26,11 @@ export default function SampleModelsPage() {
       category: category || undefined,
       include_archived: includeArchived || undefined,
       page: 1,
-      page_size: 50,
+      // NOTE: 列表是“主模型维度”（最多几百条），这里设置为后端上限 200。
+      // 之所以不走“先分页后过滤”：SampleModelsPage 会在 listItems 里再按“打样入口/存在打样版本”
+      // 做一次前端过滤，如果 page_size 过小会把满足条件的模型在分页阶段就截掉，
+      // 造成“数据在库里但页面只显示 1~2 条”的错觉（曾经因 page_size=50 复现过）。
+      page_size: 200,
     }),
     [category, includeArchived, search],
   )
@@ -147,8 +151,7 @@ export default function SampleModelsPage() {
       render: (v: any) => {
         const s = String(v ?? '').trim()
         if (!s) return '-'
-        const d = dayjs(s)
-        return d.isValid() ? d.format('YYYY-MM-DD HH:mm') : s
+        return formatBeijingTime(s, 'YYYY-MM-DD HH:mm')
       },
     },
     {

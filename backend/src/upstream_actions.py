@@ -13,6 +13,7 @@ from .planner import models, schemas
 from .planner.services import material_service
 from .planner.services import product_model_service
 from .planner.services import process_module_service
+from .planner.services import bundle_template_service
 
 
 def now_ms() -> int:
@@ -201,8 +202,93 @@ def run_project_action(
                 raise HTTPException(status_code=404, detail="Product model not found")
 
             m = schemas.ProductModelRead.from_orm(product)
-            result_text = f"{m.model_code} {m.model_name} ({m.category or ''})"
-            result_json = {"product": m.dict(by_alias=True)}
+            
+            # 获取已发布的标准版本
+            published_version = (
+                db.query(models.ProductModelVersion)
+                .filter(
+                    models.ProductModelVersion.model_id == product.id,
+                    models.ProductModelVersion.version_status == "published",
+                    models.ProductModelVersion.is_archived.is_(False),
+                )
+                .order_by(models.ProductModelVersion.published_at.desc())
+                .first()
+            )
+            
+            materials_list = []
+            processes_list = []
+            version_info = None
+            
+            if published_version:
+                version_info = {
+                    "version_id": published_version.id,
+                    "version_label": published_version.version_label,
+                    "version_kind": published_version.version_kind,
+                    "published_at": str(published_version.published_at) if published_version.published_at else None,
+                }
+                
+                # 获取版本物料
+                version_materials = (
+                    db.query(models.ModelVersionMaterial)
+                    .filter(
+                        models.ModelVersionMaterial.version_id == published_version.id,
+                        models.ModelVersionMaterial.is_archived.is_(False),
+                    )
+                    .order_by(models.ModelVersionMaterial.sequence_order)
+                    .all()
+                )
+                for vm in version_materials:
+                    materials_list.append({
+                        "material_code": vm.material_code,
+                        "material_name": vm.material_name,
+                        "calculation_method": vm.calculation_method,
+                        "base_quantity": float(vm.base_quantity) if vm.base_quantity else 0,
+                        "loss_rate": float(vm.loss_rate) if vm.loss_rate else 0,
+                        "unit_cost": float(vm.unit_cost) if vm.unit_cost else None,
+                    })
+                
+                # 获取版本工序
+                version_processes = (
+                    db.query(models.ModelVersionProcess)
+                    .filter(
+                        models.ModelVersionProcess.version_id == published_version.id,
+                        models.ModelVersionProcess.is_archived.is_(False),
+                    )
+                    .order_by(models.ModelVersionProcess.sequence_order)
+                    .all()
+                )
+                for vp in version_processes:
+                    proc = vp.process
+                    processes_list.append({
+                        "process_code": proc.process_code if proc else "",
+                        "process_name": proc.process_name if proc else "",
+                        "sequence_order": vp.sequence_order,
+                    })
+            
+            # 构建文本摘要
+            lines = [f"{m.model_code} {m.model_name} ({m.category or ''})"]
+            if version_info:
+                lines.append(f"已发布版本：{version_info.get('version_label') or '标准版'}")
+            if materials_list:
+                lines.append(f"物料清单（{len(materials_list)}项）：")
+                for mat in materials_list[:5]:
+                    lines.append(f"  - {mat['material_code'] or '?'} {mat['material_name'] or ''}")
+                if len(materials_list) > 5:
+                    lines.append(f"  ... +{len(materials_list) - 5} 项")
+            if processes_list:
+                lines.append(f"工序清单（{len(processes_list)}项）：")
+                for proc in processes_list[:5]:
+                    lines.append(f"  - {proc['process_name']}")
+                if len(processes_list) > 5:
+                    lines.append(f"  ... +{len(processes_list) - 5} 项")
+            
+            result_text = "\n".join(lines)
+            result_json = {
+                "product": m.dict(by_alias=True),
+                "published_version": version_info,
+                "materials": materials_list,
+                "processes": processes_list,
+            }
 
         elif name in ("process_module.search", "process_modules.search", "process_module.list"):
             q = (args.get("q") or args.get("search") or "").strip() or None
@@ -272,6 +358,132 @@ def run_project_action(
             d["steps_summary"] = steps_summary
             d["total_work_minutes"] = total_minutes
             result_json = {"process_module": d}
+
+        elif name in ("bundle_template.search", "bundle_templates.search", "bundle_template.list"):
+            q = (args.get("q") or args.get("search") or "").strip() or None
+            page = int(args.get("page") or 1)
+            page_size = int(args.get("page_size") or 20)
+            page = max(1, page)
+            page_size = max(1, min(200, page_size))
+            category = (args.get("category") or "").strip() or None
+            tag = (args.get("tag") or "").strip() or None
+            include_archived = args.get("include_archived", False)
+
+            filters = bundle_template_service.BundleTemplateFilters(
+                search=q, category=category, tag=tag, include_archived=include_archived
+            )
+            total, items = bundle_template_service.list_templates(db, filters=filters, page=page, page_size=page_size)
+
+            lines = [f"bundle_templates.search q={q or ''} total={total} page={page}"]
+            items_out = []
+            for t in items:
+                comp_count = len(t.components_json or [])
+                meta = t.metadata_json or {}
+                lines.append(f"- {t.code} {t.name or ''} 组件数={comp_count}")
+                items_out.append({
+                    "id": str(t.id),
+                    "code": t.code,
+                    "name": t.name,
+                    "component_count": comp_count,
+                    "shared_trigger_text": str(meta.get("shared_trigger_text") or "").strip() or None,
+                    "published_version_label": str(meta.get("published_version_label") or "").strip() or None,
+                    "is_archived": bool(t.is_archived),
+                })
+
+            result_text = "\n".join(lines)
+            result_json = {
+                "q": q,
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+                "items": items_out,
+            }
+
+        elif name in ("bundle_template.get", "bundle_templates.get", "bundle_template.by_code"):
+            template_id = (args.get("template_id") or args.get("id") or "").strip()
+            template_code = (args.get("template_code") or args.get("code") or "").strip()
+            if not template_id and not template_code:
+                raise HTTPException(status_code=400, detail="template_id or template_code is required")
+
+            template = None
+            if template_id:
+                template = bundle_template_service.get_template(db, template_id, include_archived=True)
+            if template is None and template_code:
+                template = bundle_template_service.get_by_code(db, template_code)
+            if template is None:
+                raise HTTPException(status_code=404, detail="Bundle template not found")
+
+            meta = template.metadata_json or {}
+            components = template.components_json or []
+            comp_summary = []
+            for c in components[:5]:
+                label = c.get("label") or ""
+                w = c.get("width_mm", 0)
+                h = c.get("height_mm", 0)
+                qty = c.get("quantity", 1)
+                comp_summary.append(f"{label or '组件'}({w}×{h})×{qty}")
+            if len(components) > 5:
+                comp_summary.append(f"+{len(components)-5}...")
+
+            result_text = f"{template.code} {template.name or ''} 组件数={len(components)}"
+            result_json = {
+                "bundle_template": {
+                    "id": str(template.id),
+                    "code": template.code,
+                    "name": template.name,
+                    "component_count": len(components),
+                    "components": components,
+                    "components_summary": ", ".join(comp_summary),
+                    "shared_trigger_text": str(meta.get("shared_trigger_text") or "").strip() or None,
+                    "published_version_id": str(meta.get("published_version_id") or "").strip() or None,
+                    "published_version_label": str(meta.get("published_version_label") or "").strip() or None,
+                    "published_at": str(meta.get("published_at") or "").strip() or None,
+                    "is_archived": bool(template.is_archived),
+                }
+            }
+
+        elif name in ("semantic_search", "vector_search", "semantic.search"):
+            # 语义搜索 - 调用向量搜索服务
+            import httpx
+            query = (args.get("query") or args.get("q") or "").strip()
+            collection = (args.get("collection") or "materials").strip()
+            top_k = int(args.get("top_k") or args.get("limit") or 10)
+            top_k = max(1, min(50, top_k))
+
+            if not query:
+                raise HTTPException(status_code=400, detail="query is required")
+
+            vector_search_url = os.getenv("VECTOR_SEARCH_URL", "http://127.0.0.1:8810")
+            try:
+                with httpx.Client(timeout=15.0) as client:
+                    resp = client.get(
+                        f"{vector_search_url}/api/v1/search",
+                        params={"q": query, "collection": collection, "top_k": top_k},
+                    )
+                    if resp.status_code != 200:
+                        raise HTTPException(status_code=502, detail=f"vector search failed: {resp.status_code}")
+                    vec_data = resp.json()
+            except httpx.RequestError as e:
+                raise HTTPException(status_code=502, detail=f"vector search connection error: {e}")
+
+            items = vec_data.get("items", [])
+            total = vec_data.get("total", len(items))
+
+            # 格式化结果
+            lines = [f"semantic_search query={query} collection={collection} total={total}"]
+            for it in items[:5]:
+                meta = it.get("metadata", {})
+                code = meta.get("material_code") or meta.get("model_code") or meta.get("module_code") or meta.get("code") or it.get("id", "")
+                name_val = meta.get("material_name") or meta.get("model_name") or meta.get("module_name") or meta.get("name") or ""
+                score = it.get("score", 0)
+                lines.append(f"- {code} {name_val} (score={score:.2f})")
+            result_text = "\n".join(lines)
+            result_json = {
+                "query": query,
+                "collection": collection,
+                "total": total,
+                "items": items,
+            }
 
         else:
             raise HTTPException(status_code=404, detail=f"unknown action name: {name}")

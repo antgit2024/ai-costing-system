@@ -202,15 +202,26 @@ def evaluate_conditions(
                     out.append(p.lower())
         return out
 
-    if cond.get("spec_contains_any"):
-        any_values = _split_token_values(cond.get("spec_contains_any") or [])
-        if any_values and not any(value for value in any_values if value and value in lowered_tokens):
-            return False
+    # 隐式变体编码命中：metadata_json.variant_code 是变体的"身份证"（如 KB8-001），
+    # 由"自动生成变体编码"按钮单独维护，不污染 spec_contains_any/all 用户输入。
+    # 出货 sku_code 含 KB8-001 时，_augment_runtime_tokens 会把 KB8-001 加入 token 池，
+    # 这里只要它出现在 token 池里，就直接判定命中（独立短路条件，不与 any/all 串联）。
+    meta = variant.metadata_json or {}
+    variant_code = str(meta.get("variant_code") or "").strip().lower()
+    if variant_code and variant_code in lowered_tokens:
+        # 仍要满足维度类条件（width/height/area/...），否则尺寸不匹配的变体也会被错命中
+        # → 跳过 token 类条件，直接进入下方维度判定。
+        pass
+    else:
+        if cond.get("spec_contains_any"):
+            any_values = _split_token_values(cond.get("spec_contains_any") or [])
+            if any_values and not any(value for value in any_values if value and value in lowered_tokens):
+                return False
 
-    if cond.get("spec_contains_all"):
-        all_values = _split_token_values(cond.get("spec_contains_all") or [])
-        if any(value and value not in lowered_tokens for value in all_values):
-            return False
+        if cond.get("spec_contains_all"):
+            all_values = _split_token_values(cond.get("spec_contains_all") or [])
+            if any(value and value not in lowered_tokens for value in all_values):
+                return False
 
     checks = {
         "width_between": metrics.get("width_cm"),

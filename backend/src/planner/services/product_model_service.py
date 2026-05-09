@@ -2,14 +2,18 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from decimal import Decimal
+import logging
 import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from sqlalchemy import asc, func, or_
+from sqlalchemy import and_, asc, func, or_
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from .. import models
 from . import variant_rule_service
+
+logger = logging.getLogger(__name__)
 
 
 def _json_safe(value: Any) -> Any:
@@ -1776,15 +1780,46 @@ def update_model(
     if unit_of_measure is not None:
         model.unit_of_measure = unit_of_measure
     if metadata is not None:
-        # Validate recognition keywords uniqueness among models that have published standard versions.
-        # This is used by SKU auto-bind; ambiguous keywords must be rejected at save-time.
-        new_keywords = _extract_recognition_keywords(metadata)
+        # Recognition keywords used to be a HARD uniqueness constraint. Reasoning then:
+        # P3 keyword fallback was the main auto-bind driver, ambiguous keywords ⇒ wrong binds.
+        #
+        # Now the priority chain is:
+        #   P0 商家编码 (KB8-001 → KB8) — covers ~99% new SKUs
+        #   P1/P2 spec_text-extracted model_code hint
+        #   P3 keyword fallback — only when above all miss; AND _match_by_model_keywords
+        #       already returns None on multi-model ambiguity (no wrong bind, just unbound).
+        #
+        # So we downgrade to a SOFT warning: still record conflicts so the operator
+        # can decide whether to rename, but never block the save. The conflict map is
+        # written to ``metadata_json.recognition_keywords_warnings`` (audit-friendly,
+        # frontend can surface it) plus emitted to the logger.
+        meta_to_save = dict(metadata or {})
+        meta_to_save.pop("recognition_keywords_warnings", None)
+        new_keywords = _extract_recognition_keywords(meta_to_save)
         if new_keywords:
-            conflicts_map = _validate_recognition_keywords_uniqueness(db, current_model_id=model.id, keywords=new_keywords)
+            conflicts_map = _validate_recognition_keywords_uniqueness(
+                db, current_model_id=model.id, keywords=new_keywords
+            )
             if conflicts_map:
-                conflicts = ", ".join(sorted(conflicts_map.keys()))
-                raise ValueError(f"型号识别关键词冲突（需全局唯一）：{conflicts}")
-        model.metadata_json = metadata
+                meta_to_save["recognition_keywords_warnings"] = {
+                    "checked_at": datetime.now(timezone.utc).isoformat(),
+                    "conflicts": dict(sorted(conflicts_map.items())),
+                    "note": (
+                        "存在与其它已发布标准模型重复的关键词。已允许保存："
+                        "自动绑定的关键词兜底链已具备歧义保护（多模型命中时跳过），"
+                        "不会因此错绑；如希望该关键词独占某个模型，请改名后再保存。"
+                    ),
+                }
+                try:
+                    import logging as _lg
+                    _lg.getLogger(__name__).warning(
+                        "[product_model:%s] recognition_keywords conflicts (soft-warned, allowed): %s",
+                        getattr(model, "model_code", model.id),
+                        conflicts_map,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+        model.metadata_json = meta_to_save
     if modules is not None:
         _replace_modules(db, model, modules)
     db.commit()
@@ -2153,7 +2188,19 @@ def derive_standard_version(
     tmeta["sample"] = _json_safe(sample_spec)
     tmeta["derived_from_version_id"] = source_sample_version.id
     tmeta["derived_at"] = datetime.now(timezone.utc).isoformat()
+    # 继承"结构标准编码"：派生标准版本时必须沿用源打样版本的 structure_standard_code，
+    # 否则前端的"结构"列会全部回落到"空位"，行级 structure_slot 也无法被正确解析。
+    # 语义：sample 设了就以 sample 为准；sample 未设则保留 target 既有值（不主动清空）。
+    src_structure_code = str(smeta.get("structure_standard_code") or "").strip()
+    if src_structure_code:
+        tmeta["structure_standard_code"] = src_structure_code
     target.metadata_json = _json_safe(tmeta)
+    # 必须 flag_modified：本项目的 metadata_json 列是普通 JSON（未启用 MutableDict.as_mutable），
+    # 上游 create_model_version(commit=False) 已经 flush 过 target，
+    # 此处再修改/重赋 metadata_json，SQLAlchemy 默认不会把它标记为 dirty，
+    # 导致 commit 时不会发出 UPDATE，structure_standard_code/derived_at 等"派生新增字段"全部丢失。
+    # 这正是用户反馈"保存结构标准没有同步到标准模型 / 结构都是空位"的根因。
+    flag_modified(target, "metadata_json")
 
     # Prepare measures
     sample_width = _decimal(sample_spec.get("width_mm"), Decimal("1000"))
@@ -4290,6 +4337,103 @@ def bind_sku_to_version(
     db.add(row)
     db.commit()
     db.refresh(row)
+
+    # Issue 0.0i: trigger snapshot for any pending ShipmentLine of this SKU
+    # (best-effort, no time window). Without this hook, lines older than the
+    # 5-min sweep's lookback (60d) would stay in pending forever even after
+    # the user manually binds them in sku-master / 发货管理.
+    # Failures here MUST NOT break binding (which already committed above).
+    try:
+        _trigger_pending_snapshots_for_sku(db, sku=sku, operator_id=source_system or "bind_hook")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "bind_sku_to_version: post-bind snapshot trigger failed for sku=%s: %s",
+            sku, exc,
+        )
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+
     return row
+
+
+def _trigger_pending_snapshots_for_sku(
+    db: Session, *, sku: str, operator_id: str = "bind_hook"
+) -> Dict[str, Any]:
+    """Find all pending ShipmentLines for ``sku`` (no time window) and try
+    to compute a BomSnapshot for each. Best-effort, per-line errors are
+    swallowed (the line stays in pending and the next sweep / manual click
+    will retry).
+
+    Defined here (not in shipment_import_service) to avoid an import
+    cycle: shipment_import_service already imports product_model_service.
+    """
+    # Local import to avoid circular dependency at module load.
+    from src.planner.services import shipment_import_service  # noqa: PLC0415
+
+    sku_clean = (sku or "").strip()
+    if not sku_clean:
+        return {"scanned": 0, "created": 0, "skipped": 0, "failed": 0}
+
+    has_bom_sub = (
+        db.query(models.BomSnapshot.id)
+        .filter(models.BomSnapshot.shipment_line_id == models.ShipmentLine.id)
+        .exists()
+    )
+    has_cost_sub = (
+        db.query(models.ShipmentCostingResult.id)
+        .filter(models.ShipmentCostingResult.shipment_line_id == models.ShipmentLine.id)
+        .exists()
+    )
+    cleared_pred = func.nullif(
+        func.trim(
+            func.coalesce(
+                models.ShipmentLine.metadata_json["snapshot_cleared_at"].as_string(), ""
+            )
+        ),
+        "",
+    ).isnot(None)
+    pending_pred = ~and_(or_(has_bom_sub, has_cost_sub), ~cleared_pred)
+
+    rows = (
+        db.query(models.ShipmentLine.id)
+        .filter(
+            models.ShipmentLine.sku_code == sku_clean,
+            models.ShipmentLine.is_archived.is_(False),
+            models.ShipmentLine.is_active.is_(True),
+            pending_pred,
+        )
+        # Keep the cap modest — a single SKU with hundreds of pending
+        # rows will still finish, but >500 is suspicious and we'd rather
+        # let the sweep amortize the rest.
+        .limit(500)
+        .all()
+    )
+
+    created = 0
+    skipped = 0
+    failed = 0
+    for (line_id,) in rows:
+        try:
+            res = shipment_import_service.compute_snapshot_for_shipment_line(
+                db,
+                shipment_line_id=str(line_id),
+                operator_id=operator_id,
+                overwrite=False,
+            )
+            action = (res or {}).get("action")
+            if action in ("created", "recomputed"):
+                created += 1
+            else:
+                skipped += 1
+        except Exception:  # noqa: BLE001
+            failed += 1
+            try:
+                db.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+
+    return {"scanned": len(rows), "created": created, "skipped": skipped, "failed": failed}
 
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
@@ -12,6 +14,8 @@ from ..services import sku_master_service
 from ..services import sku_master_image_storage
 from ...config import settings
 from .. import models
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter(prefix="/sku-master", tags=["SKU Master"])
@@ -45,10 +49,12 @@ def list_sku_master(
     bundle_template_code: str | None = None,
     bundle_preset_selector: str | None = None,
     spec_mismatch: bool | None = None,
+    data_quality_status: str | None = None,
     preparse_state: str | None = None,
     include_terms: str | None = None,
     exclude_terms: str | None = None,
     match_scope: str | None = None,
+    shop_spec_code_kind: str | None = None,
     page: int = 1,
     page_size: int = 20,
     compute_total: bool = True,
@@ -71,10 +77,12 @@ def list_sku_master(
         bundle_template_code=bundle_template_code,
         bundle_preset_selector=bundle_preset_selector,
         spec_mismatch=spec_mismatch,
+        data_quality_status=data_quality_status,
         preparse_state=preparse_state,
         include_terms=include_terms,
         exclude_terms=exclude_terms,
         match_scope=match_scope,
+        shop_spec_code_kind=shop_spec_code_kind,
         page=page,
         page_size=page_size,
         compute_total=compute_total,
@@ -82,6 +90,103 @@ def list_sku_master(
         include_parsed_fields=include_parsed_fields,
     )
     return {"total": total, "page": page, "page_size": page_size, "items": items}
+
+
+@router.get("/shop-spec-code-summary")
+def shop_spec_code_summary(
+    channel: str | None = None,
+    bound_state: str | None = None,
+    db: Session = Depends(get_db_session),
+):
+    """Count of SKU master rows by shop_spec_code classification.
+
+    Returns ``{"total": N, "structured": A, "platform": B, "malformed": C, "empty": D}``
+    where ``structured`` rows are the only ones that can drive P0 anchor
+    auto-binding. Used by the SKU master page strip to show coverage at a glance.
+    """
+    return sku_master_service.summarize_shop_spec_code(
+        db, channel=channel, bound_state=bound_state
+    )
+
+
+@router.post("/{sku_master_id}/data-quality/recompute")
+def recompute_data_quality(
+    sku_master_id: str,
+    payload: dict | None = None,
+    db: Session = Depends(get_db_session),
+):
+    """重新评估单条 SKU 的"数据质量"标签（SPU 属性冲突）。
+
+    供运营在 SKU 主档详情页"重新评估"按钮调用。会立刻刷新该 SKU 的
+    ``metadata.data_quality_status`` 和 ``data_quality_evidence``。
+
+    Body (optional): ``{"lookback_days": 90}``
+    """
+    from ..services import data_quality_service
+    body = payload or {}
+    lookback = body.get("lookback_days")
+    try:
+        lookback = int(lookback) if lookback is not None else 90
+    except (TypeError, ValueError):
+        lookback = 90
+    evidence = data_quality_service.detect_for_one_sku(
+        db,
+        sku_master_id=str(sku_master_id),
+        lookback_days=lookback,
+        persist=True,
+    )
+    return {
+        "sku_master_id": str(sku_master_id),
+        "data_quality_status": "spu_attribute_conflict" if evidence else None,
+        "data_quality_evidence": evidence,
+    }
+
+
+@router.post("/{sku_master_id}/suspect-misbind/resolve")
+def resolve_suspect_misbind(
+    sku_master_id: str,
+    payload: dict | None = None,
+    db: Session = Depends(get_db_session),
+):
+    """Operator marks "疑似绑错" as a false positive for this SKU.
+
+    All shipment lines of this SKU stop showing the red "疑似绑错" tag /
+    counting in 「只看疑似绑错」 until the binding changes again.
+
+    Body (optional): ``{"requested_by": "...", "note": "..."}``
+    """
+    body = payload or {}
+    return sku_master_service.resolve_suspect_misbind(
+        db,
+        sku_master_id=str(sku_master_id),
+        requested_by=str(body.get("requested_by") or "").strip() or None,
+        note=str(body.get("note") or "").strip() or None,
+    )
+
+
+@router.post("/{sku_master_id}/spec-mismatch/resolve")
+def resolve_spec_mismatch(
+    sku_master_id: str,
+    payload: dict | None = None,
+    db: Session = Depends(get_db_session),
+):
+    """Operator marks a previously flagged spec_mismatch as "ignored" because
+    they have visually confirmed it's a false positive (字符顺序差异、颜色前缀差异 etc.).
+
+    Sets ``metadata.spec_mismatch_resolved = True`` + audit fields. The next
+    shipment ingest will:
+      - keep the resolved flag if the new diff is still benign
+      - auto-revoke it if a real ``dimension_mismatch`` shows up
+
+    Body (optional): ``{"requested_by": "...", "note": "..."}``
+    """
+    body = payload or {}
+    return sku_master_service.resolve_spec_mismatch(
+        db,
+        sku_master_id=str(sku_master_id),
+        requested_by=str(body.get("requested_by") or "").strip() or None,
+        note=str(body.get("note") or "").strip() or None,
+    )
 
 
 @router.get("/published-standard-models", response_model=schemas.PublishedStandardModelCandidateListResponse)
@@ -96,6 +201,13 @@ def list_published_standard_models(
 
 @router.post("/bind-by-model", response_model=schemas.SkuMasterBindByModelResponse)
 def bind_by_model(payload: schemas.SkuMasterBindByModelRequest, db: Session = Depends(get_db_session)):
+    logger.info(
+        "[bind-by-model] model_id=%s sku_count=%d allow_rebind=%s variant_code=%r",
+        payload.model_id,
+        len(payload.sku_master_ids or []),
+        payload.allow_rebind,
+        payload.variant_code,
+    )
     try:
         return sku_master_service.bind_sku_master_by_model(
             db,
@@ -103,6 +215,7 @@ def bind_by_model(payload: schemas.SkuMasterBindByModelRequest, db: Session = De
             sku_master_ids=payload.sku_master_ids,
             requested_by=payload.requested_by,
             allow_rebind=payload.allow_rebind,
+            variant_code=payload.variant_code,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -175,6 +288,7 @@ def bind_by_model_bulk(payload: schemas.SkuMasterBindByModelBulkRequest, db: Ses
             bound_model_code=payload.bound_model_code,
             bound_version_id=payload.bound_version_id,
             excluded_sku_master_ids=payload.excluded_sku_master_ids,
+            variant_code=payload.variant_code,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -309,6 +423,182 @@ def auto_bind_execute(payload: schemas.SkuMasterAutoBindExecuteRequest, db: Sess
         sku_master_ids=payload.sku_master_ids,
         scan_limit=50000,
     )
+
+
+# ----------------------------------------------------------------------------
+# SKU Governance (Sprint 2-3 of "SKU 治理与按需建模")
+#
+# IMPORTANT: these endpoints MUST be registered BEFORE the catch-all
+# ``GET /{sku_id}`` route below, otherwise FastAPI will treat
+# "governance" as a path parameter and return 404 ("SKU master not
+# found") for legitimate governance traffic. The lesson cost us one
+# debugging round, hence this comment block.
+# ----------------------------------------------------------------------------
+
+
+@router.post(
+    "/governance",
+    response_model=schemas.SkuGovernanceSetResponse,
+    summary="批量设置 SKU 治理状态(unmanaged/auto_bound/pending_model/do_not_model)",
+)
+def set_sku_governance(
+    payload: schemas.SkuGovernanceSetRequest,
+    db: Session = Depends(get_db_session),
+):
+    """Bulk-update governance_status for the given barcodes.
+
+    UI usage:
+      - BatchWorkbench exception queue: 4 action buttons each call this
+        with a single (or selected-batch) sku_codes + the right status.
+      - "长尾 SKU" tab revert: status=unmanaged.
+
+    Side-effects: writes governance_status / decided_at / decided_by /
+    note + appends to governance_history (audit trail) on each row's
+    metadata_json.
+    """
+    try:
+        counters = sku_master_service.set_sku_governance(
+            db,
+            sku_codes=payload.sku_codes,
+            status=payload.status,
+            decided_by=payload.decided_by,
+            note=payload.note,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    db.commit()
+    return counters
+
+
+@router.get(
+    "/governance",
+    response_model=schemas.SkuGovernanceListResponse,
+    summary="按治理状态分页列出 SKU(带最近 N 天发货统计供运营排序)",
+)
+def list_sku_governance(
+    status: str,
+    page: int = 1,
+    page_size: int = 50,
+    order_by: str = "shipment_score",
+    sales_window_days: int = 30,
+    db: Session = Depends(get_db_session),
+):
+    """Backlog list — used by the new "建模 Backlog" / "长尾 SKU" tabs.
+
+    Each item carries ``revenue_window`` so the UI can sort by sales
+    potential and surface high-impact SKUs first.
+    """
+    try:
+        return sku_master_service.list_governance_backlog(
+            db,
+            status=status,
+            page=page,
+            page_size=page_size,
+            order_by=order_by,
+            sales_window_days=sales_window_days,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post(
+    "/governance/promote-from-model",
+    response_model=schemas.SkuGovernancePromoteResponse,
+    summary="模型发布完成后,将相关 SKU 从 pending_model 提升至 auto_bound",
+)
+def promote_governance_from_model(
+    payload: schemas.SkuGovernancePromoteRequest,
+    db: Session = Depends(get_db_session),
+):
+    """Called by the model-publish flow (or manually from ops UI) to
+    take SKUs that were sitting in the modeling backlog and mark them
+    as bound. Idempotent.
+    """
+    counters = sku_master_service.auto_promote_pending_model(
+        db,
+        sku_codes=payload.sku_codes,
+        decided_by=payload.decided_by,
+    )
+    db.commit()
+    return counters
+
+
+@router.post(
+    "/long-tail-category",
+    response_model=schemas.SkuLongTailCategorySetResponse,
+    summary="批量给 SKU 标 long_tail_category(对应长尾策略表的某条品类; 留空清除)",
+)
+def set_sku_long_tail_category(
+    payload: schemas.SkuLongTailCategorySetRequest,
+    db: Session = Depends(get_db_session),
+):
+    """Issue 28 follow-up: write SkuMaster.metadata_json.long_tail_category
+    so the long-tail snapshot picks the matching strategy regardless of
+    keywords. Pass ``category=""`` (or null) to clear the override.
+    """
+    try:
+        counters = sku_master_service.set_sku_long_tail_category(
+            db,
+            sku_codes=payload.sku_codes,
+            category=payload.category,
+            actor=payload.actor,
+            note=payload.note,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    db.commit()
+    return counters
+
+
+@router.post(
+    "/long-tail-category/auto-suggest/preview",
+    response_model=schemas.SkuLongTailCategoryAutoSuggestPreviewResponse,
+    summary="按策略关键字扫描长尾池, 返回建议的品类候选(不写入)",
+)
+def auto_suggest_long_tail_category_preview(
+    payload: schemas.SkuLongTailCategoryAutoSuggestRequest,
+    db: Session = Depends(get_db_session),
+):
+    """Issue 28 follow-up: scan long-tail SKUs and produce keyword-based
+    ``long_tail_category`` suggestions without writing.
+
+    Use this to preview "if I clicked auto-apply, which SKUs would get
+    which category?" — the response is what the UI lists in the candidate
+    drawer; the user picks "全部采纳" (calls /execute) or selects a
+    subset (calls /set with sku_codes + chosen category).
+    """
+    return sku_master_service.auto_suggest_long_tail_category(
+        db,
+        sku_codes=payload.sku_codes,
+        include_already_labeled=payload.include_already_labeled,
+        limit=payload.limit,
+    )
+
+
+@router.post(
+    "/long-tail-category/auto-suggest/execute",
+    response_model=schemas.SkuLongTailCategoryAutoSuggestExecuteResponse,
+    summary="一键自动标长尾品类(扫描 + 按策略关键字写入 metadata.long_tail_category)",
+)
+def auto_suggest_long_tail_category_execute(
+    payload: schemas.SkuLongTailCategoryAutoSuggestRequest,
+    db: Session = Depends(get_db_session),
+):
+    """One-shot apply of the preview above. Each candidate gets
+    ``set_sku_long_tail_category(category=suggested)`` with
+    ``actor=payload.actor`` (defaults to 'auto-suggest') and
+    ``note='auto-applied via keyword match'`` so audit history records
+    that this label came from the auto-suggester (not a human).
+    """
+    result = sku_master_service.auto_apply_long_tail_category(
+        db,
+        sku_codes=payload.sku_codes,
+        include_already_labeled=payload.include_already_labeled,
+        limit=payload.limit,
+        actor=payload.actor,
+    )
+    db.commit()
+    return result
 
 
 @router.get("/{sku_id}", response_model=SkuMasterRead)

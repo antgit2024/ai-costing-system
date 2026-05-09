@@ -19,7 +19,6 @@ import {
   message,
 } from 'antd'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
-import dayjs from 'dayjs'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery } from '@tanstack/react-query'
 
@@ -34,6 +33,7 @@ import {
   saveSkuMasterSpecPreparse,
 } from '@/services/planner'
 import type { SkuMaster, SpecParseResponse } from '@/types/planner'
+import { formatBeijingTime } from '@/utils/beijingTime'
 
 const { Title, Text } = Typography
 
@@ -41,9 +41,7 @@ const DEFAULT_PAGE_SIZE = 100
 const PAGE_SIZE_STORAGE_KEY = 'costing_sku_spec_matching_page_size_v1'
 
 const formatTime = (v?: string | null) => {
-  if (!v) return '-'
-  const d = dayjs(v)
-  return d.isValid() ? d.format('YYYY-MM-DD HH:mm:ss') : String(v)
+  return formatBeijingTime(v, 'YYYY-MM-DD HH:mm:ss')
 }
 
 const safeString = (v: unknown): string => {

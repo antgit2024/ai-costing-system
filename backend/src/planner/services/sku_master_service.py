@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import re
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
@@ -174,6 +175,8 @@ def _extract_model_code_hint(spec_text: Optional[str]) -> Optional[str]:
     - 3-char code: "A1B;..." / "024;..." / "K7Q；..."
     - token with leading 3 digits: "024画框;..." -> "024"
     - longer PM-prefixed code: "PM001;..." (kept for compatibility)
+    - structured variant code: "KB8-001" / "KB8-MG" / "KB8-001-TMALL" -> "KB8"
+      （商家编码常见 "<3字符模型码>-<2~8 位变体码>[-<后缀>]" 格式；用于 sku-master 自动绑定到 KB8 模型）
     """
     raw = (spec_text or "").strip()
     if not raw:
@@ -199,13 +202,20 @@ def _extract_model_code_hint(spec_text: Optional[str]) -> Optional[str]:
         if len(token) == 3 and token.isalnum():
             return token
 
-    # Priority 2: leading 3 digits anywhere, e.g. "024画框"
+    # Priority 2: structured variant code "<MMM>-<NNN..>" → take the leading MMM
+    # 之所以放在“纯3位数字”前面：当商家编码是 "KB8-001" 时优先识别为 KB8 而不是被误抽成数字段。
+    for seg in segments:
+        m = re.match(r"^([A-Z0-9]{3})-[A-Z0-9]{2,8}(?:-[A-Z0-9]{1,16})?$", seg.strip().upper())
+        if m:
+            return m.group(1)
+
+    # Priority 3: leading 3 digits anywhere, e.g. "024画框"
     for seg in segments:
         token = seg.strip().upper()
         if len(token) >= 3 and token[:3].isdigit():
             return token[:3]
 
-    # Priority 3: legacy PM-prefixed code (scan any segment)
+    # Priority 4: legacy PM-prefixed code (scan any segment)
     for seg in segments:
         token = seg.strip().upper()
         if not token.startswith("PM"):
@@ -217,6 +227,387 @@ def _extract_model_code_hint(spec_text: Optional[str]) -> Optional[str]:
             return token
 
     return None
+
+
+def _extract_model_code_from_shop_spec(shop_spec: Optional[str]) -> Optional[str]:
+    """
+    严格版"商家编码 → 模型码"抽取器（用于 auto_bind_preview 的 P0 锚点）。
+
+    与通用的 ``_extract_model_code_hint`` 不同，本函数**拒绝**像
+    "986153092837"（12 位淘宝平台 ID）这种"前 3 位数字 + 一长串后缀"的格式，
+    避免吉客云历史 tradeGoodsno 全是平台默认 ID 的场景下，所有同前缀 ID
+    被错绑到一个模型上的连锁误判。
+
+    接受的格式：
+      - "KB8"            纯 3-char 字母数字，且**不能全是数字**（数字开头容易和平台 ID 冲撞）
+      - "KB8-001"        XXX-XXX 结构化变体码
+      - "KB8-001-TMALL"  XXX-XXX-XXX 三段式
+      - "PMxxx_yy"       PM 前缀的传统模型码（保留兼容）
+
+    拒绝的格式：
+      - "986153092837"   全数字（平台 ID）
+      - "F26040205"      9 位无破折号字符（订单号 / 批次号样式）
+      - "Q26010601C丝圈地垫"  前 3 位字母数字但后接非破折号字符
+
+    返回 None 时，调用方应回退到 spec_text 关键词匹配。
+    """
+    raw = (shop_spec or "").strip().upper()
+    if not raw:
+        return None
+    # 单一 token：3-char 字母数字 且不能全数字
+    if len(raw) == 3 and raw.isalnum() and not raw.isdigit():
+        return raw
+    # XXX-XXX[-XXX] 结构
+    m = re.match(r"^([A-Z0-9]{3})-[A-Z0-9]{2,8}(?:-[A-Z0-9]{1,16})?$", raw)
+    if m:
+        head = m.group(1)
+        if not head.isdigit():
+            return head
+    # PM 传统前缀
+    if raw.startswith("PM") and all(ch.isalnum() or ch in ("_", "-") for ch in raw):
+        return raw
+    return None
+
+
+def _extract_variant_code_hint(text: Optional[str]) -> Optional[str]:
+    """
+    抽取“模型-变体”短码（如 KB8-001 / KB8-MG），用于：
+    - sku-master 列表展示：商家编码命中变体编码后显示给运营
+    - 后续 BOM 生成阶段精确命中线变体（已在 _augment_runtime_tokens 兜底）
+    """
+    raw = (text or "").strip().upper()
+    if not raw:
+        return None
+    m = re.search(r"\b([A-Z0-9]{3}-[A-Z0-9]{2,8})\b", raw)
+    return m.group(1) if m else None
+
+
+def _clear_suspect_misbind_resolved(meta: Dict[str, Any]) -> None:
+    """绑定变更时调用：清掉之前的"运营声明绑定正确"标记。
+
+    新绑定可能命中或不命中关键词体系，让算法重新评估，避免老的忽略状态遗留。
+    """
+    for k in (
+        "suspect_misbind_resolved",
+        "suspect_misbind_resolved_at",
+        "suspect_misbind_resolved_by",
+        "suspect_misbind_resolved_note",
+    ):
+        meta.pop(k, None)
+
+
+def resolve_suspect_misbind(
+    db: Session,
+    *,
+    sku_master_id: str,
+    requested_by: Optional[str],
+    note: Optional[str],
+) -> Dict[str, Any]:
+    """Operator-action: explicitly mark this SKU's binding as "verified correct",
+    suppressing future "疑似绑错" warnings for all shipment lines of this SKU.
+
+    Use case: 算法基于关键词反向索引误判（例如伞型模型变体覆盖了某品类，
+    但变体的 spec_contains_all 还没维护到位，或者运营有意做跨品类映射）。
+    这是个声明式开关，不影响实际绑定，只是抑制告警，便于运营聚焦真问题。
+
+    自动撤销：当 SKU 的绑定模型变更时（``bind_sku_to_version`` / ``unbind`` 路径），
+    此标记会被重置——新绑定需要重新被判定。
+    """
+    sm = db.query(models.SkuMaster).filter(models.SkuMaster.id == str(sku_master_id)).first()
+    if not sm:
+        raise ValueError(f"sku_master {sku_master_id!r} 不存在")
+    meta = dict(sm.metadata_json or {})
+    meta["suspect_misbind_resolved"] = True
+    meta["suspect_misbind_resolved_at"] = _utcnow().isoformat()
+    if requested_by:
+        meta["suspect_misbind_resolved_by"] = requested_by
+    if note:
+        meta["suspect_misbind_resolved_note"] = note
+    sm.metadata_json = meta
+    try:
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(sm, "metadata_json")
+    except Exception:  # noqa: BLE001
+        pass
+    db.commit()
+    return {
+        "sku_master_id": str(sm.id),
+        "erp_sku_barcode": sm.erp_sku_barcode,
+        "suspect_misbind_resolved": True,
+    }
+
+
+def resolve_spec_mismatch(
+    db: Session,
+    *,
+    sku_master_id: str,
+    requested_by: Optional[str],
+    note: Optional[str],
+) -> Dict[str, Any]:
+    """Operator-action: explicitly ignore the current spec_mismatch flag.
+
+    Writes ``spec_mismatch_resolved=True`` + audit fields.  Auto-revoked
+    by ``_update_shipment_seen`` when a real dimension_mismatch shows up later.
+    """
+    sm = db.query(models.SkuMaster).filter(models.SkuMaster.id == str(sku_master_id)).first()
+    if not sm:
+        raise ValueError(f"sku_master {sku_master_id!r} 不存在")
+    meta = dict(sm.metadata_json or {})
+    meta["spec_mismatch_resolved"] = True
+    meta["spec_mismatch_resolved_at"] = _utcnow().isoformat()
+    if requested_by:
+        meta["spec_mismatch_resolved_by"] = requested_by
+    if note:
+        meta["spec_mismatch_resolved_note"] = note
+    # 同步把"展示用" spec_mismatch 标记一并下掉，运营立即看到效果
+    meta["spec_mismatch"] = False
+    sm.metadata_json = meta
+    try:
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(sm, "metadata_json")
+    except Exception:  # noqa: BLE001
+        pass
+    db.commit()
+    return {
+        "sku_master_id": str(sm.id),
+        "erp_sku_barcode": sm.erp_sku_barcode,
+        "spec_mismatch": False,
+        "spec_mismatch_resolved": True,
+    }
+
+
+def reevaluate_spec_mismatch_by_id(
+    db: Session,
+    *,
+    sku_master_id: str,
+) -> Dict[str, Any]:
+    """Re-run ``_evaluate_spec_mismatch`` for one SKU and persist the result.
+    Used by the backfill script and any future "重新评估" button.
+
+    Skips rows that have ``spec_mismatch_resolved=True`` (operator already decided).
+    """
+    sm = db.query(models.SkuMaster).filter(models.SkuMaster.id == str(sku_master_id)).first()
+    if not sm:
+        return {"sku_master_id": sku_master_id, "skipped": True, "reason": "not_found"}
+    meta = dict(sm.metadata_json or {})
+    if meta.get("spec_mismatch_resolved") is True:
+        return {"sku_master_id": sku_master_id, "skipped": True, "reason": "operator_resolved"}
+    erp_text = (sm.spec_text or "").strip()
+    ship_text = str(meta.get("last_shipment_spec_text") or "").strip()
+    if not erp_text or not ship_text:
+        return {"sku_master_id": sku_master_id, "skipped": True, "reason": "missing_spec"}
+    judge = _evaluate_spec_mismatch(
+        db,
+        sku_master_row=sm,
+        erp_spec_text=erp_text,
+        shipment_spec_text=ship_text,
+    )
+    is_mismatch = bool(judge.get("is_mismatch"))
+    prev = bool(meta.get("spec_mismatch"))
+    meta["spec_mismatch"] = is_mismatch
+    if is_mismatch:
+        meta["spec_mismatch_at"] = _utcnow().isoformat()
+        meta["spec_mismatch_reason"] = judge.get("reason")
+        if judge.get("detail"):
+            meta["spec_mismatch_detail"] = judge.get("detail")
+    else:
+        meta.pop("spec_mismatch_reason", None)
+        meta.pop("spec_mismatch_detail", None)
+    sm.metadata_json = meta
+    try:
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(sm, "metadata_json")
+    except Exception:  # noqa: BLE001
+        pass
+    return {
+        "sku_master_id": str(sm.id),
+        "erp_sku_barcode": sm.erp_sku_barcode,
+        "before": prev,
+        "after": is_mismatch,
+        "reason": judge.get("reason"),
+        "detail": judge.get("detail"),
+    }
+
+
+def _evaluate_spec_mismatch(
+    db: Session,
+    *,
+    sku_master_row: models.SkuMaster,
+    erp_spec_text: Optional[str],
+    shipment_spec_text: Optional[str],
+) -> Dict[str, Any]:
+    """智能"规格差异"评估器（替换早期的字面 != 比较）。
+
+    判定规则（OR 合取，命中任一即真差异）：
+      1. 解析出的尺寸不一致（width_cm / height_cm / diameter_cm）
+         —— 尺寸是钱，必须报警
+      2. 关键词冲突：发货 spec 命中"别的已发布模型"的 recognition_keywords，
+         且"不命中"当前已绑模型的关键词 —— 疑似贴错码 / 商家改了 SKU 含义
+
+    锚点优先级：
+      - 第一锚点：已落库的 ``metadata.bound_variant_code`` / 已绑模型 model_code
+        （已绑定就是真理，关键词只用于交叉校验）
+      - 关键词单独不能作为充分条件，因为很多模型有相同关键词
+
+    不算差异的常见情况（即使字面 != ）：
+      - 颜色 / 版本前缀差异（"颜色分类:" / "规格:" 等）
+      - 字符顺序变化、token 子集差异、normalize 后 punctuation 差异
+      - ERP 末尾重复 SKU 编码而发货没有，等等
+
+    Returns
+    -------
+    {
+      "is_mismatch": bool,
+      "reason": str | None,           # "dimension_mismatch" / "keyword_conflict" / None
+      "detail": str | None,           # 人类可读说明
+      "erp_normalized": str,
+      "shipment_normalized": str,
+    }
+    """
+    erp_raw = (erp_spec_text or "").strip()
+    ship_raw = (shipment_spec_text or "").strip()
+    if not erp_raw or not ship_raw:
+        # 任一为空：无法比较 → 视为无差异（不打标）
+        return {
+            "is_mismatch": False,
+            "reason": None,
+            "detail": None,
+            "erp_normalized": "",
+            "shipment_normalized": "",
+        }
+
+    erp_norm = spec_parser_service.normalize_tx_spec_text(erp_raw)
+    ship_norm = spec_parser_service.normalize_tx_spec_text(ship_raw)
+    if erp_norm == ship_norm:
+        # normalize 后字面相等：肯定无差异
+        return {
+            "is_mismatch": False,
+            "reason": None,
+            "detail": None,
+            "erp_normalized": erp_norm,
+            "shipment_normalized": ship_norm,
+        }
+
+    # ---- 规则 1：尺寸比较 ----
+    # 解析失败的情况下当成"无尺寸约束"——避免因 parser 不认识某种格式导致误报
+    erp_p = spec_parser_service.parse_spec(erp_raw)
+    ship_p = spec_parser_service.parse_spec(ship_raw)
+
+    def _eq_dim(a, b) -> bool:
+        if a is None or b is None:
+            return True
+        try:
+            from decimal import Decimal as _D
+            return _D(str(a)) == _D(str(b))
+        except Exception:  # noqa: BLE001
+            return str(a).strip() == str(b).strip()
+
+    if not (
+        _eq_dim(erp_p.get("width_cm"), ship_p.get("width_cm"))
+        and _eq_dim(erp_p.get("height_cm"), ship_p.get("height_cm"))
+        and _eq_dim(erp_p.get("diameter_cm"), ship_p.get("diameter_cm"))
+    ):
+        return {
+            "is_mismatch": True,
+            "reason": "dimension_mismatch",
+            "detail": (
+                f"ERP 解析尺寸 = {erp_p.get('width_cm')}×{erp_p.get('height_cm')}cm; "
+                f"发货解析尺寸 = {ship_p.get('width_cm')}×{ship_p.get('height_cm')}cm"
+            ),
+            "erp_normalized": erp_norm,
+            "shipment_normalized": ship_norm,
+        }
+
+    # ---- 规则 2：关键词冲突（仅在已绑定的情况下校验） ----
+    # 取当前已绑模型的 recognition_keywords vs 其它已发布 standard 模型的关键词集合，
+    # 看发货 spec_text 是否命中"别人"+"不命中自己"。这种才是真冲突。
+    bound_model_id: Optional[str] = None
+    sku = (getattr(sku_master_row, "erp_sku_barcode", None) or "").strip()
+    if sku:
+        try:
+            bind = (
+                db.query(models.SkuModelVersionMapping)
+                .filter(
+                    models.SkuModelVersionMapping.sku_code == sku,
+                    models.SkuModelVersionMapping.is_active.is_(True),
+                    models.SkuModelVersionMapping.is_archived.is_(False),
+                )
+                .order_by(models.SkuModelVersionMapping.created_at.desc())
+                .first()
+            )
+            if bind:
+                v = db.get(models.ProductModelVersion, bind.model_version_id)
+                if v and not v.is_archived:
+                    bound_model_id = v.model_id
+        except Exception:  # noqa: BLE001
+            bound_model_id = None
+
+    if not bound_model_id:
+        # 未绑定：关键词无锚点，跳过 rule 2，仅依靠 rule 1 已通过判定 → 不算差异
+        return {
+            "is_mismatch": False,
+            "reason": None,
+            "detail": "normalize 后字面不等但解析尺寸一致；未绑定无法做关键词交叉校验",
+            "erp_normalized": erp_norm,
+            "shipment_normalized": ship_norm,
+        }
+
+    # 取所有已发布 standard 模型 + recognition_keywords
+    rows = (
+        db.query(models.ProductModel, models.ProductModelVersion)
+        .join(models.ProductModelVersion, models.ProductModelVersion.model_id == models.ProductModel.id)
+        .filter(
+            models.ProductModel.is_archived.is_(False),
+            models.ProductModelVersion.is_archived.is_(False),
+            models.ProductModelVersion.version_kind == "standard",
+            models.ProductModelVersion.version_status == "published",
+        )
+        .all()
+    )
+    ship_norm_upper = "".join(ship_norm.split()).upper()
+    bound_kw_hit = False
+    other_model_hit_codes: List[str] = []
+    for m, _v in rows:
+        meta = m.metadata_json or {}
+        raw_kws = meta.get("recognition_keywords") if isinstance(meta, dict) else None
+        if not isinstance(raw_kws, list):
+            continue
+        kws = [
+            "".join(str(x).strip().split()).upper()
+            for x in raw_kws
+            if x is not None and "".join(str(x).strip().split())
+        ]
+        if not kws:
+            continue
+        hit_any = any(kw and kw in ship_norm_upper for kw in kws)
+        if not hit_any:
+            continue
+        if str(m.id) == str(bound_model_id):
+            bound_kw_hit = True
+        else:
+            other_model_hit_codes.append(str(m.model_code or ""))
+
+    # 只有"命中别人 且 没命中自己"才算真冲突
+    if other_model_hit_codes and not bound_kw_hit:
+        unique_others = sorted(set(c for c in other_model_hit_codes if c))[:5]
+        return {
+            "is_mismatch": True,
+            "reason": "keyword_conflict",
+            "detail": (
+                f"发货规格命中其它模型关键词 [{', '.join(unique_others)}]，"
+                f"且不命中当前已绑模型 → 疑似贴错码"
+            ),
+            "erp_normalized": erp_norm,
+            "shipment_normalized": ship_norm,
+        }
+
+    return {
+        "is_mismatch": False,
+        "reason": None,
+        "detail": "normalize 后字面不等但尺寸一致 + 关键词不冲突（颜色/版本前缀差异等无害变化）",
+        "erp_normalized": erp_norm,
+        "shipment_normalized": ship_norm,
+    }
 
 
 def _compute_parsed_summary(spec_text: Optional[str]) -> Dict[str, Any]:
@@ -525,6 +916,120 @@ def list_shop_skus_by_barcode(
         return []
 
 
+# ============================================================================
+# 商家编码（merchant SKU）分类 — 与 frontend/src/utils/shopSpecCode.ts 同步
+# ============================================================================
+#   structured  = 可自动匹配（KB8 / KB8-001 / PMxxx）
+#   platform    = 平台默认 ID（淘宝纯数字）
+#   malformed   = 不规范（其它非空非数字字符串）
+#   empty       = 未同步（NULL / 空串）
+# ============================================================================
+
+# PostgreSQL 正则：3 位字母数字且不全数字
+_SHOP_SPEC_RE_3CHAR = r"^[A-Z0-9]{3}$"
+# XXX-YYY[-ZZZ] 结构化变体码（不全数字开头）
+_SHOP_SPEC_RE_PAIR = r"^[A-Z0-9]{3}-[A-Z0-9]{2,8}(-[A-Z0-9]{1,16})?$"
+_SHOP_SPEC_RE_PM = r"^PM[A-Z0-9_-]+$"
+_SHOP_SPEC_RE_PURE_DIGITS = r"^[0-9]+$"
+
+
+def _shop_spec_expr():
+    """COALESCE(metadata->>'shop_spec_code', ''), uppercased and trimmed."""
+    return func.upper(func.trim(func.coalesce(
+        models.SkuMaster.metadata_json["shop_spec_code"].as_string(), ""
+    )))
+
+
+def _apply_shop_spec_code_kind_filter(q, kind: str):
+    """Filter `q` (a SkuMaster query) by shop_spec_code classification kind.
+
+    `kind` must be one of:
+      - structured     : KB8 / KB8-001 / PMxxx — 可触发 P0 锚点
+      - platform       : 纯数字（淘宝/天猫平台默认 ID）
+      - malformed      : 非空非数字但格式不规范
+      - nonstructured  : 合并视图 = platform ∪ malformed（运营单一动作类）
+      - empty          : NULL / 空串
+      - all            : 不筛选
+    """
+    if kind == "all":
+        return q
+    expr = _shop_spec_expr()
+    if kind == "empty":
+        return q.filter(expr == "")
+    if kind == "platform":
+        return q.filter(expr.op("~")(_SHOP_SPEC_RE_PURE_DIGITS))
+    if kind == "structured":
+        # 3-char alnum (NOT pure digits) OR XXX-YYY[-ZZZ] (head not pure digits) OR PM*
+        return q.filter(
+            expr != "",
+            ~expr.op("~")(_SHOP_SPEC_RE_PURE_DIGITS),
+            or_(
+                expr.op("~")(_SHOP_SPEC_RE_3CHAR),
+                expr.op("~")(_SHOP_SPEC_RE_PAIR),
+                expr.op("~")(_SHOP_SPEC_RE_PM),
+            ),
+        )
+    if kind == "malformed":
+        # everything not empty, not platform, not structured
+        return q.filter(
+            expr != "",
+            ~expr.op("~")(_SHOP_SPEC_RE_PURE_DIGITS),
+            ~expr.op("~")(_SHOP_SPEC_RE_3CHAR),
+            ~expr.op("~")(_SHOP_SPEC_RE_PAIR),
+            ~expr.op("~")(_SHOP_SPEC_RE_PM),
+        )
+    if kind == "nonstructured":
+        # 非空 且 非 structured（=platform ∪ malformed）。
+        # 运营关心的是"需不需要去吉客云改"，这两类都需要，合并展示更高效。
+        return q.filter(
+            expr != "",
+            or_(
+                # platform: 纯数字
+                expr.op("~")(_SHOP_SPEC_RE_PURE_DIGITS),
+                # malformed: 非纯数字 且 不匹配任一 structured 模式
+                ~expr.op("~")(_SHOP_SPEC_RE_PURE_DIGITS)
+                & ~expr.op("~")(_SHOP_SPEC_RE_3CHAR)
+                & ~expr.op("~")(_SHOP_SPEC_RE_PAIR)
+                & ~expr.op("~")(_SHOP_SPEC_RE_PM),
+            ),
+        )
+    return q
+
+
+def summarize_shop_spec_code(
+    db: Session,
+    *,
+    channel: Optional[str] = None,
+    bound_state: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Aggregate count of SkuMaster rows by shop_spec_code classification.
+
+    Optional filters mirror `list_sku_master` so the strip can be scoped to
+    the same context the user is viewing (e.g. only bound rows / a specific
+    channel).
+    """
+    base = db.query(models.SkuMaster).filter(models.SkuMaster.is_archived.is_(False))
+    if channel:
+        base = base.filter(models.SkuMaster.channel == channel)
+    if bound_state in ("bound", "unbound"):
+        subq = (
+            db.query(models.SkuModelVersionMapping.id)
+            .filter(
+                models.SkuModelVersionMapping.sku_code == models.SkuMaster.erp_sku_barcode,
+                models.SkuModelVersionMapping.is_active.is_(True),
+                models.SkuModelVersionMapping.is_archived.is_(False),
+            )
+        )
+        base = base.filter(subq.exists() if bound_state == "bound" else ~subq.exists())
+
+    out: Dict[str, int] = {"structured": 0, "platform": 0, "malformed": 0, "empty": 0}
+    total = 0
+    for k in out.keys():
+        out[k] = _apply_shop_spec_code_kind_filter(base, k).count()
+        total += out[k]
+    return {"total": total, **out}
+
+
 def list_sku_master(
     db: Session,
     *,
@@ -541,11 +1046,13 @@ def list_sku_master(
     bundle_template_code: Optional[str] = None,
     bundle_preset_selector: Optional[str] = None,
     spec_mismatch: Optional[bool] = None,
+    data_quality_status: Optional[str] = None,
     preparse_state: Optional[str] = None,
     include_terms: Optional[str] = None,
     exclude_terms: Optional[str] = None,
     match_scope: Optional[str] = None,
     excluded_sku_master_ids: Optional[List[str]] = None,
+    shop_spec_code_kind: Optional[str] = None,
     page: int,
     page_size: int,
     page_size_cap: int = 200,
@@ -569,10 +1076,49 @@ def list_sku_master(
         bound_state = "bound"
     if search:
         s = f"%{search.strip()}%"
+        # 让用户可以直接粘贴"本系统已有的任何编码"做搜索：
+        # - erp_sku_barcode                  ：货品条码（SSOT）
+        # - platform_product_id              ：平台货品 ID
+        # - platform_sku_id                  ：平台 SKU ID（同一货品条码可能有多条）
+        # - product_code                     ：货品编号
+        # - product_name                     ：商品名称
+        # - metadata_json.shop_spec_code     ：商家编码 / 网店规格编码（多数二级码从这里来）
+        # - metadata_json.bound_variant_code ：已绑定的变体编码（如 OZU-001 / KB8-001），重绑过时变体码时直接粘贴
+        # - 已绑模型 model_code / model_name ：通过 sku_model_version_mapping 子查询命中（用于按模型短码/中文名找已绑 SKU，如 OZU 直喷切割垫类）
+        shop_spec_expr = func.coalesce(models.SkuMaster.metadata_json["shop_spec_code"].as_string(), "")
+        bound_variant_expr = func.coalesce(models.SkuMaster.metadata_json["bound_variant_code"].as_string(), "")
+        bound_model_subq = (
+            db.query(models.SkuModelVersionMapping.id)
+            .join(
+                models.ProductModelVersion,
+                models.ProductModelVersion.id == models.SkuModelVersionMapping.model_version_id,
+            )
+            .join(
+                models.ProductModel,
+                models.ProductModel.id == models.ProductModelVersion.model_id,
+            )
+            .filter(
+                models.SkuModelVersionMapping.sku_code == models.SkuMaster.erp_sku_barcode,
+                models.SkuModelVersionMapping.is_active.is_(True),
+                models.SkuModelVersionMapping.is_archived.is_(False),
+                models.ProductModelVersion.is_archived.is_(False),
+                models.ProductModel.is_archived.is_(False),
+                or_(
+                    models.ProductModel.model_code.ilike(s),
+                    models.ProductModel.model_name.ilike(s),
+                ),
+            )
+            .exists()
+        )
         q = q.filter(
             (models.SkuMaster.erp_sku_barcode.ilike(s))
+            | (models.SkuMaster.platform_product_id.ilike(s))
+            | (models.SkuMaster.platform_sku_id.ilike(s))
             | (models.SkuMaster.product_name.ilike(s))
             | (models.SkuMaster.product_code.ilike(s))
+            | (shop_spec_expr.ilike(s))
+            | (bound_variant_expr.ilike(s))
+            | bound_model_subq
         )
     if channel:
         q = q.filter(models.SkuMaster.channel == channel)
@@ -607,9 +1153,35 @@ def list_sku_master(
     excluded_list = list(set([str(x) for x in (excluded_sku_master_ids or []) if str(x).strip()]))
     if excluded_list:
         q = q.filter(~models.SkuMaster.id.in_(excluded_list))
+
+    # 商家编码分类筛选 — 与前端 utils/shopSpecCode.ts::classifyShopSpecCode 保持同样规则。
+    # structured  = 规范化商家编码（KB8 / KB8-001 / PMxxx），可触发 P0 锚点
+    # platform    = 纯数字（淘宝/天猫平台默认 ID），自动匹配会忽略
+    # malformed   = 非空非数字但格式不规范（F26040205、Q26010601C丝圈地垫 等）
+    # empty       = NULL 或空串
+    if shop_spec_code_kind:
+        kind = str(shop_spec_code_kind).strip().lower()
+        if kind in ("structured", "platform", "malformed", "empty", "all"):
+            q = _apply_shop_spec_code_kind_filter(q, kind)
     # server-side filters for tabs (avoid empty pages caused by client-side filtering)
     if spec_mismatch is True:
         q = q.filter(models.SkuMaster.metadata_json["spec_mismatch"].as_boolean() == True)  # noqa: E712
+    # 数据质量状态筛选（"spu_attribute_conflict" / "ok" / None）
+    # 用于让运营一眼圈出"SPU 错配"的 SKU，由 data_quality_service 写入。
+    dqs = (data_quality_status or "").strip()
+    if dqs:
+        if dqs.lower() == "ok":
+            # 没有 status 字段 = OK
+            q = q.filter(
+                or_(
+                    models.SkuMaster.metadata_json["data_quality_status"].as_string().is_(None),
+                    models.SkuMaster.metadata_json["data_quality_status"].as_string() == "",
+                )
+            )
+        else:
+            q = q.filter(
+                models.SkuMaster.metadata_json["data_quality_status"].as_string() == dqs
+            )
     # Bound-state filter and bound model/version filters (correlated EXISTS).
     # IMPORTANT: keep the common case (bound_state only) lightweight (no joins),
     # because these endpoints may run at very large scale (hundreds of thousands of rows).
@@ -789,7 +1361,7 @@ def ensure_from_shipment(
         return None
     existing = get_by_barcode(db, barcode)
     if existing:
-        _update_shipment_seen(existing, shipment_spec_text=spec_text, channel=channel, metadata=metadata)
+        _update_shipment_seen(existing, shipment_spec_text=spec_text, channel=channel, metadata=metadata, db=db)
         return existing
     # 发货时按需同步（更省资源）：
     # - 发货导入遇到未建档SKU：先创建“最小SKU主档”以便后续绑定/排障/重试异常
@@ -806,7 +1378,7 @@ def ensure_from_shipment(
         metadata_json=meta,
     )
     _update_erp_parsed_cache(row, requested_by=str(metadata.get("requested_by") or ""))
-    _update_shipment_seen(row, shipment_spec_text=spec_text, channel=channel, metadata=metadata)
+    _update_shipment_seen(row, shipment_spec_text=spec_text, channel=channel, metadata=metadata, db=db)
     db.add(row)
     db.flush()
     return row
@@ -887,6 +1459,69 @@ def _attach_active_version_bindings(db: Session, rows: List[models.SkuMaster]) -
         r.bound_version_kind = getattr(v, "version_kind", None)
         r.bound_version_status = getattr(v, "version_status", None)
 
+    # ---- 变体展示：直接读绑定时落库的 metadata_json.bound_variant_code，不做任何反推 ----
+    # 设计原因：人工审核没有可靠的 spec→variant 反推规则；自动识别也已经在
+    # auto_bind_execute 里把 variant_code_hint 写入了 bound_variant_code。
+    # 这里只负责"拿编码 → 查 ProductModelLineVariant → 拼 display_name(KB8-001) 给前端"。
+    bound_variant_pairs: List[tuple[str, str]] = []  # (version_id, variant_code_upper)
+    for r in rows:
+        vid = getattr(r, "active_model_version_id", None)
+        if not vid:
+            continue
+        meta = getattr(r, "metadata_json", None) or {}
+        code = str(meta.get("bound_variant_code") or "").strip().upper()
+        if code:
+            bound_variant_pairs.append((str(vid), code))
+    if bound_variant_pairs:
+        # 一次性 query 当前列表用到的所有 (version, variant_code) 组合的 line variants
+        version_id_set = list({p[0] for p in bound_variant_pairs})
+        rows_var = (
+            db.query(models.ProductModelLineVariant)
+            .filter(
+                models.ProductModelLineVariant.version_id.in_(version_id_set),
+                models.ProductModelLineVariant.is_archived.is_(False),
+            )
+            .all()
+        )
+        # 索引：(version_id, variant_code_upper) → variant 实例
+        var_by_key: Dict[tuple[str, str], models.ProductModelLineVariant] = {}
+        for vr in rows_var:
+            vmeta = vr.metadata_json or {}
+            vc = str(vmeta.get("variant_code") or "").strip().upper()
+            if not vc:
+                continue
+            var_by_key[(str(vr.version_id), vc)] = vr
+        for r in rows:
+            vid = getattr(r, "active_model_version_id", None)
+            meta = getattr(r, "metadata_json", None) or {}
+            code = str(meta.get("bound_variant_code") or "").strip().upper()
+            if not vid or not code:
+                r.bound_variant_code = None
+                r.bound_variant_label = None
+                continue
+            vr = var_by_key.get((str(vid), code))
+            if not vr:
+                # 编码已落库但变体被删了 / 切版本：仍展示编码，让运营看到异常
+                r.bound_variant_code = code
+                r.bound_variant_label = code
+                continue
+            vmeta = vr.metadata_json or {}
+            display_name = str(vmeta.get("display_name") or "").strip() or None
+            material_name: Optional[str] = display_name
+            if not material_name:
+                for it in vr.items or []:
+                    name = str(getattr(it, "material_name", "") or "").strip()
+                    if name:
+                        material_name = name
+                        break
+            r.bound_variant_code = code
+            r.bound_variant_label = f"{material_name}({code})" if material_name else code
+    else:
+        # 没有任何 row 带 bound_variant_code：批量清空，避免 ORM 残留旧值
+        for r in rows:
+            r.bound_variant_code = None
+            r.bound_variant_label = None
+
 
 def _update_erp_parsed_cache(row: models.SkuMaster, *, requested_by: Optional[str]) -> None:
     """
@@ -915,9 +1550,20 @@ def _update_shipment_seen(
     shipment_spec_text: Optional[str],
     channel: Optional[str],
     metadata: Dict[str, Any],
+    db: Optional[Session] = None,
 ) -> None:
     """
-    Record last seen shipment spec_text/hash, and mark mismatch vs ERP spec_text if different.
+    Record last seen shipment spec_text/hash, and intelligently flag spec_mismatch.
+
+    spec_mismatch 判定改用 ``_evaluate_spec_mismatch``：
+      - 尺寸不一致 → 真差异
+      - 关键词命中"别人"且不命中"自己已绑模型" → 疑似贴错码
+      - 其它字符差异（颜色前缀、字符顺序、token 子集）一律放行
+
+    操作员手动点过"忽略此差异"（``spec_mismatch_resolved=True``）后，
+    只要发货规格继续无尺寸差异，就保持忽略状态；如果出现真的尺寸差异，
+    新差异会自动覆盖忽略，重新打标。
+
     We do NOT overwrite ERP fields (spec_text/platform ids), only augment metadata.
     """
     meta = dict(row.metadata_json or {})
@@ -933,12 +1579,44 @@ def _update_shipment_seen(
 
         erp_text = (row.spec_text or "").strip()
         ship_text = (ship_summary.get("spec_text") or "").strip()
-        if erp_text and ship_text and erp_text != ship_text:
+
+        # 没有 db session（极少数早期调用路径）退化到 normalize 后字面比较，
+        # 避免空指针；普通运行链路一定会传 db。
+        if db is not None:
+            judge = _evaluate_spec_mismatch(
+                db,
+                sku_master_row=row,
+                erp_spec_text=erp_text,
+                shipment_spec_text=ship_text,
+            )
+            is_mismatch = bool(judge.get("is_mismatch"))
+            mismatch_reason = judge.get("reason")
+            mismatch_detail = judge.get("detail")
+        else:
+            erp_norm = spec_parser_service.normalize_tx_spec_text(erp_text)
+            ship_norm = spec_parser_service.normalize_tx_spec_text(ship_text)
+            is_mismatch = bool(erp_text and ship_text and erp_norm != ship_norm)
+            mismatch_reason = "legacy_text_diff" if is_mismatch else None
+            mismatch_detail = None
+
+        prev_resolved = bool(meta.get("spec_mismatch_resolved"))
+        if is_mismatch:
             meta["spec_mismatch"] = True
             meta["spec_mismatch_at"] = _utcnow().isoformat()
+            meta["spec_mismatch_reason"] = mismatch_reason
+            if mismatch_detail:
+                meta["spec_mismatch_detail"] = mismatch_detail
+            # 出现新差异（尤其是 dimension_mismatch）→ 自动撤销之前的"已忽略"
+            if prev_resolved and mismatch_reason == "dimension_mismatch":
+                meta["spec_mismatch_resolved"] = False
+                meta["spec_mismatch_resolved_revoked_at"] = _utcnow().isoformat()
         else:
-            # keep False only when both empty or equal; do not delete historical mismatch marker
-            meta.setdefault("spec_mismatch", False)
+            meta["spec_mismatch"] = False
+            meta.pop("spec_mismatch_reason", None)
+            meta.pop("spec_mismatch_detail", None)
+            # 已自然消失：清除"已忽略"标记，避免运营误以为还在忽略
+            if prev_resolved:
+                meta["spec_mismatch_resolved"] = False
     # keep channel only if empty (avoid overwriting ERP import data)
     if not row.channel and channel:
         row.channel = channel
@@ -961,6 +1639,14 @@ def _update_shipment_seen(
                     "platform_sku_id": metadata.get("platform_sku_id"),
                 }
             )
+        # 顶层 shop_spec_code：auto_bind_preview 的 P0 锚点（从这里取值）。
+        # 仅在传入的 shop_spec_code 非空时覆盖，避免后续不带商家编码的同步把已有值清掉。
+        # 这是吉客云 ERP 没在 SKU 主档维护商家编码、却在发货 detail 里带了 tradeGoodsno 的关键回流通道。
+        new_shop = (str(metadata.get("shop_spec_code") or "").strip()) or None
+        if new_shop:
+            meta["shop_spec_code"] = new_shop
+            meta["shop_spec_code_source"] = "shipment"
+            meta["shop_spec_code_seen_at"] = _utcnow().isoformat()
     row.metadata_json = meta
 
 
@@ -998,6 +1684,9 @@ def _attach_parsed_fields(rows: List[models.SkuMaster]) -> None:
         r.preparse_saved_by = meta.get("preparse_saved_by")
         r.spec_mismatch = bool(meta.get("spec_mismatch"))
         r.spec_mismatch_at = meta.get("spec_mismatch_at")
+        r.data_quality_status = meta.get("data_quality_status")
+        r.data_quality_evidence = meta.get("data_quality_evidence")
+        r.data_quality_evaluated_at = meta.get("data_quality_evaluated_at")
 
 
 def save_spec_preparse(
@@ -1166,6 +1855,7 @@ def bulk_save_spec_preparse(
             s_like = f"%{search.strip()}%"
             q = q.filter(
                 (models.SkuMaster.erp_sku_barcode.ilike(s_like))
+                | (models.SkuMaster.platform_product_id.ilike(s_like))
                 | (models.SkuMaster.product_name.ilike(s_like))
                 | (models.SkuMaster.product_code.ilike(s_like))
             )
@@ -2145,8 +2835,18 @@ def bind_sku_master_by_model(
     sku_master_ids: List[str],
     requested_by: Optional[str],
     allow_rebind: bool = False,
+    variant_code: Optional[str] = None,
 ) -> Dict[str, Any]:
+    """
+    Bind selected SKU masters to a (model, optional variant) pair.
+
+    `variant_code`：可选的"最终绑定变体编码"（如 KB8-001）。会被规范化为大写写入
+    ``sku_master.metadata_json.bound_variant_code``，列表/详情后续直接读这个字段做展示，
+    不再靠 spec_text 反推（人工审核场景不存在可靠的反推规则）。
+    传 None / 空串 = "不指定变体"，与历史行为一致。
+    """
     version = _get_published_standard_version_for_model_id(db, model_id)
+    norm_variant_code = (str(variant_code).strip().upper() or None) if variant_code else None
     total_selected = len(sku_master_ids or [])
     if total_selected <= 0:
         return {
@@ -2184,8 +2884,36 @@ def bind_sku_master_by_model(
             skipped_already_bound += 1
             continue
         if active and str(getattr(active, "model_version_id", "") or "") == str(version.id) and allow_rebind:
-            # already aligned to the target published version
-            skipped_already_bound += 1
+            # 已经绑到同一个发布版本——以前直接 skip，但这样会让"模型对了，只想补 / 改
+            # variant_code"的常见场景在 UI 上根本无路可走。
+            # 现在的语义：版本相同时，仍然把 bound_variant_code 当成"可单独更新的轻字段"
+            # 处理；如果新值与旧值不一样，只 patch sku_master.metadata_json，不重建
+            # SkuModelVersionMapping（保留 mapping 历史与 effective_from）。
+            existing_meta = dict(getattr(active, "metadata_json", None) or {})
+            existing_code = str(existing_meta.get("bound_variant_code") or "").strip().upper() or None
+            sm_meta = dict(getattr(row, "metadata_json", None) or {})
+            existing_sm_code = str(sm_meta.get("bound_variant_code") or "").strip().upper() or None
+            new_code = norm_variant_code  # 已在函数顶部归一化为大写
+            # 比较"sku_master 上落的 bound_variant_code"，因为列表 / 详情读的就是它
+            if (new_code or None) == (existing_sm_code or None):
+                skipped_already_bound += 1
+                continue
+            # 仅 patch sku_master.metadata_json.bound_variant_code，不动 mapping
+            if new_code:
+                sm_meta["bound_variant_code"] = new_code
+            else:
+                sm_meta.pop("bound_variant_code", None)
+            _clear_suspect_misbind_resolved(sm_meta)
+            sm_meta["model_bound_at"] = now_iso
+            sm_meta["model_bound_by"] = requested_by or sm_meta.get("model_bound_by") or None
+            sm_meta["model_binding_method"] = "manual_variant_only_update"
+            row.metadata_json = sm_meta
+            try:
+                from sqlalchemy.orm.attributes import flag_modified
+                flag_modified(row, "metadata_json")
+            except Exception:
+                pass
+            bound_count += 1
             continue
         # Validation by latest shipment spec sample (relaxed):
         # - If no sample, allow binding but mark as "no_shipment_sample".
@@ -2217,7 +2945,20 @@ def bind_sku_master_by_model(
                     "skip_prefix_check": True,
                 },
             )
-            # Record binding metadata on sku_master for downstream "spec-matching" anchor-change detection.
+            # 先跑 preparse（让它先 read-modify-write 一遍 metadata_json）
+            if norm_spec:
+                try:
+                    _apply_preparse_no_commit(db, sku_master_row=row, spec_text=norm_spec, requested_by=requested_by)
+                except Exception:
+                    pass
+            # ⚠ 必须在 preparse 之后写"我们要落的字段"。
+            # 历史 bug：bind_sku_to_version 内部 db.commit() 触发 SQLAlchemy
+            # expire_on_commit，row 被标 expired。如果我们先写、后跑 preparse，
+            # preparse 内 `meta = dict(row.metadata_json or {})` 触发 lazy reload 拿到
+            # stale baseline（不含我们刚 set 的 in-memory 值），update preparse 字段
+            # 后写回 row.metadata_json，**把 model_bound_at / bound_variant_code 全抹掉**。
+            # 把"我们要落的字段"放最后写，避免被 preparse 覆盖。
+            # （回归测试：test_bind_with_shipment_sample_keeps_variant_code）
             meta = dict(getattr(row, "metadata_json", None) or {})
             meta.update(
                 {
@@ -2227,13 +2968,17 @@ def bind_sku_master_by_model(
                     "binding_validation_state": "sampled" if norm_spec else "no_shipment_sample",
                 }
             )
+            if norm_variant_code:
+                meta["bound_variant_code"] = norm_variant_code
+            else:
+                meta.pop("bound_variant_code", None)
+            _clear_suspect_misbind_resolved(meta)
             row.metadata_json = meta
-            # auto preparse (from latest shipment spec sample)
-            if norm_spec:
-                try:
-                    _apply_preparse_no_commit(db, sku_master_row=row, spec_text=norm_spec, requested_by=requested_by)
-                except Exception:
-                    pass
+            try:
+                from sqlalchemy.orm.attributes import flag_modified  # local import to avoid global churn
+                flag_modified(row, "metadata_json")
+            except Exception:
+                pass
             bound_count += 1
         except Exception as exc:  # noqa: BLE001
             errors.append({"sku_master_id": row.id, "sku_code": sku, "error": str(exc)})
@@ -2281,11 +3026,196 @@ def _latest_shipment_spec_sample(db: Session, *, sku_code: str) -> Tuple[Optiona
     return row, raw, norm
 
 
-def _mismatch_warnings_by_keywords(*, sample_text: str, sku_spec_text: Optional[str], product_name: Optional[str], target_label: str) -> List[str]:
+def _mismatch_warnings_by_keywords_v2(
+    db: Session,
+    *,
+    combined_text: str,
+    bound_model_id: str,
+) -> List[str]:
+    """新版「疑似绑错」精筛：基于运营自定义的 ``recognition_keywords``。
+
+    判定：发货样本文本命中"其它已发布标准模型"的关键词，且不命中"当前已绑模型"的关键词
+    → 可能贴错码 / 误绑模型。
+
+    这与 ``_evaluate_spec_mismatch`` 用的判定核心一致，但本函数返回的是
+    给发货行用的"人话告警字符串"，可以拼到 hint 列里展示。
+
+    设计考虑：
+      - 与 SKU 主档「规格差异」共享同一套关键词来源（`metadata.recognition_keywords`）
+      - 运营在标准模型编辑里加新关键词 → 立刻生效到发货管理「疑似绑错」
+      - 多模型命中相同关键词时不报警（避免歧义噪音；类似 _match_by_model_keywords）
+
+    返回 [] 表示：未找到冲突 / 无关键词配置。
     """
-    Soft guardrail: warn when shipment sample keywords strongly suggest a different category than the chosen target.
-    This is NOT a hard error (users may intentionally map across categories).
+    text = "".join(str(combined_text or "").split()).upper()
+    if not text or not bound_model_id:
+        return []
+    try:
+        rows = (
+            db.query(models.ProductModel, models.ProductModelVersion)
+            .join(models.ProductModelVersion, models.ProductModelVersion.model_id == models.ProductModel.id)
+            .filter(
+                models.ProductModel.is_archived.is_(False),
+                models.ProductModelVersion.is_archived.is_(False),
+                models.ProductModelVersion.version_kind == "standard",
+                models.ProductModelVersion.version_status == "published",
+            )
+            .all()
+        )
+    except Exception:  # noqa: BLE001
+        return []
+    # 模型级 keywords + 变体级 spec_contains_all/_any 合并构造 model→keywords 映射
+    # （与 SQL 端反向索引同语义：伞型模型靠变体覆盖品类）
+    model_kws: Dict[str, List[str]] = {}
+    model_code_by_id: Dict[str, str] = {}
+    version_to_model: Dict[str, str] = {}
+    for m, v in rows:
+        model_code_by_id[str(m.id)] = str(m.model_code or "").strip() or "(未知)"
+        version_to_model[str(v.id)] = str(m.id)
+        meta = m.metadata_json or {}
+        raw = meta.get("recognition_keywords") if isinstance(meta, dict) else None
+        if isinstance(raw, list):
+            for x in raw:
+                k = "".join(str(x).strip().split()).upper()
+                if k:
+                    model_kws.setdefault(str(m.id), []).append(k)
+    if version_to_model:
+        try:
+            variant_rows = (
+                db.query(
+                    models.ProductModelLineVariant.version_id,
+                    models.ProductModelLineVariant.conditions_json,
+                )
+                .filter(
+                    models.ProductModelLineVariant.is_archived.is_(False),
+                    models.ProductModelLineVariant.version_id.in_(list(version_to_model.keys())),
+                )
+                .all()
+            )
+            for ver_id, cond in variant_rows:
+                if not isinstance(cond, dict):
+                    continue
+                mid = version_to_model.get(str(ver_id))
+                if not mid:
+                    continue
+                for ck in ("spec_contains_all", "spec_contains_any"):
+                    tokens = cond.get(ck) or []
+                    if not isinstance(tokens, list):
+                        continue
+                    for tok in tokens:
+                        ts = str(tok or "").strip()
+                        if not ts or ":" in ts:
+                            continue
+                        norm_t = "".join(ts.split()).upper()
+                        if norm_t:
+                            model_kws.setdefault(mid, []).append(norm_t)
+        except Exception:  # noqa: BLE001
+            pass
+
+    bound_kw_hit = False
+    other_model_hits: Dict[str, List[str]] = {}
+    for mid, kws in model_kws.items():
+        matched = [k for k in kws if k and k in text]
+        if not matched:
+            continue
+        if mid == str(bound_model_id):
+            bound_kw_hit = True
+        else:
+            code = model_code_by_id.get(mid) or "(未知)"
+            other_model_hits.setdefault(code, []).extend(matched)
+    if other_model_hits and not bound_kw_hit:
+        # 列出冲突最严重的前 3 个模型，避免提示过长
+        items = sorted(other_model_hits.items(), key=lambda x: -len(x[1]))[:3]
+        labels = []
+        for code, matched_kws in items:
+            uniq = sorted(set(matched_kws))[:3]
+            labels.append(f"{code}（命中：{', '.join(uniq)}）")
+        return [
+            f"疑似绑错：发货规格命中其它模型关键词 → {' / '.join(labels)}，且不命中当前已绑模型；请确认目标是否选对。"
+        ]
+    return []
+
+
+def _mismatch_warnings_by_keywords(
+    *,
+    sample_text: str,
+    sku_spec_text: Optional[str],
+    product_name: Optional[str],
+    target_label: str,
+    db: Optional[Session] = None,
+    bound_model_id: Optional[str] = None,
+) -> List[str]:
     """
+    Soft guardrail: warn when shipment sample keywords strongly suggest a different
+    category than the chosen target.
+
+    Two-tier strategy（向后兼容 + 渐进升级）：
+      Tier 1（精筛，优先）: ``recognition_keywords`` 体系 — 当 caller 传入 ``db`` +
+        ``bound_model_id`` 时启用。运营在标准模型里维护的关键词立刻生效。
+      Tier 2（粗筛，兜底）: 硬编码 5 组品类（丝圈/地垫、抱枕、地毯、桌垫、装饰画/画框）
+        — 旧行为，对未配置 recognition_keywords 的模型仍然有效，避免行级提示忽然全消失。
+
+    Returns [] when no warning. This is NOT a hard error (users may intentionally
+    map across categories).
+    """
+    # Tier 1: 统一关键词体系（运营维护的 recognition_keywords）
+    # 当前已绑模型如果**已经配过 recognition_keywords**，就信任 Tier 1 的判断结果——
+    # 不论是命中冲突（报警）还是无冲突（放行），都不再回退到硬编码 Tier 2。
+    # 这样运营给 OZU 配了"丝圈地垫"后，发货命中"丝圈地垫"就**不会再被 Tier 2 的
+    # "目标名称未含对应关键词" 兜底误报**。
+    if db is not None and bound_model_id:
+        try:
+            bound_model_row = db.get(models.ProductModel, str(bound_model_id))
+        except Exception:  # noqa: BLE001
+            bound_model_row = None
+        bound_kws: List[str] = []
+        if bound_model_row is not None:
+            # 模型级关键词
+            meta_b = bound_model_row.metadata_json or {}
+            raw_b = meta_b.get("recognition_keywords") if isinstance(meta_b, dict) else None
+            if isinstance(raw_b, list):
+                bound_kws.extend([str(x).strip() for x in raw_b if str(x or "").strip()])
+            # 变体级关键词（伞型模型靠这个；如 OZU 模型只配"丝圈地垫"，
+            # 但 OZU-002 变体覆盖"皮革桌垫" → 必须把变体级合并）
+            try:
+                vrows = (
+                    db.query(
+                        models.ProductModelLineVariant.conditions_json,
+                    )
+                    .join(
+                        models.ProductModelVersion,
+                        models.ProductModelVersion.id == models.ProductModelLineVariant.version_id,
+                    )
+                    .filter(
+                        models.ProductModelLineVariant.is_archived.is_(False),
+                        models.ProductModelVersion.is_archived.is_(False),
+                        models.ProductModelVersion.model_id == bound_model_row.id,
+                        models.ProductModelVersion.version_kind == "standard",
+                        models.ProductModelVersion.version_status == "published",
+                    )
+                    .all()
+                )
+                for (cond,) in vrows:
+                    if not isinstance(cond, dict):
+                        continue
+                    for ck in ("spec_contains_all", "spec_contains_any"):
+                        for tok in (cond.get(ck) or []):
+                            ts = str(tok or "").strip()
+                            if not ts or ":" in ts:
+                                continue
+                            bound_kws.append(ts)
+            except Exception:  # noqa: BLE001
+                pass
+        if bound_kws:
+            combined = " ".join(
+                x for x in [str(sample_text or ""), str(product_name or ""), str(sku_spec_text or "")] if x
+            ).strip()
+            return _mismatch_warnings_by_keywords_v2(
+                db, combined_text=combined, bound_model_id=str(bound_model_id)
+            )
+        # 已绑模型没配 recognition_keywords → 走 Tier 2 兜底
+
+    # Tier 2: 硬编码品类组（向后兼容 + 兜底，仅在 Tier 1 不可用时启用）
     s = str(sample_text or "")
     p = str(product_name or "")
     sku_spec = str(sku_spec_text or "")
@@ -2678,12 +3608,16 @@ def bind_sku_master_by_model_bulk(
     bound_model_code: Optional[str] = None,
     bound_version_id: Optional[str] = None,
     excluded_sku_master_ids: Optional[List[str]] = None,
+    variant_code: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Bulk bind for manual workbench: bind *unbound* sku masters matched by filters.
     Designed for UI "implicit select all across pages", with an exclusion list.
+
+    `variant_code`：可选，整批 SKU 共享的"最终绑定变体编码"。同 bind_sku_master_by_model。
     """
     version = _get_published_standard_version_for_model_id(db, model_id)
+    norm_variant_code = (str(variant_code).strip().upper() or None) if variant_code else None
     limit2 = max(min(int(limit or 200), 2000), 1)
 
     excluded_list = list(set([str(x) for x in (excluded_sku_master_ids or []) if str(x).strip()]))
@@ -2857,6 +3791,13 @@ def bind_sku_master_by_model_bulk(
                     "skip_prefix_check": True,
                 },
             )
+            # 先跑 preparse 再写"我们要落的字段"——避免 preparse 内部 read-modify-write
+            # 把 model_bound_at / bound_variant_code 抹掉。详见 bind_sku_master_by_model 同位置注释。
+            if norm_spec:
+                try:
+                    _apply_preparse_no_commit(db, sku_master_row=row, spec_text=norm_spec, requested_by=requested_by)
+                except Exception:
+                    pass
             meta = dict(getattr(row, "metadata_json", None) or {})
             meta.update(
                 {
@@ -2866,12 +3807,17 @@ def bind_sku_master_by_model_bulk(
                     "binding_validation_state": "sampled" if norm_spec else "no_shipment_sample",
                 }
             )
+            if norm_variant_code:
+                meta["bound_variant_code"] = norm_variant_code
+            else:
+                meta.pop("bound_variant_code", None)
+            _clear_suspect_misbind_resolved(meta)
             row.metadata_json = meta
-            if norm_spec:
-                try:
-                    _apply_preparse_no_commit(db, sku_master_row=row, spec_text=norm_spec, requested_by=requested_by)
-                except Exception:
-                    pass
+            try:
+                from sqlalchemy.orm.attributes import flag_modified
+                flag_modified(row, "metadata_json")
+            except Exception:
+                pass
             bound_count += 1
         except Exception as exc:  # noqa: BLE001
             errors.append({"sku_master_id": row.id, "sku_code": sku, "error": str(exc)})
@@ -3766,9 +4712,34 @@ def preview_bind_by_bundle_template_bulk(
     }
 
 
-def auto_bind_preview(db: Session, *, limit: int, scan_limit: int = 50000) -> Dict[str, Any]:
+def auto_bind_preview(
+    db: Session,
+    *,
+    limit: int,
+    scan_limit: int = 50000,
+    restrict_to_sku_codes: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """
+    Identify unbound SkuMaster rows that match a published standard model
+    via either ``model_code_hint`` (extracted from spec_text) or
+    ``recognition_keywords`` (from model.metadata_json). Returns a list of
+    auto-bind candidates (no writes).
+
+    Args:
+        limit: max number of candidate items to return.
+        scan_limit: max number of unbound SkuMaster rows to inspect.
+        restrict_to_sku_codes: when provided, scope scanning to these
+            ``erp_sku_barcode`` values only. Used by
+            ``shipment_import_service.auto_resolve_pending_shipment_lines_*``
+            so that the recognition engine only runs against SKUs that
+            actually appear in recent pending shipment lines (instead of
+            spending CPU on long-tail historical SKUs that are not selling).
+    """
     limit = max(min(int(limit or 200), 2000), 1)
     scan_limit = max(min(int(scan_limit or 50000), 500000), 100)
+    restrict_codes_norm: Optional[List[str]] = None
+    if restrict_to_sku_codes is not None:
+        restrict_codes_norm = sorted({(c or "").strip() for c in restrict_to_sku_codes if (c or "").strip()})
 
     def _norm_text(t: Optional[str]) -> str:
         return "".join(str(t or "").strip().split()).upper()
@@ -3859,6 +4830,10 @@ def auto_bind_preview(db: Session, *, limit: int, scan_limit: int = 50000) -> Di
         .filter(~subq.exists())
         .order_by(models.SkuMaster.updated_at.desc())
     )
+    if restrict_codes_norm is not None:
+        if not restrict_codes_norm:
+            return {"total_unbound": 0, "candidates": 0, "items": []}
+        q = q.filter(models.SkuMaster.erp_sku_barcode.in_(restrict_codes_norm))
     rows = q.limit(scan_limit).all()
 
     # NOTE: q.count() can be very expensive on large tables and may trigger gateway timeouts.
@@ -3877,10 +4852,22 @@ def auto_bind_preview(db: Session, *, limit: int, scan_limit: int = 50000) -> Di
         spec_for_match = meta.get("last_shipment_spec_text") or r.spec_text
         # Keyword recognition is STRICT: only match against spec_text (prefer latest shipment spec).
         match_text = str(spec_for_match or "")
+        # 商家编码（线上 ERP 维护的"规格编码（网店）"）作为最强识别源：
+        # 优先级 1 = 商家编码命中"模型-变体"短码（KB8-001 → KB8）→ 100% 锁定模型
+        # 优先级 2 = spec_text 抽取的 hint
+        # 优先级 3 = 模型识别关键词（recognition_keywords）
+        shop_code = str(meta.get("shop_spec_code") or getattr(r, "shop_spec_code", "") or "").strip()
+        variant_hint = _extract_variant_code_hint(shop_code) if shop_code else None
+        # P0 锚点：商家编码必须用**严格抽取器**，拒绝 12 位淘宝 ID 形态
+        # （避免 model_code='024' 一旦上线，所有 024 开头的平台 ID 被错绑）
+        shop_hint = _extract_model_code_from_shop_spec(shop_code) if shop_code else None
+        # P1：spec_text 抽取的 hint（保留 _extract_model_code_hint 宽松行为，因为规格文本上下文更可信）
         hint = meta.get("model_code_hint_shipment") or meta.get("model_code_hint_erp")
         if not hint:
-            # Fallback: compute from current spec_text (so older imported rows can still be auto-bound)
             hint = _extract_model_code_hint(spec_for_match)
+        # 商家编码 hint 命中时优先（仅在严格抽取器通过时才覆盖）
+        if shop_hint:
+            hint = shop_hint
         hint = (str(hint).strip().upper()) if hint else ""
         match_method = None
         matched_keyword = None
@@ -3892,7 +4879,9 @@ def auto_bind_preview(db: Session, *, limit: int, scan_limit: int = 50000) -> Di
             if version:
                 model = db.get(models.ProductModel, version.model_id)
                 if model and not model.is_archived:
-                    match_method = "model_code_hint"
+                    # 注意：只有 shop_hint 严格通过 + 与最终 hint 一致时才标 shop_spec_code，
+                    # 否则归类到 model_code_hint（说明命中来自 spec_text 而非商家编码）
+                    match_method = "shop_spec_code" if (shop_hint and shop_hint == hint) else "model_code_hint"
 
         if not model or not version:
             kw_match = _match_by_model_keywords(match_text)
@@ -3912,6 +4901,8 @@ def auto_bind_preview(db: Session, *, limit: int, scan_limit: int = 50000) -> Di
                 "erp_sku_barcode": sku,
                 "channel": r.channel,
                 "spec_text": spec_for_match,
+                "shop_spec_code": shop_code or None,
+                "variant_code_hint": variant_hint,
                 "model_code_hint": hint,
                 "model_id": model.id,
                 "model_code": model.model_code,
@@ -3954,7 +4945,35 @@ def auto_bind_execute(
         if product_model_service.get_active_sku_binding(db, sku):
             skipped_already_bound += 1
             continue
+        # 自动识别模式：preview 阶段已经从商家编码（shop_spec_code）正则抽出
+        # variant_code_hint（如 KB8-001），这里直接落到 SkuMaster.metadata_json.bound_variant_code，
+        # 与人工审核走同一份字段，下游列表/详情统一从这里读，不再反推。
+        norm_variant_code = str(it.get("variant_code_hint") or "").strip().upper() or None
         try:
+            # CRITICAL ORDERING:
+            # bind_sku_to_version() internally calls db.commit() AND then
+            # invokes _trigger_pending_snapshots_for_sku() which does
+            # db.rollback() on failure — that rollback would erase any
+            # SkuMaster.metadata.bound_variant_code we wrote AFTER the bind.
+            # So we write bound_variant_code on the SkuMaster BEFORE binding,
+            # ensuring both rows are committed atomically by bind_sku_to_version.
+            sku_master_id = it.get("sku_master_id")
+            if sku_master_id:
+                row = db.get(models.SkuMaster, str(sku_master_id))
+                if row is not None:
+                    meta = dict(getattr(row, "metadata_json", None) or {})
+                    if norm_variant_code:
+                        meta["bound_variant_code"] = norm_variant_code
+                    else:
+                        meta.pop("bound_variant_code", None)
+                    _clear_suspect_misbind_resolved(meta)
+                    row.metadata_json = meta
+                    try:
+                        from sqlalchemy.orm.attributes import flag_modified
+                        flag_modified(row, "metadata_json")
+                    except Exception:
+                        pass
+
             product_model_service.bind_sku_to_version(
                 db,
                 sku_code=sku,
@@ -3966,6 +4985,7 @@ def auto_bind_execute(
                     "binding_method": it.get("match_method") or "auto",
                     "model_code_hint": it.get("model_code_hint"),
                     "matched_keyword": it.get("matched_keyword"),
+                    "variant_code_hint": norm_variant_code,
                     "skip_prefix_check": True,
                 },
             )
@@ -3982,4 +5002,684 @@ def auto_bind_execute(
         "errors": errors,
     }
 
+
+# ============================================================================
+# SKU Governance (Sprint 2 of "SKU 治理与按需建模")
+# ----------------------------------------------------------------------------
+# Background:
+#   With ~1M SKUs in Jackyun, we cannot pre-import or pre-model every SKU.
+#   Instead, ``ensure_from_shipment`` creates SkuMaster rows on-demand and
+#   each SKU traverses a 4-state governance lifecycle managed by operators
+#   from the BatchWorkbench exception queue UI.
+#
+# State machine (stored in SkuMaster.metadata_json.governance_status):
+#
+#       unmanaged ---bind/build model---> auto_bound
+#           |                                ^
+#           |---add to backlog---> pending_model
+#           |                                |
+#           |---mark as long-tail---> do_not_model (silent skip)
+#           |                                |
+#           +-------- operator revert -------+
+#
+# Why metadata_json (not a column):
+#   - No Alembic migration cost; unblocks 4-state UI immediately.
+#   - Pattern aligns with existing extension keys (needs_erp_sync,
+#     bundle_template_id, spec_mismatch, ...).
+#   - Audit trail (governance_history[]) lives next to the status.
+#
+# Worker contract (see shipment_import_service._finalize_shipment_line and
+# Sprint 2-2 work for shipment_import_service.py):
+#   - do_not_model     -> skip the line silently (no exception, no snapshot)
+#   - pending_model    -> enqueue exception with reason='MODEL_PENDING'
+#   - unmanaged        -> default behaviour (SKU_NOT_BOUND if unbound)
+#   - auto_bound       -> normal parse + BomSnapshot
+# ============================================================================
+
+
+GOVERNANCE_UNMANAGED = "unmanaged"
+GOVERNANCE_AUTO_BOUND = "auto_bound"
+GOVERNANCE_PENDING_MODEL = "pending_model"
+GOVERNANCE_DO_NOT_MODEL = "do_not_model"
+
+GOVERNANCE_STATUSES = frozenset(
+    {
+        GOVERNANCE_UNMANAGED,
+        GOVERNANCE_AUTO_BOUND,
+        GOVERNANCE_PENDING_MODEL,
+        GOVERNANCE_DO_NOT_MODEL,
+    }
+)
+
+
+def get_sku_governance_status(sku_master: Optional[models.SkuMaster]) -> str:
+    """Read governance_status from SkuMaster.metadata_json. Default: unmanaged.
+
+    Safe to call with None (returns 'unmanaged') so callers don't need to
+    null-check before deciding the worker behaviour.
+    """
+    if sku_master is None:
+        return GOVERNANCE_UNMANAGED
+    meta = dict(getattr(sku_master, "metadata_json", None) or {})
+    return str(meta.get("governance_status") or GOVERNANCE_UNMANAGED)
+
+
+def is_do_not_model(sku_master: Optional[models.SkuMaster]) -> bool:
+    """Check whether a SKU is marked as long-tail (worker should skip)."""
+    return get_sku_governance_status(sku_master) == GOVERNANCE_DO_NOT_MODEL
+
+
+def is_pending_model(sku_master: Optional[models.SkuMaster]) -> bool:
+    """Check whether a SKU is in the modeling backlog."""
+    return get_sku_governance_status(sku_master) == GOVERNANCE_PENDING_MODEL
+
+
+def set_sku_governance(
+    db: Session,
+    *,
+    sku_codes: List[str],
+    status: str,
+    decided_by: Optional[str] = None,
+    note: Optional[str] = None,
+) -> Dict[str, int]:
+    """Bulk-set governance_status for the given barcodes.
+
+    Side-effects (atomic per row, all under one db.flush()):
+      - metadata_json.governance_status        = <status>
+      - metadata_json.governance_decided_at    = ISO timestamp
+      - metadata_json.governance_decided_by    = <decided_by> if provided
+      - metadata_json.governance_note          = <note> if provided
+      - metadata_json.governance_history       = appended audit entry
+        (capped at last 20 entries to avoid metadata bloat)
+
+    Returns
+    -------
+    counters: {"updated": int, "unchanged": int, "missing": int}
+        - updated:    rows whose status actually changed
+        - unchanged:  rows already at the requested status (idempotent)
+        - missing:    barcodes with no SkuMaster row in DB
+
+    Raises
+    ------
+    ValueError: if ``status`` not in GOVERNANCE_STATUSES.
+    """
+    if status not in GOVERNANCE_STATUSES:
+        raise ValueError(
+            f"Unknown governance status: {status!r}; allowed={sorted(GOVERNANCE_STATUSES)}"
+        )
+    if not sku_codes:
+        return {"updated": 0, "unchanged": 0, "missing": 0}
+
+    barcodes = [c for c in (str(s).strip() for s in sku_codes) if c]
+    if not barcodes:
+        return {"updated": 0, "unchanged": 0, "missing": 0}
+
+    unique_barcodes = list({b for b in barcodes})
+    rows = (
+        db.query(models.SkuMaster)
+        .filter(models.SkuMaster.erp_sku_barcode.in_(unique_barcodes))
+        .all()
+    )
+    found = {r.erp_sku_barcode: r for r in rows}
+
+    updated = 0
+    unchanged = 0
+    now_iso = _utcnow().isoformat()
+
+    for code in unique_barcodes:
+        r = found.get(code)
+        if r is None:
+            continue
+        meta = dict(r.metadata_json or {})
+        prev = meta.get("governance_status") or GOVERNANCE_UNMANAGED
+        if prev == status:
+            unchanged += 1
+            continue
+        meta["governance_status"] = status
+        meta["governance_decided_at"] = now_iso
+        if decided_by:
+            meta["governance_decided_by"] = decided_by
+        if note is not None:
+            meta["governance_note"] = note
+        history = list(meta.get("governance_history") or [])
+        history.append(
+            {
+                "at": now_iso,
+                "by": decided_by,
+                "from": prev,
+                "to": status,
+                "note": note,
+            }
+        )
+        meta["governance_history"] = history[-20:]
+        r.metadata_json = _json_safe(meta)
+        r.updated_at = _utcnow()
+        updated += 1
+
+    missing = len(unique_barcodes) - len(found)
+    db.flush()
+    return {"updated": updated, "unchanged": unchanged, "missing": missing}
+
+
+def set_sku_long_tail_category(
+    db: Session,
+    *,
+    sku_codes: List[str],
+    category: Optional[str],
+    actor: Optional[str] = None,
+    note: Optional[str] = None,
+) -> Dict[str, int]:
+    """Issue 28 follow-up: bulk-set ``metadata_json.long_tail_category`` for
+    the given barcodes.
+
+    This is the "manual override" branch of the long-tail rate resolver.
+    When a SKU has this field set, the long-tail snapshot will pick the
+    matching strategy regardless of keywords (see
+    ``long_tail_strategy_service.resolve_rate_for_sku``).
+
+    Side-effects (atomic per row, all under one db.flush()):
+      - metadata_json.long_tail_category          = <category> (or removed when empty)
+      - metadata_json.long_tail_category_decided_at  = ISO timestamp
+      - metadata_json.long_tail_category_decided_by  = <actor> if provided
+      - metadata_json.long_tail_category_note     = <note> if provided
+      - metadata_json.long_tail_category_history  = appended audit entry
+        (capped at last 20)
+
+    Validation:
+      - if category is non-empty, it must match a non-archived enabled
+        strategy's category (case-insensitive). Pass empty string / None
+        to *clear* the override.
+
+    Returns
+    -------
+    {"updated": int, "unchanged": int, "missing": int, "cleared": int}
+    """
+    raw = (category or "").strip()
+    clearing = raw == ""
+
+    if not clearing:
+        # Local import to avoid a circular import at module load.
+        from . import long_tail_strategy_service as ltss
+
+        strategies = ltss.list_strategies(db, include_archived=False)
+        valid_categories = {
+            (s.category or "").strip().lower(): (s.category or "").strip()
+            for s in strategies
+            if s.enabled
+        }
+        if raw.lower() not in valid_categories:
+            raise ValueError(
+                f"category {raw!r} not found in strategies; allowed="
+                f"{sorted(valid_categories.values())}"
+            )
+        # Normalise to the canonical casing stored in the strategy table.
+        raw = valid_categories[raw.lower()]
+
+    if not sku_codes:
+        return {"updated": 0, "unchanged": 0, "missing": 0, "cleared": 0}
+
+    barcodes = [c for c in (str(s).strip() for s in sku_codes) if c]
+    if not barcodes:
+        return {"updated": 0, "unchanged": 0, "missing": 0, "cleared": 0}
+
+    unique_barcodes = list({b for b in barcodes})
+    rows = (
+        db.query(models.SkuMaster)
+        .filter(models.SkuMaster.erp_sku_barcode.in_(unique_barcodes))
+        .all()
+    )
+    found = {r.erp_sku_barcode: r for r in rows}
+
+    updated = 0
+    unchanged = 0
+    cleared = 0
+    now_iso = _utcnow().isoformat()
+
+    for code in unique_barcodes:
+        r = found.get(code)
+        if r is None:
+            continue
+        meta = dict(r.metadata_json or {})
+        prev = (meta.get("long_tail_category") or "").strip()
+        new_value = raw  # already validated/normalised above
+
+        if prev == new_value and not clearing:
+            unchanged += 1
+            continue
+        if clearing and not prev:
+            unchanged += 1
+            continue
+
+        history = list(meta.get("long_tail_category_history") or [])
+        history.append(
+            {
+                "at": now_iso,
+                "by": actor,
+                "from": prev or None,
+                "to": new_value or None,
+                "note": note,
+            }
+        )
+        meta["long_tail_category_history"] = history[-20:]
+        meta["long_tail_category_decided_at"] = now_iso
+        if actor:
+            meta["long_tail_category_decided_by"] = actor
+        if note is not None:
+            meta["long_tail_category_note"] = note
+
+        if clearing:
+            meta.pop("long_tail_category", None)
+            cleared += 1
+        else:
+            meta["long_tail_category"] = new_value
+            updated += 1
+
+        r.metadata_json = _json_safe(meta)
+        r.updated_at = _utcnow()
+
+    missing = len(unique_barcodes) - len(found)
+    db.flush()
+    return {
+        "updated": updated,
+        "unchanged": unchanged,
+        "missing": missing,
+        "cleared": cleared,
+    }
+
+
+def auto_suggest_long_tail_category(
+    db: Session,
+    *,
+    sku_codes: Optional[List[str]] = None,
+    include_already_labeled: bool = False,
+    limit: int = 5000,
+) -> Dict[str, Any]:
+    """Issue 28 follow-up: scan long-tail SKUs and suggest a category for
+    each one based on the strategy keyword table.
+
+    Scope:
+      - If ``sku_codes`` is provided, only those SKUs are scanned (useful
+        for "re-evaluate this batch" workflows).
+      - Otherwise scan all SkuMaster rows whose
+        ``metadata.governance_status='do_not_model'``.
+
+    Skip rules:
+      - ``include_already_labeled=False`` (default) → skip SKUs whose
+        ``metadata.long_tail_category`` is already set (don't overwrite
+        human decisions).
+      - SKUs with no haystack text (no spec_text/product_name/...) are
+        included with ``suggested_category=None`` (counted in
+        ``no_match_count``).
+
+    Returns
+    -------
+    {
+      "scanned": int,                 # total SKUs scanned
+      "already_labeled_skipped": int, # SKUs skipped because they had a category
+      "suggested": [                  # ordered by occurrence in scan
+        {
+          "sku_code": str,
+          "current_category": Optional[str],
+          "suggested_category": str,
+          "matched_keyword": str,
+          "strategy_id": str,
+          "strategy_rate": float,
+          "spec_text": Optional[str],
+          "product_name": Optional[str],
+        }, ...
+      ],
+      "no_match_count": int,          # scanned but no keyword hit
+      "limited": bool,                # True if hit ``limit`` (truncated)
+    }
+    """
+    from . import long_tail_strategy_service as ltss
+
+    strategies = ltss.list_strategies(db, include_archived=False)
+    enabled = [s for s in strategies if s.enabled]
+    if not enabled:
+        return {
+            "scanned": 0,
+            "already_labeled_skipped": 0,
+            "suggested": [],
+            "no_match_count": 0,
+            "limited": False,
+            "reason": "no enabled strategies",
+        }
+
+    q = db.query(models.SkuMaster).filter(models.SkuMaster.is_archived.is_(False))
+    if sku_codes:
+        codes = list({(c or "").strip() for c in sku_codes if (c or "").strip()})
+        if not codes:
+            return {
+                "scanned": 0,
+                "already_labeled_skipped": 0,
+                "suggested": [],
+                "no_match_count": 0,
+                "limited": False,
+            }
+        q = q.filter(models.SkuMaster.erp_sku_barcode.in_(codes))
+    else:
+        # Scan only do_not_model rows. Use the same JSON path query the
+        # backlog list uses, so SQLite + PG behave the same.
+        status_expr = func.coalesce(
+            models.SkuMaster.metadata_json["governance_status"].as_string(),
+            GOVERNANCE_UNMANAGED,
+        )
+        q = q.filter(status_expr == GOVERNANCE_DO_NOT_MODEL)
+
+    # Order is stable (by erp_sku_barcode) so two consecutive previews on
+    # the same data return the same prefix when ``limit`` truncates.
+    rows = (
+        q.order_by(models.SkuMaster.erp_sku_barcode.asc())
+        .limit(max(int(limit or 5000), 1))
+        .all()
+    )
+
+    suggested: List[Dict[str, Any]] = []
+    already_labeled_skipped = 0
+    no_match_count = 0
+    limited = len(rows) >= int(limit or 5000)
+
+    for r in rows:
+        meta = r.metadata_json or {}
+        current = (meta.get("long_tail_category") or "").strip() or None
+        if current and not include_already_labeled:
+            already_labeled_skipped += 1
+            continue
+        haystack = " ".join(
+            [
+                r.spec_text or "",
+                r.product_name or "",
+                r.product_code or "",
+                r.erp_sku_barcode or "",
+            ]
+        ).lower()
+        hit = ltss.match_keyword_strategy(enabled, haystack)
+        if hit is None:
+            no_match_count += 1
+            continue
+        strategy, matched_kw = hit
+        suggested.append(
+            {
+                "sku_code": r.erp_sku_barcode,
+                "current_category": current,
+                "suggested_category": strategy.category,
+                "matched_keyword": matched_kw,
+                "strategy_id": strategy.id,
+                "strategy_rate": float(strategy.rate or 0.0),
+                "spec_text": r.spec_text,
+                "product_name": r.product_name,
+            }
+        )
+
+    return {
+        "scanned": len(rows),
+        "already_labeled_skipped": already_labeled_skipped,
+        "suggested": suggested,
+        "no_match_count": no_match_count,
+        "limited": limited,
+    }
+
+
+def auto_apply_long_tail_category(
+    db: Session,
+    *,
+    sku_codes: Optional[List[str]] = None,
+    include_already_labeled: bool = False,
+    limit: int = 5000,
+    actor: Optional[str] = None,
+) -> Dict[str, Any]:
+    """One-shot: run ``auto_suggest_long_tail_category`` then apply each
+    candidate via ``set_sku_long_tail_category`` (grouped per-category).
+
+    Returns the suggest result plus per-category apply counters and a
+    flat ``applied`` total.
+    """
+    preview = auto_suggest_long_tail_category(
+        db,
+        sku_codes=sku_codes,
+        include_already_labeled=include_already_labeled,
+        limit=limit,
+    )
+    suggestions = preview.get("suggested") or []
+    if not suggestions:
+        return {**preview, "applied": 0, "apply_results": []}
+
+    by_cat: Dict[str, List[str]] = {}
+    for item in suggestions:
+        by_cat.setdefault(item["suggested_category"], []).append(item["sku_code"])
+
+    apply_results: List[Dict[str, Any]] = []
+    applied = 0
+    for cat, codes in by_cat.items():
+        try:
+            counters = set_sku_long_tail_category(
+                db,
+                sku_codes=codes,
+                category=cat,
+                actor=actor or "auto-suggest",
+                note="auto-applied via keyword match",
+            )
+        except ValueError as exc:
+            apply_results.append({"category": cat, "error": str(exc), "sku_count": len(codes)})
+            continue
+        applied += int(counters.get("updated") or 0)
+        apply_results.append(
+            {
+                "category": cat,
+                "sku_count": len(codes),
+                **counters,
+            }
+        )
+
+    return {**preview, "applied": applied, "apply_results": apply_results}
+
+
+def list_governance_backlog(
+    db: Session,
+    *,
+    status: str,
+    page: int = 1,
+    page_size: int = 50,
+    order_by: str = "shipment_score",
+    sales_window_days: int = 30,
+) -> Dict[str, Any]:
+    """List SkuMaster rows by governance_status, with shipment stats for triage.
+
+    The "建模 Backlog" UI uses this to surface ``pending_model`` SKUs sorted by
+    sales potential, so operators can prioritise modeling work by impact.
+    The "长尾 SKU" UI uses it with ``status='do_not_model'`` for read-only
+    statistics + manual revert.
+
+    Parameters
+    ----------
+    status : one of GOVERNANCE_STATUSES
+    page, page_size : pagination
+    order_by : 'shipment_score' (default, by revenue desc) | 'updated_at'
+               | 'last_shipment_at'
+    sales_window_days : look-back window for the per-SKU shipment stats
+                        attached to each item (default 30 days)
+
+    Returns
+    -------
+    {"items": [...], "total": int, "page": int, "page_size": int}
+        item shape:
+          erp_sku_barcode, spec_text, channel,
+          governance_status, governance_decided_at, governance_decided_by,
+          governance_note,
+          last_shipment_at, qty_window, revenue_window, line_count_window
+    """
+    if status not in GOVERNANCE_STATUSES:
+        raise ValueError(f"Unknown governance status: {status!r}")
+
+    page = max(int(page or 1), 1)
+    page_size = max(min(int(page_size or 50), 500), 1)
+    sales_window_days = max(int(sales_window_days or 30), 1)
+
+    status_expr = func.coalesce(
+        models.SkuMaster.metadata_json["governance_status"].as_string(),
+        GOVERNANCE_UNMANAGED,
+    )
+
+    base_q = db.query(models.SkuMaster).filter(status_expr == status)
+    total = base_q.count()
+
+    # NULLS LAST is Postgres-only; portable form uses a CASE so the same
+    # query works for both SQLite (tests) and Postgres (production).
+    page_rows = (
+        base_q.order_by(
+            models.SkuMaster.updated_at.is_(None),
+            models.SkuMaster.updated_at.desc(),
+        )
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+
+    barcodes = [r.erp_sku_barcode for r in page_rows if r.erp_sku_barcode]
+    stats_by_code: Dict[str, Dict[str, Any]] = {}
+    if barcodes:
+        from datetime import timedelta as _td
+
+        cutoff = _utcnow() - _td(days=sales_window_days)
+        stat_rows = (
+            db.query(
+                models.ShipmentLine.sku_code,
+                func.max(models.ShipmentLine.completed_at).label("last_shipment_at"),
+                func.coalesce(func.sum(models.ShipmentLine.qty), 0).label("qty_w"),
+                func.coalesce(func.sum(models.ShipmentLine.revenue_amount), 0).label(
+                    "rev_w"
+                ),
+                func.count(models.ShipmentLine.id).label("line_count_w"),
+            )
+            .filter(
+                models.ShipmentLine.sku_code.in_(list(set(barcodes))),
+                models.ShipmentLine.is_archived.is_(False),
+                models.ShipmentLine.is_active.is_(True),
+                or_(
+                    models.ShipmentLine.completed_at >= cutoff,
+                    models.ShipmentLine.completed_at.is_(None),
+                ),
+            )
+            .group_by(models.ShipmentLine.sku_code)
+            .all()
+        )
+        for s in stat_rows:
+            stats_by_code[s.sku_code] = {
+                "last_shipment_at": s.last_shipment_at.isoformat()
+                if s.last_shipment_at
+                else None,
+                "qty_window": float(s.qty_w) if s.qty_w is not None else 0.0,
+                "revenue_window": float(s.rev_w) if s.rev_w is not None else 0.0,
+                "line_count_window": int(s.line_count_w or 0),
+            }
+
+    items: List[Dict[str, Any]] = []
+    for r in page_rows:
+        meta = dict(r.metadata_json or {})
+        s = stats_by_code.get(r.erp_sku_barcode, {})
+        items.append(
+            {
+                "erp_sku_barcode": r.erp_sku_barcode,
+                "spec_text": r.spec_text,
+                "channel": r.channel,
+                "governance_status": meta.get("governance_status") or GOVERNANCE_UNMANAGED,
+                "governance_decided_at": meta.get("governance_decided_at"),
+                "governance_decided_by": meta.get("governance_decided_by"),
+                "governance_note": meta.get("governance_note"),
+                # Issue 28 follow-up: surface manual long-tail category override
+                # so the long-tail Tab can show + let user re-edit it inline.
+                "long_tail_category": meta.get("long_tail_category"),
+                "long_tail_category_decided_at": meta.get("long_tail_category_decided_at"),
+                "long_tail_category_decided_by": meta.get("long_tail_category_decided_by"),
+                "last_shipment_at": s.get("last_shipment_at"),
+                "qty_window": s.get("qty_window") or 0,
+                "revenue_window": s.get("revenue_window") or 0,
+                "line_count_window": s.get("line_count_window") or 0,
+                "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+            }
+        )
+
+    if order_by == "shipment_score":
+        items.sort(key=lambda x: float(x.get("revenue_window") or 0), reverse=True)
+    elif order_by == "last_shipment_at":
+        items.sort(key=lambda x: x.get("last_shipment_at") or "", reverse=True)
+    # 'updated_at' is already the SQL order; keep page order
+
+    return {
+        "items": items,
+        "total": int(total),
+        "page": page,
+        "page_size": page_size,
+        "order_by": order_by,
+        "sales_window_days": sales_window_days,
+    }
+
+
+def auto_promote_pending_model(
+    db: Session,
+    *,
+    sku_codes: List[str],
+    decided_by: Optional[str] = None,
+) -> Dict[str, int]:
+    """Promote SKUs from ``pending_model`` -> ``auto_bound``.
+
+    Called when a ProductModelVersion is published+bound, so the modeling
+    backlog UI no longer shows SKUs whose model has shipped. Idempotent:
+    SKUs not in pending_model are skipped (counted as 'skipped'); SKUs
+    with no SkuMaster row are reported as 'missing'.
+
+    Returns
+    -------
+    {"promoted": int, "skipped": int, "missing": int}
+    """
+    if not sku_codes:
+        return {"promoted": 0, "skipped": 0, "missing": 0}
+
+    barcodes = [c for c in (str(s).strip() for s in sku_codes) if c]
+    if not barcodes:
+        return {"promoted": 0, "skipped": 0, "missing": 0}
+
+    unique_barcodes = list({b for b in barcodes})
+
+    present_rows = (
+        db.query(models.SkuMaster)
+        .filter(models.SkuMaster.erp_sku_barcode.in_(unique_barcodes))
+        .all()
+    )
+    by_code = {r.erp_sku_barcode: r for r in present_rows}
+    missing = len(unique_barcodes) - len(by_code)
+
+    now_iso = _utcnow().isoformat()
+    promoted = 0
+    skipped = 0
+    for code in unique_barcodes:
+        r = by_code.get(code)
+        if r is None:
+            continue
+        meta = dict(r.metadata_json or {})
+        prev = meta.get("governance_status") or GOVERNANCE_UNMANAGED
+        if prev != GOVERNANCE_PENDING_MODEL:
+            skipped += 1
+            continue
+        meta["governance_status"] = GOVERNANCE_AUTO_BOUND
+        meta["governance_decided_at"] = now_iso
+        meta["governance_decided_by"] = decided_by or "auto_promote"
+        history = list(meta.get("governance_history") or [])
+        history.append(
+            {
+                "at": now_iso,
+                "by": decided_by or "auto_promote",
+                "from": prev,
+                "to": GOVERNANCE_AUTO_BOUND,
+                "note": "promoted after model published",
+            }
+        )
+        meta["governance_history"] = history[-20:]
+        r.metadata_json = _json_safe(meta)
+        r.updated_at = _utcnow()
+        promoted += 1
+
+    db.flush()
+    return {"promoted": promoted, "skipped": skipped, "missing": missing}
 

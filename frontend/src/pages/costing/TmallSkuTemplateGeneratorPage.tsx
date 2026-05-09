@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, Button, Card, Checkbox, Divider, Drawer, Input, message, Radio, Select, Space, Switch, Table, Tag, Typography, Upload } from 'antd'
 import {
   CheckCircleFilled,
@@ -8,6 +8,7 @@ import {
   EyeOutlined,
   PlusOutlined,
   ReloadOutlined,
+  SaveOutlined,
   SettingOutlined,
   UploadOutlined,
 } from '@ant-design/icons'
@@ -18,25 +19,101 @@ import {
   exportTmallSkuTemplateXlsx,
   fetchBundleTemplates,
   fetchPublishedStandardModels,
+  fetchTmallSkuGeneratorTemplate,
   previewTmallSkuTemplate,
+  upsertTmallSkuGeneratorTemplate,
   type TmallColorOption,
   type TmallSizeOption,
   type TmallSkuCell,
   type TmallSkuRow,
 } from '@/services/planner'
+import { formatBeijingTime } from '@/utils/beijingTime'
 
 import {
   computeMatrixCountFromConfig,
   loadTemplateConfig,
-  loadTemplateIndex,
-  saveTemplateConfig,
-  upsertTemplateMeta,
   type SpecModuleType,
 } from './tmallSkuGeneratorTemplates'
+
+// 通用绑定目标选择器（弹窗浏览模式 — 标签页 标准模型/套装模板 + Tree 二级展开）。
+// 本页 4 处"绑定来源(模型/套版)"下拉用 <TmallSourceCodePicker /> 包装它，
+// 内部用 token helper 在 string 形式 source_code（如 "KB8" / "B-3U3PAA" / "Z-DB9EAD"）
+// 与 TargetSelection 之间做转换 —— specEdits / colors / sizes / customSalesAttributes
+// 字段类型 (`source_code: string`) 完全不变，bundleTokenMetaByValue 元数据查找路径不变。
+import { useQuery } from '@tanstack/react-query'
+import {
+  TargetPickerBrowserButton,
+  targetSelectionToTmallSourceCode,
+  tmallSourceCodeToTargetSelection,
+} from '@/components/common/TargetPicker'
+import type { TargetSelection } from '@/components/common/TargetPicker'
+import { fetchBindingTargets } from '@/services/planner'
 
 const { Text } = Typography
 
 const uid = () => Math.random().toString(36).slice(2, 10)
+
+/**
+ * 把"商家编码锚点 token 字符串"形式的 source_code 接入 TargetPickerBrowserButton。
+ *
+ * Why a wrapper?
+ *   - 4 处下拉/4 个数据源（colors / sizes / customSalesAttributes / specEdits）都用 string token，
+ *     直接接 BrowserButton 需要外部维护 selection state；用包装组件后调用方仍只看 string，0 改动。
+ *   - 业务下游 bundleTokenMetaByValue 仍按 token 字符串查 components，不需要扩接口暴露 components。
+ *
+ * 注意：
+ *   - value=''/undefined → 视为"未绑定（清空）"
+ *   - 标准模型回显由于 token 不含 model_id，用户已选的话只能恢复 model_code；重新打开 Modal 时
+ *     在标准模型 Tab 下输入 code 搜索可以快速定位高亮（按 model_code 大写匹配）。
+ */
+type TmallSourceCodePickerProps = {
+  value?: string | null
+  onChange: (token: string) => void
+  size?: 'small' | 'middle' | 'large'
+  width?: number | string
+  placeholder?: string
+  disabled?: boolean
+}
+
+const TmallSourceCodePicker = ({
+  value,
+  onChange,
+  size = 'middle',
+  width,
+  placeholder = '绑定来源(模型/套版)',
+  disabled,
+}: TmallSourceCodePickerProps) => {
+  // 拉一次"全量绑定目标"用作回显查表 —— React Query 共享 cache，本页所有按钮实例只发一次请求。
+  // limit 给到 500 足以覆盖当前规模（~100 model + ~5 bundle template）。
+  // **关键**：把 source_code 字符串映回 TargetSelection 时优先精确查表（命中 standard_model_code
+  // 就走 model 路径，否则按 `B-XXXXAB` / `Z-XXXXAB` 拆出 bundle + selector），
+  // 不再单纯靠正则猜，避免 `B-DB9EAE`（同时是 model code、又长得像 bundle token）回显错位。
+  const candidatesQuery = useQuery({
+    queryKey: ['binding-targets', 'tmall-source-candidates'],
+    queryFn: () => fetchBindingTargets({ limit: 500 }),
+    staleTime: 60_000,
+  })
+  const allItems = candidatesQuery.data?.items ?? []
+  const candidates = useMemo(
+    () => ({
+      models: allItems.filter((x) => x.kind === 'model'),
+      bundles: allItems.filter((x) => x.kind === 'bundle'),
+    }),
+    [allItems],
+  )
+  const selection = useMemo<TargetSelection | null>(
+    () => tmallSourceCodeToTargetSelection(value || '', candidates),
+    [value, candidates],
+  )
+  return (
+    <TargetPickerBrowserButton
+      value={selection}
+      onChange={(next) => onChange(targetSelectionToTmallSourceCode(next))}
+      buttonProps={{ size, style: width !== undefined ? { width } : undefined, disabled }}
+      placeholder={placeholder}
+    />
+  )
+}
 
 const downloadBlob = (blob: Blob, filename: string) => {
   const url = window.URL.createObjectURL(blob)
@@ -294,11 +371,13 @@ type HeaderIndex = {
   sizeCol: number
   merchantSkuCol: number
   statusCol: number
+  attrCols: Record<string, number>
 }
 
-const findHeaderIndex = (ws: XLSX.WorkSheet): HeaderIndex | null => {
+const findHeaderIndex = (ws: XLSX.WorkSheet, attributeNames: string[] = ['颜色分类', '成品尺寸']): HeaderIndex | null => {
   const ref = ws['!ref']
   if (!ref) return null
+  const normalizedAttributeNames = attributeNames.map(normalizeHeaderLabel).filter(Boolean)
   const range = XLSX.utils.decode_range(ref)
   for (let r = range.s.r; r <= Math.min(range.e.r, range.s.r + 50); r++) {
     const rowValues: string[] = []
@@ -310,16 +389,27 @@ const findHeaderIndex = (ws: XLSX.WorkSheet): HeaderIndex | null => {
       rowValues.findIndex((x) => candidates.some((k) => x === k || x.includes(k)))
 
     const colorCol = idxIncludesAny(['颜色分类'])
-    const sizeCol = idxIncludesAny(['尺寸'])
+    const sizeCol = idxIncludesAny(['成品尺寸', '尺寸'])
     const merchantSkuCol = idxIncludesAny(['商家编码'])
     const statusCol = idxIncludesAny(['是否上架', '上架状态'])
     if ([colorCol, sizeCol, merchantSkuCol, statusCol].every((x) => x >= 0)) {
+      const attrCols: Record<string, number> = {}
+      for (const name of normalizedAttributeNames) {
+        const idx = rowValues.findIndex((x) => x === name || x.includes(name))
+        if (idx >= 0) attrCols[name] = range.s.c + idx
+      }
+      if (colorCol >= 0) attrCols['颜色分类'] = range.s.c + colorCol
+      if (sizeCol >= 0) {
+        attrCols['成品尺寸'] = range.s.c + sizeCol
+        attrCols['尺寸'] = range.s.c + sizeCol
+      }
       return {
         headerRowIndex: r,
         colorCol: range.s.c + colorCol,
         sizeCol: range.s.c + sizeCol,
         merchantSkuCol: range.s.c + merchantSkuCol,
         statusCol: range.s.c + statusCol,
+        attrCols,
       }
     }
   }
@@ -327,6 +417,22 @@ const findHeaderIndex = (ws: XLSX.WorkSheet): HeaderIndex | null => {
 }
 
 type MainPatternOption = { key: string; label: string }
+type CustomSalesAttributeValue = {
+  key: string
+  label: string
+  sku_code?: string
+  source_code?: string
+  remark?: string
+  metadata_json?: Record<string, any>
+}
+type CustomSalesAttribute = {
+  key: string
+  name: string
+  values: CustomSalesAttributeValue[]
+  enabled?: boolean
+  enableImages?: boolean
+  enableRemarks?: boolean
+}
 
 type PersistedConfigV1 = {
   merchantSkuPrefix: string
@@ -335,6 +441,8 @@ type PersistedConfigV1 = {
   sizes: SizeRow[]
   colors: Array<TmallColorOption & { enabledSizes?: Record<string, boolean>; source_code?: string }>
   mainPatternTypes: Array<MainPatternOption & { remark?: string }>
+  customSalesAttributes?: CustomSalesAttribute[]
+  profiles?: Record<string, PersistedConfigV1>
   ui?: {
     enableColorImages?: boolean
     enableSizeImages?: boolean
@@ -344,8 +452,6 @@ type PersistedConfigV1 = {
     includeMainPatternType?: boolean
   }
 }
-
-const STORAGE_PROFILES_KEY = 'tmall_sku_generator_profiles_v1'
 
 const downloadText = (text: string, filename: string) => {
   const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
@@ -381,9 +487,11 @@ type SpecRow = {
   size_key: string
   color_label: string
   size_label: string
+  attribute_values?: Record<string, string>
   merchant_sku: string
   merchant_source?: string
   display_source?: string
+  binding_level?: 'row' | 'custom' | 'size' | 'color' | 'none'
   is_z_source?: boolean
   attribute_spec?: string
   token_formula?: string
@@ -410,31 +518,156 @@ type SpecEdits = Record<
   }
 >
 
+// 默认值（每个 builder 返回独立引用，避免不同模板共享 mutable 数组/对象）
+const DEFAULT_MERCHANT_SKU_PREFIX = 'BZPB008XXXXX-'
+const DEFAULT_MERCHANT_SKU_SUFFIX = ''
+const DEFAULT_LISTING_CHANNEL: ListingChannel = 'tmall'
+
+const buildDefaultSizes = (): SizeRow[] => [
+  { key: 'size_1', label: '枕芯+枕套', size_code: 'C1', source_code: '' },
+  { key: 'size_2', label: '枕套', size_code: 'C2', source_code: '' },
+]
+
+const buildDefaultColors = (): ColorRow[] => [
+  {
+    key: 'c1',
+    label: 'Q25122501A黄金绒背面纯色（红色毛球） 45X45',
+    width_cm: 45,
+    height_cm: 45,
+    enabledSizes: { size_1: true, size_2: true },
+    source_code: '',
+  },
+]
+
+const buildDefaultMainPatternTypes = (): MainPatternOption[] => [
+  { key: 'p1', label: '无' },
+]
+
+const buildDefaultCustomSalesAttributes = (): CustomSalesAttribute[] => []
+
+const normalizeCustomSalesAttributes = (raw: unknown): CustomSalesAttribute[] => {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .map((attr: any) => {
+      const key = String(attr?.key ?? `attr_${uid()}`)
+      const name = String(attr?.name ?? '').trim()
+      const valuesRaw = Array.isArray(attr?.values) ? attr.values : []
+      const values = valuesRaw
+        .map((v: any) => ({
+          key: String(v?.key ?? `v_${uid()}`),
+          label: String(v?.label ?? '').trim(),
+          sku_code: String(v?.sku_code ?? '').trim(),
+          source_code: String(v?.source_code ?? '').trim(),
+          remark: String(v?.remark ?? '').trim(),
+          metadata_json: v?.metadata_json && typeof v.metadata_json === 'object' ? v.metadata_json : {},
+        }))
+        .filter((v: CustomSalesAttributeValue) => v.label)
+      return {
+        key,
+        name,
+        values,
+        enabled: attr?.enabled !== false,
+        enableImages: attr?.enableImages === true,
+        enableRemarks: attr?.enableRemarks === true,
+      }
+    })
+    .filter((attr: CustomSalesAttribute) => attr.name && attr.values.length)
+}
+
+const buildCustomAttributeCombos = (attrs: CustomSalesAttribute[]) => {
+  const active = normalizeCustomSalesAttributes(attrs).filter((attr) => attr.enabled !== false)
+  if (!active.length) return [{ keySuffix: '', labels: [] as string[], values: {} as Record<string, string>, skuCodeSuffix: '', sourceCodes: [] as string[] }]
+  return active.reduce<Array<{ keySuffix: string; labels: string[]; values: Record<string, string>; skuCodeSuffix: string; sourceCodes: string[] }>>(
+    (acc, attr) => {
+      const next: Array<{ keySuffix: string; labels: string[]; values: Record<string, string>; skuCodeSuffix: string; sourceCodes: string[] }> = []
+      for (const base of acc) {
+        for (const value of attr.values) {
+          const label = normalizeAttrValue(value.label)
+          if (!label) continue
+          next.push({
+            keySuffix: `${base.keySuffix}||${attr.key}:${value.key}`,
+            labels: [...base.labels, label],
+            values: { ...base.values, [attr.name]: label },
+            skuCodeSuffix: `${base.skuCodeSuffix}${String(value.sku_code ?? '').trim()}`,
+            sourceCodes: [...base.sourceCodes, String(value.source_code ?? '').trim()].filter(Boolean),
+          })
+        }
+      }
+      return next.length ? next : acc
+    },
+    [{ keySuffix: '', labels: [], values: {}, skuCodeSuffix: '', sourceCodes: [] }],
+  )
+}
+
+// 外层包一层，按 templateId 强制重挂载内部组件，杜绝模板切换时 state 残留导致的“列表里每个进入都一样”问题
 export default function TmallSkuTemplateGeneratorPage() {
   const params = useParams()
   const templateId = String((params as any)?.templateId ?? 'mvp').trim() || 'mvp'
+  return <TmallSkuTemplateGeneratorPageInner key={templateId} templateId={templateId} />
+}
+
+function TmallSkuTemplateGeneratorPageInner({ templateId }: { templateId: string }) {
   const [templateName, setTemplateName] = useState<string>('')
   const [templateType, setTemplateType] = useState<SpecModuleType>('家居布艺')
 
-  const [merchantSkuPrefix, setMerchantSkuPrefix] = useState('BZPB008XXXXX-')
-  const [merchantSkuSuffix, setMerchantSkuSuffix] = useState('')
-  const [listingChannel, setListingChannel] = useState<ListingChannel>('tmall')
+  // 同步加载当前 templateId 对应的 config（仅 mvp 时尝试 legacy 迁移），保证不同模板初始 state 互不串扰
+  const initialConfig = useMemo<PersistedConfigV1 | null>(() => {
+    try {
+      const parsed = loadTemplateConfig(templateId) as PersistedConfigV1 | null
+      if (parsed) return parsed
+      if (templateId === 'mvp') {
+        const legacyRaw = localStorage.getItem('tmall_sku_generator_config_v1')
+        if (legacyRaw) {
+          try {
+            const legacyParsed = JSON.parse(legacyRaw) as PersistedConfigV1
+            if (legacyParsed) {
+              return legacyParsed
+            }
+          } catch {
+            // ignore corrupted legacy
+          }
+        }
+      }
+      return null
+    } catch {
+      return null
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
-  const [sizes, setSizes] = useState<SizeRow[]>([
-    { key: 'size_1', label: '枕芯+枕套', size_code: 'C1', source_code: '' },
-    { key: 'size_2', label: '枕套', size_code: 'C2', source_code: '' },
-  ])
+  const [merchantSkuPrefix, setMerchantSkuPrefix] = useState<string>(
+    () => String(initialConfig?.merchantSkuPrefix ?? DEFAULT_MERCHANT_SKU_PREFIX),
+  )
+  const [merchantSkuSuffix, setMerchantSkuSuffix] = useState<string>(
+    () => String(initialConfig?.merchantSkuSuffix ?? DEFAULT_MERCHANT_SKU_SUFFIX),
+  )
+  const [listingChannel, setListingChannel] = useState<ListingChannel>(
+    () => ((initialConfig as any)?.listingChannel as ListingChannel) ?? DEFAULT_LISTING_CHANNEL,
+  )
 
-  const [colors, setColors] = useState<ColorRow[]>([
-    {
-      key: 'c1',
-      label: 'Q25122501A黄金绒背面纯色（红色毛球） 45X45',
-      width_cm: 45,
-      height_cm: 45,
-      enabledSizes: { size_1: true, size_2: true },
-      source_code: '',
-    },
-  ])
+  const [sizes, setSizes] = useState<SizeRow[]>(() => {
+    // 区分「无 config（首次进入 mvp 等）」与「有 config 但字段为空（用户主动清空 / 新建空白模板）」：
+    // - 无 config → 用内置默认示例
+    // - 有 config（哪怕字段为空数组）→ 完全尊重已保存的内容，避免“新建空白模板还显示默认示例”
+    if (!initialConfig) return buildDefaultSizes()
+    return Array.isArray(initialConfig.sizes) ? (initialConfig.sizes as SizeRow[]) : []
+  })
+
+  const [colors, setColors] = useState<ColorRow[]>(() => {
+    if (!initialConfig) return buildDefaultColors()
+    const raw = Array.isArray(initialConfig.colors) ? (initialConfig.colors as any[]) : []
+    return raw.map((c) => ({
+      key: c.key,
+      label: c.label,
+      width_cm: c.width_cm,
+      height_cm: c.height_cm,
+      thickness_cm: c.thickness_cm,
+      length_cm: c.length_cm,
+      main_pattern_type: c.main_pattern_type,
+      source_code: c?.source_code ?? '',
+      enabledSizes: c?.enabledSizes ?? {},
+    }))
+  })
 
   const [previewRows, setPreviewRows] = useState<TmallSkuRow[]>([])
   const [previewTotal, setPreviewTotal] = useState(0)
@@ -445,16 +678,33 @@ export default function TmallSkuTemplateGeneratorPage() {
   const [templateSheetName, setTemplateSheetName] = useState<string>('')
   const [loadingFill, setLoadingFill] = useState(false)
   const [overwriteExisting, setOverwriteExisting] = useState(true)
-  const [mainPatternTypes, setMainPatternTypes] = useState<MainPatternOption[]>([
-    { key: 'p1', label: '无' },
-  ])
+  const [mainPatternTypes, setMainPatternTypes] = useState<MainPatternOption[]>(() => {
+    if (!initialConfig) return buildDefaultMainPatternTypes()
+    return Array.isArray(initialConfig.mainPatternTypes) ? (initialConfig.mainPatternTypes as MainPatternOption[]) : []
+  })
+  const [customSalesAttributes, setCustomSalesAttributes] = useState<CustomSalesAttribute[]>(() => {
+    if (!initialConfig) return buildDefaultCustomSalesAttributes()
+    return normalizeCustomSalesAttributes((initialConfig as any).customSalesAttributes)
+  })
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [includeMainPatternType, setIncludeMainPatternType] = useState(true)
-  const [enableColorImages, setEnableColorImages] = useState(true)
-  const [enableSizeImages, setEnableSizeImages] = useState(false)
-  const [enableColorRemarks, setEnableColorRemarks] = useState(true)
-  const [enableSizeRemarks, setEnableSizeRemarks] = useState(true)
-  const [enablePatternRemarks, setEnablePatternRemarks] = useState(false)
+  const [includeMainPatternType, setIncludeMainPatternType] = useState<boolean>(
+    () => (typeof initialConfig?.ui?.includeMainPatternType === 'boolean' ? initialConfig!.ui!.includeMainPatternType! : true),
+  )
+  const [enableColorImages, setEnableColorImages] = useState<boolean>(
+    () => (typeof initialConfig?.ui?.enableColorImages === 'boolean' ? initialConfig!.ui!.enableColorImages! : true),
+  )
+  const [enableSizeImages, setEnableSizeImages] = useState<boolean>(
+    () => (typeof initialConfig?.ui?.enableSizeImages === 'boolean' ? initialConfig!.ui!.enableSizeImages! : false),
+  )
+  const [enableColorRemarks, setEnableColorRemarks] = useState<boolean>(
+    () => (typeof initialConfig?.ui?.enableColorRemarks === 'boolean' ? initialConfig!.ui!.enableColorRemarks! : true),
+  )
+  const [enableSizeRemarks, setEnableSizeRemarks] = useState<boolean>(
+    () => (typeof initialConfig?.ui?.enableSizeRemarks === 'boolean' ? initialConfig!.ui!.enableSizeRemarks! : true),
+  )
+  const [enablePatternRemarks, setEnablePatternRemarks] = useState<boolean>(
+    () => (typeof initialConfig?.ui?.enablePatternRemarks === 'boolean' ? initialConfig!.ui!.enablePatternRemarks! : false),
+  )
   const [displayMode, setDisplayMode] = useState<DisplayMode>('table')
   const [specEdits, setSpecEdits] = useState<SpecEdits>({})
   type RowValidationDetail = {
@@ -472,120 +722,136 @@ export default function TmallSkuTemplateGeneratorPage() {
   const [sourceRefreshKey, setSourceRefreshKey] = useState(0)
   const [bundleTokenMetaByValue, setBundleTokenMetaByValue] = useState<Record<string, BundleTokenMeta>>({})
 
-  // Explicit save/load profiles (in addition to auto localStorage)
+  // Explicit save/load profiles: persisted inside the backend template config.
   const [profileName, setProfileName] = useState('')
   const [profileNames, setProfileNames] = useState<string[]>([])
   const [selectedProfileName, setSelectedProfileName] = useState<string>('')
+  const [savedProfiles, setSavedProfiles] = useState<Record<string, PersistedConfigV1>>(() => {
+    const raw = (initialConfig as any)?.profiles
+    return raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, PersistedConfigV1>) : {}
+  })
+  const [templateLoaded, setTemplateLoaded] = useState(false)
+  const [savingTemplate, setSavingTemplate] = useState(false)
+  const [lastSavedAt, setLastSavedAt] = useState<string>('')
+  const suppressSaveRef = useRef(true)
 
-  // Load per-template meta (name/type) from index
+  // Load shared template meta/config from backend DB. localStorage is only a legacy initial fallback.
   useEffect(() => {
-    const rows = loadTemplateIndex()
-    const hit = rows.find((r) => String((r as any)?.id ?? '').trim() === templateId)
-    if (hit) {
-      setTemplateName(String((hit as any)?.name ?? '').trim() || '未命名模板')
-      setTemplateType(((hit as any)?.type as any) || '家居布艺')
+    let cancelled = false
+    void (async () => {
+      suppressSaveRef.current = true
+      setTemplateLoaded(false)
+      try {
+        const tpl = await fetchTmallSkuGeneratorTemplate(templateId)
+        if (cancelled) return
+        const cfg = tpl.config as any as PersistedConfigV1
+        setTemplateName(String(tpl.name ?? '').trim() || '未命名模板')
+        setTemplateType(((tpl.type as any) || '家居布艺') as SpecModuleType)
+        setMerchantSkuPrefix(String(cfg?.merchantSkuPrefix ?? DEFAULT_MERCHANT_SKU_PREFIX))
+        setMerchantSkuSuffix(String(cfg?.merchantSkuSuffix ?? DEFAULT_MERCHANT_SKU_SUFFIX))
+        setListingChannel(((cfg as any)?.listingChannel as ListingChannel) ?? DEFAULT_LISTING_CHANNEL)
+        setSizes(Array.isArray(cfg?.sizes) ? (cfg.sizes as any) : [])
+        setColors(
+          Array.isArray(cfg?.colors)
+            ? (cfg.colors as any[]).map((c) => ({
+                key: c.key,
+                label: c.label,
+                width_cm: c.width_cm,
+                height_cm: c.height_cm,
+                thickness_cm: c.thickness_cm,
+                length_cm: c.length_cm,
+                main_pattern_type: c.main_pattern_type,
+                source_code: c?.source_code ?? '',
+                enabledSizes: c?.enabledSizes ?? {},
+              }))
+            : [],
+        )
+        setMainPatternTypes(Array.isArray(cfg?.mainPatternTypes) ? (cfg.mainPatternTypes as any) : [])
+        setCustomSalesAttributes(normalizeCustomSalesAttributes((cfg as any)?.customSalesAttributes))
+        const profiles = (cfg as any)?.profiles
+        const normalizedProfiles =
+          profiles && typeof profiles === 'object' && !Array.isArray(profiles) ? (profiles as Record<string, PersistedConfigV1>) : {}
+        setSavedProfiles(normalizedProfiles)
+        setProfileNames(Object.keys(normalizedProfiles).filter(Boolean).sort((a, b) => a.localeCompare(b)))
+        const ui = cfg?.ui ?? {}
+        setEnableColorImages(typeof ui.enableColorImages === 'boolean' ? ui.enableColorImages : true)
+        setEnableSizeImages(typeof ui.enableSizeImages === 'boolean' ? ui.enableSizeImages : false)
+        setEnableColorRemarks(typeof ui.enableColorRemarks === 'boolean' ? ui.enableColorRemarks : true)
+        setEnableSizeRemarks(typeof ui.enableSizeRemarks === 'boolean' ? ui.enableSizeRemarks : true)
+        setEnablePatternRemarks(typeof ui.enablePatternRemarks === 'boolean' ? ui.enablePatternRemarks : false)
+        setIncludeMainPatternType(typeof ui.includeMainPatternType === 'boolean' ? ui.includeMainPatternType : true)
+        setTemplateLoaded(true)
+        window.setTimeout(() => {
+          suppressSaveRef.current = false
+        }, 0)
+      } catch (e: any) {
+        if (!cancelled) {
+          message.error(`加载模板失败：${String(e?.message ?? e)}`)
+          setTemplateLoaded(true)
+          window.setTimeout(() => {
+            suppressSaveRef.current = false
+          }, 0)
+        }
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [templateId])
+
+  // 注：localStorage 只作为旧数据读取 fallback；多人共享与长期保存以 backend DB 为准。
+
+  useEffect(() => {
+    setProfileNames(Object.keys(savedProfiles ?? {}).filter(Boolean).sort((a, b) => a.localeCompare(b)))
+  }, [savedProfiles])
+
+  const buildPersistedConfig = (): PersistedConfigV1 => ({
+    merchantSkuPrefix,
+    merchantSkuSuffix,
+    listingChannel,
+    sizes,
+    colors,
+    mainPatternTypes,
+    customSalesAttributes,
+    profiles: savedProfiles,
+    ui: {
+      enableColorImages,
+      enableSizeImages,
+      enableColorRemarks,
+      enableSizeRemarks,
+      enablePatternRemarks,
+      includeMainPatternType,
+    },
+  })
+
+  const saveTemplateNow = async (opts: { silent?: boolean; closeSettings?: boolean } = {}) => {
+    if (!templateLoaded) {
+      if (!opts.silent) message.warning('模板还在加载，请稍后再保存')
       return
     }
+    const data = buildPersistedConfig()
     const now = new Date().toISOString()
-    const seedName = templateId === 'mvp' ? '天猫布艺 SKU规格生成器（MVP）' : '未命名模板'
-    const seedType: SpecModuleType = '家居布艺'
-    setTemplateName(seedName)
-    setTemplateType(seedType)
-    upsertTemplateMeta({
-      id: templateId,
-      name: seedName,
-      type: seedType,
-      published_at: now,
-      matrix_count: null,
-    })
-  }, [templateId])
-
-  // Load per-template config (fallback: migrate legacy single-config)
-  useEffect(() => {
+    const name = String(templateName ?? '').trim() || (templateId === 'mvp' ? '天猫布艺 SKU规格生成器（MVP）' : '未命名模板')
+    if (!opts.silent) setSavingTemplate(true)
     try {
-      const parsed = loadTemplateConfig(templateId) as any as PersistedConfigV1 | null
-      if (!parsed) {
-        // migrate legacy single-config storage if exists (best-effort)
-        const legacyRaw = localStorage.getItem('tmall_sku_generator_config_v1')
-        if (!legacyRaw) return
-        const legacyParsed = JSON.parse(legacyRaw) as PersistedConfigV1
-        if (!legacyParsed) return
-        saveTemplateConfig(templateId, legacyParsed as any)
-        if (legacyParsed?.merchantSkuPrefix) setMerchantSkuPrefix(legacyParsed.merchantSkuPrefix)
-        if (legacyParsed?.merchantSkuSuffix !== undefined) setMerchantSkuSuffix(legacyParsed.merchantSkuSuffix)
-        if ((legacyParsed as any)?.listingChannel) setListingChannel((legacyParsed as any).listingChannel as any)
-        if (Array.isArray(legacyParsed?.sizes) && legacyParsed.sizes.length) setSizes(legacyParsed.sizes)
-        if (Array.isArray(legacyParsed?.colors) && legacyParsed.colors.length) {
-          setColors(
-            legacyParsed.colors.map((c) => ({
-              key: c.key,
-              label: c.label,
-              width_cm: c.width_cm,
-              height_cm: c.height_cm,
-              thickness_cm: (c as any).thickness_cm,
-              length_cm: (c as any).length_cm,
-              main_pattern_type: (c as any).main_pattern_type,
-              source_code: (c as any)?.source_code ?? '',
-              enabledSizes: (c as any).enabledSizes ?? {},
-            })),
-          )
-        }
-        if (Array.isArray(legacyParsed?.mainPatternTypes) && legacyParsed.mainPatternTypes.length) setMainPatternTypes(legacyParsed.mainPatternTypes)
-        if (legacyParsed?.ui) {
-          if (typeof legacyParsed.ui.enableColorImages === 'boolean') setEnableColorImages(legacyParsed.ui.enableColorImages)
-          if (typeof legacyParsed.ui.enableSizeImages === 'boolean') setEnableSizeImages(legacyParsed.ui.enableSizeImages)
-          if (typeof legacyParsed.ui.enableColorRemarks === 'boolean') setEnableColorRemarks(legacyParsed.ui.enableColorRemarks)
-          if (typeof legacyParsed.ui.enableSizeRemarks === 'boolean') setEnableSizeRemarks(legacyParsed.ui.enableSizeRemarks)
-          if (typeof legacyParsed.ui.enablePatternRemarks === 'boolean') setEnablePatternRemarks(legacyParsed.ui.enablePatternRemarks)
-          if (typeof legacyParsed.ui.includeMainPatternType === 'boolean') setIncludeMainPatternType(legacyParsed.ui.includeMainPatternType)
-        }
-        return
-      }
-      if (parsed?.merchantSkuPrefix) setMerchantSkuPrefix(parsed.merchantSkuPrefix)
-      if (parsed?.merchantSkuSuffix !== undefined) setMerchantSkuSuffix(parsed.merchantSkuSuffix)
-      if ((parsed as any)?.listingChannel) setListingChannel((parsed as any).listingChannel as any)
-      if (Array.isArray(parsed?.sizes) && parsed.sizes.length) setSizes(parsed.sizes)
-      if (Array.isArray(parsed?.colors) && parsed.colors.length) {
-        setColors(
-          parsed.colors.map((c) => ({
-            key: c.key,
-            label: c.label,
-            width_cm: c.width_cm,
-            height_cm: c.height_cm,
-            thickness_cm: c.thickness_cm,
-            length_cm: c.length_cm,
-            main_pattern_type: c.main_pattern_type,
-            source_code: (c as any)?.source_code ?? '',
-            enabledSizes: c.enabledSizes ?? {},
-          })),
-        )
-      }
-      if (Array.isArray(parsed?.mainPatternTypes) && parsed.mainPatternTypes.length) setMainPatternTypes(parsed.mainPatternTypes)
-      if (parsed?.ui) {
-        if (typeof parsed.ui.enableColorImages === 'boolean') setEnableColorImages(parsed.ui.enableColorImages)
-        if (typeof parsed.ui.enableSizeImages === 'boolean') setEnableSizeImages(parsed.ui.enableSizeImages)
-        if (typeof parsed.ui.enableColorRemarks === 'boolean') setEnableColorRemarks(parsed.ui.enableColorRemarks)
-        if (typeof parsed.ui.enableSizeRemarks === 'boolean') setEnableSizeRemarks(parsed.ui.enableSizeRemarks)
-        if (typeof parsed.ui.enablePatternRemarks === 'boolean') setEnablePatternRemarks(parsed.ui.enablePatternRemarks)
-        if (typeof parsed.ui.includeMainPatternType === 'boolean') setIncludeMainPatternType(parsed.ui.includeMainPatternType)
-      }
-    } catch {
-      // ignore storage corruption
+      await upsertTmallSkuGeneratorTemplate(templateId, {
+        id: templateId,
+        name,
+        type: templateType,
+        published_at: now,
+        matrix_count: computeMatrixCountFromConfig(data as any),
+        archived: false,
+        config: data as any,
+      })
+      setLastSavedAt(now)
+      if (opts.closeSettings) setSettingsOpen(false)
+      if (!opts.silent) message.success('已保存到服务器')
+    } catch (e: any) {
+      message.error(`${opts.silent ? '自动保存' : '保存'}模板失败：${String(e?.message ?? e)}`)
+    } finally {
+      if (!opts.silent) setSavingTemplate(false)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [templateId])
-
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_PROFILES_KEY)
-      if (!raw) return
-      const parsed = JSON.parse(raw) as Record<string, PersistedConfigV1>
-      const names = Object.keys(parsed ?? {}).filter(Boolean).sort((a, b) => a.localeCompare(b))
-      setProfileNames(names)
-    } catch {
-      // ignore
-    }
-  }, [])
+  }
 
   useEffect(() => {
     // fetch options (refreshable)
@@ -676,40 +942,18 @@ export default function TmallSkuTemplateGeneratorPage() {
     }
   }, [sourceRefreshKey])
 
+  // 自动保存到后端 DB：多人跨电脑共享，不再只写浏览器 localStorage。
   useEffect(() => {
-    try {
-      const data: PersistedConfigV1 = {
-        merchantSkuPrefix,
-        merchantSkuSuffix,
-        listingChannel,
-        sizes,
-        colors,
-        mainPatternTypes,
-        ui: {
-          enableColorImages,
-          enableSizeImages,
-          enableColorRemarks,
-          enableSizeRemarks,
-          enablePatternRemarks,
-          includeMainPatternType,
-        },
-      }
-      saveTemplateConfig(templateId, data as any)
-
-      const now = new Date().toISOString()
-      const name = String(templateName ?? '').trim() || (templateId === 'mvp' ? '天猫布艺 SKU规格生成器（MVP）' : '未命名模板')
-      upsertTemplateMeta({
-        id: templateId,
-        name,
-        type: templateType,
-        published_at: now,
-        matrix_count: computeMatrixCountFromConfig(data as any),
-      })
-    } catch {
-      // ignore quota/disabled storage
+    if (!templateLoaded || suppressSaveRef.current) {
+      return
     }
+    const handle = window.setTimeout(() => {
+      void saveTemplateNow({ silent: true })
+    }, 500)
+    return () => window.clearTimeout(handle)
   }, [
     templateId,
+    templateLoaded,
     templateName,
     templateType,
     merchantSkuPrefix,
@@ -718,6 +962,8 @@ export default function TmallSkuTemplateGeneratorPage() {
     sizes,
     colors,
     mainPatternTypes,
+    customSalesAttributes,
+    savedProfiles,
     enableColorImages,
     enableSizeImages,
     enableColorRemarks,
@@ -751,6 +997,19 @@ export default function TmallSkuTemplateGeneratorPage() {
     [sizes, colors, cells, merchantSkuPrefix, merchantSkuSuffix],
   )
 
+  const activeAttributeNames = useMemo(
+    () => [
+      '颜色分类',
+      '成品尺寸',
+      ...normalizeCustomSalesAttributes(customSalesAttributes)
+        .filter((attr) => attr.enabled !== false)
+        .map((attr) => attr.name),
+    ],
+    [customSalesAttributes],
+  )
+
+  const hasCustomSalesAttributes = activeAttributeNames.length > 2
+
   const sourceLabelByValue = useMemo(() => {
     const m = new Map<string, string>()
     for (const g of sourceGroups ?? []) {
@@ -766,26 +1025,37 @@ export default function TmallSkuTemplateGeneratorPage() {
 
   const specRows: SpecRow[] = useMemo(() => {
     const rows: SpecRow[] = []
+    const customCombos = buildCustomAttributeCombos(customSalesAttributes)
     for (const c of colors) {
       for (const s of sizes) {
-        const row_key = `${c.key}||${s.key}`
+        for (const combo of customCombos) {
+        const row_key = `${c.key}||${s.key}${combo.keySuffix}`
         const enabled = c.enabledSizes?.[s.key] !== false
         const sku_status: 0 | 1 = enabled ? 1 : 0
 
         const rowOverride = String(specEdits?.[row_key]?.model_source_code ?? '').trim()
         const colorSource = String((c as any)?.source_code ?? '').trim()
         const sizeSource = String((s as any)?.source_code ?? '').trim()
+        const customSource = [...(combo.sourceCodes ?? [])].reverse().find(Boolean) ?? ''
 
         // Priority (商家编码锚点)：
-        // - row override（行级覆盖） > size binding（尺寸绑定：通常是系统编码，如 B-3U3PAE / Z-...） > color binding
-        // 说明：颜色分类更多用于对客展示/款式区分，商家编码优先使用系统的“模型/套版编码”作为稳定锚点。
-        const merchantSource = rowOverride || sizeSource || colorSource
-        const displaySource = rowOverride || sizeSource
+        // - row override（行级覆盖） > custom attr binding > size binding > color binding.
+        const bindingLevel: SpecRow['binding_level'] = rowOverride
+          ? 'row'
+          : customSource
+            ? 'custom'
+            : sizeSource
+              ? 'size'
+              : colorSource
+                ? 'color'
+                : 'none'
+        const merchantSource = rowOverride || customSource || sizeSource || colorSource
+        const displaySource = rowOverride || customSource || sizeSource
         const isZSource = !!displaySource && displaySource.toUpperCase().startsWith('Z-')
 
         const merchant_sku = buildMerchantSku({
           merchantSkuPrefix,
-          merchantSkuSuffix,
+          merchantSkuSuffix: `${merchantSkuSuffix}${combo.skuCodeSuffix}`,
           sourceCode: merchantSource || undefined,
         })
 
@@ -794,15 +1064,17 @@ export default function TmallSkuTemplateGeneratorPage() {
         const token_formula =
           String(specEdits?.[row_key]?.token_formula ?? '').trim() ||
           (bm && bm.mode === 'B' ? String(bm.phrase ?? '').trim() : '')
-        const spec_text = `${String(c.label ?? '').trim()} ${String(s.label ?? '').trim()}`.trim()
+        const spec_text = [String(c.label ?? '').trim(), String(s.label ?? '').trim(), ...combo.labels].filter(Boolean).join(' ').trim()
         rows.push({
           row_key,
           color_key: c.key,
           size_key: s.key,
           color_label: c.label,
           size_label: s.label,
+          attribute_values: combo.values,
           merchant_sku,
           merchant_source: merchantSource || undefined,
+          binding_level: bindingLevel,
           display_source: displaySource || undefined,
           is_z_source: isZSource || undefined,
           attribute_spec,
@@ -815,10 +1087,11 @@ export default function TmallSkuTemplateGeneratorPage() {
           width_cm: fmtNum(c.width_cm),
           height_cm: fmtNum((c as any).height_cm),
         })
+        }
       }
     }
     return rows
-  }, [colors, sizes, merchantSkuPrefix, merchantSkuSuffix, includeMainPatternType, sourceLabelByValue, bundleTokenMetaByValue, specEdits])
+  }, [colors, sizes, customSalesAttributes, merchantSkuPrefix, merchantSkuSuffix, includeMainPatternType, sourceLabelByValue, bundleTokenMetaByValue, specEdits])
 
   const getSpecTextForRow = (r: SpecRow): string => String(r.spec_text ?? '').trim()
 
@@ -1107,6 +1380,12 @@ export default function TmallSkuTemplateGeneratorPage() {
   const doPreview = async () => {
     setLoadingPreview(true)
     try {
+      if (hasCustomSalesAttributes) {
+        setPreviewRows(specRows as any)
+        setPreviewTotal(specRows.length)
+        message.success(`已生成预览：${specRows.length} 行`)
+        return
+      }
       const resp = await previewTmallSkuTemplate(payload)
       setPreviewRows(resp.rows ?? [])
       setPreviewTotal(resp.total_rows ?? 0)
@@ -1121,6 +1400,27 @@ export default function TmallSkuTemplateGeneratorPage() {
   const doExport = async () => {
     setLoadingExport(true)
     try {
+      if (hasCustomSalesAttributes) {
+        const wb = XLSX.utils.book_new()
+        const headers = [...activeAttributeNames, '商品规格（网店）', '商家编码', '是否上架']
+        const rows = specRows.map((r) => {
+          const out: Record<string, any> = {
+            颜色分类: r.color_label,
+            成品尺寸: r.size_label,
+            '商品规格（网店）': r.spec_text,
+            商家编码: r.merchant_sku,
+            是否上架: r.sku_status,
+          }
+          for (const [name, value] of Object.entries(r.attribute_values ?? {})) out[name] = value
+          return out
+        })
+        const ws = XLSX.utils.json_to_sheet(rows, { header: headers })
+        XLSX.utils.book_append_sheet(wb, ws, 'sku')
+        const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
+        downloadBlob(new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), 'tmall_sku_template_custom.xlsx')
+        message.success('已导出自定义属性 SKU xlsx')
+        return
+      }
       const blob = await exportTmallSkuTemplateXlsx(payload)
       downloadBlob(blob, 'tmall_buyi_sku_template.xlsx')
       message.success('已导出 xlsx')
@@ -1147,12 +1447,19 @@ export default function TmallSkuTemplateGeneratorPage() {
     }
     setLoadingFill(true)
     try {
-      const [buf, resp] = await Promise.all([readFileAsArrayBuffer(templateFile), previewTmallSkuTemplate(payload)])
+      const [buf, resp] = await Promise.all([
+        readFileAsArrayBuffer(templateFile),
+        hasCustomSalesAttributes ? Promise.resolve({ rows: specRows, total_rows: specRows.length }) : previewTmallSkuTemplate(payload),
+      ])
 
-      // Build lookup: (color_label, size_label) -> row
-      const lookup = new Map<string, TmallSkuRow>()
+      // Build lookup: sales attribute tuple -> row
+      const lookup = new Map<string, TmallSkuRow | SpecRow>()
       for (const r of resp.rows ?? []) {
-        const k = `${normalizeCellText(r.color_label)}||${normalizeCellText(r.size_label)}`
+        const values: string[] = [normalizeCellText((r as any).color_label), normalizeCellText((r as any).size_label)]
+        for (const name of activeAttributeNames.slice(2)) {
+          values.push(normalizeCellText((r as any).attribute_values?.[name]))
+        }
+        const k = values.join('||')
         lookup.set(k, r)
       }
 
@@ -1162,9 +1469,13 @@ export default function TmallSkuTemplateGeneratorPage() {
       const ws = wb.Sheets[sheetName]
       if (!ws) throw new Error('模板工作表读取失败')
 
-      const header = findHeaderIndex(ws)
+      const header = findHeaderIndex(ws, activeAttributeNames)
       if (!header) {
-        throw new Error('未在模板中找到表头列：颜色分类/尺寸/商家编码/是否上架（请确认上传的是天猫官方SKU模板）')
+        throw new Error('未在模板中找到表头列：颜色分类/成品尺寸（或尺寸）/商家编码/是否上架（请确认上传的是天猫官方SKU模板）')
+      }
+      const missingAttrs = activeAttributeNames.filter((name) => header.attrCols[normalizeHeaderLabel(name)] === undefined)
+      if (missingAttrs.length) {
+        throw new Error(`模板中缺少销售属性列：${missingAttrs.join('、')}`)
       }
 
       const range = XLSX.utils.decode_range(ws['!ref'] as string)
@@ -1173,15 +1484,15 @@ export default function TmallSkuTemplateGeneratorPage() {
       let unmatched = 0
 
       for (let r = header.headerRowIndex + 1; r <= range.e.r; r++) {
-        const colorAddr = XLSX.utils.encode_cell({ r, c: header.colorCol })
-        const sizeAddr = XLSX.utils.encode_cell({ r, c: header.sizeCol })
-        const colorVal = normalizeCellText((ws as any)[colorAddr]?.v)
-        const sizeVal = normalizeCellText((ws as any)[sizeAddr]?.v)
-
+        const attrValues = activeAttributeNames.map((name) => {
+          const col = header.attrCols[normalizeHeaderLabel(name)]
+          const addr = XLSX.utils.encode_cell({ r, c: col })
+          return normalizeCellText((ws as any)[addr]?.v)
+        })
         // stop early on trailing empty rows
-        if (!colorVal && !sizeVal) continue
+        if (!attrValues.some(Boolean)) continue
 
-        const k = `${colorVal}||${sizeVal}`
+        const k = attrValues.join('||')
         const target = lookup.get(k)
         if (!target) {
           unmatched++
@@ -1234,8 +1545,11 @@ export default function TmallSkuTemplateGeneratorPage() {
     const wb = XLSX.utils.book_new()
     const rows: Array<{ attribute: string; value: string }> = []
     for (const c of colors) rows.push({ attribute: '颜色分类', value: normalizeAttrValue(c.label) })
-    for (const s of sizes) rows.push({ attribute: '尺寸', value: normalizeAttrValue(s.label) })
+    for (const s of sizes) rows.push({ attribute: '成品尺寸', value: normalizeAttrValue(s.label) })
     for (const p of mainPatternTypes) rows.push({ attribute: '主图案类型', value: normalizeAttrValue(p.label) })
+    for (const attr of normalizeCustomSalesAttributes(customSalesAttributes)) {
+      for (const value of attr.values) rows.push({ attribute: attr.name, value: normalizeAttrValue(value.label) })
+    }
 
     const ws = XLSX.utils.json_to_sheet(rows, { header: ['attribute', 'value'] })
     // Friendly headers
@@ -1253,6 +1567,7 @@ export default function TmallSkuTemplateGeneratorPage() {
       sizes,
       colors,
       mainPatternTypes,
+      customSalesAttributes,
       ui: {
         enableColorImages,
         enableSizeImages,
@@ -1295,6 +1610,9 @@ export default function TmallSkuTemplateGeneratorPage() {
           })),
         )
       }
+      if (Array.isArray((parsed as any).customSalesAttributes)) {
+        setCustomSalesAttributes(normalizeCustomSalesAttributes((parsed as any).customSalesAttributes))
+      }
       if (parsed.ui) {
         if (typeof parsed.ui.enableColorImages === 'boolean') setEnableColorImages(parsed.ui.enableColorImages)
         if (typeof parsed.ui.enableSizeImages === 'boolean') setEnableSizeImages(parsed.ui.enableSizeImages)
@@ -1322,14 +1640,42 @@ export default function TmallSkuTemplateGeneratorPage() {
     lines.push('【颜色分类】')
     for (const c of colors) lines.push(`- ${normalizeAttrValue(c.label)}`)
     lines.push('')
-    lines.push('【尺寸】')
+    lines.push('【成品尺寸】')
     for (const s of sizes) lines.push(`- ${normalizeAttrValue(s.label)}`)
     lines.push('')
     lines.push('【主图案类型】')
     for (const p of mainPatternTypes) lines.push(`- ${normalizeAttrValue(p.label)}`)
     lines.push('')
+    for (const attr of normalizeCustomSalesAttributes(customSalesAttributes)) {
+      lines.push(`【${attr.name}】`)
+      for (const value of attr.values) lines.push(`- ${normalizeAttrValue(value.label)}`)
+      lines.push('')
+    }
     return lines.join('\n')
-  }, [colors, sizes, mainPatternTypes])
+  }, [colors, sizes, mainPatternTypes, customSalesAttributes])
+
+  const renderBindingStatusTag = (
+    sourceCode: unknown,
+    level: 'row' | 'custom' | 'size' | 'color',
+    opts?: { disabled?: boolean },
+  ) => {
+    if (opts?.disabled) return <Tag>已关闭</Tag>
+    const hasSource = !!String(sourceCode ?? '').trim()
+    if (!hasSource) return <Tag>未绑定</Tag>
+    if (level === 'row') return <Tag color="red">行级覆盖</Tag>
+    if (level === 'custom') return <Tag color="gold">覆盖尺寸/颜色</Tag>
+    if (level === 'size') return <Tag color="green">覆盖颜色</Tag>
+    return <Tag color="blue">兜底</Tag>
+  }
+
+  const renderRowBindingStatusTag = (row: SpecRow) => {
+    if (!row.merchant_source) return <Tag>未绑定</Tag>
+    if (row.binding_level === 'row') return <Tag color="red">行级覆盖</Tag>
+    if (row.binding_level === 'custom') return <Tag color="gold">自定属性覆盖</Tag>
+    if (row.binding_level === 'size') return <Tag color="green">成品尺寸覆盖</Tag>
+    if (row.binding_level === 'color') return <Tag color="blue">颜色兜底</Tag>
+    return <Tag>未绑定</Tag>
+  }
 
   return (
     <div style={{ padding: 16 }}>
@@ -1355,7 +1701,23 @@ export default function TmallSkuTemplateGeneratorPage() {
                   ]}
                 />
               </Space>
-              <Tag color="gold">颜色分类=图案/工艺款式；尺寸可按款式禁用</Tag>
+              <Space wrap size={8}>
+                {lastSavedAt ? (
+                  <Text type="secondary">上次保存：{formatBeijingTime(lastSavedAt, 'HH:mm:ss')}</Text>
+                ) : (
+                  <Text type="secondary">保存到服务器后，多人可共享</Text>
+                )}
+                <Button
+                  type="primary"
+                  icon={<SaveOutlined />}
+                  loading={savingTemplate}
+                  disabled={!templateLoaded}
+                  onClick={() => void saveTemplateNow()}
+                >
+                  保存模板
+                </Button>
+                <Tag color="gold">颜色分类=图案/工艺款式；成品尺寸可按款式禁用</Tag>
+              </Space>
             </Space>
           }
         >
@@ -1406,7 +1768,7 @@ export default function TmallSkuTemplateGeneratorPage() {
               message="天猫模板填充（推荐流程）"
               description={
                 <div>
-                  <div>销售属性（颜色分类/尺寸）需要先在天猫后台建立，模板里不可编辑。</div>
+                  <div>销售属性（颜色分类/成品尺寸）需要先在天猫后台建立，模板里不可编辑。</div>
                   <div>本工具用于把你配置好的“商家编码 / 是否上架(0/1)”批量回填到天猫官方模板，再下载回传。</div>
                 </div>
               }
@@ -1538,39 +1900,33 @@ export default function TmallSkuTemplateGeneratorPage() {
                     />
                   ),
                 },
+                ...activeAttributeNames.slice(2).map((name) => ({
+                  title: name,
+                  width: 140,
+                  render: (_: any, r: SpecRow) => String(r.attribute_values?.[name] ?? '') || '-',
+                })),
                 {
                   title: '模型属性',
                   width: 210,
                   render: (_: any, r: SpecRow) => (
-                    <Select
-                      allowClear
-                      showSearch
-                      placeholder="行级覆盖：选择模型/套版"
-                      loading={loadingSourceGroups}
-                      popupMatchSelectWidth={false}
-                      listHeight={520}
-                      value={String(specEdits[r.row_key]?.model_source_code ?? '').trim() || undefined}
-                      options={[
-                        { label: '不覆盖（走颜色/尺寸绑定）', value: '' },
-                        ...sourceGroups.map((g) => ({
-                          label: g.label,
-                          options: g.options,
-                        })),
-                      ]}
-                      onChange={(v) =>
+                    <TmallSourceCodePicker
+                      value={specEdits[r.row_key]?.model_source_code}
+                      size="small"
+                      width={200}
+                      placeholder="行级覆盖：选模型/套版"
+                      onChange={(token) =>
                         setSpecEdits((prev) => ({
                           ...prev,
-                          [r.row_key]: { ...(prev[r.row_key] ?? {}), model_source_code: String(v ?? '') },
+                          [r.row_key]: { ...(prev[r.row_key] ?? {}), model_source_code: token },
                         }))
                       }
-                      filterOption={(input, opt) => {
-                        const t = String((opt as any)?.label ?? '')
-                        const vv = String((opt as any)?.value ?? '')
-                        const q = String(input ?? '').trim().toLowerCase()
-                        return t.toLowerCase().includes(q) || vv.toLowerCase().includes(q)
-                      }}
                     />
                   ),
+                },
+                {
+                  title: '绑定状态',
+                  width: 130,
+                  render: (_: any, r: SpecRow) => renderRowBindingStatusTag(r),
                 },
                 {
                   title: '解析尺寸',
@@ -1831,7 +2187,12 @@ export default function TmallSkuTemplateGeneratorPage() {
             dataSource={(previewRows ?? []).slice(0, 50)}
             columns={[
               { title: '颜色分类', dataIndex: 'color_label' },
-              { title: '尺寸', dataIndex: 'size_label', width: 160 },
+              { title: '成品尺寸', dataIndex: 'size_label', width: 160 },
+              ...activeAttributeNames.slice(2).map((name) => ({
+                title: name,
+                width: 140,
+                render: (_: any, r: any) => String(r?.attribute_values?.[name] ?? ''),
+              })),
               { title: '商家编码', dataIndex: 'merchant_sku', width: 220 },
               { title: '是否上架', dataIndex: 'sku_status', width: 90 },
             ]}
@@ -1842,17 +2203,32 @@ export default function TmallSkuTemplateGeneratorPage() {
           title="设置（SKU 模式 / 销售属性）"
           open={settingsOpen}
           onClose={() => setSettingsOpen(false)}
-          width={860}
+          extra={
+            <Space>
+              <Button
+                type="primary"
+                icon={<SaveOutlined />}
+                loading={savingTemplate}
+                disabled={!templateLoaded}
+                onClick={() => void saveTemplateNow({ closeSettings: true })}
+              >
+                保存设置
+              </Button>
+            </Space>
+          }
+          width="min(96vw, 1290px)"
         >
           <Space direction="vertical" style={{ width: '100%' }} size={12}>
             <Alert
-              type="info"
+              type="warning"
               showIcon
-              message="说明"
+              message="模型/套版绑定规则（避免冲突）"
               description={
                 <div>
-                  <div>这里用于模拟天猫“建立销售属性”的第一步：维护属性值域并输出可复制清单。</div>
-                  <div>天猫模板中的“颜色分类/尺寸”不可编辑；建好属性后下载模板，再用主页面的“模板回填”批量填编码/上架。</div>
+                  <div>SKU 行数按启用的销售属性做笛卡尔积：颜色分类 × 成品尺寸 × 已启用的自定属性。</div>
+                  <div>商家编码只取一个“模型/套版”作为锚点，不会把多个属性的绑定拼在一起。</div>
+                  <div>优先级：行级覆盖 &gt; 自定属性值绑定 &gt; 成品尺寸绑定 &gt; 颜色分类绑定。</div>
+                  <div>使用建议：只在“真正决定模型/套版”的那一层绑定；其它属性用于展示就留空。个别 SKU 特例再到表格里的“模型属性”做行级覆盖。</div>
                 </div>
               }
             />
@@ -1862,7 +2238,7 @@ export default function TmallSkuTemplateGeneratorPage() {
               title="属性选择"
               extra={
                 <Space wrap size={8}>
-                  <Text type="secondary">颜色分类/尺寸为必选；主图案类型可选</Text>
+                  <Text type="secondary">颜色分类/成品尺寸为必选；主图案类型可选</Text>
                   <Button
                     size="small"
                     icon={<ReloadOutlined />}
@@ -1879,7 +2255,7 @@ export default function TmallSkuTemplateGeneratorPage() {
                   颜色分类
                 </Checkbox>
                 <Checkbox checked disabled>
-                  尺寸
+                  成品尺寸
                 </Checkbox>
                 <Checkbox checked={includeMainPatternType} onChange={(e) => setIncludeMainPatternType(e.target.checked)}>
                   主图案类型
@@ -1964,38 +2340,21 @@ export default function TmallSkuTemplateGeneratorPage() {
                     ) : null}
 
                     <Input
-                      style={{ flex: 1, minWidth: 520 }}
+                      style={{ width: 420 }}
                       placeholder="颜色分类（天猫展示值）"
                       value={c.label}
                       onChange={(e) => setColors((prev) => prev.map((x, i) => (i === idx ? { ...x, label: e.target.value } : x)))}
                     />
 
-                    <Select
-                      allowClear
-                      showSearch
-                      style={{ width: 520 }}
+                    <TmallSourceCodePicker
+                      value={(c as any)?.source_code}
+                      width={520}
                       placeholder="绑定来源(模型/套版)（可选，优先级最高）"
-                      loading={loadingSourceGroups}
-                      popupMatchSelectWidth={false}
-                      listHeight={520}
-                      value={String((c as any)?.source_code ?? '') || undefined}
-                      options={[
-                        { label: '不绑定（使用尺寸绑定/前后缀规则）', value: '' },
-                        ...sourceGroups.map((g) => ({
-                          label: g.label,
-                          options: g.options,
-                        })),
-                      ]}
-                      onChange={(v) =>
-                        setColors((prev) => prev.map((x, i) => (i === idx ? ({ ...x, source_code: String(v ?? '') } as any) : x)))
+                      onChange={(token) =>
+                        setColors((prev) => prev.map((x, i) => (i === idx ? ({ ...x, source_code: token } as any) : x)))
                       }
-                      filterOption={(input, opt) => {
-                        const t = String((opt as any)?.label ?? '')
-                        const vv = String((opt as any)?.value ?? '')
-                        const q = String(input ?? '').trim().toLowerCase()
-                        return t.toLowerCase().includes(q) || vv.toLowerCase().includes(q)
-                      }}
                     />
+                    {renderBindingStatusTag((c as any)?.source_code, 'color')}
 
                     {enableColorRemarks ? (
                       <Input
@@ -2024,7 +2383,7 @@ export default function TmallSkuTemplateGeneratorPage() {
 
             <Card
               size="small"
-              title={`尺寸（${sizes.length}）`}
+              title={`成品尺寸（${sizes.length}）`}
               extra={
                 <Space wrap size={8}>
                   <Checkbox checked={enableSizeImages} onChange={(e) => setEnableSizeImages(e.target.checked)}>
@@ -2087,36 +2446,19 @@ export default function TmallSkuTemplateGeneratorPage() {
 
                     <Input
                       style={{ width: 420 }}
-                      placeholder="尺寸（天猫展示值）"
+                      placeholder="成品尺寸（天猫展示值）"
                       value={s.label}
                       onChange={(e) => setSizes((prev) => prev.map((x, i) => (i === idx ? { ...x, label: e.target.value } : x)))}
                     />
-                    <Select
-                      allowClear
-                      showSearch
-                      style={{ width: 520 }}
+                    <TmallSourceCodePicker
+                      value={(s as any)?.source_code}
+                      width={520}
                       placeholder="绑定来源(模型/套版)（可选，优先级低于颜色绑定）"
-                      loading={loadingSourceGroups}
-                      popupMatchSelectWidth={false}
-                      listHeight={520}
-                      value={String((s as any)?.source_code ?? '') || undefined}
-                      options={[
-                        { label: '不绑定（使用前后缀规则）', value: '' },
-                        ...sourceGroups.map((g) => ({
-                          label: g.label,
-                          options: g.options,
-                        })),
-                      ]}
-                      onChange={(v) =>
-                        setSizes((prev) => prev.map((x, i) => (i === idx ? ({ ...x, source_code: String(v ?? '') } as any) : x)))
+                      onChange={(token) =>
+                        setSizes((prev) => prev.map((x, i) => (i === idx ? ({ ...x, source_code: token } as any) : x)))
                       }
-                      filterOption={(input, opt) => {
-                        const t = String((opt as any)?.label ?? '')
-                        const vv = String((opt as any)?.value ?? '')
-                        const q = String(input ?? '').trim().toLowerCase()
-                        return t.toLowerCase().includes(q) || vv.toLowerCase().includes(q)
-                      }}
                     />
+                    {renderBindingStatusTag((s as any)?.source_code, 'size')}
 
                     {enableSizeRemarks ? (
                       <Input
@@ -2158,7 +2500,7 @@ export default function TmallSkuTemplateGeneratorPage() {
                   {mainPatternTypes.map((p, idx) => (
                     <Space key={p.key} wrap size={8} style={{ width: '100%', alignItems: 'flex-start' }}>
                       <Input
-                        style={{ width: 360 }}
+                        style={{ width: 420 }}
                         placeholder="主图案类型（天猫展示值）"
                         value={p.label}
                         onChange={(e) =>
@@ -2183,6 +2525,244 @@ export default function TmallSkuTemplateGeneratorPage() {
                 </Space>
               </Card>
             ) : null}
+
+            <Card
+              size="small"
+              title={`自定属性（${customSalesAttributes.length}）`}
+              extra={
+                <Button
+                  icon={<PlusOutlined />}
+                  onClick={() =>
+                    setCustomSalesAttributes((prev) => [
+                      ...prev,
+                      {
+                        key: `attr_${uid()}`,
+                        name: '',
+                        enabled: true,
+                        enableImages: false,
+                        enableRemarks: true,
+                        values: [{ key: `v_${uid()}`, label: '', sku_code: '', source_code: '', metadata_json: {} }],
+                      },
+                    ])
+                  }
+                >
+                  添加属性
+                </Button>
+              }
+            >
+              <Space direction="vertical" style={{ width: '100%' }} size={12}>
+                <Text type="secondary">
+                  这里的属性打开后会参与 SKU 笛卡尔积，例如“颜色分类 × 成品尺寸 × 材质 × 款式”。属性值可像颜色/成品尺寸一样绑定模型或套版；关闭时仅保存配置，不参与生成。
+                </Text>
+                {customSalesAttributes.map((attr, attrIdx) => (
+                  <Card
+                    key={attr.key}
+                    size="small"
+                    title={
+                      <Space wrap>
+                        <Switch
+                          checked={attr.enabled !== false}
+                          onChange={(checked) =>
+                            setCustomSalesAttributes((prev) => prev.map((x, i) => (i === attrIdx ? { ...x, enabled: checked } : x)))
+                          }
+                        />
+                        <Input
+                          style={{ width: 420 }}
+                          placeholder="属性名，例如：材质 / 款式 / 规格"
+                          value={attr.name}
+                          onChange={(e) =>
+                            setCustomSalesAttributes((prev) => prev.map((x, i) => (i === attrIdx ? { ...x, name: e.target.value } : x)))
+                          }
+                        />
+                        <Tag color={attr.enabled !== false ? 'green' : undefined}>
+                          {attr.enabled !== false ? '参与生成' : '不参与生成'}
+                        </Tag>
+                      </Space>
+                    }
+                    extra={
+                      <Space>
+                        <Checkbox
+                          checked={attr.enableImages === true}
+                          onChange={(e) =>
+                            setCustomSalesAttributes((prev) =>
+                              prev.map((x, i) => (i === attrIdx ? { ...x, enableImages: e.target.checked } : x)),
+                            )
+                          }
+                        >
+                          添加图片
+                        </Checkbox>
+                        <Checkbox
+                          checked={attr.enableRemarks === true}
+                          onChange={(e) =>
+                            setCustomSalesAttributes((prev) =>
+                              prev.map((x, i) => (i === attrIdx ? { ...x, enableRemarks: e.target.checked } : x)),
+                            )
+                          }
+                        >
+                          备注
+                        </Checkbox>
+                        <Button
+                          size="small"
+                          icon={<PlusOutlined />}
+                          onClick={() =>
+                            setCustomSalesAttributes((prev) =>
+                              prev.map((x, i) =>
+                                i === attrIdx
+                                  ? { ...x, values: [...(x.values ?? []), { key: `v_${uid()}`, label: '', sku_code: '', source_code: '', metadata_json: {} }] }
+                                  : x,
+                              ),
+                            )
+                          }
+                        >
+                          添加属性值
+                        </Button>
+                        <Button
+                          size="small"
+                          danger
+                          icon={<DeleteOutlined />}
+                          onClick={() => setCustomSalesAttributes((prev) => prev.filter((_, i) => i !== attrIdx))}
+                        />
+                      </Space>
+                    }
+                  >
+                    <Space direction="vertical" style={{ width: '100%' }} size={8}>
+                      {(attr.values ?? []).map((value, valueIdx) => (
+                        <Space key={value.key} wrap size={8} style={{ width: '100%', alignItems: 'flex-start' }}>
+                          {attr.enableImages === true ? (
+                            <Upload
+                              accept="image/*"
+                              showUploadList={false}
+                              beforeUpload={async (file) => {
+                                try {
+                                  const dataUrl = await readFileAsDataUrl(file)
+                                  setCustomSalesAttributes((prev) =>
+                                    prev.map((x, i) =>
+                                      i === attrIdx
+                                        ? {
+                                            ...x,
+                                            values: (x.values ?? []).map((v, j) =>
+                                              j === valueIdx
+                                                ? { ...v, metadata_json: { ...(v as any).metadata_json, image_data_url: dataUrl } }
+                                                : v,
+                                            ),
+                                          }
+                                        : x,
+                                    ),
+                                  )
+                                } catch (e: any) {
+                                  message.error(String(e?.message ?? e))
+                                }
+                                return false
+                              }}
+                            >
+                              <div
+                                style={{
+                                  width: 40,
+                                  height: 40,
+                                  border: '1px solid var(--app-border)',
+                                  borderRadius: 6,
+                                  overflow: 'hidden',
+                                  background: 'var(--app-surface)',
+                                  cursor: 'pointer',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  marginTop: 2,
+                                }}
+                              >
+                                {(value as any)?.metadata_json?.image_data_url ? (
+                                  <img src={(value as any).metadata_json.image_data_url as string} alt="img" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                ) : (
+                                  <Text type="secondary" style={{ fontSize: 12 }}>
+                                    图
+                                  </Text>
+                                )}
+                              </div>
+                            </Upload>
+                          ) : null}
+                          <Input
+                            style={{ width: 420 }}
+                            placeholder="属性值，例如：棉麻 / 莫兰迪 / 加厚"
+                            value={value.label}
+                            onChange={(e) =>
+                              setCustomSalesAttributes((prev) =>
+                                prev.map((x, i) =>
+                                  i === attrIdx
+                                    ? {
+                                        ...x,
+                                        values: (x.values ?? []).map((v, j) => (j === valueIdx ? { ...v, label: e.target.value } : v)),
+                                      }
+                                    : x,
+                                ),
+                              )
+                            }
+                          />
+                          <TmallSourceCodePicker
+                            value={(value as any)?.source_code}
+                            width={520}
+                            placeholder="绑定来源(模型/套版)（可选）"
+                            disabled={attr.enabled === false}
+                            onChange={(token) =>
+                              setCustomSalesAttributes((prev) =>
+                                prev.map((x, i) =>
+                                  i === attrIdx
+                                    ? {
+                                        ...x,
+                                        values: (x.values ?? []).map((val, j) =>
+                                          j === valueIdx ? { ...val, source_code: token } : val,
+                                        ),
+                                      }
+                                    : x,
+                                ),
+                              )
+                            }
+                          />
+                          {renderBindingStatusTag((value as any)?.source_code, 'custom', { disabled: attr.enabled === false })}
+                          {attr.enableRemarks === true ? (
+                            <Input
+                              style={{ width: 220 }}
+                              placeholder="备注(可选)"
+                              value={String((value as any)?.metadata_json?.remark ?? value.remark ?? '')}
+                              onChange={(e) =>
+                                setCustomSalesAttributes((prev) =>
+                                  prev.map((x, i) =>
+                                    i === attrIdx
+                                      ? {
+                                          ...x,
+                                          values: (x.values ?? []).map((val, j) =>
+                                            j === valueIdx
+                                              ? {
+                                                  ...val,
+                                                  remark: e.target.value,
+                                                  metadata_json: { ...(val as any).metadata_json, remark: e.target.value },
+                                                }
+                                              : val,
+                                          ),
+                                        }
+                                      : x,
+                                  ),
+                                )
+                              }
+                            />
+                          ) : null}
+                          <Button
+                            icon={<DeleteOutlined />}
+                            danger
+                            onClick={() =>
+                              setCustomSalesAttributes((prev) =>
+                                prev.map((x, i) =>
+                                  i === attrIdx ? { ...x, values: (x.values ?? []).filter((_, j) => j !== valueIdx) } : x,
+                                ),
+                              )
+                            }
+                          />
+                        </Space>
+                      ))}
+                    </Space>
+                  </Card>
+                ))}
+              </Space>
+            </Card>
 
             <Card
               size="small"
@@ -2225,15 +2805,16 @@ export default function TmallSkuTemplateGeneratorPage() {
                           message.warning('请输入方案名')
                           return
                         }
-                        try {
-                          const raw = localStorage.getItem(STORAGE_PROFILES_KEY)
-                          const all = raw ? (JSON.parse(raw) as Record<string, PersistedConfigV1>) : {}
-                          all[name] = {
+                        const next = {
+                          ...(savedProfiles ?? {}),
+                          [name]: {
                             merchantSkuPrefix,
                             merchantSkuSuffix,
+                            listingChannel,
                             sizes,
                             colors,
                             mainPatternTypes,
+                            customSalesAttributes,
                             ui: {
                               enableColorImages,
                               enableSizeImages,
@@ -2242,15 +2823,11 @@ export default function TmallSkuTemplateGeneratorPage() {
                               enablePatternRemarks,
                               includeMainPatternType,
                             },
-                          }
-                          localStorage.setItem(STORAGE_PROFILES_KEY, JSON.stringify(all))
-                          const names = Object.keys(all).filter(Boolean).sort((a, b) => a.localeCompare(b))
-                          setProfileNames(names)
-                          setSelectedProfileName(name)
-                          message.success('已保存方案')
-                        } catch (e: any) {
-                          message.error(`保存失败：${String(e?.message ?? e)}`)
+                          },
                         }
+                        setSavedProfiles(next)
+                        setSelectedProfileName(name)
+                        message.success('已保存方案（后端长期保存）')
                       }}
                     >
                       保存
@@ -2268,9 +2845,7 @@ export default function TmallSkuTemplateGeneratorPage() {
                         const name = String(selectedProfileName ?? '').trim()
                         if (!name) return
                         try {
-                          const raw = localStorage.getItem(STORAGE_PROFILES_KEY)
-                          const all = raw ? (JSON.parse(raw) as Record<string, PersistedConfigV1>) : {}
-                          const cfg = all[name]
+                          const cfg = savedProfiles?.[name]
                           if (!cfg) {
                             message.warning('未找到该方案')
                             return
@@ -2303,6 +2878,7 @@ export default function TmallSkuTemplateGeneratorPage() {
                               })),
                             )
                           }
+                          setCustomSalesAttributes(normalizeCustomSalesAttributes((cfg as any).customSalesAttributes))
                           const ui = (cfg as any)?.ui ?? {}
                           if (typeof ui.enableColorImages === 'boolean') setEnableColorImages(ui.enableColorImages)
                           if (typeof ui.enableSizeImages === 'boolean') setEnableSizeImages(ui.enableSizeImages)
@@ -2325,18 +2901,15 @@ export default function TmallSkuTemplateGeneratorPage() {
                         const name = String(selectedProfileName ?? '').trim()
                         if (!name) return
                         try {
-                          const raw = localStorage.getItem(STORAGE_PROFILES_KEY)
-                          const all = raw ? (JSON.parse(raw) as Record<string, PersistedConfigV1>) : {}
+                          const all = { ...(savedProfiles ?? {}) }
                           if (!all[name]) {
                             message.warning('未找到该方案')
                             return
                           }
                           delete all[name]
-                          localStorage.setItem(STORAGE_PROFILES_KEY, JSON.stringify(all))
-                          const names = Object.keys(all).filter(Boolean).sort((a, b) => a.localeCompare(b))
-                          setProfileNames(names)
+                          setSavedProfiles(all)
                           setSelectedProfileName('')
-                          message.success('已删除方案')
+                          message.success('已删除方案（后端长期保存）')
                         } catch (e: any) {
                           message.error(`删除失败：${String(e?.message ?? e)}`)
                         }

@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import io
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import or_
+from sqlalchemy.orm import Session
+
+from ...database import get_db
+from ..models import TmallSkuGeneratorTemplate
 
 router = APIRouter(prefix="/tmall/sku-template", tags=["tmall"])
 
@@ -73,6 +79,55 @@ class TmallSkuTemplatePreviewResponse(BaseModel):
     header_mapping: Dict[str, str]
 
 
+class TmallSkuGeneratorPersistedConfig(BaseModel):
+    merchantSkuPrefix: str = ""
+    merchantSkuSuffix: str = ""
+    listingChannel: Optional[str] = None
+    sizes: List[Dict[str, Any]] = Field(default_factory=list)
+    colors: List[Dict[str, Any]] = Field(default_factory=list)
+    mainPatternTypes: List[Dict[str, Any]] = Field(default_factory=list)
+    ui: Dict[str, Any] = Field(default_factory=dict)
+
+    class Config:
+        extra = "allow"
+
+
+class TmallSkuGeneratorTemplateRead(BaseModel):
+    id: str
+    name: str
+    type: str
+    published_at: Optional[datetime] = None
+    matrix_count: Optional[int] = None
+    archived: bool = False
+    config: TmallSkuGeneratorPersistedConfig
+    created_at: datetime
+    updated_at: datetime
+
+
+class TmallSkuGeneratorTemplateListResponse(BaseModel):
+    total: int
+    items: List[TmallSkuGeneratorTemplateRead]
+
+
+class TmallSkuGeneratorTemplateUpsertRequest(BaseModel):
+    id: str = Field(..., min_length=1, max_length=64)
+    name: str = Field("未命名模板", max_length=255)
+    type: str = Field("家居布艺", max_length=64)
+    published_at: Optional[datetime] = None
+    matrix_count: Optional[int] = None
+    archived: bool = False
+    config: TmallSkuGeneratorPersistedConfig = Field(default_factory=TmallSkuGeneratorPersistedConfig)
+
+
+class TmallSkuGeneratorTemplateUpdateRequest(BaseModel):
+    name: Optional[str] = Field(None, max_length=255)
+    type: Optional[str] = Field(None, max_length=64)
+    published_at: Optional[datetime] = None
+    matrix_count: Optional[int] = None
+    archived: Optional[bool] = None
+    config: Optional[TmallSkuGeneratorPersistedConfig] = None
+
+
 TMALL_SHEET2_MAPPING: Dict[str, str] = {
     "颜色分类": "p-1627207",
     "尺寸": "p-21433",
@@ -83,6 +138,176 @@ TMALL_SHEET2_MAPPING: Dict[str, str] = {
     "厚度(cm)": "skuParam_p-554360987",
     "宽度": "skuParam_p-554668632",
 }
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _default_generator_config() -> Dict[str, Any]:
+    return {
+        "merchantSkuPrefix": "BZPB008XXXXX-",
+        "merchantSkuSuffix": "",
+        "listingChannel": "tmall",
+        "sizes": [
+            {"key": "size_1", "label": "枕芯+枕套", "size_code": "C1", "source_code": ""},
+            {"key": "size_2", "label": "枕套", "size_code": "C2", "source_code": ""},
+        ],
+        "colors": [
+            {
+                "key": "c1",
+                "label": "Q25122501A黄金绒背面纯色（红色毛球） 45X45",
+                "width_cm": 45,
+                "height_cm": 45,
+                "enabledSizes": {"size_1": True, "size_2": True},
+                "source_code": "",
+            }
+        ],
+        "mainPatternTypes": [{"key": "p1", "label": "无"}],
+        "ui": {
+            "enableColorImages": True,
+            "enableSizeImages": False,
+            "enableColorRemarks": True,
+            "enableSizeRemarks": True,
+            "enablePatternRemarks": False,
+            "includeMainPatternType": True,
+        },
+    }
+
+
+def _serialize_generator_template(row: TmallSkuGeneratorTemplate) -> TmallSkuGeneratorTemplateRead:
+    return TmallSkuGeneratorTemplateRead(
+        id=row.id,
+        name=row.name,
+        type=row.type,
+        published_at=row.published_at,
+        matrix_count=row.matrix_count,
+        archived=bool(row.is_archived),
+        config=TmallSkuGeneratorPersistedConfig.parse_obj(row.config_json or {}),
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def _ensure_generator_seed(db: Session) -> None:
+    exists = db.get(TmallSkuGeneratorTemplate, "mvp")
+    if exists:
+        return
+    now = _utcnow()
+    db.add(
+        TmallSkuGeneratorTemplate(
+            id="mvp",
+            name="天猫布艺 SKU规格生成器（MVP）",
+            type="家居布艺",
+            published_at=now,
+            matrix_count=2,
+            config_json=_default_generator_config(),
+        )
+    )
+    db.commit()
+
+
+def _get_generator_template_or_404(db: Session, template_id: str) -> TmallSkuGeneratorTemplate:
+    row = db.get(TmallSkuGeneratorTemplate, template_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Tmall SKU generator template not found")
+    return row
+
+
+@router.get("/generator-templates", response_model=TmallSkuGeneratorTemplateListResponse)
+def list_generator_templates(
+    search: Optional[str] = None,
+    type: Optional[str] = None,
+    include_archived: bool = False,
+    db: Session = Depends(get_db),
+) -> TmallSkuGeneratorTemplateListResponse:
+    _ensure_generator_seed(db)
+    q = db.query(TmallSkuGeneratorTemplate)
+    if not include_archived:
+        q = q.filter(TmallSkuGeneratorTemplate.is_archived.is_(False))
+    if type:
+        q = q.filter(TmallSkuGeneratorTemplate.type == type)
+    if search:
+        like = f"%{search.strip()}%"
+        q = q.filter(or_(TmallSkuGeneratorTemplate.id.ilike(like), TmallSkuGeneratorTemplate.name.ilike(like)))
+    items = q.order_by(TmallSkuGeneratorTemplate.updated_at.desc()).all()
+    return TmallSkuGeneratorTemplateListResponse(total=len(items), items=[_serialize_generator_template(x) for x in items])
+
+
+@router.post("/generator-templates", response_model=TmallSkuGeneratorTemplateRead, status_code=status.HTTP_201_CREATED)
+def create_generator_template(
+    payload: TmallSkuGeneratorTemplateUpsertRequest,
+    db: Session = Depends(get_db),
+) -> TmallSkuGeneratorTemplateRead:
+    template_id = payload.id.strip()
+    if db.get(TmallSkuGeneratorTemplate, template_id):
+        raise HTTPException(status_code=409, detail="Template id already exists")
+    now = payload.published_at or _utcnow()
+    row = TmallSkuGeneratorTemplate(
+        id=template_id,
+        name=(payload.name or "未命名模板").strip() or "未命名模板",
+        type=(payload.type or "家居布艺").strip() or "家居布艺",
+        published_at=now,
+        matrix_count=payload.matrix_count,
+        is_archived=payload.archived,
+        config_json=payload.config.dict(),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _serialize_generator_template(row)
+
+
+@router.get("/generator-templates/{template_id}", response_model=TmallSkuGeneratorTemplateRead)
+def get_generator_template(template_id: str, db: Session = Depends(get_db)) -> TmallSkuGeneratorTemplateRead:
+    _ensure_generator_seed(db)
+    return _serialize_generator_template(_get_generator_template_or_404(db, template_id))
+
+
+@router.put("/generator-templates/{template_id}", response_model=TmallSkuGeneratorTemplateRead)
+def upsert_generator_template(
+    template_id: str,
+    payload: TmallSkuGeneratorTemplateUpsertRequest,
+    db: Session = Depends(get_db),
+) -> TmallSkuGeneratorTemplateRead:
+    tid = template_id.strip()
+    row = db.get(TmallSkuGeneratorTemplate, tid)
+    if not row:
+        row = TmallSkuGeneratorTemplate(id=tid)
+        db.add(row)
+    row.name = (payload.name or "未命名模板").strip() or "未命名模板"
+    row.type = (payload.type or "家居布艺").strip() or "家居布艺"
+    row.published_at = payload.published_at or _utcnow()
+    row.matrix_count = payload.matrix_count
+    row.is_archived = payload.archived
+    row.config_json = payload.config.dict()
+    db.commit()
+    db.refresh(row)
+    return _serialize_generator_template(row)
+
+
+@router.patch("/generator-templates/{template_id}", response_model=TmallSkuGeneratorTemplateRead)
+def update_generator_template(
+    template_id: str,
+    payload: TmallSkuGeneratorTemplateUpdateRequest,
+    db: Session = Depends(get_db),
+) -> TmallSkuGeneratorTemplateRead:
+    row = _get_generator_template_or_404(db, template_id)
+    if payload.name is not None:
+        row.name = payload.name.strip() or "未命名模板"
+    if payload.type is not None:
+        row.type = payload.type.strip() or "家居布艺"
+    if payload.published_at is not None:
+        row.published_at = payload.published_at
+    if payload.matrix_count is not None:
+        row.matrix_count = payload.matrix_count
+    if payload.archived is not None:
+        row.is_archived = payload.archived
+    if payload.config is not None:
+        row.config_json = payload.config.dict()
+    db.commit()
+    db.refresh(row)
+    return _serialize_generator_template(row)
 
 
 def _fmt_num(v: Optional[float]) -> Optional[str]:

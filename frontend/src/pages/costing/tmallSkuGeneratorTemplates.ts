@@ -16,6 +16,7 @@ export type TmallSkuGeneratorPersistedConfigV1 = {
   sizes: any[]
   colors: any[]
   mainPatternTypes: any[]
+  customSalesAttributes?: any[]
   ui?: {
     enableColorImages?: boolean
     enableSizeImages?: boolean
@@ -63,6 +64,9 @@ export const computeMatrixCountFromConfig = (cfg: TmallSkuGeneratorPersistedConf
   try {
     const sizes = Array.isArray(cfg?.sizes) ? cfg?.sizes : []
     const colors = Array.isArray(cfg?.colors) ? cfg?.colors : []
+    const customAttrs = Array.isArray(cfg?.customSalesAttributes)
+      ? cfg.customSalesAttributes.filter((attr: any) => attr?.enabled !== false && Array.isArray(attr?.values) && attr.values.length)
+      : []
     if (!sizes.length || !colors.length) return 0
     let cnt = 0
     for (const c of colors as any[]) {
@@ -72,6 +76,10 @@ export const computeMatrixCountFromConfig = (cfg: TmallSkuGeneratorPersistedConf
         if (!sk) continue
         if (enabledSizes?.[sk] !== false) cnt += 1
       }
+    }
+    for (const attr of customAttrs) {
+      const values = (attr.values as any[]).filter((v) => String(v?.label ?? '').trim())
+      cnt *= Math.max(values.length, 1)
     }
     return cnt
   } catch {

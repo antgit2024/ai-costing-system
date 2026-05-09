@@ -361,6 +361,16 @@ export interface PaginatedAuditLogResponse {
   page_size: number
 }
 
+// Stage 2 (Migration 0039) — purchase entity 暂用枚举字符串，Phase 2 换 cost_center_master 真实 UUID。
+export type PurchaseEntityCode = '一般纳税人' | '小规模A' | '小规模B'
+export type MaterialPriceSource =
+  | 'manual'
+  | 'po_avg_30d'
+  | 'last_po'
+  | 'contract'
+  | 'system_imported'
+  | 'yida_sync'
+
 export interface Material {
   id: string
   material_code: string
@@ -388,6 +398,13 @@ export interface Material {
   source_updated_at?: string | null
   updated_at: string
   metadata_json?: Record<string, unknown>
+  // Stage 2 (Migration 0039) — 税务/采购/效期
+  purchase_entity_id?: PurchaseEntityCode | string | null
+  tax_included_flag?: boolean
+  tax_rate?: string | number | null
+  price_source?: MaterialPriceSource | string | null
+  effective_from?: string | null
+  effective_to?: string | null
 }
 
 export interface MaterialListResponse extends PaginatedResponse<Material> {
@@ -417,6 +434,13 @@ export interface MaterialStatusUpdatePayload {
   bom_unit_price?: number
   calculation_method?: CalculationMethod
   metadata_json?: Record<string, unknown>
+  // Stage 2 (Migration 0039) — 税务/采购/效期。null = 显式清空，undefined = 不动。
+  purchase_entity_id?: PurchaseEntityCode | string | null
+  tax_included_flag?: boolean
+  tax_rate?: number | null
+  price_source?: MaterialPriceSource | string | null
+  effective_from?: string | null
+  effective_to?: string | null
 }
 
 export interface MaterialExportResponse {

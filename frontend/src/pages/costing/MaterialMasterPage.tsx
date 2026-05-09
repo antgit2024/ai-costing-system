@@ -33,7 +33,10 @@ import {
   Typography,
   message,
   Radio,
+  DatePicker,
 } from 'antd'
+import dayjs from 'dayjs'
+import type { Dayjs } from 'dayjs'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -54,10 +57,12 @@ import type {
   CalculationMethod,
   Material,
   MaterialListResponse,
+  MaterialPriceSource,
   MaterialReferencesResponse,
   MaterialStatusUpdatePayload,
   MaterialSyncLog,
   MaterialSyncLogResponse,
+  PurchaseEntityCode,
 } from '@/types/planner'
 import { MATERIAL_STATUS_OPTIONS } from '@/constants/planner'
 import { formatBeijingTime } from '@/utils/beijingTime'
@@ -354,6 +359,36 @@ const getMaterialTypeLabel = (record: Material): string => {
   }
 }
 
+// Stage 2 (Migration 0039) — 税务/采购/效期 表单元数据
+const PURCHASE_ENTITY_OPTIONS: { label: string; value: PurchaseEntityCode; short: string }[] = [
+  { label: '一般纳税人', value: '一般纳税人', short: '一般' },
+  { label: '小规模 A', value: '小规模A', short: '小A' },
+  { label: '小规模 B', value: '小规模B', short: '小B' },
+]
+
+const PRICE_SOURCE_OPTIONS: { label: string; value: MaterialPriceSource }[] = [
+  { label: '手工填写', value: 'manual' },
+  { label: '30 天均价', value: 'po_avg_30d' },
+  { label: '最近一次 PO', value: 'last_po' },
+  { label: '合同', value: 'contract' },
+  { label: '系统导入', value: 'system_imported' },
+  { label: '宜搭同步', value: 'yida_sync' },
+]
+
+const getPurchaseEntityShort = (value?: string | null): string => {
+  if (!value) return '-'
+  const opt = PURCHASE_ENTITY_OPTIONS.find((o) => o.value === value)
+  return opt?.short ?? String(value)
+}
+
+const formatTaxRate = (rate?: string | number | null): string => {
+  if (rate === null || rate === undefined || rate === '') return '-'
+  const num = Number(rate)
+  if (!Number.isFinite(num)) return '-'
+  // Stored as 0.0~1.0 (e.g. 0.13 = 13%)；显示 2 位小数百分比。
+  return `${(num * 100).toFixed(2).replace(/\.?0+$/, '')}%`
+}
+
 interface CostFormValues {
   usage_class?: 'direct' | 'conditional' | 'indirect'
   bom_unit?: string
@@ -365,6 +400,13 @@ interface CostFormValues {
   fixed_quantity_alpha?: number
   coverage_ratio?: number
   default_loss_rate?: number
+  // Stage 2 — 税务/采购/效期。tax_rate_pct 在表单里用 0~100，提交时 ÷100 落库。
+  purchase_entity_id?: PurchaseEntityCode | null
+  tax_included_flag?: boolean
+  tax_rate_pct?: number | null
+  price_source?: MaterialPriceSource | null
+  effective_from?: Dayjs | null
+  effective_to?: Dayjs | null
 }
 
 const positiveNumberRule = (message: string) => ({
@@ -640,6 +682,7 @@ const MaterialMasterPage = () => {
       inboundUnit && inventoryUnit && inboundUnit === inventoryUnit && convPurchase && convPurchase > 0
         ? Number((1 / convPurchase).toFixed(6))
         : undefined
+    const taxRateNum = parseDecimal(record.tax_rate)
     costForm.setFieldsValue({
       usage_class: getUsageClass(record),
       bom_unit: normalizeBomUnit(record.unit) ?? BOM_UNIT_OPTIONS[0].value,
@@ -661,6 +704,13 @@ const MaterialMasterPage = () => {
         typeof costingDefaults.loss_rate === 'number'
           ? costingDefaults.loss_rate
           : parseDecimal(costingDefaults.loss_rate),
+      // Stage 2 — 税务/采购/效期
+      purchase_entity_id: (record.purchase_entity_id as PurchaseEntityCode | null | undefined) ?? null,
+      tax_included_flag: Boolean(record.tax_included_flag),
+      tax_rate_pct: taxRateNum != null ? Number((taxRateNum * 100).toFixed(4)) : null,
+      price_source: (record.price_source as MaterialPriceSource | null | undefined) ?? null,
+      effective_from: record.effective_from ? dayjs(record.effective_from) : null,
+      effective_to: record.effective_to ? dayjs(record.effective_to) : null,
     })
   }
 
@@ -738,6 +788,35 @@ const MaterialMasterPage = () => {
     if (values.inventory_unit && values.inventory_unit !== editingMaterial.inventory_unit) {
       payload.inventory_unit = values.inventory_unit
     }
+
+    // Stage 2 (Migration 0039) — 税务/采购/效期。
+    // 这些字段是显式提交：哪怕为 null（清空）也要送给后端，由后端写回 NULL。
+    payload.purchase_entity_id =
+      values.purchase_entity_id === undefined ? null : values.purchase_entity_id
+    payload.tax_included_flag = Boolean(values.tax_included_flag)
+    if (values.tax_rate_pct === null || values.tax_rate_pct === undefined) {
+      payload.tax_rate = null
+    } else {
+      const num = Number(values.tax_rate_pct)
+      if (!Number.isFinite(num) || num < 0 || num > 100) {
+        message.error('税率应在 0 ~ 100 之间')
+        return
+      }
+      // 落库为 0~1（Numeric(6,4)）。
+      payload.tax_rate = Number((num / 100).toFixed(4))
+    }
+    payload.price_source = values.price_source ?? null
+    payload.effective_from = values.effective_from ? values.effective_from.format('YYYY-MM-DD') : null
+    payload.effective_to = values.effective_to ? values.effective_to.format('YYYY-MM-DD') : null
+    if (
+      payload.effective_from &&
+      payload.effective_to &&
+      payload.effective_from > payload.effective_to
+    ) {
+      message.error('生效期不能晚于失效期')
+      return
+    }
+
     detailMutation.mutate({
       id: editingMaterial.id,
       payload,
@@ -1048,6 +1127,36 @@ const MaterialMasterPage = () => {
             ) : (
               <Text type="secondary">{bomUnitText}</Text>
             )}
+          </Space>
+        )
+      },
+    },
+    {
+      title: '采购主体',
+      dataIndex: 'purchase_entity_id',
+      key: 'purchase_entity_id',
+      width: 110,
+      render: (value?: string | null) => {
+        if (!value) {
+          return <Text type="secondary">-</Text>
+        }
+        return <Tag>{getPurchaseEntityShort(value)}</Tag>
+      },
+    },
+    {
+      title: '税率',
+      key: 'tax_rate',
+      width: 130,
+      render: (_, record) => {
+        const text = formatTaxRate(record.tax_rate)
+        if (text === '-') {
+          return <Text type="secondary">-</Text>
+        }
+        const suffix = record.tax_included_flag ? '含税' : '不含税'
+        return (
+          <Space size={4}>
+            <Text>{text}</Text>
+            <Tag color={record.tax_included_flag ? 'blue' : undefined}>{suffix}</Tag>
           </Space>
         )
       },
@@ -1516,6 +1625,100 @@ const MaterialMasterPage = () => {
                     showIcon
                     message="说明"
                     description="这些参数会写入 metadata_json.costing_defaults。产品模型中选择/替换该物料时，会自动带入 α/覆盖率/损耗（若模型行仍处于默认值）。"
+                  />
+                </Card>
+
+                <Card
+                  size="small"
+                  title="税务 / 采购 / 效期 (Stage 2)"
+                  style={{ marginBottom: 16 }}
+                >
+                  <Row gutter={16}>
+                    <Col xs={24} md={12}>
+                      <Form.Item
+                        label="采购主体"
+                        name="purchase_entity_id"
+                        extra="v1 用枚举字符串，Phase 2 会迁移到 cost_center_master 真实主体 ID。"
+                      >
+                        <Select
+                          allowClear
+                          placeholder="请选择采购主体"
+                          options={PURCHASE_ENTITY_OPTIONS.map((o) => ({
+                            label: o.label,
+                            value: o.value,
+                          }))}
+                        />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} md={12}>
+                      <Form.Item
+                        label="价格来源"
+                        name="price_source"
+                        extra="该单价的来源（手工 / 30 天均价 / 最近一次 PO / 合同 等）。"
+                      >
+                        <Select
+                          allowClear
+                          placeholder="请选择价格来源"
+                          options={PRICE_SOURCE_OPTIONS.map((o) => ({
+                            label: o.label,
+                            value: o.value,
+                          }))}
+                        />
+                      </Form.Item>
+                    </Col>
+                  </Row>
+                  <Row gutter={16}>
+                    <Col xs={24} md={12}>
+                      <Form.Item
+                        label="含税标志"
+                        name="tax_included_flag"
+                        valuePropName="checked"
+                        extra="True = 物料价已含税；False = 不含税（净价）。默认不含税。"
+                      >
+                        <Switch checkedChildren="含税" unCheckedChildren="不含税" />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} md={12}>
+                      <Form.Item
+                        label="税率 (%)"
+                        name="tax_rate_pct"
+                        extra="0 ~ 100，小数允许（如 13、9、6.5）。落库为 0~1（如 0.13）。"
+                      >
+                        <InputNumber
+                          min={0}
+                          max={100}
+                          step={0.01}
+                          style={{ width: '100%' }}
+                          placeholder="例如 13"
+                        />
+                      </Form.Item>
+                    </Col>
+                  </Row>
+                  <Row gutter={16}>
+                    <Col xs={24} md={12}>
+                      <Form.Item
+                        label="生效期"
+                        name="effective_from"
+                        extra="留空表示「立即生效」。"
+                      >
+                        <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} md={12}>
+                      <Form.Item
+                        label="失效期"
+                        name="effective_to"
+                        extra="留空表示「当前仍有效」。Stage 3 会按发货日期取价。"
+                      >
+                        <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
+                      </Form.Item>
+                    </Col>
+                  </Row>
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="Stage 2 物料字段（v1.3 §4.5）"
+                    description="这 6 个字段是 Hub 物料治理的「坐实底座」。当前 BOM 计算仍直读 unit_price；按 effective_from 取历史价是 Stage 3。宜搭同步 3 种 mode 都不会覆盖这里的本地值。"
                   />
                 </Card>
               </Form>

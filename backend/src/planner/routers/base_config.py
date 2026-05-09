@@ -527,6 +527,29 @@ def update_material(
         metadata_updated = True
     if metadata_updated:
         material.metadata_json = metadata
+
+    # Stage 2 (Migration 0039) — tax / purchase / effective period.
+    # Use __fields_set__ so callers can both set (e.g. tax_rate=0.13) and
+    # clear (e.g. effective_to=null). Skipping the field entirely keeps the
+    # current value unchanged (back-compat for old callers).
+    fields_set = payload.__fields_set__
+    if "purchase_entity_id" in fields_set:
+        value = payload.purchase_entity_id
+        material.purchase_entity_id = value.strip() if isinstance(value, str) and value.strip() else value or None
+    if "tax_included_flag" in fields_set and payload.tax_included_flag is not None:
+        # NOT NULL column with DB default; explicit None is ignored to
+        # avoid violating the constraint on PostgreSQL.
+        material.tax_included_flag = bool(payload.tax_included_flag)
+    if "tax_rate" in fields_set:
+        material.tax_rate = payload.tax_rate
+    if "price_source" in fields_set:
+        value = payload.price_source
+        material.price_source = value.strip() if isinstance(value, str) and value.strip() else value or None
+    if "effective_from" in fields_set:
+        material.effective_from = payload.effective_from
+    if "effective_to" in fields_set:
+        material.effective_to = payload.effective_to
+
     db.commit()
     db.refresh(material)
     return schemas.MaterialRead.from_orm(material)

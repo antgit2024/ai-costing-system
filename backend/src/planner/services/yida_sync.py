@@ -509,6 +509,13 @@ class MaterialSyncService:
             material.source_updated_at = data.source_updated_at
             material.usage_scope = data.usage_scope
             material.bom_notes = data.bom_notes
+            # Stage 2 (Migration 0039) 的 6 个字段不被任何 mode 覆盖：
+            # - purchase_entity_id / tax_included_flag / tax_rate / price_source
+            # - effective_from / effective_to
+            # 宜搭目前没有这 6 个字段的映射；本地手填值要保留。如果未来宜搭加了
+            # 字段映射，可以在 `backend/config/yida_materials.json` 加入 fieldId
+            # 后再来这里追加 `material.purchase_entity_id = data.purchase_entity_id`
+            # 等显式赋值（仅 full mode）。— Cost Rate Hub v1.3 §4.5。
             # IMPORTANT:
             # `raw_form_data` 必须用最新同步结果全量覆盖（不能 merge），否则旧字段缺失/控件变更会导致前端读取到过期值。
             existing_meta = dict(material.metadata_json or {})

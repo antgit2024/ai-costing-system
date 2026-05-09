@@ -17,6 +17,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     and_,
+    false,
 )
 from sqlalchemy.orm import Mapped, relationship
 
@@ -326,6 +327,18 @@ class Material(Base, TimestampMixin, SoftDeleteMixin):
     source_created_at: Mapped[datetime | None] = Column(DateTime)
     source_updated_at: Mapped[datetime | None] = Column(DateTime)
     metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict)
+
+    # ---- Stage 2 (Migration 0039): tax / purchase entity / effective period ----
+    # All 6 are nullable so old rows keep working. v1 only stores them; BOM 计算
+    # 仍走 unit_price，按 effective_from 取价是 Stage 3。
+    purchase_entity_id: Mapped[str | None] = Column(String(36))
+    tax_included_flag: Mapped[bool] = Column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+    tax_rate: Mapped[float | None] = Column(Numeric(6, 4))
+    price_source: Mapped[str | None] = Column(String(32))
+    effective_from: Mapped[date | None] = Column(Date)
+    effective_to: Mapped[date | None] = Column(Date)
 
 
 class VirtualMaterial(Base, TimestampMixin, SoftDeleteMixin):

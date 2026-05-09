@@ -46,6 +46,19 @@ VariantActionType = Literal["replace_material", "add_material"]
 LineVariantAction = Literal["replace_bundle", "replace_self", "remove_self", "add_siblings"]
 
 # ---------------------------------------------------------------------------
+# Stage 2 (Migration 0039) materials 字段语义。v1 用枚举字符串，Phase 2 再换主表 UUID。
+# ---------------------------------------------------------------------------
+PurchaseEntityCode = Literal["一般纳税人", "小规模A", "小规模B"]
+PriceSource = Literal[
+    "manual",
+    "po_avg_30d",
+    "last_po",
+    "contract",
+    "system_imported",
+    "yida_sync",
+]
+
+# ---------------------------------------------------------------------------
 # Cost Rate Hub v1.3 — analytics 可信度徽章 (U7-A)
 # ---------------------------------------------------------------------------
 # 给 4 个 Insights 看板 (Profit / Shop / Sales / AfterSales) 每行附上一枚
@@ -353,6 +366,13 @@ class MaterialRead(BaseModel):
     source_updated_at: Optional[datetime]
     metadata: Dict[str, Any] = Field(alias="metadata_json")
     updated_at: datetime
+    # Stage 2 (Migration 0039) — tax / purchase / effective period
+    purchase_entity_id: Optional[str] = None
+    tax_included_flag: bool = False
+    tax_rate: Optional[Decimal] = None
+    price_source: Optional[str] = None
+    effective_from: Optional[date] = None
+    effective_to: Optional[date] = None
 
     @staticmethod
     def _extract_image_sources(metadata: dict | None) -> list[str]:
@@ -652,6 +672,15 @@ class MaterialUpdateRequest(BaseModel):
     bom_unit_price: Optional[Decimal] = Field(None, ge=0)
     calculation_method: Optional[CalculationMethod] = None
     metadata: Optional[Dict[str, Any]] = Field(default=None, alias="metadata_json")
+    # Stage 2 (Migration 0039) — tax / purchase / effective period
+    # 全部 optional：不传 = 不动；显式传 None = 清空（语义靠 router 处理）。
+    # tax_rate: 0~1（e.g. 0.13 表示 13%）；purchase_entity_id 用枚举字符串。
+    purchase_entity_id: Optional[str] = Field(None, max_length=36)
+    tax_included_flag: Optional[bool] = None
+    tax_rate: Optional[Decimal] = Field(None, ge=0, le=1)
+    price_source: Optional[str] = Field(None, max_length=32)
+    effective_from: Optional[date] = None
+    effective_to: Optional[date] = None
 
 
 class MaterialExportRequest(BaseModel):

@@ -3567,3 +3567,70 @@ To github.com:antgit2024/ai-costing-system.git
 - 后续 Agent 若做"大批量 service 文件改造"建议尽早分主题 commit，避免再次累积到 1700+ 行 diff 难拆。
 - `backend/src/upstream_actions.py` 的 LLM agent 接 `semantic_search` 端点目前依赖外部 `VECTOR_SEARCH_URL=http://127.0.0.1:8810`，部署时需要确认该服务存在或加 feature flag。
 - `frontend/src/utils/http.ts` 的 `installAuthInterceptors` 修复了关键 bug（axios.create 不继承拦截器），但任何 plannerClient/services 之外的 axios.create 实例如果有，仍需要手动调一次该函数 — 建议下次扫一遍 `axios.create` 全引用。
+
+---
+
+## 2026-05-10 07:50 — Materials Stage 2 字段扩展完成快照（Cost Rate Hub v1.3 §4.5 第 1 步）
+
+**任务**：`DOC/agents/briefings/material_stage2_fields_mvp.md` —— `materials` 表加 6 个税务/采购/效期字段（purchase_entity_id / tax_included_flag / tax_rate / price_source / effective_from / effective_to），让物料成本从"近似"变"坐实"，把 Hub 物料治理底座搭起来。
+
+### 5 条完成标准 ✅ 全过
+
+1. ✅ Migration 0039 跑通（PG 三向 upgrade head → downgrade -1 → upgrade head；老物料 6 字段全 NULL/默认 False；现有 BOM/同步零回归）
+2. ✅ `PATCH /api/planner/base-config/materials/{id}` + `GET /materials/{id}` + `GET /materials` 全部暴露 6 新字段，向后兼容（老前端不传新字段零改动；新前端可读可写可清空）
+3. ✅ `/costing/materials` 编辑抽屉「成本参数」Tab 末尾新增「税务/采购/效期 (Stage 2)」Card，6 字段（采购主体 / 含税标志 / 税率% / 价格来源 / 生效期 / 失效期）可填可保存可读回
+4. ✅ `/costing/materials` 列表新增「采购主体」+「税率」2 列；老物料显示 `-`
+5. ✅ 宜搭同步 3 种 mode（full/new_only/core_fields）测试覆盖：6 个本地手填字段任何 mode 下都不被覆盖（`yida_sync.py` 已有逻辑天然兼容；新增 4 个参数化测试守住）
+
+### 关键技术决策
+
+- `purchase_entity_id` v1 用枚举字符串（一般纳税人 / 小规模A / 小规模B），DB 列类型 `VARCHAR(36)` 已为 Phase 2 UUID 留位，不需要再改类型
+- 6 字段全 nullable，`tax_included_flag` 唯一 NOT NULL（默认 FALSE，最保守；用户后续可批量 PATCH 修正）
+- Migration 0039 partial index `WHERE effective_to IS NULL`（不能用 `CURRENT_DATE`，PG 在 index predicate 里要求 IMMUTABLE）
+- 前端税率 UI 用百分比 0~100，提交时 ÷100 落库为 `Numeric(6,4)`（如 13% → 0.1300）
+- BOM 计算 v1 不动（仍直读 `materials.unit_price`），按 `effective_from` 取价是 Stage 3 后续派单
+- 宜搭同步无字段映射 → 3 种 mode 都不写入这 6 字段；未来宜搭加映射后只需在 `yida_materials.json` 加 fieldId
+
+### 关键 commit
+
+- `feat(materials): Stage 2 加 6 个税务/采购/效期字段（Cost Rate Hub v1.3 §4.5）` ← 本次
+  - Migration 0039 + ORM Material + Pydantic schemas + base_config router + yida_sync 注释 + 前端 MaterialMasterPage + types/planner.ts + 12 条参数化测试
+
+### 验收命令实跑结果
+
+```
+# Migration 三向（PG）
+$ python -m alembic upgrade head      # 0038 → 0039 ✓
+$ python -m alembic downgrade -1      # 0039 → 0038 ✓
+$ python -m alembic upgrade head      # 0038 → 0039 ✓
+
+# 新测试
+$ python -m pytest tests/planner/test_materials_stage2_fields.py -v
+... 12 passed ...
+
+# 现有 material 测试零回归
+$ python -m pytest tests/planner/test_material_endpoints.py tests/planner/test_materials.py \
+    tests/planner/test_virtual_material_endpoints.py \
+    tests/planner/test_bom_fills_missing_units_from_material_master.py -v
+... 11 passed ...
+
+# 前端 build
+$ npm -C frontend run build           # ✓ built in 9.16s
+
+# Live PG 读 → 写 → 还原
+... before: 全 None/False / after: 一般纳税人/True/0.1300/manual/2026-05-10/2026-12-31 / reverted ✓
+```
+
+### 不在本次 scope（Stage 2 后续 / Stage 3）
+
+- 月度加权平均价 worker（拉 PO 平均价填 `materials.unit_price`）
+- Hub Tab 1「物料价格治理」卡片
+- BOM 按 `effective_from` 取历史价（Stage 3）
+- 接采购系统/ERP 拉 PO 数据
+- 把 `purchase_entity_id` 字符串迁移到 cost_center_master 真实 UUID（A 路径完成后单独派单）
+
+### 遗留 / 建议
+
+- 设计文档 §13.1 任务能力清单可加一行 U#（Stage 2 物料字段 = 已 ✅）
+- 整个 planner 测试集有 8 条**预先存在**失败（migrations 0031 ALTER COLUMN/ SQLite 不兼容、bom_generate_by_spec_bundle_selector 等），与本次改动无关；`git stash` 验证过同样失败
+- 宜搭如未来加 6 字段映射，只需在 `backend/config/yida_materials.json` 添加 fieldId 后，去 `yida_sync.py:_upsert_material` 的 `full mode` 块追加显式赋值（已留中文 TODO 注释）

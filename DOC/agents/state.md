@@ -3315,3 +3315,75 @@
   - 当发货主链路（SKU 绑定工作台 + spec 预解析工作台 + 发货导入/异常重试 + 成本/利润/退货洞察）稳定运行后，再开启“组合型产品模型 + 自动编码”Phase，优先支持文档中的 **类型三：多幅套装（规则型）**，类型四（非规则型）仍通过人工 BOM 或模板化占位物料处理。
   - 编码方案真正落地时，必须与 `spec_parse_snapshots/bom_snapshots` 打通：编码提取写入解析 trace，产品模型匹配结果写入 BOM 快照 trace，严格遵守“快照不回写、重跑产出新快照”的 Guardrails。
   - 任意试点店铺在电商字段内嵌 `#SxVxFx` 编码前，需先完成“产品模型配置 UI + 编码自动生成 + 运营操作手册”，禁止人工随意造码；试点范围与回滚方案需单独由 Hub/Planner 评审后再派 Backend/Frontend 闭环任务单。
+
+### 2026-05-09 Cost Rate Hub MVP 完成快照（v1.3 落地，U5+U6 合并交付）
+
+- **任务来源**：`DOC/agents/briefings/cost_rate_hub_mvp.md`（U5/U6 合并的全栈大任务单）；新规则首次落地实践。
+- **完成日期（北京时间 GMT+8）**：2026-05-09 21:30
+- **执行 Agent**：`@Fullstack Agent`（按 `task_distribution_standard.md` v2.0 §3.1 自主完成 5~8 天工作量；中间过程未回 Hub 汇报）。
+- **最近一次已确认快照**：本快照即是。
+
+#### 落地内容
+
+1. **Migration 0038 — `cost_rate_master`（PG 生产 + SQLite 测试双兼容）**：
+   - 文件：`backend/migrations/versions/0038_cost_rate_master.py`
+   - 在 `long_tail_cogs_rate_strategies` 表加 11 字段后改名为 `cost_rate_master`：`rate_type` / `scope_type` / `scope_id` / `rate_basis` / `source` / `effective_from` / `effective_to` / `data_quality` / `cost_center_id` / `legal_entity_id` / `production_unit_id`。
+   - 老 long-tail 行 UPDATE 回填：`rate_type='cogs'` / `scope_type='category'` / `scope_id=category` / `rate_basis='pct_of_revenue'` / `source='long_tail_legacy'`。
+   - 兼容视图 `CREATE VIEW long_tail_cogs_rate_strategies AS SELECT * FROM cost_rate_master WHERE rate_type='cogs'`，老 SQL 0 改动。
+   - 双向跑通：`alembic upgrade head` + `alembic downgrade -1`（数据完好）+ `alembic upgrade head` 全部 0 退出码。
+
+2. **ORM 模型升级**（`backend/src/planner/models.py`）：
+   - 新增 `CostRateMaster` 类（`__tablename__ = 'cost_rate_master'`），保留 `LongTailCogsRateStrategy = CostRateMaster` 别名兼容老代码。
+
+3. **Service 层** （`backend/src/planner/services/long_tail_strategy_service.py`）：
+   - 新增 `resolve_overhead_rate(db, *, model_id, category, cost_center_id, as_of) -> ResolvedOverheadRate` — Hub v1.3 §5.1 4 层 resolve 链：`model > category > cost_center > global > 硬兜底 0.30`；返回 `(rate, hit_layer, scope_type, scope_id, source, data_quality, strategy_id)`。
+   - `list_strategies` 新增 `rate_type` 参数（默认 `'cogs'` 兼容老 long-tail UI）。
+   - `create_strategy` / `update_strategy` 接收 11 个 Hub 字段；`rate_type != 'cogs'` 时自动合成 `category = '__<rate_type>__<scope_type>__<scope_id>'`，让现有 `UNIQUE(category)` 约束转为"一 scope 一行"的天然守卫。
+
+4. **bom_generation_service 接入**（`backend/src/planner/services/bom_generation_service.py:2009-2080`）：
+   - `_resolve_overhead_rate` 优先级：① Hub 4 层 resolve → ② version.metadata_json → ③ model.metadata_json → ④ 硬兜底 0.30。
+   - 任一 Hub 层命中即直接返回该层 rate；都没命中时回退到 `metadata_json` 老逻辑，**老模型行为完全不变**。
+
+5. **Router 层**（`backend/src/planner/routers/long_tail_strategies.py`）：
+   - `GET /api/planner/long-tail-strategies?rate_type=cogs|overhead_rate|...|all` — 默认 `cogs` 兼容旧前端。
+   - `POST` / `PATCH` 接收 11 字段，`rate_type='overhead_rate'` 时校验 `scope_type` + `scope_id`（global 除外）。
+   - `POST /resolve-preview` 加 `rate_type='overhead_rate'` 模式，返回 `hit_layer / hit_scope_type / hit_scope_id / data_quality` 给前端徽章。
+
+6. **前端**（`frontend/src/pages/costing/admin/LongTailCogsRatePage.tsx`）：
+   - 改为顶部 Tabs：①`长尾成本兜底（cogs）`（原逻辑不变）+ ②`制造费率治理（overhead_rate）`（新）。
+   - Tab2 表格列：`scope_type` / `scope_id` / `rate` / `rate_basis` / `data_quality`（🟢🟡🔴 徽章）/ `source` / `effective_from` / `enabled`。
+   - Tab2 编辑表单：`scope_type` 下拉（model/category/cost_center/global）+ 动态 `scope_id` 提示 + `rate` + `data_quality` + `source` + `effective_from`。
+   - Tab2 试算面板：填 `model_id / category / cost_center_id` 看命中哪一层。
+   - URL 同步：`?tab=cogs|overhead_rate`（`useSearchParams`，刷新保留）。
+   - 老路由 `/costing/admin/long-tail-cogs-rate` 保留；新增 `/costing/admin/cost-rate-hub` → 重定向 `?tab=overhead_rate`。
+
+#### KB8 端到端验收数据
+
+| 步骤 | 命令/操作 | 结果 |
+|---|---|---|
+| 1. 预查 | `resolve_overhead_rate(model_id=KB8)` 无 Hub 行 | `hard_fallback` rate=0.30 ✓ |
+| 2. POST | `create_strategy(rate_type='overhead_rate', scope_type='model', scope_id=KB8_uuid, rate=0.25)` | id=`7c83bc7b-096e-431b-a266-9ed78a661d74` ✓ |
+| 3. resolve | 同 step 1 重新 resolve | `hit_layer='model'` rate=0.25 ✓ |
+| 4. bom 接入 | `bom_generation_service._resolve_overhead_rate` over KB8 published version | 返回 0.25（不再是 0.30）✓ |
+| 5. KB8 模拟 | 物料 26.93 + 人工 7.34 + 制造费 8.5675 = 合计 42.84 | 折算占比 **20.00%**（旧 23.08%）✓ |
+
+#### 影响范围
+
+- **正向影响**：KB8 + 任何配了 Hub 行的模型（按 4 层链命中），实时核价 / 发货台账"成本拆分" / `cost_overhead_total` 都会反映 Hub 设置的真实费率。
+- **零回归**：未配 Hub 行的模型完全沿用老 `metadata_json + 0.30 兜底` 链路，行为不变；老 long-tail 27 单测全过（`pytest backend/tests/planner/test_long_tail_strategy.py backend/tests/planner/test_long_tail_auto_suggest.py -q` → 27 passed）。
+- **新单测**：`backend/tests/planner/test_cost_rate_hub.py` 17/17 全过（covers 4 层 resolve / scope_id 校验 / data_quality 枚举 / metadata_json 回退 / 硬兜底 / API 往返 / 老 cogs 兼容）。
+- **API 契约**：`?rate_type=cogs` 默认兼容旧前端调用；新 `?rate_type=overhead_rate` 给 Hub UI；body 11 个 Hub 字段全 optional 默认。
+
+#### 下一步派单候选（按优先级）
+
+1. **U7：4 个 Insights 看板加成本可信度徽章 + 三视图切换**（最直接：Hub 数据已落地，`shipment_costing_results.metadata_json` 已留 `cost_quality` 入口）→ 派单文件名建议 `frontend_insights_quality_badges_mvp.md`。
+2. **`cost_center` 主数据表新建** + 6 个班组初稿数据（H4 决策点）→ 让 Hub 第 3 层 cost_center 真正可用；派单文件名建议 `cost_center_master_mvp.md`。
+3. **Stage 2 物料端 4 字段**（`materials.purchase_entity_id` / `tax_rate` / `tax_included_flag` / `effective_from`）— 物料成本固化的入口。
+4. **U1/U2/U3/U4 v1.3 同步**（按需触发 — 用户启动相关功能时再做，避免跨文件风暴）。
+
+#### 已知遗留 / v2 优化空间
+
+- `cost_rate_master.category` 仍带 `UNIQUE` 约束；overhead_rate 行靠合成 `__overhead_rate__<scope_type>__<scope_id>` 兜底（一 scope 一行的硬约束）。多版本目前走"老 archive + 新 create"模式；v2 新建独立 `cost_rate_history` 表后可移除合成 + 改用 `(rate_type, scope_type, scope_id, effective_from)` 复合 unique。
+- `cost_center_id` / `legal_entity_id` / `production_unit_id` 是 `String(36)` 留位字段（v1 全 NULL）；接入 Stage 2 时要看 `cost_center` 主数据是否需要双向 FK。
+- 4 个 Insights 看板尚未读 `cost_quality`（U7 单独派）。
+- `bom_generation_service.py:1129/1487` 两处 `Decimal("0.3")` accumulator（与本任务无关，未动；属 bundle merge 默认值，按设计保留）。

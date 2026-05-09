@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+import re
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
@@ -1683,7 +1684,15 @@ def _augment_runtime_tokens(
     if bound_version_id:
         _add(f"BOUND_VERSION:{bound_version_id}")
     if sku_code:
-        _add(f"SKU:{str(sku_code).strip()}")
+        sku = str(sku_code).strip()
+        _add(f"SKU:{sku}")
+        # 商家编码中允许放“模型-变体”短码（如 KB8-001 / KB8-MG）。
+        # 线上商家编码有时会额外拼接店铺/渠道后缀；这里抽取短码作为独立 token，
+        # 让变体条件只维护 SKU:KB8-001，不需要按每个后缀重复维护。
+        for m in re.findall(r"\b([A-Z0-9]{3}-[A-Z0-9]{2,8})\b", sku, flags=re.IGNORECASE):
+            code = str(m).strip().upper()
+            _add(code)
+            _add(f"SKU:{code}")
     return out
 
 
@@ -2000,15 +2009,45 @@ def _compute_process_costing(
 def _resolve_overhead_rate(db: Session, *, model_version_processes: List[models.ModelVersionProcess]) -> Decimal:
     """
     Resolve manufacturing overhead rate for costing.
-    Priority:
-    - version.metadata_json.costing.overhead_rate / manufacturing_overhead_rate
-    - model.metadata_json.costing.overhead_rate / manufacturing_overhead_rate
-    Fallback: 0.3 (consistent with existing UI stats / preview_model_cost).
+
+    v1.3 Cost Rate Hub priority (Migration 0038 / cost_rate_hub_design_v1.md §5.1):
+        1. cost_rate_master rate_type='overhead_rate' — model > category >
+           cost_center > global (Hub-managed, finance editable).
+        2. version.metadata_json.costing.overhead_rate / manufacturing_overhead_rate
+        3. model.metadata_json.costing.overhead_rate / manufacturing_overhead_rate
+        4. Hard fallback 0.30 (consistent with existing UI stats /
+           preview_model_cost).
+
+    Layer 1 is the Hub. If any of the 4 Hub layers (model / category /
+    cost_center / global) hits a row, that rate wins and metadata_json is
+    ignored — this is exactly how finance is supposed to override the
+    historical "0.30 兜底" behaviour without needing engineering changes.
+
+    Layers 2 and 3 are kept so existing models with metadata_json overrides
+    keep working unchanged (no surprise behaviour change for KB8 peers
+    that haven't been onboarded to the Hub yet).
     """
     version_id = model_version_processes[0].version_id if model_version_processes else None
     version = db.get(models.ProductModelVersion, version_id) if version_id else None
     model = db.get(models.ProductModel, version.model_id) if version else None
 
+    # === v1.3: Hub 4-layer resolve (model > category > cost_center > global) ===
+    try:
+        from .long_tail_strategy_service import resolve_overhead_rate as _hub_resolve
+        hub_hit = _hub_resolve(
+            db,
+            model_id=getattr(model, "id", None) if model else None,
+            category=getattr(model, "category", None) if model else None,
+            cost_center_id=None,  # v1: cost_center wiring is Stage 2.
+        )
+        if hub_hit.hit_layer in {"model", "category", "cost_center", "global"}:
+            return hub_hit.rate
+    except Exception:  # noqa: BLE001
+        # Defensive: a failure in Hub lookup must not break costing for
+        # the entire fleet. Fall through to legacy metadata_json chain.
+        pass
+
+    # === Legacy: metadata_json overrides (kept for backwards compat) ===
     def _read(meta: Any) -> Optional[Decimal]:
         if not isinstance(meta, dict):
             return None

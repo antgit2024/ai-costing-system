@@ -92,6 +92,27 @@
 - 前端（构建）：
   - `npm -C frontend run build`
 
+### 1.4.5) Cost Rate Hub MVP（v1.3 落地，2026-05-09）硬验收（自主选 1~3 条）
+
+> 口径：按 `agent_rules.md` v2.0 §7（交接成本 ≤ 编码成本），不强求"必须 0 退出码"。
+> 候选命令，执行 Agent 自主选 1~3 条最有代表性的跑通即可。
+
+- 后端单测（Hub 4 层 resolve + bom 接入 + API 往返 17 项）：
+  - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_cost_rate_hub.py -q`
+- 后端单测（老 long-tail 0 回归 27 项）：
+  - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_long_tail_strategy.py backend/tests/planner/test_long_tail_auto_suggest.py -q`
+- Migration 双向（PG 生产 / SQLite 测试都验证）：
+  - `cd backend && source .venv/bin/activate && alembic upgrade head && alembic downgrade -1 && alembic upgrade head`
+- KB8 端到端 API 验收（需要后端跑在 8002）：
+  - `KB8=464ca78d-81d6-40e5-8370-66d94ce49312`
+  - `curl -X POST http://localhost:8002/api/planner/long-tail-strategies -H 'Content-Type: application/json' -d "{\"rate_type\":\"overhead_rate\",\"scope_type\":\"model\",\"scope_id\":\"$KB8\",\"rate\":0.25,\"rate_basis\":\"pct_of_cost\",\"data_quality\":\"yellow\",\"note\":\"v1.3 Hub 验收\"}"`
+  - `curl -X POST http://localhost:8002/api/planner/long-tail-strategies/resolve-preview -H 'Content-Type: application/json' -d "{\"rate_type\":\"overhead_rate\",\"model_id\":\"$KB8\"}"`
+  - 期望返回 `rate=0.25 hit_layer=model`。
+- 前端构建：
+  - `npm -C frontend run build`
+- 前端入口验证（路由）：
+  - `grep -nF "/costing/admin/cost-rate-hub" frontend/src/App.tsx`
+
 ### 1.5) 数据洞察（店铺数据：按渠道汇总）MVP 硬验收（必须）
 
 > 口径：新增“店铺数据”页面与按渠道聚合接口；必须全部 **0 退出码**。

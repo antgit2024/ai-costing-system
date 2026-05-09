@@ -901,6 +901,207 @@ class MaterialSyncJob(Base, TimestampMixin):
     finished_at: Mapped[datetime | None] = Column(DateTime)
 
 
+class IntegrationSyncRun(Base, TimestampMixin):
+    """
+    A unified sync run for any external system (e.g. jackyun, pod, tmall, manual_xlsx).
+
+    One IntegrationSyncRun = one logical pull/push session with a single upstream API method.
+    """
+
+    __tablename__ = "integration_sync_runs"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    source_system: Mapped[str] = Column(String(32), nullable=False, index=True)
+    sync_type: Mapped[str] = Column(String(64), nullable=False, index=True)
+    api_method: Mapped[str] = Column(String(128), nullable=False, index=True)
+    direction: Mapped[str] = Column(String(16), nullable=False, default="pull", index=True)
+    status: Mapped[str] = Column(String(32), nullable=False, default="pending", index=True)
+    request_params_json: Mapped[Dict[str, Any]] = Column("request_params", JSON, default=dict)
+    total_rows: Mapped[int] = Column(Integer, nullable=False, default=0)
+    inserted_rows: Mapped[int] = Column(Integer, nullable=False, default=0)
+    updated_rows: Mapped[int] = Column(Integer, nullable=False, default=0)
+    skipped_rows: Mapped[int] = Column(Integer, nullable=False, default=0)
+    error_rows: Mapped[int] = Column(Integer, nullable=False, default=0)
+    cursor_start: Mapped[str | None] = Column(String(64))
+    cursor_end: Mapped[str | None] = Column(String(64))
+    context_id: Mapped[str | None] = Column(String(64), index=True)
+    triggered_by: Mapped[str | None] = Column(String(64))
+    error_message: Mapped[str | None] = Column(Text)
+    started_at: Mapped[datetime | None] = Column(DateTime, index=True)
+    finished_at: Mapped[datetime | None] = Column(DateTime)
+    result_json: Mapped[Dict[str, Any]] = Column("result", JSON, default=dict)
+
+    records: Mapped[List["IntegrationApiRecord"]] = relationship(
+        "IntegrationApiRecord",
+        primaryjoin="IntegrationSyncRun.id==IntegrationApiRecord.sync_run_id",
+        back_populates="sync_run",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class IntegrationApiRecord(Base, TimestampMixin):
+    """
+    Raw payload archive for any upstream record (one-row-per-business-entity).
+
+    Use external_id + external_line_id (optional) to dedupe.
+    Business tables can reference this via source_payload_id for full traceability.
+
+    ``schema_version`` is the contract identifier (e.g. ``jackyun.shipment.v1``)
+    used by the matching mapper. When upstream changes its schema, register a
+    ``v2`` mapper and replay records by version.
+    """
+
+    __tablename__ = "integration_api_records"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    sync_run_id: Mapped[str | None] = Column(
+        String(36), ForeignKey("integration_sync_runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    source_system: Mapped[str] = Column(String(32), nullable=False, index=True)
+    api_method: Mapped[str] = Column(String(128), nullable=False, index=True)
+    record_type: Mapped[str] = Column(String(64), nullable=False, index=True)
+    external_id: Mapped[str] = Column(String(255), nullable=False, index=True)
+    external_line_id: Mapped[str | None] = Column(String(255), index=True)
+    payload_hash: Mapped[str] = Column(String(64), nullable=False, index=True)
+    payload_bytes: Mapped[int | None] = Column(Integer)
+    schema_version: Mapped[str | None] = Column(String(64), index=True)
+    payload_json: Mapped[Dict[str, Any]] = Column("payload", JSON, default=dict)
+    fetched_at: Mapped[datetime | None] = Column(DateTime, index=True)
+    processed_at: Mapped[datetime | None] = Column(DateTime)
+    status: Mapped[str] = Column(String(32), nullable=False, default="pending", index=True)
+    error_message: Mapped[str | None] = Column(Text)
+    metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict)
+
+    sync_run: Mapped["IntegrationSyncRun"] = relationship("IntegrationSyncRun", back_populates="records")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "source_system",
+            "api_method",
+            "record_type",
+            "external_id",
+            "external_line_id",
+            "schema_version",
+            name="uq_integration_api_record_identity",
+        ),
+    )
+
+
+class IntegrationApiCallLog(Base, TimestampMixin):
+    """
+    Per-HTTP-call log for any upstream call (request/response/timing/error).
+
+    Keep small; payloads in `request`/`response` JSON are truncated to a reasonable size.
+    """
+
+    __tablename__ = "integration_api_call_logs"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    sync_run_id: Mapped[str | None] = Column(
+        String(36), ForeignKey("integration_sync_runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    source_system: Mapped[str] = Column(String(32), nullable=False, index=True)
+    api_method: Mapped[str] = Column(String(128), nullable=False, index=True)
+    direction: Mapped[str] = Column(String(16), nullable=False, default="outbound", index=True)
+    http_status: Mapped[int | None] = Column(Integer)
+    biz_code: Mapped[str | None] = Column(String(32), index=True)
+    biz_sub_code: Mapped[str | None] = Column(String(64), index=True)
+    duration_ms: Mapped[int | None] = Column(Integer)
+    context_id: Mapped[str | None] = Column(String(64), index=True)
+    request_json: Mapped[Dict[str, Any]] = Column("request", JSON, default=dict)
+    response_json: Mapped[Dict[str, Any]] = Column("response", JSON, default=dict)
+    error_message: Mapped[str | None] = Column(Text)
+    requested_at: Mapped[datetime | None] = Column(DateTime, default=utcnow, index=True)
+
+
+class IntegrationSyncWatermark(Base, TimestampMixin):
+    """
+    High-water-mark per (source_system, sync_type) for incremental pulls.
+
+    Each successful sync run advances the watermark so the next run picks up
+    where the last one left off. Decoupling this from individual sync_run rows
+    avoids relying on history scans to compute deltas.
+    """
+
+    __tablename__ = "integration_sync_watermarks"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    source_system: Mapped[str] = Column(String(32), nullable=False, index=True)
+    sync_type: Mapped[str] = Column(String(64), nullable=False, index=True)
+    watermark_field: Mapped[str] = Column(String(64), nullable=False)
+    watermark_value: Mapped[str | None] = Column(String(64), index=True)
+    cursor_extra_json: Mapped[Dict[str, Any]] = Column("cursor_extra", JSON, default=dict)
+    last_sync_run_id: Mapped[str | None] = Column(String(36))
+    last_advanced_at: Mapped[datetime | None] = Column(DateTime, index=True)
+    notes: Mapped[str | None] = Column(Text)
+
+    __table_args__ = (
+        UniqueConstraint("source_system", "sync_type", name="uq_integration_sync_watermark_identity"),
+    )
+
+
+class IntegrationDeadLetter(Base, TimestampMixin):
+    """
+    Generic dead-letter queue for any per-record processing failure.
+
+    Producers (mappers / writeback workers) call ``record_dead_letter(...)``
+    when a single record fails to process so the rest of the batch can keep
+    going. Operators replay or discard from here.
+    """
+
+    __tablename__ = "integration_dead_letters"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    source_system: Mapped[str] = Column(String(32), nullable=False, index=True)
+    api_method: Mapped[str | None] = Column(String(128), index=True)
+    record_type: Mapped[str | None] = Column(String(64), index=True)
+    stage: Mapped[str] = Column(String(32), nullable=False, default="mapper", index=True)
+    sync_run_id: Mapped[str | None] = Column(
+        String(36), ForeignKey("integration_sync_runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    source_payload_id: Mapped[str | None] = Column(
+        String(36), ForeignKey("integration_api_records.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    external_id: Mapped[str | None] = Column(String(255), index=True)
+    external_line_id: Mapped[str | None] = Column(String(255), index=True)
+    error_type: Mapped[str | None] = Column(String(128), index=True)
+    error_message: Mapped[str | None] = Column(Text)
+    payload_snapshot_json: Mapped[Dict[str, Any]] = Column("payload_snapshot", JSON, default=dict)
+    attempt: Mapped[int] = Column(Integer, nullable=False, default=1)
+    status: Mapped[str] = Column(String(32), nullable=False, default="open", index=True)
+    last_attempt_at: Mapped[datetime | None] = Column(DateTime, index=True)
+    resolved_at: Mapped[datetime | None] = Column(DateTime)
+    resolved_by: Mapped[str | None] = Column(String(64))
+    metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict)
+
+
+class IntegrationWritebackJob(Base, TimestampMixin):
+    """
+    Outbound write-back queue (e.g. push memo / process notes back to ERP).
+
+    A scheduler picks up `pending` jobs, executes them via the matching integration client,
+    and updates status (succeeded / failed / retrying).
+    """
+
+    __tablename__ = "integration_writeback_jobs"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    source_system: Mapped[str] = Column(String(32), nullable=False, index=True)
+    api_method: Mapped[str] = Column(String(128), nullable=False, index=True)
+    target_type: Mapped[str] = Column(String(64), nullable=False, index=True)
+    target_id: Mapped[str] = Column(String(255), nullable=False, index=True)
+    payload_json: Mapped[Dict[str, Any]] = Column("payload", JSON, default=dict)
+    status: Mapped[str] = Column(String(32), nullable=False, default="pending", index=True)
+    attempt: Mapped[int] = Column(Integer, nullable=False, default=0)
+    max_attempts: Mapped[int] = Column(Integer, nullable=False, default=5)
+    next_run_at: Mapped[datetime | None] = Column(DateTime, index=True)
+    last_attempt_at: Mapped[datetime | None] = Column(DateTime)
+    last_error: Mapped[str | None] = Column(Text)
+    requested_by: Mapped[str | None] = Column(String(64))
+    metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict)
+
+
 class ShipmentImportBatch(Base, TimestampMixin):
     __tablename__ = "shipment_import_batches"
 
@@ -947,12 +1148,12 @@ class ShipmentLine(Base, TimestampMixin, SoftDeleteMixin):
     )
     row_index: Mapped[int] = Column(Integer, nullable=False, default=0)
 
-    shipment_no: Mapped[str | None] = Column(String(64), index=True)
-    order_no: Mapped[str | None] = Column(String(64), index=True)
-    product_link_id: Mapped[str | None] = Column(String(128), index=True)
+    shipment_no: Mapped[str | None] = Column(String(255), index=True)
+    order_no: Mapped[str | None] = Column(String(255), index=True)
+    product_link_id: Mapped[str | None] = Column(String(255), index=True)
     completed_at: Mapped[datetime | None] = Column(DateTime, index=True)
-    channel: Mapped[str | None] = Column(String(128))
-    sku_code: Mapped[str | None] = Column(String(64), index=True)
+    channel: Mapped[str | None] = Column(String(255))
+    sku_code: Mapped[str | None] = Column(String(255), index=True)
     spec_text: Mapped[str | None] = Column(Text)
     spec_hash: Mapped[str | None] = Column(String(64), index=True)
     qty: Mapped[float | None] = Column(Numeric(18, 6))
@@ -963,6 +1164,53 @@ class ShipmentLine(Base, TimestampMixin, SoftDeleteMixin):
     revision_no: Mapped[int] = Column(Integer, nullable=False, default=1)
     superseded_by_id: Mapped[str | None] = Column(String(36), ForeignKey("shipment_lines.id"))
     is_active: Mapped[bool] = Column(Boolean, nullable=False, default=True)
+
+    tag: Mapped[str | None] = Column(Text, index=True)
+
+    # generic source provenance (works for xlsx/jky api/pod/...)
+    source_system: Mapped[str | None] = Column(String(32), index=True)
+    source_record_id: Mapped[str | None] = Column(String(255), index=True)
+    source_line_id: Mapped[str | None] = Column(String(255), index=True)
+    source_payload_id: Mapped[str | None] = Column(
+        String(36), ForeignKey("integration_api_records.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
+    # business shared fields (useful regardless of source)
+    erp_order_no: Mapped[str | None] = Column(String(255), index=True)
+    platform_order_no: Mapped[str | None] = Column(String(255), index=True)
+    sent_at: Mapped[datetime | None] = Column(DateTime, index=True)
+    logistic_no: Mapped[str | None] = Column(String(128), index=True)
+    logistic_name: Mapped[str | None] = Column(String(128))
+    warehouse_code: Mapped[str | None] = Column(String(64), index=True)
+    warehouse_name: Mapped[str | None] = Column(String(255))
+    seller_memo: Mapped[str | None] = Column(Text)
+    buyer_memo: Mapped[str | None] = Column(Text)
+
+    # Jackyun v2 wms.order.query-info.page header extensions (migration 0036).
+    # These power 发货台账 detail drawer + reverse-logistics inventory checks
+    # without parsing raw_row_json on every render.
+    order_status_name: Mapped[str | None] = Column(String(64), index=True)
+    logistic_type_name: Mapped[str | None] = Column(String(64), index=True)
+    logistic_code: Mapped[str | None] = Column(String(32), index=True)
+    wave_no: Mapped[str | None] = Column(String(64), index=True)
+    customer_name: Mapped[str | None] = Column(String(255))
+    picker: Mapped[str | None] = Column(String(64))
+    packer: Mapped[str | None] = Column(String(64))
+    checker: Mapped[str | None] = Column(String(64))
+    check_started_at: Mapped[datetime | None] = Column(DateTime)
+    paid_at: Mapped[datetime | None] = Column(DateTime, index=True)
+    ordered_at: Mapped[datetime | None] = Column(DateTime, index=True)
+    trade_type: Mapped[int | None] = Column(Integer, index=True)
+    trade_type_msg: Mapped[str | None] = Column(String(64))
+
+    # Jackyun v2 goodsDetail extensions.
+    unit_price: Mapped[float | None] = Column(Numeric(18, 6))
+    unit_of_measure: Mapped[str | None] = Column(String(32))
+    category_name: Mapped[str | None] = Column(String(128), index=True)
+    goods_name: Mapped[str | None] = Column(String(255))
+    goods_no: Mapped[str | None] = Column(String(128), index=True)
+    is_gift: Mapped[bool | None] = Column(Boolean)
+    actual_qty: Mapped[float | None] = Column(Numeric(18, 6))
 
     raw_row_json: Mapped[Dict[str, Any]] = Column("raw_row", JSON, default=dict)
     normalize_warnings_json: Mapped[List[Dict[str, Any]]] = Column("normalize_warnings", JSON, default=list)
@@ -1150,6 +1398,25 @@ class AfterSalesLine(Base, TimestampMixin, SoftDeleteMixin):
     sku_code: Mapped[str | None] = Column(String(64), index=True)
 
     external_line_key_hash: Mapped[str] = Column(String(64), nullable=False, unique=True, index=True)
+
+    tag: Mapped[str | None] = Column(Text, index=True)
+
+    # generic source provenance
+    source_system: Mapped[str | None] = Column(String(32), index=True)
+    source_record_id: Mapped[str | None] = Column(String(255), index=True)
+    source_line_id: Mapped[str | None] = Column(String(255), index=True)
+    source_payload_id: Mapped[str | None] = Column(
+        String(36), ForeignKey("integration_api_records.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
+    # business shared fields
+    erp_order_no: Mapped[str | None] = Column(String(255), index=True)
+    platform_order_no: Mapped[str | None] = Column(String(255), index=True)
+    warehouse_code: Mapped[str | None] = Column(String(64), index=True)
+    warehouse_name: Mapped[str | None] = Column(String(255))
+    status: Mapped[str | None] = Column(String(64), index=True)
+    status_name: Mapped[str | None] = Column(String(128))
+
     raw_row_json: Mapped[Dict[str, Any]] = Column("raw_row", JSON, default=dict)
     normalize_warnings_json: Mapped[List[Dict[str, Any]]] = Column("normalize_warnings", JSON, default=list)
     metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict)
@@ -1187,6 +1454,11 @@ class SkuMaster(Base, TimestampMixin, SoftDeleteMixin):
     images_json: Mapped[Dict[str, Any]] = Column("images", JSON, default=dict)
     match_status: Mapped[str | None] = Column(String(64))
     source_updated_at: Mapped[datetime | None] = Column(DateTime)
+    source_system: Mapped[str | None] = Column(String(32), index=True)
+    source_record_id: Mapped[str | None] = Column(String(255), index=True)
+    source_payload_id: Mapped[str | None] = Column(
+        String(36), ForeignKey("integration_api_records.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict)
 
 
@@ -1214,9 +1486,100 @@ class ShopSkuMapping(Base, TimestampMixin, SoftDeleteMixin):
     match_status: Mapped[str | None] = Column(String(64))
     match_method: Mapped[str | None] = Column(String(64))
     source_updated_at: Mapped[datetime | None] = Column(DateTime)
+    source_system: Mapped[str | None] = Column(String(32), index=True)
+    source_record_id: Mapped[str | None] = Column(String(255), index=True)
+    source_line_id: Mapped[str | None] = Column(String(255), index=True)
+    source_payload_id: Mapped[str | None] = Column(
+        String(36), ForeignKey("integration_api_records.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    writeback_status: Mapped[str | None] = Column(String(32), index=True)
+    last_writeback_at: Mapped[datetime | None] = Column(DateTime)
+    last_writeback_message: Mapped[str | None] = Column(Text)
     metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict)
 
     __table_args__ = (
         UniqueConstraint("channel", "platform_sku_id", "is_archived", name="uq_shop_sku_channel_platform_sku_active"),
     )
+
+
+class TmallSkuGeneratorTemplate(Base, TimestampMixin, SoftDeleteMixin):
+    __tablename__ = "tmall_sku_generator_templates"
+
+    id: Mapped[str] = Column(String(64), primary_key=True)
+    name: Mapped[str] = Column(String(255), nullable=False)
+    type: Mapped[str] = Column(String(64), nullable=False, default="家居布艺")
+    published_at: Mapped[datetime | None] = Column(DateTime)
+    matrix_count: Mapped[int | None] = Column(Integer)
+    config_json: Mapped[Dict[str, Any]] = Column("config", JSON, default=dict, nullable=False)
+
+
+class CostRateMaster(Base, TimestampMixin, SoftDeleteMixin):
+    """Cost Rate Hub v1.3 master table (formerly ``long_tail_cogs_rate_strategies``).
+
+    Migration 0038 renamed the table from ``long_tail_cogs_rate_strategies``
+    to ``cost_rate_master`` and added 11 fields so all rate types share one
+    4-layer scope chain. Legacy long-tail rows stay 100% backwards
+    compatible — they get ``rate_type='cogs'`` / ``scope_type='category'`` /
+    ``scope_id=category`` and old code paths still read them through the
+    compatibility view ``long_tail_cogs_rate_strategies`` (which filters
+    ``WHERE rate_type='cogs'``).
+
+    Resolution chains (one per ``rate_type``):
+
+    Long-tail cogs (``rate_type='cogs'``, see
+    ``long_tail_strategy_service.resolve_rate_for_sku``):
+      1. SkuMaster.metadata_json.long_tail_category — explicit human override
+      2. keyword match against SkuMaster.spec_text + product_name (highest
+         priority strategy wins; ties broken by created_at)
+      3. strategy with ``category='default'`` if present
+      4. settings.long_tail_cogs_rate (legacy global fallback)
+
+    Overhead rate (``rate_type='overhead_rate'``, see
+    ``long_tail_strategy_service.resolve_overhead_rate``):
+      1. model       (scope_type='model',       scope_id=<model_id>)
+      2. category    (scope_type='category',    scope_id=<category>)
+      3. cost_center (scope_type='cost_center', scope_id=<cost_center_id>)
+      4. global      (scope_type='global',      scope_id=NULL)
+
+    Audit: every save bumps ``metadata_json.history`` with old/new rate +
+    keywords + actor + timestamp. Historical BomSnapshots already record
+    the actual rate used in trace_json, so changing this table never
+    rewrites history (reports stay stable).
+
+    The legacy class name ``LongTailCogsRateStrategy`` is kept as an alias
+    below so existing imports keep working.
+    """
+
+    __tablename__ = "cost_rate_master"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    category: Mapped[str] = Column(String(128), nullable=False, unique=True)
+    rate: Mapped[float] = Column(Numeric(6, 4), nullable=False)
+    keywords_json: Mapped[List[str]] = Column("keywords", JSON, default=list, nullable=False)
+    priority: Mapped[int] = Column(Integer, nullable=False, default=100)
+    enabled: Mapped[bool] = Column(Boolean, nullable=False, default=True)
+    note: Mapped[str | None] = Column(Text)
+    metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict, nullable=False)
+
+    # ---- v1.3 Cost Rate Hub fields (Migration 0038) ----
+    # Default 'cogs' so existing long-tail rows keep their semantics.
+    rate_type: Mapped[str] = Column(String(32), nullable=False, default="cogs", server_default="cogs")
+    scope_type: Mapped[str] = Column(String(32), nullable=False, default="category", server_default="category")
+    scope_id: Mapped[str | None] = Column(String(128))
+    rate_basis: Mapped[str] = Column(
+        String(32), nullable=False, default="pct_of_revenue", server_default="pct_of_revenue"
+    )
+    source: Mapped[str] = Column(String(64), nullable=False, default="manual", server_default="manual")
+    effective_from: Mapped[datetime | None] = Column(DateTime)
+    effective_to: Mapped[datetime | None] = Column(DateTime)
+    data_quality: Mapped[str | None] = Column(String(16))  # green / yellow / red
+    cost_center_id: Mapped[str | None] = Column(String(36))
+    legal_entity_id: Mapped[str | None] = Column(String(36))
+    production_unit_id: Mapped[str | None] = Column(String(36))
+
+
+# Backwards-compat alias: the original Issue 28 model class. Existing code
+# (services, routers, tests) imports ``LongTailCogsRateStrategy`` and that
+# must keep working through the migration window.
+LongTailCogsRateStrategy = CostRateMaster
 

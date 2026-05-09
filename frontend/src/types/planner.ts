@@ -803,6 +803,7 @@ export interface ProductModel {
   standard_version_count?: number
   current_published_standard_version_id?: string | null
   current_published_standard_version_label?: string | null
+  current_published_variant_codes?: Array<{ variant_code: string; material_name?: string | null }>
   // list perf: avoid N+1 version fetch just to render thumbnail
   latest_sample_version_id?: string | null
 }
@@ -1467,6 +1468,11 @@ export interface ShipmentLineListItem {
   bundle_preset_selector?: string | null
   bound_model_code?: string | null
   bound_model_name?: string | null
+  // 与 SkuMaster.bound_variant_label 同源：列表后端从 sku_master.metadata_json.bound_variant_code
+  // 反查 ProductModelLineVariant.metadata_json.display_name 拼出 "麻感冰丝(KB8-001)"。
+  // 仅"已绑定具体变体"的发货行有值；按"模型基础线"绑的（兜底）为 null，前端回退到 model 名展示。
+  bound_variant_code?: string | null
+  bound_variant_label?: string | null
   bound_version_label?: string | null
   spec_text?: string | null
   spec_hash?: string | null
@@ -1486,6 +1492,45 @@ export interface ShipmentLineListItem {
   mismatch_warnings?: string[]
   suspected_size_anomaly?: boolean
   size_anomaly_detail?: string | null
+  /**
+   * SKU 主档「数据质量」状态。来自 SkuMaster.metadata.data_quality_status，
+   * 目前只有 "spu_attribute_conflict"——即同一条码历史发货跨多个不相关品类。
+   * 仅用于 UI 灰色 Tag 提示运营这是数据脏 SKU、自动绑定不可信。
+   * mark_only：不影响成本计算流程。
+   */
+  sku_data_quality_status?: string | null
+
+  // Jackyun v2 wms.order.query-info.page.v2 extensions (backend migration 0036).
+  // All optional; older rows (pre-0036 backfill or Excel imports) may be null.
+  erp_order_no?: string | null
+  platform_order_no?: string | null
+  sent_at?: string | null
+  paid_at?: string | null
+  ordered_at?: string | null
+  check_started_at?: string | null
+  order_status_name?: string | null
+  trade_type?: number | null
+  trade_type_msg?: string | null
+  customer_name?: string | null
+  logistic_no?: string | null
+  logistic_name?: string | null
+  logistic_type_name?: string | null
+  logistic_code?: string | null
+  warehouse_code?: string | null
+  warehouse_name?: string | null
+  wave_no?: string | null
+  picker?: string | null
+  packer?: string | null
+  checker?: string | null
+  seller_memo?: string | null
+  buyer_memo?: string | null
+  unit_price?: string | null
+  unit_of_measure?: string | null
+  category_name?: string | null
+  goods_name?: string | null
+  goods_no?: string | null
+  is_gift?: boolean | null
+  actual_qty?: string | null
 }
 
 export interface ShipmentLineListResponse extends PaginatedResponse<ShipmentLineListItem> {}
@@ -1511,6 +1556,89 @@ export interface ShipmentLineClearSnapshotsResponse {
   skipped_already_cleared: number
   skipped_missing_barcode: number
   errors: Array<Record<string, unknown>>
+}
+
+// Auto-resolve pending shipment lines (powers 「📦 业务管理 > 🚚 发货管理 > 🔴 待处理」 「⚡ 一键自动绑定」 banner)
+// Backed by /api/planner/shipments/lines/auto-resolve/{preview,execute}
+export interface ShipmentLinesAutoResolveRequest {
+  days?: number
+  limit?: number
+  sku_codes?: string[]
+  requested_by?: string
+}
+
+export interface ShipmentLinesAutoResolveCandidate {
+  shipment_line_id: string
+  shipment_line_count_for_sku: number
+  sku_code: string
+  channel?: string | null
+  spec_text?: string | null
+  model_id?: string | null
+  model_code?: string | null
+  model_name?: string | null
+  version_id?: string | null
+  version_label?: string | null
+  match_method?: string | null
+  matched_keyword?: string | null
+}
+
+export interface ShipmentLinesAutoResolvePreviewResponse {
+  scanned_days: number
+  total_pending_lines: number
+  unique_unbound_skus: number
+  candidates_count: number
+  items: ShipmentLinesAutoResolveCandidate[]
+}
+
+export interface ShipmentLinesAutoResolveExecuteItem {
+  shipment_line_id: string
+  sku_code: string
+  status: 'ok' | 'skipped_no_batch' | 'snapshot_failed' | 'error'
+  bom_snapshot_id?: string | null
+  error?: string | null
+}
+
+export interface ShipmentLinesAutoResolveExecuteResponse {
+  scanned_days: number
+  preview: ShipmentLinesAutoResolvePreviewResponse
+  bound_skus_count: number
+  skipped_already_bound: number
+  snapshots_created: number
+  lines_resolved: number
+  exceptions_resolved: number
+  bind_errors: Array<Record<string, unknown>>
+  snapshot_errors: Array<Record<string, unknown>>
+  items: ShipmentLinesAutoResolveExecuteItem[]
+}
+
+// Backed by GET /api/planner/shipments/lines/recent-stats
+export interface ShipmentRecentBySourceItem {
+  source_system: string | null
+  count: number
+}
+
+export interface ShipmentRecentSyncRunItem {
+  id: string
+  source_system: string
+  sync_type: string
+  status: string
+  inserted_rows: number
+  updated_rows: number
+  error_rows: number
+  started_at?: string | null
+  finished_at?: string | null
+  triggered_by?: string | null
+  error_message?: string | null
+}
+
+export interface ShipmentLinesRecentStatsResponse {
+  window_hours: number
+  as_of: string
+  total_new_lines: number
+  by_source_system: ShipmentRecentBySourceItem[]
+  latest_runs: ShipmentRecentSyncRunItem[]
+  recent_failed_runs_count?: number
+  latest_failed_run?: ShipmentRecentSyncRunItem | null
 }
 
 export interface ShipmentCostingResult {
@@ -1990,6 +2118,9 @@ export interface SalesLineItem {
   bundle_preset_phrase?: string | null
   bound_model_code?: string | null
   bound_model_name?: string | null
+  // 与发货管理 / 台账 / SKU Master 同源：来自 sku_master.metadata_json.bound_variant_code。
+  bound_variant_code?: string | null
+  bound_variant_label?: string | null
   bom_snapshot_id?: string | null
   status: 'costed' | 'missing_snapshot' | 'missing_costing' | 'unknown'
   note?: string | null
@@ -2266,6 +2397,11 @@ export interface SkuMaster {
   bound_version_label?: string | null
   bound_version_kind?: string | null
   bound_version_status?: string | null
+  // 显式落库的"最终绑定变体编码"（如 KB8-001）。绑定时（人工 / 自动）一并写入，
+  // 列表/详情读路径直接用，不再靠 spec_text 反推。空表示"不指定变体"。
+  bound_variant_code?: string | null
+  // 形如 "麻感冰丝(KB8-001)" 或 "KB8-001"（无 display_name 时）。
+  bound_variant_label?: string | null
   model_code_hint?: string | null
   erp_spec_hash?: string | null
   erp_parser_version?: string | null
@@ -2283,10 +2419,31 @@ export interface SkuMaster {
   preparse_saved_by?: string | null
   spec_mismatch?: boolean
   spec_mismatch_at?: string | null
+  /** "spu_attribute_conflict" 或 null/undefined。由 data_quality_service nightly 重算。 */
+  data_quality_status?: string | null
+  data_quality_evidence?: SkuDataQualityEvidence | null
+  data_quality_evaluated_at?: string | null
   source_updated_at?: string | null
   metadata_json?: Record<string, unknown>
   created_at: string
   updated_at: string
+}
+
+/** SKU "数据质量"评估 evidence —— 来自 backend data_quality_service。 */
+export interface SkuDataQualityEvidence {
+  version: number
+  /** 命中的规则代号：'R1'（关键词冲突）/ 'R2'（高变异规格） */
+  rules_hit: string[]
+  total_lines: number
+  distinct_specs: number
+  unmatched_specs: number
+  /** 已识别 model_code 列表（如 ['YS2','PI5']） */
+  keyword_matched_models: string[]
+  /** R1 的模型占比明细 [{model_code, lines, ratio}, ...] */
+  model_share?: Array<{ model_code: string; lines: number; ratio: number }>
+  /** 该 SKU TOP 6 个 variant，UI 展示用 */
+  top_variants?: Array<{ spec: string; qty: number; top_model_code: string | null }>
+  r2_exempt_due_to_single_model?: boolean
 }
 
 export interface ShopSkuMappingRead {
@@ -2401,6 +2558,8 @@ export interface SkuMasterAutoBindPreviewItem {
   erp_sku_barcode: string
   channel?: string | null
   spec_text?: string | null
+  shop_spec_code?: string | null
+  variant_code_hint?: string | null
   model_code_hint: string
   model_id: string
   model_code: string
@@ -2502,4 +2661,112 @@ export interface StructureStandardQueryParams extends Record<string, string | nu
 }
 
 export interface PaginatedStructureStandardResponse extends PaginatedResponse<StructureStandardRead> {}
+
+// ===== Long-tail COGS rate strategy (Issue 28) =====
+
+// v1.3 Cost Rate Hub (Migration 0038): rate_type / scope_type / scope_id /
+// rate_basis / source / data_quality / effective_from / effective_to are all
+// optional with safe defaults so legacy long-tail clients keep working.
+export type CostRateType =
+  | 'cogs'
+  | 'labor_per_minute'
+  | 'labor_per_piece'
+  | 'labor_per_sqm'
+  | 'overhead_rate'
+
+export type CostRateScopeType = 'global' | 'category' | 'cost_center' | 'model'
+
+export type CostRateRateBasis =
+  | 'pct_of_revenue'
+  | 'pct_of_cost'
+  | 'per_minute'
+  | 'per_piece'
+  | 'per_sqm'
+
+export type CostRateDataQuality = 'green' | 'yellow' | 'red'
+
+export interface LongTailCogsRateStrategy {
+  id: string
+  category: string
+  rate: number
+  keywords: string[]
+  priority: number
+  enabled: boolean
+  note?: string | null
+  metadata?: Record<string, unknown>
+  created_at?: string | null
+  updated_at?: string | null
+  // v1.3 Cost Rate Hub fields
+  rate_type?: CostRateType
+  scope_type?: CostRateScopeType
+  scope_id?: string | null
+  rate_basis?: CostRateRateBasis
+  source?: string
+  effective_from?: string | null
+  effective_to?: string | null
+  data_quality?: CostRateDataQuality | null
+  cost_center_id?: string | null
+  legal_entity_id?: string | null
+  production_unit_id?: string | null
+}
+
+export interface LongTailCogsRateStrategyListResponse {
+  items: LongTailCogsRateStrategy[]
+  global_fallback_rate: number
+}
+
+export interface LongTailCogsRateStrategyUpsertPayload {
+  category?: string
+  rate?: number
+  keywords?: string[]
+  priority?: number
+  enabled?: boolean
+  note?: string | null
+  actor?: string
+  // v1.3 Cost Rate Hub upsert fields
+  rate_type?: CostRateType
+  scope_type?: CostRateScopeType
+  scope_id?: string | null
+  rate_basis?: CostRateRateBasis
+  source?: string
+  effective_from?: string | null
+  effective_to?: string | null
+  data_quality?: CostRateDataQuality | null
+  cost_center_id?: string | null
+  legal_entity_id?: string | null
+  production_unit_id?: string | null
+}
+
+export interface LongTailCogsRateResolvePreviewPayload {
+  sku_code?: string
+  spec_text?: string
+  product_name?: string
+  long_tail_category?: string
+  // v1.3 Cost Rate Hub overhead_rate preview
+  rate_type?: CostRateType
+  model_id?: string
+  category?: string
+  cost_center_id?: string
+}
+
+export type LongTailCogsRateResolveSource =
+  | 'manual'
+  | 'keyword'
+  | 'default_strategy'
+  | 'global_setting'
+  | 'overhead_rate_hub'
+  | 'hard_fallback'
+
+export interface LongTailCogsRateResolvePreviewResponse {
+  rate: number
+  source: LongTailCogsRateResolveSource
+  strategy_id?: string | null
+  category?: string | null
+  matched_keyword?: string | null
+  // v1.3 Cost Rate Hub diagnostics
+  hit_layer?: 'model' | 'category' | 'cost_center' | 'global' | 'hard_fallback' | null
+  hit_scope_type?: CostRateScopeType | null
+  hit_scope_id?: string | null
+  data_quality?: CostRateDataQuality | null
+}
 

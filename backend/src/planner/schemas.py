@@ -977,6 +977,16 @@ class ProductModelUpdateRequest(BaseModel):
         json_encoders = {Decimal: _decimal_to_str}
 
 
+class VariantCodeBrief(BaseModel):
+    """
+    "货品映射"列表项：变体编码 + 替换物料名称。
+    例如 {"variant_code": "KB8-001", "material_name": "仿羊绒"} 在前端渲染为 "仿羊绒(KB8-001)"。
+    """
+
+    variant_code: str
+    material_name: Optional[str] = None
+
+
 class ProductModelRead(BaseModel):
     id: str
     model_code: str
@@ -1002,6 +1012,10 @@ class ProductModelRead(BaseModel):
     standard_version_count: int = 0
     current_published_standard_version_id: Optional[str] = None
     current_published_standard_version_label: Optional[str] = None
+    # 当前发布标准版本下所有 token 一级变体的"货品映射"摘要：变体编码 + 替换物料名称。
+    # 用于"标准模型列表 - 货品映射"列展示：例如 仿羊绒(KB8-001)。
+    # material_name 取该变体下第一个非空替换物料名称；若变体未配置替换物料则为 None。
+    current_published_variant_codes: List["VariantCodeBrief"] = Field(default_factory=list)
     # New: list performance - provide latest sample version id (for list thumbnails) to avoid frontend N+1
     latest_sample_version_id: Optional[str] = None
 
@@ -2322,6 +2336,7 @@ class ShipmentLineListItem(BaseModel):
     completed_at: Optional[datetime] = None
     channel: Optional[str] = None
     sku_code: Optional[str] = None
+    tag: Optional[str] = None
     # 商家编码 / 网店规格编码（若渠道/导出表提供）
     shop_spec_code: Optional[str] = None
     # 平台规格Id（网店）（若导出表提供）
@@ -2332,6 +2347,10 @@ class ShipmentLineListItem(BaseModel):
     # 绑定目标（当前生效绑定；BundleAsModel 也会以 model_code="B-XXXXYY" 的形式体现）
     bound_model_code: Optional[str] = None
     bound_model_name: Optional[str] = None
+    # 已绑定的具体变体（来自 SkuMaster.metadata_json.bound_variant_code，绑定时落库；
+    # 与 sku-master 列表 / 销售明细完全同源；不指定变体的发货行为 null，前端回退到 model 名）。
+    bound_variant_code: Optional[str] = None
+    bound_variant_label: Optional[str] = None  # 形如 "麻感冰丝(KB8-001)"
     # 二级：标准版本 / 套装版本（用于筛选与抽屉展示）
     bound_version_label: Optional[str] = None
     spec_text: Optional[str] = None
@@ -2359,6 +2378,44 @@ class ShipmentLineListItem(BaseModel):
     # Soft guardrail: size/area mismatch between parsed spec and snapshot measurement.
     suspected_size_anomaly: bool = False
     size_anomaly_detail: Optional[str] = None
+    # Soft guardrail: SKU 主档 SPU 属性冲突标识（同一 erp_sku_barcode 历史发货跨多个不
+    # 相关品类）。来源 SkuMaster.metadata.data_quality_status；mark_only：不影响成本计算，
+    # 仅在 UI 用灰色 Tag 提示运营这是个数据脏 SKU、自动绑定不可信。
+    sku_data_quality_status: Optional[str] = None
+
+    # Jackyun v2 wms.order.query-info.page.v2 extensions (migration 0036).
+    # All optional; older rows (Excel imports / pre-0036 Jackyun rows pre-backfill)
+    # may have any subset NULL. Frontend should render "-" for None.
+    erp_order_no: Optional[str] = None
+    platform_order_no: Optional[str] = None
+    sent_at: Optional[datetime] = None
+    paid_at: Optional[datetime] = None
+    ordered_at: Optional[datetime] = None
+    check_started_at: Optional[datetime] = None
+    order_status_name: Optional[str] = None
+    trade_type: Optional[int] = None
+    trade_type_msg: Optional[str] = None
+    customer_name: Optional[str] = None
+    logistic_no: Optional[str] = None
+    logistic_name: Optional[str] = None
+    logistic_type_name: Optional[str] = None
+    logistic_code: Optional[str] = None
+    warehouse_code: Optional[str] = None
+    warehouse_name: Optional[str] = None
+    wave_no: Optional[str] = None
+    picker: Optional[str] = None
+    packer: Optional[str] = None
+    checker: Optional[str] = None
+    seller_memo: Optional[str] = None
+    buyer_memo: Optional[str] = None
+    # detail
+    unit_price: Optional[Decimal] = None
+    unit_of_measure: Optional[str] = None
+    category_name: Optional[str] = None
+    goods_name: Optional[str] = None
+    goods_no: Optional[str] = None
+    is_gift: Optional[bool] = None
+    actual_qty: Optional[Decimal] = None
 
     class Config:
         json_encoders = {Decimal: _decimal_to_str}
@@ -2383,6 +2440,73 @@ class ShipmentLineComputeSnapshotResponse(BaseModel):
     detail: Optional[str] = None
 
 
+# Issue 29 — POST /shipments/lines/{id}/resolve
+# One-shot replacement for the 4-call frontend orchestration in
+# planner.ts::resolveShipmentLine. See shipment_import_service.resolve_shipment_line.
+class ShipmentLineResolveRequest(BaseModel):
+    action: Literal["adopt", "mark_long_tail", "defer_modeling"]
+    model_id: Optional[str] = Field(
+        None,
+        description="仅 action='adopt' 必填: 要绑定的 ProductModel.id",
+    )
+    operator_id: Optional[str] = None
+    note: Optional[str] = None
+
+
+class ShipmentLineResolveStep(BaseModel):
+    step: str
+    ok: bool
+    duration_ms: int = 0
+    detail: Optional[str] = None
+
+
+class ShipmentLineResolveResponse(BaseModel):
+    ok: bool
+    action: str
+    shipment_line_id: str
+    snapshot_id: Optional[str] = None
+    snapshot_action: Optional[str] = None  # generated|recomputed|skipped|failed
+    error: Optional[str] = None
+    steps: List[ShipmentLineResolveStep] = Field(default_factory=list)
+
+
+# Bulk resolve (Issue 29 follow-up p1-new-4)
+# Folds frontend Promise.all + concurrency-8 fanout into one server call.
+class ShipmentLineBulkResolveItem(BaseModel):
+    shipment_line_id: str
+    action: Literal["adopt", "mark_long_tail", "defer_modeling"]
+    model_id: Optional[str] = Field(None, description="仅 action='adopt' 必填")
+
+
+class ShipmentLineBulkResolveRequest(BaseModel):
+    items: List[ShipmentLineBulkResolveItem] = Field(default_factory=list)
+    operator_id: Optional[str] = None
+    note: Optional[str] = None
+    stop_on_first_error: bool = Field(
+        False,
+        description="True 时遇到第一个失败就停止 (剩余 items 标记 skipped); 默认 false=尽力而为",
+    )
+
+
+class ShipmentLineBulkResolveResultItem(BaseModel):
+    shipment_line_id: str
+    ok: bool
+    action: str
+    snapshot_id: Optional[str] = None
+    snapshot_action: Optional[str] = None
+    error: Optional[str] = None
+    duration_ms: int = 0
+
+
+class ShipmentLineBulkResolveResponse(BaseModel):
+    total: int
+    succeeded: int
+    failed: int
+    skipped_after_error: int
+    total_duration_ms: int
+    results: List[ShipmentLineBulkResolveResultItem] = Field(default_factory=list)
+
+
 class ShipmentLineClearSnapshotsRequest(BaseModel):
     shipment_line_ids: List[str] = Field(default_factory=list)
     operator_id: Optional[str] = None
@@ -2396,6 +2520,96 @@ class ShipmentLineClearSnapshotsResponse(BaseModel):
     skipped_already_cleared: int
     skipped_missing_barcode: int
     errors: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+# Auto-resolve pending shipment lines (keyword-based recognition)
+# Backed by shipment_import_service.auto_resolve_pending_shipment_lines_*
+class ShipmentLinesAutoResolveRequest(BaseModel):
+    days: int = Field(default=30, ge=1, le=365, description="扫描最近 N 天的待处理发货行")
+    limit: int = Field(default=500, ge=1, le=5000, description="最多识别/绑定的 SKU 数")
+    sku_codes: Optional[List[str]] = Field(default=None, description="仅处理指定 sku（不传则全量）")
+    requested_by: Optional[str] = Field(default=None, description="操作人/审计用")
+
+
+class ShipmentLinesAutoResolveCandidate(BaseModel):
+    shipment_line_id: str
+    shipment_line_count_for_sku: int
+    sku_code: str
+    channel: Optional[str] = None
+    spec_text: Optional[str] = None
+    model_id: Optional[str] = None
+    model_code: Optional[str] = None
+    model_name: Optional[str] = None
+    version_id: Optional[str] = None
+    version_label: Optional[str] = None
+    match_method: Optional[str] = None
+    matched_keyword: Optional[str] = None
+
+
+class ShipmentLinesAutoResolvePreviewResponse(BaseModel):
+    scanned_days: int
+    total_pending_lines: int
+    unique_unbound_skus: int
+    candidates_count: int
+    items: List[ShipmentLinesAutoResolveCandidate] = Field(default_factory=list)
+
+
+class ShipmentLinesAutoResolveExecuteItem(BaseModel):
+    shipment_line_id: str
+    sku_code: str
+    status: str  # ok | skipped_no_batch | snapshot_failed | error
+    bom_snapshot_id: Optional[str] = None
+    error: Optional[str] = None
+
+
+class ShipmentLinesAutoResolveExecuteResponse(BaseModel):
+    scanned_days: int
+    preview: ShipmentLinesAutoResolvePreviewResponse
+    bound_skus_count: int
+    skipped_already_bound: int
+    snapshots_created: int
+    lines_resolved: int
+    exceptions_resolved: int
+    bind_errors: List[Dict[str, Any]] = Field(default_factory=list)
+    snapshot_errors: List[Dict[str, Any]] = Field(default_factory=list)
+    items: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+# ----------------------------------------------------------------------------
+# Recent shipment line stats (for 「📦 业务管理 → 🚚 发货管理 → 🔴 待处理」 page header)
+# ----------------------------------------------------------------------------
+
+
+class ShipmentRecentBySourceItem(BaseModel):
+    source_system: Optional[str] = None
+    count: int = 0
+
+
+class ShipmentRecentSyncRunItem(BaseModel):
+    id: str
+    source_system: str
+    sync_type: str
+    status: str
+    inserted_rows: int = 0
+    updated_rows: int = 0
+    error_rows: int = 0
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+    triggered_by: Optional[str] = None
+    error_message: Optional[str] = None
+
+
+class ShipmentLinesRecentStatsResponse(BaseModel):
+    window_hours: int
+    as_of: str
+    total_new_lines: int
+    by_source_system: List[ShipmentRecentBySourceItem] = Field(default_factory=list)
+    latest_runs: List[ShipmentRecentSyncRunItem] = Field(default_factory=list)
+    # Failed sync runs in the same window. PendingTab shows a red Alert
+    # if recent_failed_runs_count > 0 so silent failures aren't hidden by
+    # latest_runs being capped (see Issue 0.0h).
+    recent_failed_runs_count: int = 0
+    latest_failed_run: Optional[ShipmentRecentSyncRunItem] = None
 
 
 class ShipmentImportPreviewIssue(BaseModel):
@@ -2441,6 +2655,8 @@ class ShipmentImportExecuteRequest(BaseModel):
     export_date: Optional[str] = None
     requested_by: Optional[str] = None
     mode: Literal["2025", "2026"] = "2026"
+    # Step-1 import only: when false, only persist shipment_lines; do not generate BOM snapshots/deductions.
+    process_snapshots: bool = True
 
 
 class ShipmentExceptionRead(BaseModel):
@@ -2620,6 +2836,7 @@ class AfterSalesLineRead(BaseModel):
     applied_at: Optional[datetime] = None
     channel: Optional[str] = None
     reason: Optional[str] = None
+    tag: Optional[str] = None
     # Best-effort binding info (computed via sku_code -> active version mapping)
     bound_model_code: Optional[str] = None
     bound_model_name: Optional[str] = None
@@ -3230,6 +3447,10 @@ class SalesLineItem(BaseModel):
     # 当前生效绑定（用于运营决策/下钻；标准模型或 BundleAsModel）
     bound_model_code: Optional[str] = None
     bound_model_name: Optional[str] = None
+    # 已绑定的具体变体（来自 SkuMaster.metadata_json.bound_variant_code，绑定时落库，
+    # 与 sku-master 列表 / 发货管理 / 发货台账完全同源；不指定变体的 SKU 这两个字段为 null）。
+    bound_variant_code: Optional[str] = None
+    bound_variant_label: Optional[str] = None  # 形如 "麻感冰丝(KB8-001)"
 
     bom_snapshot_id: Optional[str] = None
     status: str = "unknown"  # costed | missing_snapshot | missing_costing
@@ -3375,6 +3596,13 @@ class SkuMasterRead(BaseModel):
     bound_version_label: Optional[str] = None
     bound_version_kind: Optional[str] = None
     bound_version_status: Optional[str] = None
+    # 绑定时**显式持久化**到 SkuMaster.metadata_json.bound_variant_code 的"最终绑定变体"。
+    # 设计原则：人工审核没法靠 spec_text 反推（属性写法千差万别），运营在 TargetPickerBrowserButton
+    # 里选了 KB8 → 仿羊绒(KB8-001)，就把 KB8-001 直接落库——下次发货按这个字段直接拿，不再反推。
+    # 选了"不指定变体"（None）时为 None，前端回退到 model 级展示；调用方读 bound_variant_label
+    # 即可拿到 "麻感冰丝(KB8-001)" 这种已带 display_name 的展示串。
+    bound_variant_code: Optional[str] = None
+    bound_variant_label: Optional[str] = None  # 形如 "麻感冰丝(KB8-001)" 或 "KB8-001"（无 display_name 时）
     # Parsed spec cache & hints (computed fields; stored in metadata_json)
     model_code_hint: Optional[str] = None
     erp_spec_hash: Optional[str] = None
@@ -3394,6 +3622,12 @@ class SkuMasterRead(BaseModel):
     preparse_saved_by: Optional[str] = None
     spec_mismatch: bool = False
     spec_mismatch_at: Optional[str] = None
+    # 数据质量标签（来自 sku_master.metadata.data_quality_*，由 data_quality_service 写入）
+    # status="spu_attribute_conflict" 表示该 SKU 历史发货跨多个不相关品类，
+    # 属于"SPU 错配 SKU"，UI 应该红 Tag 隔离标识。
+    data_quality_status: Optional[str] = None
+    data_quality_evidence: Optional[Dict[str, Any]] = None
+    data_quality_evaluated_at: Optional[str] = None
     source_updated_at: Optional[datetime] = None
     metadata: Dict[str, Any] = Field(default_factory=dict, alias="metadata_json")
     created_at: datetime
@@ -3590,12 +3824,58 @@ class PublishedStandardModelCandidateListResponse(BaseModel):
     items: List[PublishedStandardModelCandidate] = Field(default_factory=list)
 
 
+# ============================================================
+# 通用 "绑定目标" 选择器（标准模型 + 套装模板二合一）
+# 详细业务背景见 services/binding_target_service.py 顶部 docstring。
+# ============================================================
+class BindingTargetVariant(BaseModel):
+    variant_code: str  # 如 KB8-001
+    material_name: Optional[str] = None  # 如 仿羊绒（可空：变体未配置替换物料）
+    label: str  # 拼装好的展示名，如 "仿羊绒(KB8-001)"
+
+
+class BindingTargetPreset(BaseModel):
+    selector: str  # 已规范化为大写 trim，如 "AA"
+    label: str  # 展示名，空时回退为 selector
+    # 'force' 或 'parse'：决定天猫 SKU 模板生成时 token 前缀（Z- 或 B-）。
+    # 来自 BundleTemplate.metadata_json.phrase_presets[i].mode；缺省视为 'parse'。
+    mode: str = "parse"
+
+
+class BindingTargetItem(BaseModel):
+    """统一的 "可绑定目标" 项。
+
+    kind="model"：使用 published_version_id / version_label / variants
+    kind="bundle"：使用 presets
+    """
+
+    kind: str  # "model" | "bundle"
+    id: str
+    code: str
+    name: Optional[str] = None
+    # model-only
+    published_version_id: Optional[str] = None
+    version_label: Optional[str] = None
+    variants: List[BindingTargetVariant] = Field(default_factory=list)
+    # bundle-only
+    presets: List[BindingTargetPreset] = Field(default_factory=list)
+
+
+class BindingTargetSearchResponse(BaseModel):
+    items: List[BindingTargetItem] = Field(default_factory=list)
+    truncated: bool = False  # True 表示因 limit 截断，请运营加 search 收敛
+
+
 class SkuMasterBindByModelRequest(BaseModel):
     model_id: str
     sku_master_ids: List[str] = Field(default_factory=list)
     requested_by: Optional[str] = None
     # if true, rebind even when SKU already has an active binding
     allow_rebind: bool = False
+    # Optional: 当运营在 TargetPickerBrowserButton 里选了具体变体时一并落库。
+    # 形如 "KB8-001"（来自 ProductModelLineVariant.metadata_json.variant_code）。
+    # 不传 / 空串 / None = "不指定变体"，与历史行为完全一致；BOM 仍按 spec 命中变体规则跑。
+    variant_code: Optional[str] = None
 
 
 class SkuMasterBindByModelResponse(BaseModel):
@@ -3667,6 +3947,9 @@ class SkuMasterBindByModelBulkRequest(BaseModel):
 
     # Exclusions: user can uncheck a few rows; we skip them.
     excluded_sku_master_ids: List[str] = Field(default_factory=list)
+
+    # Optional: 与单条绑定一致——选了具体变体时一并落库。bulk 场景下整批 SKU 都用同一个变体编码。
+    variant_code: Optional[str] = None
 
 
 class SkuMasterBindByModelBulkResponse(BaseModel):
@@ -3819,6 +4102,10 @@ class SkuMasterAutoBindPreviewItem(BaseModel):
     erp_sku_barcode: str
     channel: Optional[str] = None
     spec_text: Optional[str] = None
+    # 商家编码（来自 ERP 主档"规格编码（网店）"）以及从中抽取出的"模型-变体"短码，
+    # 让运营在 sku-master 自动绑定预览时直接看到识别依据。
+    shop_spec_code: Optional[str] = None
+    variant_code_hint: Optional[str] = None
     model_code_hint: str
     model_id: str
     model_code: str
@@ -3856,3 +4143,260 @@ class RecognitionKeywordsValidateResponse(BaseModel):
     ok: bool
     normalized_keywords: List[str] = Field(default_factory=list)
     conflicts: Dict[str, str] = Field(default_factory=dict)
+
+
+# ============================================================================
+# SKU Governance schemas (Sprint 2-3 of "SKU 治理与按需建模")
+# ----------------------------------------------------------------------------
+# Backs three endpoints under /api/planner/sku-master/governance:
+#   POST /sku-master/governance                    -> bulk set state
+#   GET  /sku-master/governance?status=...         -> backlog/long-tail list
+#   POST /sku-master/governance/promote-from-model -> promote pending->bound
+# All four governance states (unmanaged / auto_bound / pending_model /
+# do_not_model) are stored in SkuMaster.metadata_json.governance_status.
+# ============================================================================
+
+
+class SkuGovernanceSetRequest(BaseModel):
+    sku_codes: List[str] = Field(
+        default_factory=list, description="SkuMaster.erp_sku_barcode list"
+    )
+    status: str = Field(
+        ...,
+        description="Target governance state: one of unmanaged | auto_bound | pending_model | do_not_model",
+    )
+    decided_by: Optional[str] = Field(
+        None, description="Operator id/name; recorded in audit history"
+    )
+    note: Optional[str] = Field(
+        None, description="Free-text rationale; recorded in audit history"
+    )
+
+
+class SkuGovernanceSetResponse(BaseModel):
+    updated: int
+    unchanged: int
+    missing: int
+
+
+class SkuGovernanceListItem(BaseModel):
+    erp_sku_barcode: str
+    spec_text: Optional[str] = None
+    channel: Optional[str] = None
+    governance_status: str
+    governance_decided_at: Optional[str] = None
+    governance_decided_by: Optional[str] = None
+    governance_note: Optional[str] = None
+    last_shipment_at: Optional[str] = None
+    qty_window: float = 0.0
+    revenue_window: float = 0.0
+    line_count_window: int = 0
+    updated_at: Optional[str] = None
+    long_tail_category: Optional[str] = None
+    long_tail_category_decided_at: Optional[str] = None
+    long_tail_category_decided_by: Optional[str] = None
+
+
+class SkuGovernanceListResponse(BaseModel):
+    items: List[SkuGovernanceListItem]
+    total: int
+    page: int
+    page_size: int
+    order_by: str
+    sales_window_days: int
+
+
+class SkuLongTailCategorySetRequest(BaseModel):
+    sku_codes: List[str] = Field(default_factory=list)
+    category: Optional[str] = Field(
+        None,
+        description="目标品类(必须存在于策略表 enabled 项); 留空字符串/null 表示清除",
+        max_length=128,
+    )
+    actor: Optional[str] = Field(None, description="操作人, 写入 audit history")
+    note: Optional[str] = None
+
+
+class SkuLongTailCategorySetResponse(BaseModel):
+    updated: int
+    unchanged: int
+    missing: int
+    cleared: int
+
+
+class SkuLongTailCategoryAutoSuggestRequest(BaseModel):
+    sku_codes: Optional[List[str]] = Field(
+        None,
+        description="若提供, 只扫描这些 SKU; 留空 = 扫描所有 do_not_model SKU",
+    )
+    include_already_labeled: bool = Field(
+        False,
+        description="True 时即使已经手动标过也重新建议(覆盖); 默认跳过",
+    )
+    limit: int = Field(5000, ge=1, le=20000)
+    actor: Optional[str] = Field(None, description="execute 时写入 audit history")
+
+
+class SkuLongTailCategoryAutoSuggestItem(BaseModel):
+    sku_code: str
+    current_category: Optional[str] = None
+    suggested_category: str
+    matched_keyword: str
+    strategy_id: str
+    strategy_rate: float
+    spec_text: Optional[str] = None
+    product_name: Optional[str] = None
+
+
+class SkuLongTailCategoryAutoSuggestPreviewResponse(BaseModel):
+    scanned: int
+    already_labeled_skipped: int
+    no_match_count: int
+    limited: bool
+    suggested: List[SkuLongTailCategoryAutoSuggestItem]
+    reason: Optional[str] = None
+
+
+class SkuLongTailCategoryAutoSuggestApplyResultItem(BaseModel):
+    category: str
+    sku_count: int
+    updated: Optional[int] = None
+    unchanged: Optional[int] = None
+    missing: Optional[int] = None
+    cleared: Optional[int] = None
+    error: Optional[str] = None
+
+
+class SkuLongTailCategoryAutoSuggestExecuteResponse(SkuLongTailCategoryAutoSuggestPreviewResponse):
+    applied: int
+    apply_results: List[SkuLongTailCategoryAutoSuggestApplyResultItem]
+
+
+class SkuGovernancePromoteRequest(BaseModel):
+    sku_codes: List[str] = Field(default_factory=list)
+    decided_by: Optional[str] = Field(
+        None,
+        description="Optional override for audit history; defaults to 'auto_promote'",
+    )
+
+
+class SkuGovernancePromoteResponse(BaseModel):
+    promoted: int
+    skipped: int
+    missing: int
+
+
+# ===== Long-tail COGS rate strategy (Issue 28) =====
+
+
+class LongTailCogsRateStrategyRead(BaseModel):
+    id: str
+    category: str
+    rate: float
+    keywords: List[str] = Field(default_factory=list)
+    priority: int = 100
+    enabled: bool = True
+    note: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    # ===== v1.3 Cost Rate Hub fields (Migration 0038) =====
+    # All optional with safe defaults so old long-tail clients keep working.
+    rate_type: str = Field(
+        "cogs",
+        description="cogs | labor_per_minute | labor_per_piece | labor_per_sqm | overhead_rate",
+    )
+    scope_type: str = Field(
+        "category",
+        description="global | category | cost_center | model (v1 实做这 4 层)",
+    )
+    scope_id: Optional[str] = Field(
+        None,
+        description="global 时为 None；category 时存 category 名；cost_center 时存 cost_center.id；model 时存 product_models.id",
+    )
+    rate_basis: str = Field(
+        "pct_of_revenue",
+        description="pct_of_revenue | pct_of_cost | per_minute | per_piece | per_sqm",
+    )
+    source: str = Field(
+        "manual",
+        description="manual | finance_pushback | imported_excel | system_calculated | long_tail_legacy",
+    )
+    effective_from: Optional[str] = None
+    effective_to: Optional[str] = None
+    data_quality: Optional[str] = Field(None, description="green | yellow | red")
+    cost_center_id: Optional[str] = None
+    legal_entity_id: Optional[str] = None
+    production_unit_id: Optional[str] = None
+
+
+class LongTailCogsRateStrategyListResponse(BaseModel):
+    items: List[LongTailCogsRateStrategyRead]
+    global_fallback_rate: float = Field(
+        ...,
+        description="settings.long_tail_cogs_rate; used when no strategy matches",
+    )
+
+
+class LongTailCogsRateStrategyUpsertRequest(BaseModel):
+    category: Optional[str] = Field(
+        None,
+        description="必填(create); 'default' 表示兜底; 不可重复（v1 默认行为兼容老 long-tail）",
+        max_length=128,
+    )
+    rate: Optional[float] = Field(None, ge=0.0, le=1.0)
+    keywords: Optional[List[str]] = None
+    priority: Optional[int] = Field(None, ge=0, le=10_000)
+    enabled: Optional[bool] = None
+    note: Optional[str] = None
+    actor: Optional[str] = Field(None, description="审计字段; 默认 anonymous")
+    # ===== v1.3 Cost Rate Hub upsert fields =====
+    rate_type: Optional[str] = Field(
+        None,
+        description="cogs | labor_per_minute | labor_per_piece | labor_per_sqm | overhead_rate; 默认 cogs",
+    )
+    scope_type: Optional[str] = Field(
+        None,
+        description="global | category | cost_center | model; 默认 category 兼容老 long-tail",
+    )
+    scope_id: Optional[str] = None
+    rate_basis: Optional[str] = None
+    source: Optional[str] = None
+    effective_from: Optional[str] = None
+    effective_to: Optional[str] = None
+    data_quality: Optional[str] = Field(None, description="green | yellow | red")
+    cost_center_id: Optional[str] = None
+    legal_entity_id: Optional[str] = None
+    production_unit_id: Optional[str] = None
+
+
+class LongTailCogsRateResolvePreviewRequest(BaseModel):
+    """Try-it tool: pick a SKU code and see which strategy would win."""
+
+    sku_code: Optional[str] = None
+    spec_text: Optional[str] = None
+    product_name: Optional[str] = None
+    long_tail_category: Optional[str] = Field(
+        None,
+        description="模拟 SkuMaster.metadata_json.long_tail_category 的值",
+    )
+    # v1.3 Cost Rate Hub: when rate_type='overhead_rate' the resolver
+    # walks model > category > cost_center > global instead of the
+    # long-tail keyword chain.
+    rate_type: Optional[str] = Field(None, description="cogs (默认) | overhead_rate | ...")
+    model_id: Optional[str] = Field(None, description="overhead_rate resolve 时的 product_models.id")
+    cost_center_id: Optional[str] = None
+    category: Optional[str] = Field(None, description="overhead_rate resolve 时的 category 名")
+
+
+class LongTailCogsRateResolvePreviewResponse(BaseModel):
+    rate: float
+    source: str = Field(..., description="manual|keyword|default_strategy|global_setting|overhead_rate_hub|hard_fallback")
+    strategy_id: Optional[str] = None
+    category: Optional[str] = None
+    matched_keyword: Optional[str] = None
+    # v1.3 Cost Rate Hub diagnostics — populated when rate_type='overhead_rate'.
+    hit_layer: Optional[str] = Field(None, description="model | category | cost_center | global | hard_fallback")
+    hit_scope_type: Optional[str] = None
+    hit_scope_id: Optional[str] = None
+    data_quality: Optional[str] = None

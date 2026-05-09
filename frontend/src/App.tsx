@@ -32,6 +32,13 @@ const AfterSalesInsightsPage = lazy(() => import('./pages/costing/AfterSalesInsi
 const ProfitInsightsPage = lazy(() => import('./pages/costing/ProfitInsightsPage'))
 const ShopInsightsPage = lazy(() => import('./pages/costing/ShopInsightsPage'))
 const SalesInsightsPage = lazy(() => import('./pages/costing/SalesInsightsPage'))
+const IntegrationsHubPage = lazy(() => import('./pages/costing/IntegrationsHubPage'))
+const ShipmentManagementPage = lazy(() => import('./pages/costing/biz/ShipmentManagementPage'))
+const AfterSalesManagementPage = lazy(() => import('./pages/costing/biz/AfterSalesManagementPage'))
+const LongTailCogsRatePage = lazy(() => import('./pages/costing/admin/LongTailCogsRatePage'))
+// 系统运维：通用绑定目标选择器（模型筛选器）演练页 —— 既用于内部验收，也作为运营快速校验
+// 模型/套装层级、preset 与 token 拼装的工具页面。
+const TargetPickerPlaygroundPage = lazy(() => import('./pages/dev/TargetPickerPlaygroundPage'))
 
 const ProtectedShell = () => (
   <AuthGuard>
@@ -73,6 +80,18 @@ const ProtectedShell = () => (
           <Route path="/costing/insights/models" element={<ProfitInsightsPage />} />
           <Route path="/costing/insights/shops" element={<ShopInsightsPage />} />
           <Route path="/costing/insights/sales" element={<SalesInsightsPage />} />
+          <Route path="/costing/integrations" element={<IntegrationsHubPage />} />
+          <Route path="/costing/biz/shipments" element={<ShipmentManagementPage />} />
+          <Route path="/costing/biz/after-sales" element={<AfterSalesManagementPage />} />
+          <Route path="/costing/admin/long-tail-cogs-rate" element={<LongTailCogsRatePage />} />
+          {/* v1.3 Cost Rate Hub — same page, default Tab=overhead_rate via query string. */}
+          <Route
+            path="/costing/admin/cost-rate-hub"
+            element={<Navigate to="/costing/admin/long-tail-cogs-rate?tab=overhead_rate" replace />}
+          />
+          {/* 模型筛选器演练页：已正式纳入"系统运维"导航，旧路径 /dev/target-picker 保留兼容（避免外链失效）。 */}
+          <Route path="/costing/system/target-picker-playground" element={<TargetPickerPlaygroundPage />} />
+          <Route path="/dev/target-picker" element={<Navigate to="/costing/system/target-picker-playground" replace />} />
           <Route path="*" element={<Navigate to="/planner" replace />} />
         </Routes>
       </Suspense>

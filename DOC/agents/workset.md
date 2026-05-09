@@ -155,5 +155,146 @@
 - `DOC/agents/task_log.md`（变更记录与决策依据）
 - `DOC/index/extracted/`（大文件/日志提炼件目录：禁止直读导出日志，必须先提炼）
 
+### 7) PnL / Cost Rate Hub 任务工作集（2026-05-09 新增；后续 PnL/Hub 任何 Agent 接力前必读）
+
+> **背景**：2026-05-09 接到"专业版盈亏分析模块 + Cost Rate Hub"任务的 Agent 第一轮设计走偏（绕开了 `DOC/agents/state.md` 真相文档与现有 5 个雏形子系统直接重复造轮子），本 §7 把 PnL/Hub 任务的"必读最小集 + 必须看的现有能力 + 必须读的 5 份产出文档"显式列出。任何后续 PnL/Hub Agent 接力前**必须先读 §7**。
+>
+> **必读规则**：先读本 §7 → 再读 `system_capability_inventory.md` → 才能动 PnL/Hub 文档。
+
+#### 7.1 项目真相文档（PnL/Hub Agent 接力第 1 件事）
+
+- `DOC/agents/agent_rules.md`（**强制读 — 2026-05-09 18:00 重大修订**：只读工作集、大文件不直读、**任务粒度区分（设计 vs 执行）**、**交接成本 ≤ 编码成本**硬约束、北京时间口径）
+- `DOC/agents/task_distribution_standard.md`（**强制读 — 2026-05-09 18:00 重大修订**：Hub Agent 角色边界、**执行 Agent 完整自主权（§0.2）**、**优先大任务派单（§3）**、微任务直派（§3.3）、何时必须回 Hub 仅 3 种情况（§0.3））
+- `DOC/agents/state.md`（**3317 行真相文档** — 禁止全读；按关键词 grep 检索后只读 ±50 行段落）
+- `DOC/agents/task_log.md`（变更日志，看最近 30 行了解最近发生了什么）
+- `DOC/agents/known_issues.md`（**特别看 §0.0a~§33** — 含 5 个雏形子系统的完整设计 / API / 表结构）
+
+#### 7.2 PnL/Hub 任务"系统能力清单"（必读总入口）
+
+- `DOC/costing/handovers/system_capability_inventory.md`（**第 1 份必读** — 现有页面/路由/表/API/雏形子系统/已落地能力 vs 真正缺什么 / 23% 真相 / 复用边界）
+
+#### 7.3 PnL 任务历史产出文档（已写但需要校准）
+
+> **状态**：2026-05-09 第一轮产出，因未读 §7.1/§7.2 导致部分内容重复造轮子或与现状不符，需基于清单回头校准。
+
+- `DOC/costing/blueprints/pnl_analytics_module_design.md`（v1.1，待校准为 v1.2）
+- `DOC/costing/blueprints/cost_rate_hub_design_v1.md`（v1.2，待校准为 v1.3 — 复用 LongTailCogsRateStrategy 雏形 + 23% 真相还原）
+- `DOC/costing/blueprints/finance_analyzer_integration_v1.md`（v1.1）
+- `DOC/costing/blueprints/sku_portfolio_management_v1.md`（v1.1）
+- `DOC/costing/manuals/transfer_pricing_handbook.md`
+- `DOC/costing/manuals/guides/price_calculation_guide.md`（v2.1）
+- `DOC/costing/handovers/pnl_module_handover.md`（v1.2 接力总入口）
+- `DOC/costing/handovers/pnl_decision_log.md`（v1.2 决策日志，#1~#47）
+- `DOC/costing/handovers/pnl_phase_status.md`（v1.2 进度看板）
+- `DOC/costing/handovers/phase0_review_checklist.md`（v1.2 评审清单）
+- `DOC/costing/handovers/pnl_external_reviews/INDEX.md`（v1.2 外部评审 5 份归档）
+- `DOC/costing/handovers/pnl_incident_log.md`
+
+#### 7.4 已存在的盈亏蓝图（PnL 任务的"原配" — 第一轮被忽略）
+
+- `DOC/costing/blueprints/profit_and_returns_analytics_plan_2025_2026_v0_1.md`（**v0.1 原配蓝图** — 4 个 Insights 页面 + 3 个 profit API + shipment_costing_results 表都源于此 / 第一轮设计未读此文导致重复）
+
+#### 7.5 项目架构总图
+
+- `DOC/costing/architecture.md`（Phase 1-3.5 既有架构 — Initiative / Cost Package / Scenario / Approvals / Audit，PnL 模块需对齐这套架构而非另起炉灶）
+
+#### 7.6 现有 5 个雏形子系统（必看代码定位）
+
+| 雏形子系统 | 定位 | 后端代码 | 前端代码 | 文档 |
+|---|---|---|---|---|
+| **LongTailCogsRateStrategy**（雏形版 Cost Rate Hub） | 4 层优先级链 + history + resolve API | `backend/src/planner/services/long_tail_strategy_service.py` + `backend/src/planner/routers/long_tail_strategies.py` | `frontend/src/pages/costing/admin/LongTailCogsRatePage.tsx` | `known_issues.md` Issue 28 |
+| **data_quality_service**（雏形版可信度治理） | nightly 自动跑 + mark_only + 三色徽章雏形 | `backend/src/planner/services/data_quality_service.py` | `frontend/src/pages/costing/SkuMasterWorkspacePage.tsx` 红 Tag | `known_issues.md` §0.0j |
+| **SKU 治理 4 态**（unmanaged/auto_bound/pending_model/do_not_model） | 状态机 + 长尾兜底成本 | `backend/src/planner/services/sku_master_service.py::set_sku_governance` | `frontend/src/pages/costing/shipment-ops/components/GovernanceBacklogTab.tsx` | `known_issues.md` Issue 23 |
+| **shipment_costing_results**（轻量成本结果落库） | 物料/工序/制造费三段成本 | `backend/migrations/versions/0027_shipment_costing_results_no_snapshot.py` | `ShipmentLedgerPage` 抽屉"成本拆分" Tab | `profit_and_returns_analytics_plan_v0_1.md` §3.4 |
+| **4 个 Insights 看板** | 模型/店铺/销售/售后利润 | `backend/src/planner/routers/analytics.py` | `frontend/src/pages/costing/{Profit,Shop,Sales,AfterSales}InsightsPage.tsx` | `state.md:13-19` 已落地清单 |
+
+#### 7.7 关键事实（PnL/Hub Agent 必须先承认）
+
+| 事实 | 出处 | 影响 |
+|---|---|---|
+| **23% 是数学折算（30%/(1+30%)=23.08%）**，后端实际仍是 30% 写死 | `state.md:1823-1843` + `task_log.md:15` Guides Agent 2026-01-13 落地 | 不要写"23% 反推" / "把 30% 换成真实 23%" 等错误叙述 |
+| **3 法人物理一体在一栋楼，是 1 个生产体系** | 用户 2026-05-09 当面校准 | Hub 不分 factory，4 概念正交（production_unit/purchase_entity/cost_center/legal_entity） |
+| **班组主数据在 `taxonomy` 表 `domain='team'`**，含 `default_minute_rate` | `frontend/src/pages/costing/TaxonomyManagementPage.tsx:32` + `processes.py:72` 注释 | 不要在 `processes` 表加 `cost_center_id` — 班组归属在 `taxonomy.team` |
+| **`processes` 表故意不承载班组**（line 72 注释明确） | `frontend/src/pages/costing/ProcessesPage.tsx:72` | 班组工时在 `ModelVersionProcess` / `ProcessModuleStep` 维护 |
+| **现有架构有完整的 Hub Agent 派单体系** | `task_distribution_standard.md` 全文 | PnL/Hub Agent 应做 Hub 不直接写代码；派 Backend/Frontend Agent 闭环 |
+
+#### 7.8 PnL/Hub 任务的工作集白名单（先扩展再读，禁止越界）
+
+读取范围：
+- 整个 §7.1 ~ §7.7 列出的所有文件
+- `backend/src/planner/models.py`（数据模型，按需 grep）
+- `backend/src/planner/services/bom_generation_service.py`（成本计算核心）
+- `backend/src/planner/services/analytics_service.py`（分析服务）
+- `backend/src/planner/services/shipment_import_service.py`（发货导入）
+- `frontend/src/components/costing/ProductModelEditorDrawer.tsx`（KB8 抽屉清单编辑）
+
+修改范围：
+- 仅限 `DOC/costing/handovers/pnl_*.md` + `DOC/costing/blueprints/cost_rate_hub_design_v1.md` + `DOC/costing/blueprints/pnl_analytics_module_design.md`
+- 涉及 `DOC/agents/*` 必须谨慎追加而非覆盖
+
+禁止范围：
+- 不动 `frontend/src/` 下任何代码（PnL Agent 是 Hub 角色，写代码要派 Frontend/Backend Agent）
+- 不动 `backend/src/` 下任何代码（同上）
+- 不动 `DOC/agents/state.md` 主体内容（只能在末尾追加"最近校对"段，且必须用户授权）
+- 不动 `DOC/costing/blueprints/profit_and_returns_analytics_plan_2025_2026_v0_1.md`（v0.1 是项目原配蓝图，不能覆盖）
+
+#### 7.9 PnL/Hub 任务的验收命令模板（2026-05-09 18:00 修订 — 不再强制 1 条）
+
+> **修订背景**：旧规则"每轮闭环必须有 1 条 0 退出码命令"在方案设计阶段容易变成形式主义勾选。本次修订为：执行 Agent 自主选最能证明任务完成的 1~3 条，不强求 0 退出码（如有 known issue 可接受 warning）。
+
+执行 Agent 在任务交付时自主选择验收方式：
+
+**候选 1 — 文档型任务**
+- 产出新文档：`test -f <path> && grep -nF "<标志性段落>" <path>`
+- 改既有文档：`grep -nF "<新加段落>" <path>`
+
+**候选 2 — 代码型任务**
+- 前端：`npm -C frontend run build`
+- 后端：`python -m pytest backend/tests/planner/test_<相关>*.py -q`
+- 端到端：`curl <relevant API>` 或浏览器走通用户场景
+
+**候选 3 — 跨域一致性任务**（如 Hub 升级联动多文档）
+- 多条 grep 一起跑，证明所有相关文档都同步了
+- 例：`grep -nF "v1.3" DOC/costing/blueprints/cost_rate_hub_design_v1.md && grep -nF "v1.3" DOC/costing/handovers/system_capability_inventory.md`
+
+**反模式（避免）**
+- ❌ 为了打卡而跑无意义命令（如 `ls` 文件存不存在）
+- ❌ 强求 0 退出码导致掩盖真实 known issue
+- ❌ 用大量 grep 命令模拟"全面验收"实际只是堆 Token
+
+#### 7.10 PnL 模块 6 份核心必读文档（**按受众分类**，关联到运维体系，2026-05-09 17:55 新增）
+
+> **背景**：用户 2026-05-09 17:40 明确指出"这最开始的文件需要优化吗？你有没有关联到运维里"。本节把 PnL 模块 6 份核心文档（**全员必读**）按受众分类列出，明确每份的角色与读取顺序。任何 PnL Agent / Backend Agent / Frontend Agent / Rules Agent / Docs Agent 接力前必须先看本表。
+>
+> **维护契约**：本表的"当前版本号"列必须在每次校准动作完成后**当轮立刻更新**（与 `system_capability_inventory.md` §12.1 表保持一致）。
+
+| # | 文档 | 行数（v1.2 后）| 当前版本 | 路径 | 受众 | 接力顺序 |
+|---|---|---|---|---|---|---|
+| 0 | **系统能力清单**（含 §12 文档优先级 + §13 防忘追踪） | 580 | **v1.0+§13** | `DOC/costing/handovers/system_capability_inventory.md` | **全员强制首读** | 第 1 |
+| 1 | **总图（必读）** | 770 | **v1.2**（2026-05-09 17:55 同步 Hub v1.3）| `DOC/costing/blueprints/pnl_analytics_module_design.md` | **全员强制次读** | 第 2 |
+| 2 | **Cost Rate Hub 设计** | 669 | **v1.3**（2026-05-09 17:50）| `DOC/costing/blueprints/cost_rate_hub_design_v1.md` | 全员强制三读 | 第 3 |
+| 3 | 价格计算指南 v2 | 421 | v2.1 | `DOC/costing/manuals/guides/price_calculation_guide.md` | 财务 + 工厂 | 按需 |
+| 4 | 内部转移价手册 | 369 | （无明文版本号）| `DOC/costing/manuals/transfer_pricing_handbook.md` | 财务 + 老板 | 按需 |
+| 5 | SKU 组合管理蓝图 | 660 | v1.1（待 v1.2 校准 — 见 inventory §13.1 U1）| `DOC/costing/blueprints/sku_portfolio_management_v1.md` | 运营 + 老板 | 按需（Phase 2 启动时强制读）|
+| 6 | finance 集成方案 | 424 | v1.1（待 v1.2 校准 — 见 inventory §13.1 U2）| `DOC/costing/blueprints/finance_analyzer_integration_v1.md` | 技术 + finance 团队 | 按需（W4 finance 录入启动时强制读）|
+| 7 | 评审清单（打勾表） | 311 | v1.2.1（待 v1.3 校准 — 见 inventory §13.1 U4）| `DOC/costing/handovers/phase0_review_checklist.md` | 全员（评审会）| 评审会前 1 周强制读 |
+
+**强制读关系**：
+```
+新接力 PnL Agent → 必读 #0 + #1 + #2（前 3 份是 P0/P1/P2/P3 真相文档）
+新接力 Backend Agent → 必读 #0 + #1 + #2 + #6（finance 相关任务时）
+新接力 Frontend Agent → 必读 #0 + #1 + #2（看 §3 数据模型 + §4 接口契约）
+新接力 Rules/Guides Agent → 必读 #0 + #3（指南规范）
+评审会前 → 全员强制读 #7
+Phase 2 启动前 → 全员强制读 #5
+```
+
+**这 6 份核心文档与本 §7 工作集的关系**：
+- §7.1 项目真相文档（5 份 Agent 体系）= **元规则**
+- §7.10 6 份核心文档 = **业务真相**
+- §7.2~§7.9 = **任务工作集 + 复用边界 + 验收模板**
+
+三者缺一不可。任何 PnL Agent 接力，应该按"§7.1 → §7.10 → §7.2~§7.9"顺序读。
+
 
 

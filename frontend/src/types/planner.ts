@@ -1014,6 +1014,20 @@ export interface ProductModelPreviewMaterialLine {
   bom_unit_price?: string | number | null
   total_cost?: string | number | null
   warnings: string[]
+  /** Stage 2: 物料取价元数据（含税还原 / 生效期 / 价格来源 / 数据质量）。 */
+  price_metadata?: {
+    price_inclusive?: number | null
+    price_exclusive?: number | null
+    bom_unit_price_exclusive?: number | null
+    tax_rate?: number | null
+    tax_included_flag?: boolean | null
+    purchase_entity_id?: string | null
+    price_source?: string | null
+    effective_from?: string | null
+    effective_to?: string | null
+    _data_quality?: 'green' | 'yellow' | 'red' | string | null
+    _warnings?: string[] | null
+  } | null
 }
 
 export interface ProductModelPreviewLaborLine {
@@ -1311,6 +1325,21 @@ export interface BomLineRead {
   bom_unit_price?: string | number | null
   line_cost?: string | number | null
   metadata: Record<string, unknown>
+  /** Stage 2: 物料取价元数据（含税还原 / 生效期 / 价格来源 / 数据质量）。
+   * 仅 ``material_kind in ('real','bom')`` 的行有；virtual 行通常为空。 */
+  price_metadata?: {
+    price_inclusive?: number | null
+    price_exclusive?: number | null
+    bom_unit_price_exclusive?: number | null
+    tax_rate?: number | null
+    tax_included_flag?: boolean | null
+    purchase_entity_id?: string | null
+    price_source?: string | null
+    effective_from?: string | null
+    effective_to?: string | null
+    _data_quality?: 'green' | 'yellow' | 'red' | string | null
+    _warnings?: string[] | null
+  } | null
 }
 
 export interface BomGenerateRequest {

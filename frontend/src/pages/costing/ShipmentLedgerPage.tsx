@@ -40,6 +40,10 @@ import { formatBeijingTime } from '@/utils/beijingTime'
 // 通用绑定目标选择器（弹窗浏览模式）；本页 bundle 路径需把 bound_model_code 拼成 `B-${tpl}`，
 // 与通用 helper 的 bundle_template_code 不同，因此 boundTargetFilters 自己派生（见下方 useMemo）。
 import { ShopSpecCodeCell } from '@/components/common/ShopSpecCodeCell'
+import {
+  MaterialPriceQualityBadge,
+  type MaterialPriceMetadata,
+} from '@/components/costing/MaterialPriceQualityBadge'
 import { TargetPickerBrowserButton } from '@/components/common/TargetPicker'
 import type { TargetSelection } from '@/components/common/TargetPicker'
 
@@ -1223,9 +1227,25 @@ const ShipmentLedgerPage = () => {
                               { title: '单价', dataIndex: 'bom_unit_price', width: 90, render: (v) => formatMoney(v) },
                               { title: '行成本', dataIndex: 'line_cost', width: 90, render: (v) => formatMoney(v) },
                               {
-                                title: '来源',
+                                title: (
+                                  <Tooltip title="Stage 2 物料取价：价格来源（合同/发票/手填...）+ 数据质量徽章；hover 看含税口径 / 生效期 / 警告">
+                                    <span>价格来源</span>
+                                  </Tooltip>
+                                ),
+                                key: 'price_metadata',
+                                dataIndex: 'price_metadata',
+                                width: 180,
+                                render: (_v, r: any) => (
+                                  <MaterialPriceQualityBadge
+                                    size="small"
+                                    metadata={(r?.price_metadata ?? null) as MaterialPriceMetadata | null}
+                                  />
+                                ),
+                              },
+                              {
+                                title: '来源模块',
                                 key: 'src',
-                                width: 160,
+                                width: 140,
                                 render: (_v, r: any) => safeString(r?.metadata?.source_module_name || r?.metadata?.source_module_code || ''),
                               },
                             ]}

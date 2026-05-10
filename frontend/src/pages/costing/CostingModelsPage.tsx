@@ -41,6 +41,10 @@ import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import './CostingModelsPage.css'
 import GuideDrawer from '@/components/common/GuideDrawer'
+import {
+  MaterialPriceQualityBadge,
+  type MaterialPriceMetadata,
+} from '@/components/costing/MaterialPriceQualityBadge'
 import productModelGuide from '@doc/costing/manuals/guides/product_model_guide.md?raw'
 import {
   activateProductModel,
@@ -3864,6 +3868,21 @@ const CostingModelsPage = () => {
                                 { title: '用量', width: 110, dataIndex: 'used_quantity' },
                                 { title: '单价', width: 110, dataIndex: 'bom_unit_price' },
                                 { title: '成本', width: 110, dataIndex: 'total_cost' },
+                                {
+                                  title: (
+                                    <Tooltip title="Stage 2 物料取价：价格来源（合同/发票/手填...）+ 数据质量徽章；hover 看含税口径 / 生效期 / 警告">
+                                      <span>价格来源</span>
+                                    </Tooltip>
+                                  ),
+                                  key: 'price_metadata',
+                                  width: 180,
+                                  render: (_, r: any) => (
+                                    <MaterialPriceQualityBadge
+                                      size="small"
+                                      metadata={(r?.price_metadata ?? null) as MaterialPriceMetadata | null}
+                                    />
+                                  ),
+                                },
                                 {
                                   title: '提示',
                                   render: (_, r) => (r.warnings?.length ? <Text type="warning">{r.warnings.join('；')}</Text> : <Text type="secondary">-</Text>),

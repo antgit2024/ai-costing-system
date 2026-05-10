@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import re
 from typing import Any, Dict, List, Optional
@@ -8,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from . import bundle_template_service, line_variant_service, product_model_service, spec_parser_service
+from .material_price_resolver import resolve_material_price
 
 
 def _stable_base_line_key_from_row(row: models.ModelVersionMaterial) -> str:
@@ -148,6 +150,7 @@ def generate_bom(
     sku_code: Optional[str],
     quantity: Optional[Decimal],
     include_disabled_variants: bool = False,
+    as_of_date: Optional[date] = None,
 ) -> Dict[str, Any]:
     version = _resolve_version(db, model_version_id=model_version_id, sku_code=sku_code)
     model = db.get(models.ProductModel, version.model_id)
@@ -314,7 +317,9 @@ def generate_bom(
     # - This improves preview readability and reduces downstream confusion without mutating stored lines.
     _fill_missing_units(db, final_lines)
 
-    costing = _attach_costing(db, final_lines, process_lines=process_lines, measurement=measurement)
+    costing = _attach_costing(
+        db, final_lines, process_lines=process_lines, measurement=measurement, as_of_date=as_of_date
+    )
     inventory = _build_inventory_lines(db, final_lines)
 
     return {
@@ -1702,12 +1707,17 @@ def _attach_costing(
     *,
     process_lines: List[models.ModelVersionProcess],
     measurement: Dict[str, Decimal],
+    as_of_date: Optional[date] = None,
 ) -> Dict[str, Any]:
     """
     Compute and attach costing fields (read-only):
     - bom_unit_price: CNY per BOM unit
     - line_cost: computed_quantity * bom_unit_price
     Also compute process (labor) cost from model_version_processes and include in totals.
+
+    Stage 2（2026-05-10）：每行附加 ``price_metadata`` 子对象（含税还原 / 生效期 / 价格来源 /
+    数据质量）。``as_of_date`` 默认 None=今天；上层（shipment_import_service）回溯发货行时
+    可传发货日，做到"按发货当时价"取值。
     """
     # Resolve pricing snapshots:
     # - real/bom: from material master (materials)
@@ -1781,9 +1791,11 @@ def _attach_costing(
     priced_lines = 0
     missing_price_lines = 0
     missing_price_material_codes: List[str] = []
+    quality_counts: Dict[str, int] = {"green": 0, "yellow": 0, "red": 0, "n/a": 0}
 
     for line in final_lines:
         price: Optional[Decimal] = None
+        price_metadata: Optional[Dict[str, Any]] = None
 
         kind = str(line.get("material_kind") or "real")
         ref_id = str(line.get("material_ref_id") or "").strip() or None
@@ -1791,11 +1803,15 @@ def _attach_costing(
             if kind in ("real", "bom"):
                 m = materials.get(ref_id)
                 if m is not None:
-                    price = product_model_service._derive_bom_unit_price(m)
+                    quote = resolve_material_price(m, as_of_date=as_of_date)
+                    if quote.bom_unit_price_exclusive is not None:
+                        price = quote.bom_unit_price_exclusive
+                    else:
+                        price = product_model_service._derive_bom_unit_price(m, as_of_date=as_of_date)
+                    price_metadata = quote.to_jsonable()
             elif kind == "virtual":
                 vm = virtuals.get(ref_id)
                 if vm is not None:
-                    # Hard-rule: "兜底-零成本-*" virtual materials are always 0 cost (locked).
                     try:
                         if (vm.virtual_code in {"VM00052", "VM00053", "VM00054"}) or str(vm.name or "").startswith("兜底-零成本-"):
                             price = Decimal("0")
@@ -1847,6 +1863,12 @@ def _attach_costing(
 
         line["bom_unit_price"] = price
         line["line_cost"] = line_cost
+        if price_metadata is not None:
+            line["price_metadata"] = price_metadata
+            q_lvl = str(price_metadata.get("_data_quality") or "n/a")
+            quality_counts[q_lvl if q_lvl in quality_counts else "n/a"] += 1
+        else:
+            quality_counts["n/a"] += 1
 
         if line_cost is not None:
             material_cost_total += line_cost
@@ -1886,6 +1908,9 @@ def _attach_costing(
         "priced_material_lines": priced_lines,
         "missing_price_material_lines": missing_price_lines,
         "missing_price_material_codes": missing_price_material_codes[:50],
+        # Stage 2: 价格元数据质量分布（用于反推诊断 + 老板看板）
+        "material_price_quality_counts": dict(quality_counts),
+        "material_price_resolved_at": (as_of_date.isoformat() if as_of_date else None),
         **process_costing,
     }
 

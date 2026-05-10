@@ -7,7 +7,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -797,6 +797,11 @@ def _generate_bom_snapshot(
     spec_snap = _upsert_spec_snapshot(db, spec_text=spec_text)
 
     qty = line.qty if line.qty is not None else Decimal("1")
+    # Stage 2（2026-05-10）：发货行回溯按发货当日取价。`completed_at` 缺失时
+    # （比如 PoD/手填行）保持老行为 None=今天，避免 break 已有路径。
+    as_of: Optional[date] = None
+    if isinstance(line.completed_at, datetime):
+        as_of = line.completed_at.date()
     try:
         bom = bom_generation_service.generate_bom(
             db,
@@ -804,6 +809,7 @@ def _generate_bom_snapshot(
             model_version_id=None,
             sku_code=sku,
             quantity=Decimal(str(qty)),
+            as_of_date=as_of,
         )
     except Exception as exc:  # noqa: BLE001 - queue exception
         _enqueue_exception(
@@ -929,6 +935,43 @@ def _persist_deduction_artifacts(
         if parts:
             cost_total = sum(parts, Decimal("0"))
 
+    # Stage 2（2026-05-10）：把每行物料的 price_metadata（含税还原 / 生效期 / 价格来源 /
+    # 数据质量）汇集到 cost_breakdown.materials[]，供 ShipmentLedgerPage / RealtimePricingPage
+    # 直接展示，前端无需重新查 BOM 源。老 cost_breakdown 老字段（price/subtotal）保持兼容，
+    # price_metadata 是**新增**子对象——老 endpoint 不读不会崩。
+    cost_breakdown_materials: List[Dict[str, Any]] = []
+    final_lines = bom.get("final_material_lines") if isinstance(bom.get("final_material_lines"), list) else []
+    for fl in final_lines or []:
+        if not isinstance(fl, dict):
+            continue
+        kind = str(fl.get("material_kind") or "real")
+        if kind not in ("real", "bom"):
+            continue
+        line_qty = fl.get("computed_quantity")
+        line_price = fl.get("bom_unit_price")
+        line_cost = fl.get("line_cost")
+        try:
+            qty_f = float(line_qty) if line_qty is not None else None
+            price_f = float(line_price) if line_price is not None else None
+            cost_f = float(line_cost) if line_cost is not None else None
+        except Exception:  # noqa: BLE001
+            qty_f, price_f, cost_f = None, None, None
+        cost_breakdown_materials.append(
+            {
+                "material_id": fl.get("material_ref_id"),
+                "material_code": fl.get("material_code"),
+                "material_name": fl.get("material_name"),
+                "qty": qty_f,
+                # 老字段：price/subtotal 保持向后兼容（不含税口径，本次起被 Stage 2 修正过）
+                "price": price_f,
+                "subtotal": cost_f,
+                # 新增：Stage 2 元数据（前端 tooltip / 新列、反推诊断）
+                "price_metadata": fl.get("price_metadata"),
+            }
+        )
+
+    quality_counts = costing.get("material_price_quality_counts") if isinstance(costing.get("material_price_quality_counts"), dict) else {}
+
     result = models.ShipmentCostingResult(
         shipment_line_id=line.id,
         batch_id=batch.id,
@@ -947,7 +990,6 @@ def _persist_deduction_artifacts(
             {
                 "inventory_warning_count": len(inv_warnings or []),
                 "inventory_warnings": list(inv_warnings or [])[:20],
-                # Bundle anchors for audits & analytics (Phase0).
                 "bundle_template_id": (line.metadata_json or {}).get("bundle_template_id")
                 if isinstance(line.metadata_json, dict)
                 else None,
@@ -957,6 +999,13 @@ def _persist_deduction_artifacts(
                 "bundle_preset_selector": (line.metadata_json or {}).get("bundle_preset_selector")
                 if isinstance(line.metadata_json, dict)
                 else None,
+                # Stage 2: cost_breakdown 子对象。老前端忽略；新前端读
+                # ``cost_breakdown.materials[].price_metadata`` 渲染价格来源/含税/质量徽章。
+                "cost_breakdown": {
+                    "materials": cost_breakdown_materials,
+                    "material_price_quality_counts": dict(quality_counts),
+                    "material_price_resolved_at": costing.get("material_price_resolved_at"),
+                },
             }
         ),
     )

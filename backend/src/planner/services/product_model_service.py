@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 import logging
 import re
@@ -12,6 +12,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from .. import models
 from . import variant_rule_service
+from .material_price_resolver import derive_bom_unit_price_exclusive
 
 logger = logging.getLogger(__name__)
 
@@ -2545,7 +2546,22 @@ def get_latest_published_standard_version_for_model_code(
     )
 
 
-def _derive_bom_unit_price(material: models.Material) -> Optional[Decimal]:
+def _derive_bom_unit_price(
+    material: models.Material,
+    *,
+    as_of_date: Optional[date] = None,
+) -> Optional[Decimal]:
+    """BOM 单价（不含税）—— Stage 2 已接入。
+
+    历史口径：``unit_price / conversion_purchase_to_bom``，metadata_json.bom_unit_price 优先。
+
+    Stage 2 接入后（2026-05-10）：
+    - 走 ``material_price_resolver.resolve_material_price`` 拿"含税还原 + 生效期取价"后的不含税价；
+    - **签名兼容**：仍返回单个 ``Decimal``（每个 BOM 单位的不含税价），所有现有 ~25 个调用点不需要改；
+    - 老快照路径保留：``metadata_json.bom_unit_price`` 仍优先（部分模块预先快照），
+      但若快照缺失就走 resolver（之前是直读 unit_price）；
+    - ``as_of_date`` 默认 None=今天，发货行回溯时由上层传发货日。
+    """
     metadata = material.metadata_json or {}
     raw_price = metadata.get("bom_unit_price")
     if raw_price not in (None, ""):
@@ -2553,16 +2569,8 @@ def _derive_bom_unit_price(material: models.Material) -> Optional[Decimal]:
             return Decimal(str(raw_price))
         except Exception:  # noqa: BLE001
             pass
-    if material.unit_price is None or material.conversion_purchase_to_bom in (None, 0):
-        return None
-    try:
-        unit_price = Decimal(str(material.unit_price))
-        conversion = Decimal(str(material.conversion_purchase_to_bom))
-        if conversion == 0:
-            return None
-        return unit_price / conversion
-    except Exception:  # noqa: BLE001
-        return None
+
+    return derive_bom_unit_price_exclusive(material, as_of_date=as_of_date)
 
 
 def _measure_qty(method: str, *, width_mm: Decimal, height_mm: Decimal, quantity: Decimal) -> Decimal:
@@ -2624,6 +2632,46 @@ def _measure_qty_with_extras(
         return ((Decimal("2") * (w + h)) / Decimal("1000")) * q
     # area
     return ((w * h) / Decimal("1000000")) * q
+
+
+def _enrich_preview_price_metadata(
+    db: Session,
+    result: Dict[str, Any],
+    *,
+    as_of_date: Optional[date] = None,
+) -> Dict[str, Any]:
+    """Stage 2: 给 ``preview_model_cost`` 返回的 material_lines 每行追加 ``price_metadata``。
+
+    ``preview_model_cost`` 内部 8 个 return 路径都不会走 ``_attach_costing``，所以
+    此处统一在 wrapper 层做 1 次后处理：按 material_id 查 ORM，调 resolver，写入字典。
+    遇到错误（material 已删除等）静默跳过，绝不让前端预览崩。
+    """
+
+    from .material_price_resolver import resolve_material_price as _resolve_for_preview
+
+    lines = result.get("material_lines") if isinstance(result.get("material_lines"), list) else []
+    if not lines:
+        return result
+    for line in lines:
+        if not isinstance(line, dict):
+            continue
+        if line.get("price_metadata") is not None:
+            continue
+        mat_id = line.get("material_id") or line.get("resolved_ref_id")
+        if not mat_id:
+            continue
+        try:
+            mat = db.get(models.Material, str(mat_id))
+        except Exception:  # noqa: BLE001
+            mat = None
+        if mat is None:
+            continue
+        try:
+            quote = _resolve_for_preview(mat, as_of_date=as_of_date)
+            line["price_metadata"] = quote.to_jsonable()
+        except Exception:  # noqa: BLE001
+            continue
+    return result
 
 
 def preview_model_cost(

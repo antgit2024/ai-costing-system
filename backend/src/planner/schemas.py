@@ -1219,6 +1219,9 @@ class ProductModelPreviewMaterialLine(BaseModel):
     bom_unit_price: Optional[Decimal] = None
     total_cost: Optional[Decimal] = None
     warnings: List[str] = Field(default_factory=list)
+    # Stage 2: 取价元数据子对象（含税还原 / 生效期 / 价格来源 / 数据质量）。
+    # 老前端不读不会崩；新前端 ``MaterialPriceQualityBadge`` 渲染。
+    price_metadata: Optional[Dict[str, Any]] = None
 
     class Config:
         json_encoders = {Decimal: _decimal_to_str}

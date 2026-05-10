@@ -554,6 +554,9 @@ def preview_product_model_cost(
         quantity=payload.quantity,
         sku_hint=payload.sku_hint,
     )
+    # Stage 2: 给前端实时核价预览每行物料追加 price_metadata（含税还原 / 生效期 /
+    # 价格来源 / 数据质量），让 CostingModelsPage 物料明细表能渲染「价格来源」列。
+    product_model_service._enrich_preview_price_metadata(db, data)
     return schemas.ProductModelPreviewResponse(**data)
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Optional
@@ -10,6 +11,7 @@ from sqlalchemy.orm import Session
 from ...database import SessionLocal
 from .. import models
 from ..services import material_service
+from .material_price_resolver import resolve_material_price
 
 logger = logging.getLogger(__name__)
 
@@ -23,17 +25,22 @@ def _to_decimal(value: Any) -> Optional[Decimal]:
         return None
 
 
-def _derive_bom_unit_price(material: models.Material) -> Optional[Decimal]:
+def _derive_bom_unit_price(
+    material: models.Material,
+    *,
+    as_of_date: Optional[date] = None,
+) -> Optional[Decimal]:
     """
-    BOM 单价推导口径（与前端/历史逻辑一致）：
-    - 每次都按最新“入库单价 + 入库→BOM 换算”重新推导并覆盖（不沿用旧快照）
-    - 公式：BOM 单价 = 入库单价(unit_price) ÷ 入库→BOM 换算(conversion_purchase_to_bom)
+    BOM 单价推导口径（Stage 2 接入版）：
 
-    说明：
-    - 本接口的“推导”是为了把可推导的值落库，作为后续算价/扣库的稳定输入。
-    - BOM 单位使用 materials.unit（由用户在“BOM 单位”下拉选择保存）。
+    - 老口径：``BOM 单价 = unit_price ÷ conversion_purchase_to_bom``，每次重推不沿用快照
+    - Stage 2 增强（2026-05-10）：走 ``material_price_resolver`` 拿
+      "含税还原 + 生效期取价"后的不含税价；回填到 ``metadata_json.bom_unit_price``
+      让下游无需感知 Stage 2 字段。
+    - 缺关键输入（unit / purchase_unit / unit_price / conversion 任一缺失或<=0）一律不推导，
+      避免"看起来有值但口径不明"。
     """
-    # 为了避免“看起来有值但口径不明”，缺关键输入时一律不推导
+
     if not (material.unit or "").strip():
         return None
     if not (material.purchase_unit or "").strip():
@@ -47,6 +54,11 @@ def _derive_bom_unit_price(material: models.Material) -> Optional[Decimal]:
         return None
     if conversion <= 0:
         return None
+
+    quote = resolve_material_price(material, as_of_date=as_of_date)
+    if quote.bom_unit_price_exclusive is not None:
+        return quote.bom_unit_price_exclusive
+
     return unit_price / conversion
 
 

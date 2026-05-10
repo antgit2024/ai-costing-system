@@ -36,6 +36,7 @@ const IntegrationsHubPage = lazy(() => import('./pages/costing/IntegrationsHubPa
 const ShipmentManagementPage = lazy(() => import('./pages/costing/biz/ShipmentManagementPage'))
 const AfterSalesManagementPage = lazy(() => import('./pages/costing/biz/AfterSalesManagementPage'))
 const LongTailCogsRatePage = lazy(() => import('./pages/costing/admin/LongTailCogsRatePage'))
+const FinanceMasterDataPage = lazy(() => import('./pages/costing/admin/FinanceMasterDataPage'))
 // 系统运维：通用绑定目标选择器（模型筛选器）演练页 —— 既用于内部验收，也作为运营快速校验
 // 模型/套装层级、preset 与 token 拼装的工具页面。
 const TargetPickerPlaygroundPage = lazy(() => import('./pages/dev/TargetPickerPlaygroundPage'))
@@ -89,6 +90,9 @@ const ProtectedShell = () => (
             path="/costing/admin/cost-rate-hub"
             element={<Navigate to="/costing/admin/long-tail-cogs-rate?tab=overhead_rate" replace />}
           />
+          {/* C1 finance 主数据只读页(派单 costing_c1_client_service.md §2.7)·
+              数据来自 finance-analyzer · 通过 /api/planner/finance/* 代理拉。 */}
+          <Route path="/costing/admin/finance-master" element={<FinanceMasterDataPage />} />
           {/* 模型筛选器演练页：已正式纳入"系统运维"导航，旧路径 /dev/target-picker 保留兼容（避免外链失效）。 */}
           <Route path="/costing/system/target-picker-playground" element={<TargetPickerPlaygroundPage />} />
           <Route path="/dev/target-picker" element={<Navigate to="/costing/system/target-picker-playground" replace />} />

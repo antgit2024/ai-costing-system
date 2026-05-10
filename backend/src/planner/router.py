@@ -15,6 +15,7 @@ from .routers import (
     bundle_templates,
     callbacks,
     codes,
+    finance_c1_proxy,
     health,
     initiatives,
     integrations,
@@ -74,5 +75,6 @@ guarded.include_router(bundle_templates.router)
 guarded.include_router(bom.router)
 guarded.include_router(tmall_sku_template.router)
 guarded.include_router(binding_targets.router)
+guarded.include_router(finance_c1_proxy.router)
 
 router.include_router(guarded)

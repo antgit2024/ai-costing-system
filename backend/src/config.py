@@ -161,6 +161,30 @@ class Settings(BaseSettings):
     )
     long_tail_cogs_rate: float = Field(default=0.55, env="LONG_TAIL_COGS_RATE")
 
+    # ===== Finance → Costing C1 contract (2026-05-10) =====
+    # 见 `DOC/costing/blueprints/finance_to_costing_c1_contract_v1.md`。
+    # finance-analyzer 提供 5 个 GET API · costing 侧用 `FinanceC1Client` 拉。
+    # USE_MOCK=true 时 client 不发 HTTP · 直接返回 backend/tests/mocks/finance_c1_mock
+    # 数据(契约 §3 example response 1:1 复制)·适合 dev / 测试 / finance 还没起 API 阶段。
+    finance_c1_base_url: str = Field(
+        default="http://localhost:8001", env="FINANCE_C1_BASE_URL"
+    )
+    finance_c1_api_key: str = Field(
+        default="dev-key-change-in-prod", env="FINANCE_C1_API_KEY"
+    )
+    finance_c1_use_mock: bool = Field(default=True, env="FINANCE_C1_USE_MOCK")
+    # 若为 True · payroll 接口会自动加 `X-Payroll-Authorized: true` 头 · 否则 finance
+    # 会拒(契约 §3.5)·只有「开通了工资数据访问权限」的 ai-costing 部署才打开。
+    finance_c1_payroll_authorized: bool = Field(
+        default=False, env="FINANCE_C1_PAYROLL_AUTHORIZED"
+    )
+    finance_c1_cache_ttl_seconds: int = Field(
+        default=300, env="FINANCE_C1_CACHE_TTL_SECONDS"
+    )
+    finance_c1_timeout_seconds: float = Field(
+        default=10.0, env="FINANCE_C1_TIMEOUT_SECONDS"
+    )
+
     class Config:
         env_file = str(ENV_FILE)
         env_file_encoding = "utf-8"

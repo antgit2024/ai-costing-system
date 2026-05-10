@@ -1,8 +1,29 @@
 # finance → costing C1 契约 v1.1 增量需求
 
 > **本文档作用**：在 `finance_to_costing_c1_contract_v1.md` v1.0 基础上**只增不改**的需求增量。
-> **触发原因**：用户 2026-05-10 12:08 明确分工：「costing 一次性把规则定死告诉财务 → 财务按规则提供数据 → costing 直接消费 → 老板只看结果，财务不出业务建议」。本 v1.1 把"班组聚合公式"和"摊法计算公式"写死，财务按公式实现 2 个新 API。
-> **创建日期**：2026-05-10 12:10 北京时间
+> **触发原因**：用户 2026-05-10 12:08 明确分工，2026-05-10 12:15 进一步指出"班组归属权应该归 costing，不应让财务维护员工→班组映射"。本 v1.1 把"班组聚合公式"和"摊法计算公式"写死，财务按公式实现新 API。
+> **创建日期**：2026-05-10 12:10 北京时间（**12:18 重大修订 v1.1.1：撤回让财务做班组聚合的设计**）
+
+---
+
+## 🔴 v1.1.1 重大修订（2026-05-10 12:18）
+
+**修订内容**：用户 12:15 客观评审指出 — 「让财务维护员工→班组映射 = 让财务部做生产端的活 = 反人性」。专业判断采纳：**班组归属权归 costing，财务不做班组聚合**。
+
+| 原 v1.1 设计 | v1.1.1 修订后 |
+|---|---|
+| §3.6 让 finance 实现 `cost-centers/aggregate` 聚合接口 | ❌ **取消**。班组聚合 costing 自己做 |
+| §2.9.1 让 finance 建 `cost_center_mapping` 表 | ❌ **取消**。映射在 costing 内部 |
+| §3.6.3 cost_center_mapping 初始化由 costing 提供 | ❌ **取消**（同上）|
+| §3.5 payroll 默认 `by_department` 聚合 | 🟡 **强化**：必须支持 `aggregation=by_employee` 明细返回（不只是 department 聚合）|
+| 新增 §3.8 `cost-centers/aggregate` ❌ → 改为 costing 内部 service | ✅ 在 ai-costing-system 内部新建 `cost_center_aggregator_service` |
+
+**保留不变**：
+- §3.7 `fixed-cost-allocations` 摊法计算接口 — **保留**，因为摊法的"驱动因子数据"（floor_area / 班组人数 / 营业额）一部分在财务，一部分在 costing，让财务出最终摊法结果是双方数据 join 的最优点
+- §2.11 master_companies 加 `floor_area_sqm` 字段 — **保留**
+- §2.12 fixed_monthly_cost 加 `cost_subcategory_v2` 字段 — **保留**
+
+**新增条款见文末「§10 v1.1.1 修订条款」**。
 > **产权方**：与 v1.0 同 — costing + finance 双方共有
 > **关联文档**：`finance_to_costing_c1_contract_v1.md` v1.0
 > **本增量影响范围**：finance 侧加 2 个新 API + 2 个新字段 + 1 张 mapping 表；costing 侧只消费不实施
@@ -365,6 +386,113 @@ labor_rate_per_minute = total_labor_cost_window / (total_workdays_window × 480)
 
 ---
 
-## 9. 一句话给 finance 团队 / Agent
+## 9. 一句话给 finance 团队 / Agent（v1.1.1 修订后）
 
-v1.0 的 5 个 API 你已经做完了。v1.1 在此基础上加 2 个聚合 API + 2 个字段 + 2 张辅助表，**所有公式 / 默认规则 / mapping 都在本文档 §3.6 §3.7 里写死了**，你 1:1 实现即可。**任何"业务上是否合理"的问题不要问 costing**，因为本契约就是 costing 的最终决策；你只需 confirm "技术上能否实现"和 "字段名是否冲突现有 schema"。
+v1.0 的 5 个 API 你已经做完了。v1.1.1 在此基础上**只加 1 个聚合 API + 2 个字段 + 1 张辅助表**（v1.1 原本 2 个聚合 API，§3.6 班组聚合已撤回）：
+
+**finance 侧只需要做的**：
+1. §3.7 `GET /api/v1/c1/fixed-cost-allocations` 摊法计算接口（11 项默认规则在本文档写死，1:1 实现）
+2. §2.11 master_companies 加 `floor_area_sqm` 字段
+3. §2.12 fixed_monthly_cost 加 `cost_subcategory_v2` 字段
+4. §2.9.2 cost_center_allocation_rule 表（11 项默认规则 1:1 insert）
+5. **强化 v1.0 §3.5 payroll**：必须真正支持 `aggregation=by_employee` 明细返回（每个 employee_id 一行 + 月度工资 + 员工合同主体），**不要按 department 聚合**
+
+**finance 不做的**：
+- ❌ 不维护员工 → 班组映射（这是 costing 内部的事，班组归属权归生产端）
+- ❌ 不做班组聚合（costing 拉员工明细工资 + 自己内部映射 + 自己聚合）
+- ❌ 不出业务判断
+
+**任何"业务上是否合理"的问题不要问 costing**，因为本契约就是 costing 的最终决策；你只需 confirm "技术上能否实现"和 "字段名是否冲突现有 schema"。
+
+---
+
+## 10. v1.1.1 修订条款（2026-05-10 12:18）
+
+### 10.1 撤销条款（finance 不需要做）
+
+- ~~§2.9.1 cost_center_mapping 表~~ — 撤销，移到 costing 内部
+- ~~§3.6 GET /api/v1/c1/cost-centers/aggregate~~ — 撤销，costing 自己实现内部聚合 service
+
+### 10.2 强化条款（finance v1.0 §3.5 payroll 需要补强）
+
+**v1.0 §3.5 写法**：「`aggregation=by_employee|by_department`（可选，默认 by_department 聚合）」
+
+**v1.1.1 修订**：必须真正实现 `by_employee` 模式，response 格式如下：
+
+```json
+{
+  "_api_version": "1.1.1",
+  "data": [
+    {
+      "employee_id": "uuid-string-36",
+      "employee_no": "E0001",
+      "name_masked": "张*",
+      "company_id": "uuid-string-36",         // 工资发放主体（contract_company_id）
+      "department_raw": "缝纫一组",            // 财务现有 department 字段，作为参考（不是权威）
+      "period_year": 2026,
+      "period_month": 4,
+      "workdays": 21.5,
+      "gross_salary": 5500.00,                 // 应发工资
+      "employer_insurance": 1100.00,           // 公司承担五险一金
+      "total_labor_cost": 6600.00,             // 公司端总成本
+      "metadata": {}
+    }
+  ],
+  "pagination": {...}
+}
+```
+
+**关键点**：
+- `department_raw` 字段是"参考"（财务自己怎么填都可以），不是权威，**costing 不依赖它做班组聚合**
+- 每个员工每月 1 行，**不要 group by department**（让 costing 自己 group）
+- `employee_id` 是核心，**必须稳定**（员工 ID 不能因为部门变动而改变）
+
+### 10.3 新增条款（finance 帮 costing 做的"中性服务"）
+
+#### 10.3.1 `GET /api/v1/c1/employees/by-ids` — 按员工 ID 批量查
+
+**用途**：costing 内部 cost_center_master 表会存「员工 ID 列表」，需要批量反查员工信息。
+
+**Query Parameters**：
+```
+?employee_ids=<id1>,<id2>,<id3>     (必需，逗号分隔，单次 ≤ 200 个)
+```
+
+**Response 200**：
+```json
+{
+  "_api_version": "1.1.1",
+  "data": [
+    {
+      "id": "uuid",
+      "employee_no": "E0001",
+      "name_masked": "张*",
+      "is_active": true,
+      "contract_company_id": "uuid",
+      "department_raw": "缝纫一组"   // 参考字段
+    }
+  ]
+}
+```
+
+**这个接口让 costing 不需要每次都全量拉花名册**。
+
+### 10.4 costing 内部要做的（不在 finance scope 内，但记录在此让双方都清楚）
+
+**ai-costing-system 内部新增**：
+
+1. **新表 `employee_cost_center_assignment`**（员工 → 班组的细粒度映射）：
+   ```
+   id, employee_id (引 finance), cost_center_code,
+   share_pct (默认 100%，支持一员工多班组按比例), 
+   effective_from, effective_to, created_by, updated_at
+   ```
+
+2. **新 service `cost_center_aggregator_service`**：拉 §3.5 by_employee 工资明细 + join 内部 employee_cost_center_assignment + 按班组聚合算 labor_rate_per_minute
+
+3. **新 UI `/costing/admin/cost-centers`**：班长可以维护"员工 → 班组"的关系（员工 ID 列表选自 §10.3.1 接口）
+
+4. **预填策略（v1 阶段降低录入成本）**：
+   - 第一次拉员工时，**用 finance 的 `department_raw` 字段做"建议初始映射"**（一人一班组）
+   - 班长进 UI 后看到预填，调整即可（不用从零配）
+   - 班长改了之后，以 costing 内部为准，不再依赖 finance department

@@ -1,19 +1,21 @@
 # cost_center_master 主数据填报模板 v2（重新分工版）
 
-> **🟡 状态变更（2026-05-10 12:05）**：本 v2 模板**暂停老板手填**。
+> **🔴 状态变更（2026-05-10 12:12）— v2 模板正式废弃手填模式**
 >
-> 用户 2026-05-10 12:00 指出："班组数据 + 摊法专业建议 = 财务的原材料 + 财务的专业知识，让老板从零手填等于让老板把财务的活做一遍"。Hub Agent 同意，**本 v2 已升级为「等财务出初稿 → 老板 review」模式**。
+> 用户 12:08 二次指出："让财务出建议又让老板 review = 财务变业务大脑 = costing 没自己出主意"。**正确分工是：costing 一次性把规则定死告诉财务 → 财务按规则提供数据 → costing 直接消费 → 老板登录系统点鼠标即可**。
 >
-> **新工作流**：
-> 1. 财务 Agent 基于 finance-analyzer 真实员工/工资/固开数据出 v3 草案（4~6 小时）→ 文件位置：`cost_center_master_填报模板_v3_财务初稿.md`
-> 2. 老板 review v3 草案（5~10 分钟）：① 给每个班组打"主要服务品类"标签 ② confirm 班组合并/拆分意见 ③ confirm 摊法
-> 3. Hub Agent 落地数据库 + 出 UI（2~3 小时）
+> **新工作流（终极版）**：
+> 1. **财务侧**：按 `finance_to_costing_c1_contract_v1.1_increment.md` 实施 2 个新聚合 API（4~6 小时），所有公式/规则 costing 已写死，财务不出业务建议
+> 2. **costing 侧**：拉数据 → 落 cost_center_master 主表（自动预填）+ 出管理 UI（3~4 小时）
+> 3. **老板**：登录 ai-costing-system → 进 `/costing/admin/cost-centers` → 看自动预填的 6~10 个班组 → 点"主要服务品类"标签 + confirm/调整 → done（5~10 分钟，不是填模板，是点鼠标）
 >
-> **本 v2 文档保留**作为：① v1 → v2 → v3 决策演进留档 ② v3 草案的列结构参考
+> **本 v2 文档不再使用**，仅保留作为 v1 → v2 → v2.5（让财务出建议）→ v3（终极方案）的决策演进留档。
 >
-> **派单文档**：`/home/admin/ai-costing-system/DOC/agents/briefings/cost_center_master_draft_from_finance.md`
+> **真正的需求文档**：
+> - `DOC/costing/blueprints/finance_to_costing_c1_contract_v1.md` v1.0（5 个原始 API）
+> - `DOC/costing/blueprints/finance_to_costing_c1_contract_v1.1_increment.md` v1.1 增量（2 个聚合 API + 公式定义）
 >
-> **触发条件**（v3 草案才能开跑）：finance-analyzer 仓库 `feat/c1-costing-contract-v1` branch 已 push 到 origin + 7 主体已打 entity_role 标签 + COSTING_API_KEY 已发给 costing
+> **触发条件**：v1.1 增量 + v1.0 全部上线 → 自动出班组数据 → 进 UI 点品类
 >
 > ---
 >

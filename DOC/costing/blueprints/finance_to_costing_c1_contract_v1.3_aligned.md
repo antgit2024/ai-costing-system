@@ -133,6 +133,46 @@
 
 字段沿用 v1.2 §4.5，不变。
 
+### 4.10 master_companies 加 floor_area_sqm 字段（finance 备忘录 v0.3 提问澄清）
+
+**触发**：finance 备忘录 v0.3 指出 v1.3 §5 cost_allocator_service 数据源里引用了 `master_companies.floor_area`，但 §4.1 4 标签字段表没列。这是 Hub Agent 的疏漏（v1.2 §2.11 提过、v1.3 收口时漏）。
+
+**决策（选 finance 提供的 C 方案 + costing 侧多级 fallback 加强）**：
+
+| 字段 | 类型 | 必需 | 默认 | 说明 |
+|---|---|---|---|---|
+| `floor_area_sqm` | Numeric(10,2) | ❌（可空）| NULL | 该主体占用厂房/办公面积（平方米）。NULL = ops 暂未测量 |
+
+**finance 侧实施**（与 §4.1 同批做）：
+- master_companies 加这 1 个 Numeric 字段
+- DDL 兼容老数据（默认 NULL）
+- ops **不强制立即填值**（允许 v1 启动时全为 NULL，渐进补充）
+
+**costing 内部 cost_allocator_service 多级 fallback**（不在 finance scope，记录在此让双方都清楚）：
+
+```
+房租/水电 等"生产端固开"摊法：
+  优先级 1: floor_area_sqm 非 NULL → 按面积摊
+  优先级 2: floor_area_sqm 为 NULL → fallback 到 headcount（用 payroll by_employee 聚合）
+  优先级 3: 都拿不到 → fallback 到收入比例（finance C 方案默认）
+
+平台佣金/售后退换 等"销售端固开"摊法：
+  优先级 1: 收入比例（stores/revenue）— 这是天然口径
+  无 fallback 需求
+
+办公耗材/管理工资 等"两端共摊固开"：
+  优先级 1: headcount（管理类按总人头）
+  优先级 2: 平均分摊（兜底）
+```
+
+**为什么不用 A**：你们 3 工厂在一栋楼，"严格分面积"主观成分大，让 ops 当下硬填不准的值意义不大。
+**为什么不用 B**：headcount 对管理岗 vs 生产岗占地差 5~10 倍的场景偏差太大。
+**为什么不用纯 C（finance 默认）**：纯 C 把所有 NULL 都 fallback 到收入比例，但生产端固开（房租/水电）跟营收弱相关，应优先 fallback 到 headcount。
+
+**未来路径**：v1 启动后 ops 可以慢慢测量 floor_area 慢慢补值，每补 1 个主体就提升 1 个主体的摊法精度。系统不会因为字段缺失阻塞。
+
+---
+
 ### 4.6 新增 GET /api/v1/c1/payment-requests（v1.3 新增 — finance 主动提案）
 
 **用途**：暴露付款凭证级数据（含摊销配置 + 6 类管理会计分类 + 付款主体/受益主体分离）。
@@ -278,8 +318,22 @@ def get_amortized_costs_for_month(target_year: int, target_month: int) -> dict:
 
 ```
 finance 负责人 (待签字 2026-05-_____): __________________
-costing 负责人 (Hub Agent 已确认 2026-05-10): __________________
+costing 负责人 (Hub Agent 已确认 2026-05-10 13:30, §4.10 floor_area 决策 13:55): __________________
 ```
+
+### 9.1 §4.10 floor_area 决策正式回复（2026-05-10 13:55）
+
+回复 finance 备忘录 v0.3 提问：**选 C（加可空字段 + NULL 时降级）+ costing 侧补充多级 fallback**。
+
+| 项 | 决策 |
+|---|---|
+| master_companies 是否加 floor_area_sqm 字段 | ✅ 加 |
+| 字段类型 | Numeric(10,2) 可空 |
+| ops 是否必须立即填 7 主体值 | ❌ 不强制（允许 v1 启动时全 NULL，渐进补充）|
+| NULL 时的处理 | costing 内部多级 fallback（生产端→headcount，销售端→revenue，共摊→headcount，兜底→均摊）|
+| finance 侧改动量 | 加 1 个字段（与 §4.1 同批），不需要写 fallback 逻辑 |
+
+**实施动作**：finance 侧把 v0.3 备忘录 §4.10（如有）改为本节内容；签字后启动实施。
 
 ---
 

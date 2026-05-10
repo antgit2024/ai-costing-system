@@ -1,4 +1,14 @@
-# finance → costing C1 契约 v1.2 全局优化版（财务实施权威清单）
+# ⚠️ 本 v1.2 已被 v1.3 替代 — 仅作历史存档
+
+> **❌ 替代通知（2026-05-10 13:30）**：finance 团队 13:00 主动提案 `payment_requests` 接口取代 fixed_monthly_costs.amortization 字段，并 align 边界（撤回 fixed-cost-allocations API）。
+>
+> **唯一权威**：`finance_to_costing_c1_contract_v1.3_aligned.md`
+>
+> 本 v1.2 不再使用，仅作 v1.0 → v1.1 → v1.1.1 → v1.2 → v1.3 决策演进留档。
+>
+> ---
+
+# finance → costing C1 契约 v1.2 全局优化版（已废弃，仅存档）
 
 > **本文档作用**：把 v1.0 + v1.1 + v1.1.1 的所有决策、撤回、新增汇总成 1 份权威清单。**财务团队/Agent 看这一份就够，不用翻历史**。
 > **创建日期**：2026-05-10 12:25 北京时间

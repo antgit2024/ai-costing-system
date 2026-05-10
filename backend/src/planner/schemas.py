@@ -4479,3 +4479,177 @@ class LongTailCogsRateResolvePreviewResponse(BaseModel):
     hit_scope_type: Optional[str] = None
     hit_scope_id: Optional[str] = None
     data_quality: Optional[str] = None
+
+
+# ===========================================================================
+# Path A §A1 — cost_center master schemas (Migration 0040)
+# ===========================================================================
+
+
+class CostCenterRead(BaseModel):
+    id: str
+    code: str
+    name: str
+    type: str = Field(..., description="production | auxiliary | admin")
+    description: Optional[str] = None
+    default_allocation_basis: Optional[str] = Field(
+        None, description="headcount | team_hours | revenue | floor_area | fixed_pct"
+    )
+    legacy_team_names: List[str] = Field(default_factory=list)
+    is_active: bool = True
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    deleted_at: Optional[str] = None
+
+
+class CostCenterStatsRead(BaseModel):
+    process_count: int = 0
+    employee_count: int = 0
+    finance_data_source: str = Field("live", description="live | cache | mock | unavailable")
+    finance_warnings: List[str] = Field(default_factory=list)
+
+
+class CostCenterWithStatsRead(CostCenterRead):
+    stats: CostCenterStatsRead = Field(default_factory=CostCenterStatsRead)
+
+
+class CostCenterListResponse(BaseModel):
+    items: List[CostCenterWithStatsRead]
+    finance_data_source: str = Field(
+        "live",
+        description="顶层 envelope 标记 finance employees 拉取来源",
+    )
+    finance_warnings: List[str] = Field(default_factory=list)
+
+
+class CostCenterUpsertRequest(BaseModel):
+    code: Optional[str] = Field(None, description="必填(create); 不可改", max_length=64)
+    name: Optional[str] = Field(None, max_length=128)
+    type: Optional[str] = Field(None, description="production | auxiliary | admin")
+    description: Optional[str] = None
+    default_allocation_basis: Optional[str] = Field(
+        None, description="headcount | team_hours | revenue | floor_area | fixed_pct"
+    )
+    legacy_team_names: Optional[List[str]] = None
+    is_active: Optional[bool] = None
+    metadata: Optional[Dict[str, Any]] = None
+    actor: Optional[str] = Field(None, description="审计字段")
+
+
+class CostCenterAssignProcessesRequest(BaseModel):
+    process_ids: List[str] = Field(..., min_items=1)
+    actor: Optional[str] = None
+
+
+class CostCenterAssignProcessesResponse(BaseModel):
+    cost_center_id: str
+    bound_count: int
+
+
+class CostCenterRefreshMappingResponse(BaseModel):
+    departments_seen: List[str]
+    cost_centers_updated: int
+    unmatched_departments: List[str]
+    finance_data_source: str
+    warnings: List[str] = Field(default_factory=list)
+
+
+# ===========================================================================
+# Path A §A2 — cost_center_payroll_snapshot schemas
+# ===========================================================================
+
+
+class CostCenterPayrollSnapshotRead(BaseModel):
+    id: str
+    cost_center_id: str
+    period: str
+    headcount: int
+    total_paid: float
+    avg_salary: float
+    total_minutes: Optional[float] = None
+    rate_per_minute: Optional[float] = None
+    data_source: str
+    data_quality: str
+    warnings: List[Any] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class CostCenterAggregatePayrollResponse(BaseModel):
+    period: str
+    cost_center_count: int
+    snapshots: List[CostCenterPayrollSnapshotRead]
+    upserted_rate_rows: int = Field(
+        0,
+        description="cost_rate_master 中新增/更新的 labor_per_minute 行数",
+    )
+    finance_data_source: str
+    warnings: List[str] = Field(default_factory=list)
+
+
+# ===========================================================================
+# Path A §A3 — fixed_cost_amortization_line schemas
+# ===========================================================================
+
+
+class FixedCostAmortizationLineRead(BaseModel):
+    id: str
+    period: str
+    payment_request_id: str
+    beneficiary_company_id: Optional[str] = None
+    payer_company_id: Optional[str] = None
+    expense_category: str
+    amount_amortized: float
+    is_monthly_amortized: bool
+    amort_months: Optional[int] = None
+    amort_start_period: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: Optional[str] = None
+
+
+class FixedCostAmortizeResponse(BaseModel):
+    period: str
+    lines_written: int
+    total_amount: float
+    by_category: Dict[str, float] = Field(default_factory=dict)
+    by_company: Dict[str, float] = Field(default_factory=dict)
+    finance_data_source: str
+    warnings: List[str] = Field(default_factory=list)
+
+
+# ===========================================================================
+# Path A §A4 — cost_allocation_line schemas
+# ===========================================================================
+
+
+class CostAllocationLineRead(BaseModel):
+    id: str
+    period: str
+    source_company_id: str
+    source_expense_category: str
+    source_total_amount: float
+    target_cost_center_id: str
+    allocation_basis: str
+    allocation_basis_value: float
+    allocation_basis_total: float
+    allocation_weight: float
+    amount_allocated: float
+    fallback_chain: List[str] = Field(default_factory=list)
+    warnings: List[Any] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: Optional[str] = None
+
+
+class CostAllocationRunResponse(BaseModel):
+    period: str
+    lines_written: int
+    cost_centers_touched: int
+    total_amount: float
+    upserted_rate_rows: int = Field(
+        0,
+        description="cost_rate_master 中新增/更新的 overhead_rate 行数",
+    )
+    by_cost_center: Dict[str, float] = Field(default_factory=dict)
+    warnings: List[str] = Field(default_factory=list)

@@ -44,6 +44,11 @@ import {
 import type { SalesLineItem, SalesLinesResponse, SalesProfitDashboardResponse, SalesProfitDashboardTopModelItem, SalesProfitDashboardTopSkuItem } from '@/types/planner'
 import { CostQualityBadge } from '@/components/costing/CostQualityBadge'
 import { formatBeijingTime } from '@/utils/beijingTime'
+import {
+  LegalEntityFilter,
+  rowMatchesLegalEntity,
+  useLegalEntityFilter,
+} from '@/components/insights/LegalEntityFilter'
 
 const STORAGE_KEY = 'insights.sales.lastQuery.v1'
 
@@ -143,6 +148,17 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(100)
   const [shopOptions, setShopOptions] = useState<string[]>([])
+  // Path A §A5 — 法人主体多选过滤(client-side fuzzy on row.channel)
+  const [selectedCompanyIds, setSelectedCompanyIds] = useState<string[]>([])
+  const { options: companyOptions } = useLegalEntityFilter()
+  const selectedKeywords = useMemo(() => {
+    const set = new Set<string>()
+    for (const id of selectedCompanyIds) {
+      const opt = companyOptions.find(o => o.value === id)
+      if (opt) opt.keywords.forEach(k => set.add(k))
+    }
+    return Array.from(set)
+  }, [selectedCompanyIds, companyOptions])
   const [useSnapshot] = useState(true)
   const [dashboardComputedAt, setDashboardComputedAt] = useState<string | null>(null)
   const [periodMode, setPeriodMode] = useState<SalesPeriodMode>('custom')
@@ -840,6 +856,9 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
               filterOption={(input, option) => String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())}
             />
           </Form.Item>
+          <Form.Item label="法人主体">
+            <LegalEntityFilter value={selectedCompanyIds} onChange={setSelectedCompanyIds} />
+          </Form.Item>
           <Form.Item label="货品条码" name="sku_code">
             <Input placeholder="可选：barcode" style={{ width: 180 }} allowClear />
           </Form.Item>
@@ -947,7 +966,11 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
               size="small"
               loading={loading}
               columns={columns}
-              dataSource={data?.items ?? []}
+              dataSource={
+                selectedKeywords.length
+                  ? (data?.items ?? []).filter(it => rowMatchesLegalEntity(it.channel, selectedKeywords))
+                  : (data?.items ?? [])
+              }
               pagination={pagination}
               scroll={{ x: 2100 }}
             />
@@ -1453,7 +1476,11 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
                           size="small"
                           loading={loading}
                           columns={columns}
-                          dataSource={data?.items ?? []}
+                          dataSource={
+                            selectedKeywords.length
+                              ? (data?.items ?? []).filter(it => rowMatchesLegalEntity(it.channel, selectedKeywords))
+                              : (data?.items ?? [])
+                          }
                           pagination={pagination}
                           scroll={{ x: 2350 }}
                         />

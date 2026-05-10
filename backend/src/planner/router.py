@@ -15,6 +15,7 @@ from .routers import (
     bundle_templates,
     callbacks,
     codes,
+    cost_centers,
     finance_c1_proxy,
     health,
     initiatives,
@@ -76,5 +77,9 @@ guarded.include_router(bom.router)
 guarded.include_router(tmall_sku_template.router)
 guarded.include_router(binding_targets.router)
 guarded.include_router(finance_c1_proxy.router)
+# Path A §A1+A2+A3+A4 — cost_center master + 3 batch endpoints
+guarded.include_router(cost_centers.router)
+guarded.include_router(cost_centers.fixed_costs_router)
+guarded.include_router(cost_centers.allocation_router)
 
 router.include_router(guarded)

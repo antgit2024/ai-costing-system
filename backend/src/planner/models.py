@@ -469,7 +469,16 @@ class Process(Base, TimestampMixin, SoftDeleteMixin):
     unit_of_measure: Mapped[str | None] = Column(String(32))
     status: Mapped[str] = Column(String(32), nullable=False, default="draft")
     is_active: Mapped[bool] = Column(Boolean, nullable=False, default=True)
+    # Path A §A1 (Migration 0040): nullable FK to cost_center.id. Historical
+    # rows keep NULL, the 4-layer Hub resolver already falls back gracefully.
+    cost_center_id: Mapped[str | None] = Column(
+        String(36), ForeignKey("cost_center.id", ondelete="SET NULL"), nullable=True
+    )
     metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict)
+
+    cost_center: Mapped["CostCenter | None"] = relationship(
+        "CostCenter", back_populates="processes", lazy="selectin"
+    )
 
 
 class ProcessFeedback(Base, TimestampMixin, SoftDeleteMixin):
@@ -1595,4 +1604,160 @@ class CostRateMaster(Base, TimestampMixin, SoftDeleteMixin):
 # (services, routers, tests) imports ``LongTailCogsRateStrategy`` and that
 # must keep working through the migration window.
 LongTailCogsRateStrategy = CostRateMaster
+
+
+# ---------------------------------------------------------------------------
+# Path A §A1 — cost_center master (Migration 0040)
+# ---------------------------------------------------------------------------
+
+
+class CostCenter(Base):
+    """Cost center master — replaces the loose `processes.team_name` string
+    with a real entity that can be referenced by Hub overhead_rate /
+    labor_per_minute resolvers (4th layer of the chain).
+
+    Six initial seeds are inserted by Migration 0040 (CC_DECOR_PROD /
+    CC_FABRIC_PROD / CC_PRINT / CC_CUT_EDGE / CC_PACK_SHIP / CC_ADMIN);
+    runtime ``cost_center_service.refresh_finance_department_mapping()``
+    aligns finance-side ``employees.department`` strings into
+    ``metadata.finance_department_mapping`` so A2 aggregator can find
+    which employees belong to each cost center.
+
+    Soft-delete: ``deleted_at`` IS NULL means active. We don't reuse
+    ``SoftDeleteMixin``'s boolean ``is_archived`` because cost_center
+    has the additional ``is_active`` toggle (= "暂停使用 vs 永久删除"
+    is a real distinction for finance ops).
+    """
+
+    __tablename__ = "cost_center"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    code: Mapped[str] = Column(String(64), nullable=False, unique=True)
+    name: Mapped[str] = Column(String(128), nullable=False)
+    type: Mapped[str] = Column(String(32), nullable=False)
+    description: Mapped[str | None] = Column(Text)
+    default_allocation_basis: Mapped[str | None] = Column(String(32))
+    legacy_team_names: Mapped[List[str]] = Column(JSON, default=list, nullable=False)
+    is_active: Mapped[bool] = Column(Boolean, nullable=False, default=True)
+    metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = Column(DateTime, default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
+    deleted_at: Mapped[datetime | None] = Column(DateTime)
+
+    processes: Mapped[List["Process"]] = relationship(
+        "Process", back_populates="cost_center", lazy="selectin"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Path A §A2 — cost_center_payroll_snapshot (Migration 0041)
+# ---------------------------------------------------------------------------
+
+
+class CostCenterPayrollSnapshot(Base):
+    """Per-(cost_center, period) payroll aggregation snapshot.
+
+    Written by A2 ``cost_center_aggregator_service``; consumed by Hub
+    ``rate_type='labor_per_minute'`` upserts and by A5's "自动算法日志"
+    Tab. ``data_quality`` is yellow (auto-aggregated) by default; ops
+    can override to green (verified) or red (degraded) via the Hub.
+    """
+
+    __tablename__ = "cost_center_payroll_snapshot"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    cost_center_id: Mapped[str] = Column(
+        String(36), ForeignKey("cost_center.id", ondelete="CASCADE"), nullable=False
+    )
+    period: Mapped[str] = Column(String(7), nullable=False)
+    headcount: Mapped[int] = Column(Integer, nullable=False, default=0)
+    total_paid: Mapped[float] = Column(Numeric(14, 2), nullable=False, default=0)
+    avg_salary: Mapped[float] = Column(Numeric(12, 2), nullable=False, default=0)
+    total_minutes: Mapped[float | None] = Column(Numeric(14, 2))
+    rate_per_minute: Mapped[float | None] = Column(Numeric(10, 4))
+    data_source: Mapped[str] = Column(String(32), nullable=False)
+    data_quality: Mapped[str] = Column(String(16), nullable=False)
+    warnings: Mapped[List[Any]] = Column(JSON, default=list, nullable=False)
+    metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = Column(DateTime, default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("cost_center_id", "period", name="uq_cost_center_payroll_period"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Path A §A3 — fixed_cost_amortization_line (Migration 0042)
+# ---------------------------------------------------------------------------
+
+
+class FixedCostAmortizationLine(Base):
+    """Per-(period, payment_request) amortized fixed cost line.
+
+    Built by A3 ``fixed_cost_amortizer_service`` from finance C1
+    payment_requests + amort 5-field expansion. Each line carries the
+    monthly amortized portion plus enough audit metadata to trace back
+    to the originating payment_request and master_companies entry.
+    Notice ``beneficiary_company_id`` (= finance ``company_id`` aka
+    company_name) vs ``payer_company_id`` (= finance ``pay_company``):
+    cost_allocator (A4) uses *beneficiary* for allocation, never payer.
+    """
+
+    __tablename__ = "fixed_cost_amortization_line"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    period: Mapped[str] = Column(String(7), nullable=False)
+    payment_request_id: Mapped[str] = Column(String(64), nullable=False)
+    beneficiary_company_id: Mapped[str | None] = Column(String(64))
+    payer_company_id: Mapped[str | None] = Column(String(64))
+    expense_category: Mapped[str] = Column(String(32), nullable=False)
+    amount_amortized: Mapped[float] = Column(Numeric(14, 2), nullable=False)
+    is_monthly_amortized: Mapped[bool] = Column(Boolean, nullable=False, default=False)
+    amort_months: Mapped[int | None] = Column(Integer)
+    amort_start_period: Mapped[str | None] = Column(String(7))
+    metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = Column(DateTime, default=utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("period", "payment_request_id", name="uq_fca_period_payment"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Path A §A4 — cost_allocation_line (Migration 0043)
+# ---------------------------------------------------------------------------
+
+
+class CostAllocationLine(Base):
+    """Per-(period, source_company, expense_category, target_cost_center)
+    allocation line — output of A4 ``cost_allocator_service``.
+
+    For each (beneficiary company, expense category, total amount) tuple
+    the allocator picks an allocation basis (floor_area / headcount /
+    revenue / fixed_pct) per the v1.3 §4.10 rule table, then distributes
+    to all cost_centers weighted by that driver. ``fallback_chain``
+    records the multi-level fallback path actually taken so the Hub UI
+    can show a tooltip.
+    """
+
+    __tablename__ = "cost_allocation_line"
+
+    id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
+    period: Mapped[str] = Column(String(7), nullable=False)
+    source_company_id: Mapped[str] = Column(String(64), nullable=False)
+    source_expense_category: Mapped[str] = Column(String(32), nullable=False)
+    source_total_amount: Mapped[float] = Column(Numeric(14, 2), nullable=False)
+    target_cost_center_id: Mapped[str] = Column(
+        String(36), ForeignKey("cost_center.id", ondelete="CASCADE"), nullable=False
+    )
+    allocation_basis: Mapped[str] = Column(String(32), nullable=False)
+    allocation_basis_value: Mapped[float] = Column(Numeric(14, 4), nullable=False, default=0)
+    allocation_basis_total: Mapped[float] = Column(Numeric(14, 4), nullable=False, default=0)
+    allocation_weight: Mapped[float] = Column(Numeric(8, 6), nullable=False, default=0)
+    amount_allocated: Mapped[float] = Column(Numeric(14, 2), nullable=False)
+    fallback_chain: Mapped[List[str]] = Column(JSON, default=list, nullable=False)
+    warnings: Mapped[List[Any]] = Column(JSON, default=list, nullable=False)
+    metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = Column(DateTime, default=utcnow, nullable=False)
 

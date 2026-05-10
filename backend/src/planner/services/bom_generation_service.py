@@ -2056,14 +2056,29 @@ def _resolve_overhead_rate(db: Session, *, model_version_processes: List[models.
     version = db.get(models.ProductModelVersion, version_id) if version_id else None
     model = db.get(models.ProductModel, version.model_id) if version else None
 
-    # === v1.3: Hub 4-layer resolve (model > category > cost_center > global) ===
+    # === v1.3 + Path A §A4: Hub 4-layer resolve (model > category > cost_center > global) ===
     try:
         from .long_tail_strategy_service import resolve_overhead_rate as _hub_resolve
+        # Path A §A4 wiring: derive cost_center_id from this version's
+        # processes via Process.cost_center_id (added in Migration 0040).
+        # We pick the most-frequent cost_center across the version's
+        # processes — consistent with the brief's "众数" rule. NULL
+        # cost_center_id rows are ignored. Robust to mixed-team versions.
+        cc_id: Optional[str] = None
+        if model_version_processes:
+            cc_counts: Dict[str, int] = {}
+            for p in model_version_processes:
+                proc = db.get(models.Process, p.process_id) if p.process_id else None
+                cc = getattr(proc, "cost_center_id", None) if proc is not None else None
+                if cc:
+                    cc_counts[cc] = cc_counts.get(cc, 0) + 1
+            if cc_counts:
+                cc_id = max(cc_counts.items(), key=lambda kv: kv[1])[0]
         hub_hit = _hub_resolve(
             db,
             model_id=getattr(model, "id", None) if model else None,
             category=getattr(model, "category", None) if model else None,
-            cost_center_id=None,  # v1: cost_center wiring is Stage 2.
+            cost_center_id=cc_id,
         )
         if hub_hit.hit_layer in {"model", "category", "cost_center", "global"}:
             return hub_hit.rate

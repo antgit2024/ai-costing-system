@@ -18,6 +18,11 @@ import type {
   ReturnsRateByChannelResponse,
 } from '@/types/planner'
 import { CostQualityBadge } from '@/components/costing/CostQualityBadge'
+import {
+  LegalEntityFilter,
+  rowMatchesLegalEntity,
+  useLegalEntityFilter,
+} from '@/components/insights/LegalEntityFilter'
 
 type GroupBy = 'day' | 'month'
 
@@ -58,6 +63,17 @@ const ShopInsightsPage = () => {
   const [dataProfit, setDataProfit] = useState<ProfitByChannelResponse | null>(null)
   const [dataReturns, setDataReturns] = useState<ReturnsRateByChannelResponse | null>(null)
   const [onlyFullCoverage, setOnlyFullCoverage] = useState(false)
+  // Path A §A5 — 法人主体多选过滤(client-side fuzzy)
+  const [selectedCompanyIds, setSelectedCompanyIds] = useState<string[]>([])
+  const { options: companyOptions } = useLegalEntityFilter()
+  const selectedKeywords = useMemo(() => {
+    const set = new Set<string>()
+    for (const id of selectedCompanyIds) {
+      const opt = companyOptions.find(o => o.value === id)
+      if (opt) opt.keywords.forEach(k => set.add(k))
+    }
+    return Array.from(set)
+  }, [selectedCompanyIds, companyOptions])
   const didInitRef = useRef(false)
   const [useSnapshot, setUseSnapshot] = useState(true)
   const [quickDays, setQuickDays] = useState<7 | 30 | 90>(30)
@@ -238,10 +254,23 @@ const ShopInsightsPage = () => {
   }
 
   const filteredProfitItems = useMemo(() => {
-    const items = dataProfit?.items ?? []
-    if (!onlyFullCoverage) return items
-    return items.filter((it) => (it.shipment_lines_total || 0) > 0 && it.lines_with_bom_snapshots === it.shipment_lines_total)
-  }, [dataProfit, onlyFullCoverage])
+    let items = dataProfit?.items ?? []
+    if (onlyFullCoverage) {
+      items = items.filter((it) => (it.shipment_lines_total || 0) > 0 && it.lines_with_bom_snapshots === it.shipment_lines_total)
+    }
+    if (selectedKeywords.length) {
+      items = items.filter(it => rowMatchesLegalEntity(it.channel, selectedKeywords))
+    }
+    return items
+  }, [dataProfit, onlyFullCoverage, selectedKeywords])
+
+  const filteredReturnsItems = useMemo(() => {
+    let items = dataReturns?.items ?? []
+    if (selectedKeywords.length) {
+      items = items.filter(it => rowMatchesLegalEntity(it.channel, selectedKeywords))
+    }
+    return items
+  }, [dataReturns, selectedKeywords])
 
   return (
     <div style={{ padding: 16 }}>
@@ -293,6 +322,9 @@ const ShopInsightsPage = () => {
           </Form.Item>
           <Form.Item label="渠道" name="channel">
             <Input placeholder="可选：店铺/渠道（留空=全部）" style={{ width: 200 }} allowClear />
+          </Form.Item>
+          <Form.Item label="法人主体">
+            <LegalEntityFilter value={selectedCompanyIds} onChange={setSelectedCompanyIds} />
           </Form.Item>
           <Form.Item>
             <Space>
@@ -430,7 +462,7 @@ const ShopInsightsPage = () => {
                     rowKey={(r) => `${r.period}-${r.channel ?? ''}`}
                     loading={loading}
                     columns={returnsColumns}
-                    dataSource={dataReturns?.items ?? []}
+                    dataSource={filteredReturnsItems}
                     pagination={{ pageSize: 50, showSizeChanger: true }}
                     scroll={{ x: 1260 }}
                   />

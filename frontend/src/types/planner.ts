@@ -2853,3 +2853,185 @@ export interface LongTailCogsRateResolvePreviewResponse {
   data_quality?: CostRateDataQuality | null
 }
 
+// ============================================================================
+// Path A §A1 — cost_center master types (Migration 0040)
+// ============================================================================
+
+export type CostCenterType = 'production' | 'auxiliary' | 'admin'
+export type CostCenterAllocationBasis =
+  | 'headcount'
+  | 'team_hours'
+  | 'revenue'
+  | 'floor_area'
+  | 'fixed_pct'
+export type CostCenterFinanceDataSource =
+  | 'live'
+  | 'cache'
+  | 'mock'
+  | 'unavailable'
+  | 'skipped'
+
+export interface CostCenterStats {
+  process_count: number
+  employee_count: number
+  finance_data_source: CostCenterFinanceDataSource
+  finance_warnings: string[]
+}
+
+export interface CostCenter {
+  id: string
+  code: string
+  name: string
+  type: CostCenterType
+  description?: string | null
+  default_allocation_basis?: CostCenterAllocationBasis | null
+  legacy_team_names: string[]
+  is_active: boolean
+  metadata: Record<string, unknown>
+  created_at?: string | null
+  updated_at?: string | null
+  deleted_at?: string | null
+  stats: CostCenterStats
+}
+
+export interface CostCenterListResponse {
+  items: CostCenter[]
+  finance_data_source: CostCenterFinanceDataSource
+  finance_warnings: string[]
+}
+
+export interface CostCenterUpsertPayload {
+  code?: string
+  name?: string
+  type?: CostCenterType
+  description?: string | null
+  default_allocation_basis?: CostCenterAllocationBasis | null
+  legacy_team_names?: string[]
+  is_active?: boolean
+  metadata?: Record<string, unknown>
+  actor?: string
+}
+
+export interface CostCenterAssignProcessesResponse {
+  cost_center_id: string
+  bound_count: number
+}
+
+export interface CostCenterRefreshMappingResponse {
+  departments_seen: string[]
+  cost_centers_updated: number
+  unmatched_departments: string[]
+  finance_data_source: CostCenterFinanceDataSource
+  warnings: string[]
+}
+
+// ============================================================================
+// Path A §A2 — payroll snapshots
+// ============================================================================
+
+export type CostCenterPayrollDataSource =
+  | 'finance_payroll'
+  | 'finance_payroll_fallback'
+  | 'manual'
+
+export interface CostCenterPayrollSnapshot {
+  id: string
+  cost_center_id: string
+  period: string
+  headcount: number
+  total_paid: number
+  avg_salary: number
+  total_minutes?: number | null
+  rate_per_minute?: number | null
+  data_source: CostCenterPayrollDataSource
+  data_quality: CostRateDataQuality
+  warnings: unknown[]
+  metadata: Record<string, unknown>
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface CostCenterAggregatePayrollResponse {
+  period: string
+  cost_center_count: number
+  snapshots: CostCenterPayrollSnapshot[]
+  upserted_rate_rows: number
+  finance_data_source: string
+  warnings: string[]
+}
+
+// ============================================================================
+// Path A §A3 — fixed cost amortization
+// ============================================================================
+
+export type FixedCostExpenseCategory =
+  | 'cogs'
+  | 'selling'
+  | 'admin'
+  | 'financial'
+  | 'capital_recovery'
+  | 'platform_recharge'
+
+export interface FixedCostAmortizationLine {
+  id: string
+  period: string
+  payment_request_id: string
+  beneficiary_company_id?: string | null
+  payer_company_id?: string | null
+  expense_category: FixedCostExpenseCategory | string
+  amount_amortized: number
+  is_monthly_amortized: boolean
+  amort_months?: number | null
+  amort_start_period?: string | null
+  metadata: Record<string, unknown>
+  created_at?: string | null
+}
+
+export interface FixedCostAmortizeResponse {
+  period: string
+  lines_written: number
+  total_amount: number
+  by_category: Record<string, number>
+  by_company: Record<string, number>
+  finance_data_source: string
+  warnings: string[]
+}
+
+// ============================================================================
+// Path A §A4 — allocation lines
+// ============================================================================
+
+export type AllocationBasis =
+  | 'floor_area'
+  | 'headcount'
+  | 'revenue'
+  | 'equal'
+  | 'fixed_pct'
+
+export interface CostAllocationLine {
+  id: string
+  period: string
+  source_company_id: string
+  source_expense_category: string
+  source_total_amount: number
+  target_cost_center_id: string
+  allocation_basis: AllocationBasis | string
+  allocation_basis_value: number
+  allocation_basis_total: number
+  allocation_weight: number
+  amount_allocated: number
+  fallback_chain: string[]
+  warnings: unknown[]
+  metadata: Record<string, unknown>
+  created_at?: string | null
+}
+
+export interface CostAllocationRunResponse {
+  period: string
+  lines_written: number
+  cost_centers_touched: number
+  total_amount: number
+  upserted_rate_rows: number
+  by_cost_center: Record<string, number>
+  warnings: string[]
+}

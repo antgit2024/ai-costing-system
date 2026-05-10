@@ -51,6 +51,11 @@ import {
 } from '@/components/common/TargetPicker'
 import type { TargetSelection } from '@/components/common/TargetPicker'
 import { CostQualityBadge } from '@/components/costing/CostQualityBadge'
+import {
+  LegalEntityFilter,
+  rowMatchesLegalEntity,
+  useLegalEntityFilter,
+} from '@/components/insights/LegalEntityFilter'
 
 type GroupBy = 'day' | 'month'
 
@@ -180,6 +185,18 @@ const AfterSalesInsightsPage = () => {
 
   const watchedRange = Form.useWatch('range', form) as [dayjs.Dayjs, dayjs.Dayjs] | undefined
   const watchedChannel = Form.useWatch('channel', form) as string | undefined
+
+  // Path A §A5 — 法人主体多选(client-side fuzzy on row.channel)
+  const [selectedCompanyIds, setSelectedCompanyIds] = useState<string[]>([])
+  const { options: companyOptions } = useLegalEntityFilter()
+  const selectedKeywords = useMemo(() => {
+    const set = new Set<string>()
+    for (const id of selectedCompanyIds) {
+      const opt = companyOptions.find(o => o.value === id)
+      if (opt) opt.keywords.forEach(k => set.add(k))
+    }
+    return Array.from(set)
+  }, [selectedCompanyIds, companyOptions])
 
   const computedRange = useMemo(() => {
     if (periodMode === 'custom') {
@@ -637,6 +654,9 @@ const AfterSalesInsightsPage = () => {
           </Form.Item>
           <Form.Item label="渠道" name="channel">
             <Input placeholder="可选：店铺/渠道" style={{ width: 180 }} allowClear />
+          </Form.Item>
+          <Form.Item label="法人主体">
+            <LegalEntityFilter value={selectedCompanyIds} onChange={setSelectedCompanyIds} />
           </Form.Item>
           <Form.Item label="货品条码" name="sku_code">
             <Input placeholder="可选：barcode" style={{ width: 180 }} allowClear />
@@ -1205,7 +1225,11 @@ const AfterSalesInsightsPage = () => {
                     rowKey={(r) => `${r.period}-${r.channel ?? ''}-${r.sku_code ?? ''}`}
                     loading={loading}
                     columns={columns}
-                    dataSource={data?.items ?? []}
+                    dataSource={
+                      selectedKeywords.length
+                        ? (data?.items ?? []).filter(it => rowMatchesLegalEntity(it.channel, selectedKeywords))
+                        : (data?.items ?? [])
+                    }
                     pagination={{ pageSize: 50, showSizeChanger: true }}
                     scroll={{ x: 1210 }}
                   />
@@ -1225,7 +1249,11 @@ const AfterSalesInsightsPage = () => {
                     size="small"
                     loading={detailLoading}
                     columns={detailColumns}
-                    dataSource={detailData?.items ?? []}
+                    dataSource={
+                      selectedKeywords.length
+                        ? (detailData?.items ?? []).filter(it => rowMatchesLegalEntity(it.channel, selectedKeywords))
+                        : (detailData?.items ?? [])
+                    }
                     pagination={{
                       current: detailPage,
                       pageSize: detailPageSize,

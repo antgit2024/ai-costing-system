@@ -72,14 +72,35 @@ def _norm_keywords(raw: Any) -> List[str]:
     return out
 
 
-def _validate_rate(rate: Any) -> float:
-    """Coerce a rate value to a float in [0, 1]. Raises ValueError otherwise."""
+def _validate_rate(rate: Any, *, rate_basis: Optional[str] = None) -> float:
+    """Coerce a rate value to a float and validate against the basis.
+
+    Range depends on ``rate_basis``:
+    - ``pct_of_revenue`` / ``pct_of_cost`` (or unspecified): 0..1
+      (the historical long-tail behaviour is preserved verbatim).
+    - ``per_minute`` / ``per_piece`` / ``per_sqm`` (Hub labor rates,
+      Path A §A2 onwards): 0..100_000 to accommodate values like
+      "¥500/分钟" without forcing callers to manually scale. Practical
+      values are usually 0.1..50, but we leave headroom.
+    """
+
     if rate is None or rate == "":
         raise ValueError("rate is required")
     try:
         v = float(rate)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"rate must be a number, got: {rate!r}") from exc
+
+    basis = (rate_basis or "").strip().lower()
+    if basis in {"per_minute", "per_piece", "per_sqm"}:
+        # cost_rate_master.rate is Numeric(6, 4): max 99.9999. That covers
+        # all realistic ¥/min, ¥/piece, ¥/sqm values (typical 0.1–50).
+        if not (0.0 <= v < 100.0):
+            raise ValueError(
+                f"rate must be between 0 and 100 for basis {basis!r} (got {v})"
+            )
+        return v
+
     if not (0.0 <= v <= 1.0):
         raise ValueError(f"rate must be between 0 and 1 (got {v})")
     return v
@@ -297,7 +318,7 @@ def create_strategy(
         if not category:
             raise ValueError("category is required")
 
-    rate = _validate_rate(payload.get("rate"))
+    rate = _validate_rate(payload.get("rate"), rate_basis=payload.get("rate_basis"))
     keywords = _norm_keywords(payload.get("keywords"))
     priority = int(payload.get("priority") or 100)
     enabled = bool(payload.get("enabled", True))
@@ -391,7 +412,10 @@ def update_strategy(
                 raise ValueError(f"category already exists: {new_cat}")
             strategy.category = new_cat
     if "rate" in patch and patch["rate"] is not None:
-        strategy.rate = Decimal(str(_validate_rate(patch["rate"])))
+        # Patch may or may not include rate_basis; use the strategy's current
+        # basis (or whatever the patch sets first via _apply_hub_fields).
+        basis = patch.get("rate_basis") or getattr(strategy, "rate_basis", None)
+        strategy.rate = Decimal(str(_validate_rate(patch["rate"], rate_basis=basis)))
     if "keywords" in patch and patch["keywords"] is not None:
         strategy.keywords_json = _norm_keywords(patch["keywords"])
     if "priority" in patch and patch["priority"] is not None:

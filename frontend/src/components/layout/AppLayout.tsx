@@ -64,6 +64,7 @@ const parentMenuKeyByPath = (pathname: string): string => {
   if (pathname.startsWith('/costing/sku-master')) return '/costing/automation'
   if (pathname.startsWith('/costing/spec-matching')) return '/costing/automation'
   if (pathname.startsWith('/costing/admin/long-tail-cogs-rate')) return '/costing/automation'
+  if (pathname.startsWith('/costing/admin/cost-centers')) return '/costing/automation'
   if (pathname.startsWith('/costing/admin/finance-master')) return '/costing/automation'
 
   if (pathname.startsWith('/costing/insights')) return '/costing/insights'
@@ -140,6 +141,7 @@ const menuItems: MenuProps['items'] = [
       { key: '/costing/sku-master', label: subItemLabel('商品关联（SKU 主档）', '/costing/sku-master') },
       { key: '/costing/spec-matching', label: subItemLabel('规格解析（工作台）', '/costing/spec-matching') },
       { key: '/costing/admin/long-tail-cogs-rate', label: subItemLabel('💰 长尾成本策略', '/costing/admin/long-tail-cogs-rate') },
+      { key: '/costing/admin/cost-centers', label: subItemLabel('💼 班组（cost_center）', '/costing/admin/cost-centers') },
       { key: '/costing/admin/finance-master', label: subItemLabel('🏢 Finance 主数据（只读）', '/costing/admin/finance-master') },
       { key: '/costing/system/target-picker-playground', label: subItemLabel('模型筛选器（演练）', '/costing/system/target-picker-playground') },
     ],
@@ -297,6 +299,9 @@ const AppLayout = ({ children }: AppLayoutProps) => {
       }
       if (location.pathname.startsWith('/costing/admin/long-tail-cogs-rate')) {
         return ['/costing/admin/long-tail-cogs-rate']
+      }
+      if (location.pathname.startsWith('/costing/admin/cost-centers')) {
+        return ['/costing/admin/cost-centers']
       }
       if (location.pathname.startsWith('/costing/admin/finance-master')) {
         return ['/costing/admin/finance-master']

@@ -28,6 +28,7 @@ import {
   patchLongTailStrategy,
   previewLongTailRateForSku,
 } from '../../../services/longTailStrategy'
+import AlgorithmLogTab from './AlgorithmLogTab'
 import type {
   CostRateDataQuality,
   CostRateScopeType,
@@ -79,6 +80,39 @@ const DATA_QUALITY_TAG: Record<CostRateDataQuality, { color: string; label: stri
   green: { color: 'green', label: '🟢 高（实测/可验证）' },
   yellow: { color: 'gold', label: '🟡 中（估算/月度反推）' },
   red: { color: 'red', label: '🔴 低（默认/硬兜底）' },
+}
+
+/**
+ * Path A §A5 — 数据源徽章。
+ *
+ * `cost_rate_master.source` 值映射到 4 种"出身"：
+ *   manual                          → 🟢 manual    (人工录入)
+ *   auto_aggregated_from_finance    → 🔵 auto      (A2 班组工资聚合产物)
+ *   auto_allocated_from_finance     → 🟣 allocated (A4 班组分摊产物)
+ *   <其他/null>                     → ⚫ legacy    (旧 long-tail 兜底 / 未知)
+ */
+const SOURCE_BADGE: Record<string, { color: string; emoji: string; label: string; group: 'manual' | 'auto' }> = {
+  manual: { color: 'green', emoji: '🟢', label: 'manual', group: 'manual' },
+  auto_aggregated_from_finance: {
+    color: 'blue',
+    emoji: '🔵',
+    label: 'auto (A2 工资)',
+    group: 'auto',
+  },
+  auto_allocated_from_finance: {
+    color: 'purple',
+    emoji: '🟣',
+    label: 'allocated (A4 分摊)',
+    group: 'auto',
+  },
+  finance_pushback: { color: 'default', emoji: '⚫', label: 'legacy', group: 'manual' },
+  imported_excel: { color: 'default', emoji: '⚫', label: 'legacy', group: 'manual' },
+  system_calculated: { color: 'default', emoji: '⚫', label: 'legacy', group: 'manual' },
+}
+
+function sourceGroup(s?: string | null): 'manual' | 'auto' {
+  if (!s) return 'manual'
+  return SOURCE_BADGE[s]?.group ?? 'manual'
 }
 
 const SCOPE_TYPE_OPTIONS: { value: CostRateScopeType; label: string; tip: string }[] = [
@@ -536,6 +570,8 @@ function OverheadRateTab() {
   const [editorOpen, setEditorOpen] = useState(false)
   const [editing, setEditing] = useState<LongTailCogsRateStrategy | null>(null)
   const [editorForm] = Form.useForm<OverheadEditFormValues>()
+  // Path A §A5 — auto/manual 切换：默认 all，可只看 auto 或只看 manual。
+  const [sourceFilter, setSourceFilter] = useState<'all' | 'auto' | 'manual'>('all')
 
   const [previewOpen, setPreviewOpen] = useState(false)
   const [previewForm] = Form.useForm<{
@@ -701,8 +737,28 @@ function OverheadRateTab() {
         title: 'source',
         dataIndex: 'source',
         key: 'source',
-        width: 140,
-        render: (v?: string | null) => <Tag color="default">{v || 'manual'}</Tag>,
+        width: 200,
+        render: (v?: string | null) => {
+          const cfg = SOURCE_BADGE[v || 'manual'] ?? {
+            color: 'default',
+            emoji: '⚫',
+            label: v || 'unknown',
+            group: 'manual' as const,
+          }
+          return (
+            <Tooltip
+              title={
+                cfg.group === 'auto'
+                  ? '由 Path A 自动算法回写（A2/A4 batch），无需人工维护'
+                  : '人工录入或旧 long-tail 数据 — 优先级高于自动'
+              }
+            >
+              <Tag color={cfg.color}>
+                {cfg.emoji} {cfg.label}
+              </Tag>
+            </Tooltip>
+          )
+        },
       },
       {
         title: 'effective_from',
@@ -775,7 +831,7 @@ function OverheadRateTab() {
       />
 
       <Card>
-        <Space style={{ marginBottom: 12 }}>
+        <Space style={{ marginBottom: 12 }} wrap>
           <Button type="primary" onClick={openCreate}>
             ➕ 新建费率
           </Button>
@@ -791,12 +847,37 @@ function OverheadRateTab() {
           <Button onClick={() => listQuery.refetch()} loading={listQuery.isFetching}>
             刷新
           </Button>
+          <Tooltip title="按 source 出身过滤：auto = A2/A4 自动产物；manual = 人工录入或 legacy">
+            <Select
+              value={sourceFilter}
+              onChange={setSourceFilter}
+              style={{ width: 200 }}
+              options={[
+                { value: 'all', label: `全部（${items.length}）` },
+                {
+                  value: 'manual',
+                  label: `🟢 人工 / legacy（${items.filter(r => sourceGroup(r.source) === 'manual').length}）`,
+                },
+                {
+                  value: 'auto',
+                  label: `🔵🟣 自动算法（${items.filter(r => sourceGroup(r.source) === 'auto').length}）`,
+                },
+              ]}
+            />
+          </Tooltip>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            徽章说明：🟢 manual · 🔵 auto (A2 工资) · 🟣 allocated (A4 分摊) · ⚫ legacy
+          </Text>
         </Space>
 
         <Table
           rowKey="id"
           loading={listQuery.isLoading}
-          dataSource={items}
+          dataSource={
+            sourceFilter === 'all'
+              ? items
+              : items.filter(r => sourceGroup(r.source) === sourceFilter)
+          }
           columns={columns as any}
           pagination={false}
           size="middle"
@@ -997,7 +1078,13 @@ function OverheadRateTab() {
 
 export default function LongTailCogsRatePage() {
   const [searchParams, setSearchParams] = useSearchParams()
-  const activeTab = searchParams.get('tab') === 'overhead_rate' ? 'overhead_rate' : 'cogs'
+  const tabParam = searchParams.get('tab')
+  const activeTab: 'cogs' | 'overhead_rate' | 'algorithm_log' =
+    tabParam === 'overhead_rate'
+      ? 'overhead_rate'
+      : tabParam === 'algorithm_log'
+        ? 'algorithm_log'
+        : 'cogs'
 
   return (
     <div style={{ padding: 16 }}>
@@ -1034,6 +1121,11 @@ export default function LongTailCogsRatePage() {
             key: 'overhead_rate',
             label: '制造费率治理（overhead_rate）',
             children: <OverheadRateTab />,
+          },
+          {
+            key: 'algorithm_log',
+            label: '🤖 自动算法日志',
+            children: <AlgorithmLogTab />,
           },
         ]}
       />

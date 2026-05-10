@@ -15,6 +15,11 @@ import type {
   ModelInsightsSummaryResponse,
 } from '@/types/planner'
 import { CostQualityBadge } from '@/components/costing/CostQualityBadge'
+import {
+  LegalEntityFilter,
+  rowMatchesLegalEntity,
+  useLegalEntityFilter,
+} from '@/components/insights/LegalEntityFilter'
 
 const STORAGE_KEY = 'insights.models.lastQuery.v1'
 
@@ -67,6 +72,22 @@ const ProfitInsightsPage = () => {
   const [useSnapshot, setUseSnapshot] = useState(false)
   const [quickDays, setQuickDays] = useState<7 | 30 | 90>(30)
   const [computedAt, setComputedAt] = useState<string | null>(null)
+  // Path A §A5 — 法人主体多选(client-side fuzzy on row.channel)
+  const [selectedCompanyIds, setSelectedCompanyIds] = useState<string[]>([])
+  const { options: companyOptions } = useLegalEntityFilter()
+  const selectedKeywords = useMemo(() => {
+    const set = new Set<string>()
+    for (const id of selectedCompanyIds) {
+      const opt = companyOptions.find(o => o.value === id)
+      if (opt) opt.keywords.forEach(k => set.add(k))
+    }
+    return Array.from(set)
+  }, [selectedCompanyIds, companyOptions])
+  const filteredSummaryItems = useMemo(() => {
+    const items = summary?.items ?? []
+    if (!selectedKeywords.length) return items
+    return items.filter(it => rowMatchesLegalEntity(it.channel, selectedKeywords))
+  }, [summary, selectedKeywords])
 
   const shopOptions = useMemo(() => {
     const s = new Set<string>()
@@ -551,6 +572,15 @@ const ProfitInsightsPage = () => {
                   </Form.Item>
                 </Col>
                 <Col span={24}>
+                  <Form.Item label="法人主体">
+                    <LegalEntityFilter
+                      value={selectedCompanyIds}
+                      onChange={setSelectedCompanyIds}
+                      width={'100%'}
+                    />
+                  </Form.Item>
+                </Col>
+                <Col span={24}>
                   <Form.Item label="日期范围" name="range" rules={[{ required: true, message: '请选择日期范围' }]}>
                     <DatePicker.RangePicker allowClear={false} style={{ width: '100%' }} />
                   </Form.Item>
@@ -645,7 +675,7 @@ const ProfitInsightsPage = () => {
               size="small"
               loading={loadingSummary}
               rowKey={(r) => String(r.model_code ?? '') || String((r as any)?.model_id ?? '')}
-              dataSource={(summary?.items ?? []).slice()}
+              dataSource={filteredSummaryItems.slice()}
               columns={modelListColumns}
               pagination={{ pageSize: 12, showSizeChanger: true }}
               locale={{ emptyText: '暂无数据（请先选择范围并查询）' }}

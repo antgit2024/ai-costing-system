@@ -1879,12 +1879,21 @@ def _attach_costing(
             if code:
                 missing_price_material_codes.append(str(code))
 
+    # TDABC v1 G — pass model so the Hub can scope ``model > category``
+    # before falling back to the per-process ``cost_center`` layer.
+    _model_for_hub: Optional[models.ProductModel] = None
+    if process_lines:
+        _v = db.get(models.ProductModelVersion, process_lines[0].version_id)
+        if _v is not None:
+            _model_for_hub = db.get(models.ProductModel, _v.model_id)
+
     process_cost_total, process_costing = _compute_process_costing(
         db,
         process_lines=process_lines,
         width_mm=measurement["width_mm"],
         height_mm=measurement["height_mm"],
         quantity=measurement["quantity"],
+        model=_model_for_hub,
     )
 
     overhead_rate = _resolve_overhead_rate(db, model_version_processes=process_lines)
@@ -1922,6 +1931,7 @@ def _compute_process_costing(
     width_mm: Decimal,
     height_mm: Decimal,
     quantity: Decimal,
+    model: Optional[models.ProductModel] = None,
 ) -> tuple[Decimal, Dict[str, Any]]:
     """
     Compute process(labor) costs from version process lines.
@@ -1931,16 +1941,42 @@ def _compute_process_costing(
     - cost_type: time/piece
     - base_minutes, unit_minutes
     - rate_per_minute, piece_rate
+
+    TDABC v1 G — A2 接通：
+    - For each process line, first try ``cost_rate_master`` (Hub) for a
+      ``labor_per_minute``/``labor_per_piece`` rate scoped to that
+      process's ``cost_center_id`` (Migration 0040 FK). If the Hub returns
+      a positive rate, that rate wins and ``rate_source`` is set to
+      ``hub_<layer>``. Otherwise we fall back to the legacy
+      ``metadata_json.rate_per_minute``/``piece_rate`` snapshot recorded
+      on the model version process line, and ``rate_source`` is
+      ``metadata`` (or ``missing`` when no metadata rate either).
+
+    Backwards compatibility: if no Hub row exists at any of the 4 layers
+    (model > category > cost_center > global), behaviour is **identical**
+    to pre-G code — the metadata rate is used and the response is shape-
+    compatible (only adds new fields ``rate_per_minute_legacy``,
+    ``rate_source``, ``cost_center_id``, ``cost_rate_strategy_id``,
+    ``rate_hit_layer``).
     """
+    from .long_tail_strategy_service import (
+        resolve_labor_rate as _hub_labor_minute,
+        resolve_labor_per_piece as _hub_labor_piece,
+    )
+
     process_cost_total = Decimal("0")
     priced_process_lines = 0
     missing_price_process_lines = 0
     missing_price_process_codes: List[str] = []
     process_cost_lines: List[Dict[str, Any]] = []
 
+    model_id_for_hub = getattr(model, "id", None) if model else None
+    category_for_hub = getattr(model, "category", None) if model else None
+
     for row in process_lines or []:
         meta = row.metadata_json or {}
         proc = db.get(models.Process, row.process_id)
+        cost_center_id = getattr(proc, "cost_center_id", None) if proc else None
 
         pricing_method = str(meta.get("pricing_method") or "count")
         measure_method = (
@@ -1976,20 +2012,82 @@ def _compute_process_costing(
         total_minutes: Optional[Decimal] = None
         total_cost: Optional[Decimal] = None
         warnings: List[str] = []
+        rate_source: str = "missing"
+        rate_hit_layer: Optional[str] = None
+        cost_rate_strategy_id: Optional[str] = None
+        rate_legacy = rate
+        piece_legacy = piece
+
         if cost_type == "time":
             total_minutes = base_minutes + (unit_minutes * measure_qty)
-            if rate is not None and rate > 0:
-                total_cost = total_minutes * rate
+
+            # === TDABC v1 G: try Hub labor_per_minute first ===
+            hub_rate: Optional[Decimal] = None
+            try:
+                hub_hit = _hub_labor_minute(
+                    db,
+                    model_id=model_id_for_hub,
+                    category=category_for_hub,
+                    cost_center_id=cost_center_id,
+                )
+                if (
+                    hub_hit.rate_per_minute is not None
+                    and hub_hit.rate_per_minute > 0
+                    and hub_hit.hit_layer != "hard_fallback"
+                ):
+                    hub_rate = hub_hit.rate_per_minute
+                    rate_hit_layer = hub_hit.hit_layer
+                    cost_rate_strategy_id = hub_hit.strategy_id
+            except Exception:  # noqa: BLE001
+                # Hub 错误绝不阻塞计算 — 静默回退到 metadata.rate_per_minute
+                hub_rate = None
+
+            final_rate = hub_rate if hub_rate is not None and hub_rate > 0 else rate
+            if final_rate is not None and final_rate > 0:
+                total_cost = total_minutes * final_rate
+                rate = final_rate
+                if hub_rate is not None and hub_rate > 0:
+                    rate_source = f"hub_{rate_hit_layer}"
+                else:
+                    rate_source = "metadata"
             else:
                 warnings.append("未配置分钟单价（rate_per_minute）")
+                rate_source = "missing"
                 missing_price_process_lines += 1
                 if proc and proc.process_code:
                     missing_price_process_codes.append(str(proc.process_code))
         elif cost_type == "piece":
-            if piece is not None and piece > 0:
-                total_cost = measure_qty * piece
+            # === TDABC v1 G3 (optional): try Hub labor_per_piece first ===
+            hub_piece: Optional[Decimal] = None
+            try:
+                hub_hit = _hub_labor_piece(
+                    db,
+                    model_id=model_id_for_hub,
+                    category=category_for_hub,
+                    cost_center_id=cost_center_id,
+                )
+                if (
+                    hub_hit.rate_per_minute is not None
+                    and hub_hit.rate_per_minute > 0
+                    and hub_hit.hit_layer != "hard_fallback"
+                ):
+                    hub_piece = hub_hit.rate_per_minute
+                    rate_hit_layer = hub_hit.hit_layer
+                    cost_rate_strategy_id = hub_hit.strategy_id
+            except Exception:  # noqa: BLE001
+                hub_piece = None
+
+            final_piece = hub_piece if hub_piece is not None and hub_piece > 0 else piece
+            if final_piece is not None and final_piece > 0:
+                total_cost = measure_qty * final_piece
+                piece = final_piece
+                if hub_piece is not None and hub_piece > 0:
+                    rate_source = f"hub_{rate_hit_layer}"
+                else:
+                    rate_source = "metadata"
             else:
                 warnings.append("未配置计件单价（piece_rate）")
+                rate_source = "missing"
                 missing_price_process_lines += 1
                 if proc and proc.process_code:
                     missing_price_process_codes.append(str(proc.process_code))
@@ -2017,6 +2115,13 @@ def _compute_process_costing(
                 "unit_minutes": unit_minutes,
                 "rate_per_minute": rate,
                 "piece_rate": piece,
+                # TDABC v1 G — audit trail for rate sourcing
+                "rate_per_minute_legacy": rate_legacy,
+                "piece_rate_legacy": piece_legacy,
+                "rate_source": rate_source,
+                "rate_hit_layer": rate_hit_layer,
+                "cost_center_id": cost_center_id,
+                "cost_rate_strategy_id": cost_rate_strategy_id,
                 "total_minutes": total_minutes,
                 "total_cost": total_cost,
                 "warnings": warnings,

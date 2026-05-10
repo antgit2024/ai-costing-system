@@ -2674,6 +2674,155 @@ def _enrich_preview_price_metadata(
     return result
 
 
+def _resolve_labor_rate_for_preview(
+    db: Session,
+    *,
+    model: Optional[models.ProductModel],
+    proc: Optional[models.Process],
+    cost_type: Optional[str],
+    metadata_rate: Optional[Decimal],
+    metadata_piece: Optional[Decimal],
+) -> Dict[str, Any]:
+    """TDABC v1 G/H: resolve labor rate via Cost Rate Hub for preview UI.
+
+    Returns a dict with the *effective* rate (Hub or metadata) and a
+    transparent audit trail (rate_source / rate_hit_layer / cost_center_id /
+    cost_rate_strategy_id / *_legacy snapshot). Mirrors the logic in
+    ``bom_generation_service._compute_process_costing`` so the standard-
+    models drawer's "成本核算" tab shows the same numbers as shipment BOM.
+    """
+    from . import long_tail_strategy_service as _ltss
+
+    cost_center_id = getattr(proc, "cost_center_id", None) if proc else None
+    model_id = getattr(model, "id", None) if model else None
+    category = getattr(model, "category", None) if model else None
+
+    rate_source: str = "missing"
+    rate_hit_layer: Optional[str] = None
+    strategy_id: Optional[str] = None
+    final_rate: Optional[Decimal] = metadata_rate
+    final_piece: Optional[Decimal] = metadata_piece
+
+    if cost_type == "time":
+        try:
+            hub = _ltss.resolve_labor_rate(
+                db,
+                model_id=model_id,
+                category=category,
+                cost_center_id=cost_center_id,
+            )
+            if (
+                hub.rate_per_minute is not None
+                and hub.rate_per_minute > 0
+                and hub.hit_layer != "hard_fallback"
+            ):
+                final_rate = hub.rate_per_minute
+                rate_hit_layer = hub.hit_layer
+                strategy_id = hub.strategy_id
+                rate_source = f"hub_{hub.hit_layer}"
+            elif metadata_rate is not None and metadata_rate > 0:
+                rate_source = "metadata"
+            else:
+                rate_source = "missing"
+        except Exception:  # noqa: BLE001
+            rate_source = "metadata" if metadata_rate is not None and metadata_rate > 0 else "missing"
+    elif cost_type == "piece":
+        try:
+            hub = _ltss.resolve_labor_per_piece(
+                db,
+                model_id=model_id,
+                category=category,
+                cost_center_id=cost_center_id,
+            )
+            if (
+                hub.rate_per_minute is not None
+                and hub.rate_per_minute > 0
+                and hub.hit_layer != "hard_fallback"
+            ):
+                final_piece = hub.rate_per_minute
+                rate_hit_layer = hub.hit_layer
+                strategy_id = hub.strategy_id
+                rate_source = f"hub_{hub.hit_layer}"
+            elif metadata_piece is not None and metadata_piece > 0:
+                rate_source = "metadata"
+            else:
+                rate_source = "missing"
+        except Exception:  # noqa: BLE001
+            rate_source = "metadata" if metadata_piece is not None and metadata_piece > 0 else "missing"
+
+    return {
+        "rate_per_minute": final_rate,
+        "piece_rate": final_piece,
+        "rate_source": rate_source,
+        "rate_hit_layer": rate_hit_layer,
+        "cost_rate_strategy_id": strategy_id,
+        "cost_center_id": cost_center_id,
+        "rate_per_minute_legacy": metadata_rate,
+        "piece_rate_legacy": metadata_piece,
+    }
+
+
+def _resolve_overhead_for_preview(
+    db: Session,
+    *,
+    model: Optional[models.ProductModel],
+    cost_center_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """TDABC v1 H: resolve overhead via Hub and surface hit_layer for UI.
+
+    Returns ``{rate, hit_layer, scope_type, scope_id, source, data_quality,
+    strategy_id}``. ``rate`` is always non-None: Hub returns 0.30 hard
+    fallback (with hit_layer='hard_fallback') when nothing matches, which
+    matches the pre-G UI behaviour.
+    """
+    from . import long_tail_strategy_service as _ltss
+
+    try:
+        hit = _ltss.resolve_overhead_rate(
+            db,
+            model_id=getattr(model, "id", None) if model else None,
+            category=getattr(model, "category", None) if model else None,
+            cost_center_id=cost_center_id,
+        )
+        return {
+            "rate": hit.rate,
+            "hit_layer": hit.hit_layer,
+            "scope_type": hit.scope_type,
+            "scope_id": hit.scope_id,
+            "source": hit.source,
+            "data_quality": hit.data_quality,
+            "strategy_id": hit.strategy_id,
+        }
+    except Exception:  # noqa: BLE001
+        # Defensive: fall back to legacy 0.30 hard default rather than
+        # crashing the whole preview.
+        return {
+            "rate": Decimal("0.30"),
+            "hit_layer": "hard_fallback",
+            "scope_type": None,
+            "scope_id": None,
+            "source": None,
+            "data_quality": "red",
+            "strategy_id": None,
+        }
+
+
+def _pick_dominant_cost_center(db: Session, processes: List[Any]) -> Optional[str]:
+    """Mirror ``bom_generation_service._resolve_overhead_rate``'s "众数" rule."""
+    cc_counts: Dict[str, int] = {}
+    for p in processes or []:
+        pid = getattr(p, "process_id", None) or getattr(p, "id", None)
+        if not pid:
+            continue
+        proc = db.get(models.Process, pid)
+        cc = getattr(proc, "cost_center_id", None) if proc is not None else None
+        if cc:
+            cc_counts[cc] = cc_counts.get(cc, 0) + 1
+    if not cc_counts:
+        return None
+    return max(cc_counts.items(), key=lambda kv: kv[1])[0]
+
+
 def preview_model_cost(
     db: Session,
     model: models.ProductModel,
@@ -3124,23 +3273,38 @@ def preview_model_cost(
             unit_minutes = _decimal(meta.get("unit_minutes"), Decimal("0"))
             rate_per_minute = meta.get("rate_per_minute")
             piece_rate = meta.get("piece_rate")
-            rate = _decimal(rate_per_minute, Decimal("0")) if rate_per_minute not in (None, "") else None
-            piece = _decimal(piece_rate, Decimal("0")) if piece_rate not in (None, "") else None
+            rate_meta = _decimal(rate_per_minute, Decimal("0")) if rate_per_minute not in (None, "") else None
+            piece_meta = _decimal(piece_rate, Decimal("0")) if piece_rate not in (None, "") else None
+
+            if cost_type not in ("time", "piece"):
+                cost_type = "piece" if piece_meta is not None and piece_meta > 0 else "time"
+
+            # TDABC v1 G/H — Hub-first labor rate resolution
+            hub = _resolve_labor_rate_for_preview(
+                db,
+                model=model,
+                proc=proc,
+                cost_type=cost_type,
+                metadata_rate=rate_meta,
+                metadata_piece=piece_meta,
+            )
+            rate = hub["rate_per_minute"]
+            piece = hub["piece_rate"]
 
             warnings: List[str] = []
             total_minutes: Optional[Decimal] = None
             total_cost: Optional[Decimal] = None
             if cost_type == "time":
-                if rate is None or rate <= 0:
-                    warnings.append("未配置分钟单价（rate_per_minute）")
                 total_minutes = base_minutes + (unit_minutes * measure_qty)
                 if rate is not None and rate > 0:
                     total_cost = total_minutes * rate
+                else:
+                    warnings.append("未配置分钟单价（rate_per_minute）")
             elif cost_type == "piece":
-                if piece is None or piece <= 0:
-                    warnings.append("未配置计件单价（piece_rate）")
                 if piece is not None and piece > 0:
                     total_cost = measure_qty * piece
+                else:
+                    warnings.append("未配置计件单价（piece_rate）")
             else:
                 warnings.append("未配置工序计价类型（cost_type=time/piece）")
 
@@ -3164,16 +3328,40 @@ def preview_model_cost(
                     "piece_rate": piece,
                     "total_minutes": total_minutes,
                     "total_cost": total_cost,
+                    # TDABC v1 G/H — audit trail + 4-layer Hub link
+                    "rate_per_minute_legacy": hub["rate_per_minute_legacy"],
+                    "piece_rate_legacy": hub["piece_rate_legacy"],
+                    "rate_source": hub["rate_source"],
+                    "rate_hit_layer": hub["rate_hit_layer"],
+                    "cost_center_id": hub["cost_center_id"],
+                    "cost_rate_strategy_id": hub["cost_rate_strategy_id"],
                     "warnings": warnings,
                 }
             )
 
-        overhead_cost = (material_cost_total + labor_cost_total) * Decimal("0.3")
+        # TDABC v1 H — overhead now sourced from Cost Rate Hub (4-layer
+        # resolve) instead of hardcoded 0.30. Preserves shape: overhead_cost
+        # always present in `totals`; UI gets hit_layer via `costing` block.
+        dominant_cc = _pick_dominant_cost_center(db, model_processes)
+        oh = _resolve_overhead_for_preview(db, model=model, cost_center_id=dominant_cc)
+        overhead_rate_decimal = oh["rate"] or Decimal("0")
+        overhead_cost = (material_cost_total + labor_cost_total) * overhead_rate_decimal
         result["totals"] = {
             "material_cost": material_cost_total,
             "labor_cost": labor_cost_total,
             "overhead_cost": overhead_cost,
             "total_cost": material_cost_total + labor_cost_total + overhead_cost,
+        }
+        result["costing"] = {
+            "currency": "CNY",
+            "overhead_rate": overhead_rate_decimal,
+            "overhead_hit_layer": oh["hit_layer"],
+            "overhead_scope_type": oh["scope_type"],
+            "overhead_scope_id": oh["scope_id"],
+            "overhead_source": oh["source"],
+            "overhead_data_quality": oh["data_quality"],
+            "overhead_strategy_id": oh["strategy_id"],
+            "dominant_cost_center_id": dominant_cc,
         }
         return result
 
@@ -3609,7 +3797,8 @@ def preview_model_cost(
             line["warnings"].append(f"虚拟物料({v_kind})暂不在模型预览中自动展开计价")
             result["material_lines"].append(line)
 
-    # Resolve and cost labor lines
+    # Resolve and cost labor lines — TDABC v1 G/H: Hub-first labor rate
+    cc_counts: Dict[str, int] = {}
     for link in module_links:
         module = module_by_id.get(link.module_id)
         if not module:
@@ -3630,30 +3819,47 @@ def preview_model_cost(
             unit_minutes = _decimal(meta_step.get("unit_minutes"), Decimal("0"))
             rate_per_minute = meta_step.get("rate_per_minute")
             piece_rate = meta_step.get("piece_rate")
-            rate = _decimal(rate_per_minute, Decimal("0")) if rate_per_minute not in (None, "") else None
-            piece = _decimal(piece_rate, Decimal("0")) if piece_rate not in (None, "") else None
+            rate_meta = _decimal(rate_per_minute, Decimal("0")) if rate_per_minute not in (None, "") else None
+            piece_meta = _decimal(piece_rate, Decimal("0")) if piece_rate not in (None, "") else None
             warnings: List[str] = []
+
+            if cost_type not in ("time", "piece"):
+                cost_type = "piece" if piece_meta is not None and piece_meta > 0 else "time"
+
+            proc = step.process
+            hub = _resolve_labor_rate_for_preview(
+                db,
+                model=model,
+                proc=proc,
+                cost_type=cost_type,
+                metadata_rate=rate_meta,
+                metadata_piece=piece_meta,
+            )
+            rate = hub["rate_per_minute"]
+            piece = hub["piece_rate"]
+            cc_id = hub["cost_center_id"]
+            if cc_id:
+                cc_counts[cc_id] = cc_counts.get(cc_id, 0) + 1
 
             total_minutes: Optional[Decimal] = None
             total_cost: Optional[Decimal] = None
             if cost_type == "time":
-                if rate is None or rate <= 0:
-                    warnings.append("未配置分钟单价（rate_per_minute）")
                 total_minutes = base_minutes + (unit_minutes * measure_qty)
                 if rate is not None and rate > 0:
                     total_cost = total_minutes * rate
+                else:
+                    warnings.append("未配置分钟单价（rate_per_minute）")
             elif cost_type == "piece":
-                if piece is None or piece <= 0:
-                    warnings.append("未配置计件单价（piece_rate）")
                 if piece is not None and piece > 0:
                     total_cost = measure_qty * piece
+                else:
+                    warnings.append("未配置计件单价（piece_rate）")
             else:
                 warnings.append("未配置工序计价类型（cost_type=time/piece）")
 
             if total_cost is not None:
                 labor_cost_total += total_cost
 
-            proc = step.process
             result["labor_lines"].append(
                 {
                     "module_id": module.id,
@@ -3672,14 +3878,36 @@ def preview_model_cost(
                     "piece_rate": piece,
                     "total_minutes": total_minutes,
                     "total_cost": total_cost,
+                    "rate_per_minute_legacy": hub["rate_per_minute_legacy"],
+                    "piece_rate_legacy": hub["piece_rate_legacy"],
+                    "rate_source": hub["rate_source"],
+                    "rate_hit_layer": hub["rate_hit_layer"],
+                    "cost_center_id": hub["cost_center_id"],
+                    "cost_rate_strategy_id": hub["cost_rate_strategy_id"],
                     "warnings": warnings,
                 }
             )
 
+    dominant_cc = max(cc_counts.items(), key=lambda kv: kv[1])[0] if cc_counts else None
+    oh = _resolve_overhead_for_preview(db, model=model, cost_center_id=dominant_cc)
+    overhead_rate_decimal = oh["rate"] or Decimal("0")
+    overhead_cost = (material_cost_total + labor_cost_total) * overhead_rate_decimal
     result["totals"] = {
         "material_cost": material_cost_total,
         "labor_cost": labor_cost_total,
-        "total_cost": material_cost_total + labor_cost_total,
+        "overhead_cost": overhead_cost,
+        "total_cost": material_cost_total + labor_cost_total + overhead_cost,
+    }
+    result["costing"] = {
+        "currency": "CNY",
+        "overhead_rate": overhead_rate_decimal,
+        "overhead_hit_layer": oh["hit_layer"],
+        "overhead_scope_type": oh["scope_type"],
+        "overhead_scope_id": oh["scope_id"],
+        "overhead_source": oh["source"],
+        "overhead_data_quality": oh["data_quality"],
+        "overhead_strategy_id": oh["strategy_id"],
+        "dominant_cost_center_id": dominant_cc,
     }
     return result
 
@@ -3978,7 +4206,7 @@ def preview_version_cost(
         else:
             result["material_lines"].append(line)
 
-    # Processes (labor)
+    # Processes (labor) — TDABC v1 G/H: Hub-first rate resolution
     for row in processes:
         meta_line = row.metadata_json or {}
         process_id = str(row.process_id or "").strip()
@@ -3987,8 +4215,21 @@ def preview_version_cost(
         cost_type = str(meta_line.get("cost_type") or "time")
         base_minutes = _decimal(meta_line.get("base_minutes"), Decimal("0"))
         unit_minutes = _decimal(meta_line.get("unit_minutes"), Decimal("0"))
-        rate = _decimal(meta_line.get("rate_per_minute"), Decimal("0"))
-        piece = _decimal(meta_line.get("piece_rate"), Decimal("0"))
+        rate_meta_raw = meta_line.get("rate_per_minute")
+        piece_meta_raw = meta_line.get("piece_rate")
+        rate_meta = _decimal(rate_meta_raw, Decimal("0")) if rate_meta_raw not in (None, "") else None
+        piece_meta = _decimal(piece_meta_raw, Decimal("0")) if piece_meta_raw not in (None, "") else None
+
+        hub = _resolve_labor_rate_for_preview(
+            db,
+            model=model,
+            proc=proc,
+            cost_type=cost_type,
+            metadata_rate=rate_meta,
+            metadata_piece=piece_meta,
+        )
+        rate = hub["rate_per_minute"]
+        piece = hub["piece_rate"]
 
         warnings: List[str] = []
         measure_method = pricing_method if pricing_method in ("fixed", "count", "area", "perimeter", "width", "height") else "count"
@@ -4000,9 +4241,13 @@ def preview_version_cost(
             total_minutes = base_minutes + unit_minutes * measure_qty
             if rate is not None and rate > 0:
                 total_cost = total_minutes * rate
+            else:
+                warnings.append("未配置分钟单价（rate_per_minute）")
         elif cost_type == "piece":
             if piece is not None and piece > 0:
                 total_cost = measure_qty * piece
+            else:
+                warnings.append("未配置计件单价（piece_rate）")
         else:
             warnings.append("未配置工序计价类型（cost_type=time/piece）")
 
@@ -4024,17 +4269,37 @@ def preview_version_cost(
                 "piece_rate": piece,
                 "total_minutes": total_minutes,
                 "total_cost": total_cost,
+                "rate_per_minute_legacy": hub["rate_per_minute_legacy"],
+                "piece_rate_legacy": hub["piece_rate_legacy"],
+                "rate_source": hub["rate_source"],
+                "rate_hit_layer": hub["rate_hit_layer"],
+                "cost_center_id": hub["cost_center_id"],
+                "cost_rate_strategy_id": hub["cost_rate_strategy_id"],
                 "warnings": warnings,
                 "metadata_json": meta_line,
             }
         )
 
-    overhead = (material_cost_total + labor_cost_total) * Decimal("0.3")
+    dominant_cc = _pick_dominant_cost_center(db, processes)
+    oh = _resolve_overhead_for_preview(db, model=model, cost_center_id=dominant_cc)
+    overhead_rate_decimal = oh["rate"] or Decimal("0")
+    overhead = (material_cost_total + labor_cost_total) * overhead_rate_decimal
     result["totals"] = {
         "material_cost": material_cost_total,
         "labor_cost": labor_cost_total,
         "overhead_cost": overhead,
         "total_cost": material_cost_total + labor_cost_total + overhead,
+    }
+    result["costing"] = {
+        "currency": "CNY",
+        "overhead_rate": overhead_rate_decimal,
+        "overhead_hit_layer": oh["hit_layer"],
+        "overhead_scope_type": oh["scope_type"],
+        "overhead_scope_id": oh["scope_id"],
+        "overhead_source": oh["source"],
+        "overhead_data_quality": oh["data_quality"],
+        "overhead_strategy_id": oh["strategy_id"],
+        "dominant_cost_center_id": dominant_cc,
     }
     return result
 

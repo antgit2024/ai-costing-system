@@ -55,6 +55,7 @@ import priceCalculationGuide from '@doc/costing/manuals/guides/price_calculation
 import usageCalculationGuide from '@doc/costing/manuals/guides/usage_calculation_guide.md?raw'
 import LineVariantDrawer from '@/components/costing/LineVariantDrawer'
 import MaterialPickerDrawer, { type MaterialPickerResult, type MaterialPickerTab } from '@/components/costing/MaterialPickerDrawer'
+import CostingTab from '@/components/costing/CostingTab'
 
 import {
   bindSkuModelVersion,
@@ -296,7 +297,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
 
   const DEFAULT_OPERATOR = import.meta.env.VITE_PLANNER_USER_ID ?? 'planner_user'
 
-  const [activeTab, setActiveTab] = useState<'basic' | 'versions' | 'lines'>('lines')
+  const [activeTab, setActiveTab] = useState<'basic' | 'versions' | 'lines' | 'cost'>('lines')
   // 标准模型：型号识别规则（用于 SKU 自动绑定模型）
   const [recognitionDraftKeywords, setRecognitionDraftKeywords] = useState<string[]>([])
   const [recognitionValidateResult, setRecognitionValidateResult] = useState<
@@ -5521,6 +5522,16 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                 </Row>
                 </Space>
               </div>
+            ),
+          },
+          {
+            key: 'cost',
+            label: '成本核算',
+            children: (
+              <CostingTab
+                modelId={modelQuery.data?.id ?? modelId ?? null}
+                versionId={selectedVersionId}
+              />
             ),
           },
         ]}

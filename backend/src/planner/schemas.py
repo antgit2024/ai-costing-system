@@ -1245,6 +1245,30 @@ class ProductModelPreviewLaborLine(BaseModel):
     total_minutes: Optional[Decimal] = None
     total_cost: Optional[Decimal] = None
     warnings: List[str] = Field(default_factory=list)
+    # TDABC v1 G/H — Hub 4-layer 链路 + 审计快照（向后兼容；老前端忽略不会崩）
+    rate_source: Optional[str] = None
+    rate_hit_layer: Optional[str] = None
+    cost_center_id: Optional[str] = None
+    cost_rate_strategy_id: Optional[str] = None
+    rate_per_minute_legacy: Optional[Decimal] = None
+    piece_rate_legacy: Optional[Decimal] = None
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
+class ProductModelPreviewCostingMeta(BaseModel):
+    """TDABC v1 H — 制造费/汇总元信息，供「成本核算」Tab 渲染 4 层链路徽章。"""
+
+    currency: str = "CNY"
+    overhead_rate: Optional[Decimal] = None
+    overhead_hit_layer: Optional[str] = None
+    overhead_scope_type: Optional[str] = None
+    overhead_scope_id: Optional[str] = None
+    overhead_source: Optional[str] = None
+    overhead_data_quality: Optional[str] = None
+    overhead_strategy_id: Optional[str] = None
+    dominant_cost_center_id: Optional[str] = None
 
     class Config:
         json_encoders = {Decimal: _decimal_to_str}
@@ -1258,6 +1282,8 @@ class ProductModelPreviewResponse(BaseModel):
     labor_lines: List[ProductModelPreviewLaborLine] = Field(default_factory=list)
     totals: Dict[str, Decimal] = Field(default_factory=dict)
     errors: List[str] = Field(default_factory=list)
+    # TDABC v1 H — overhead 4 层链路 / 班组 ID。可选字段，老前端忽略不会崩。
+    costing: Optional[ProductModelPreviewCostingMeta] = None
 
     class Config:
         json_encoders = {Decimal: _decimal_to_str}

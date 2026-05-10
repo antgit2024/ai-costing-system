@@ -1048,6 +1048,31 @@ export interface ProductModelPreviewLaborLine {
   total_minutes?: string | number | null
   total_cost?: string | number | null
   warnings: string[]
+  /** TDABC v1 G/H — 实际取值来源（hub_<layer> | metadata | missing）。 */
+  rate_source?: string | null
+  /** TDABC v1 G/H — Hub 4 层命中层级（model | category | cost_center | global | hard_fallback | null）。 */
+  rate_hit_layer?: string | null
+  /** Migration 0040 — 工序所属班组 ID（process.cost_center_id）。 */
+  cost_center_id?: string | null
+  /** TDABC v1 G/H — 命中的 cost_rate_master 行 id（用于 UI 跳转管理）。 */
+  cost_rate_strategy_id?: string | null
+  /** 模型快照 metadata 里的原值（命中 Hub 时用作审计对比）。 */
+  rate_per_minute_legacy?: string | number | null
+  /** 模型快照 metadata 里的原值（命中 Hub 时用作审计对比）。 */
+  piece_rate_legacy?: string | number | null
+}
+
+/** TDABC v1 H — Cost Rate Hub 4 层链路 / 班组 ID / 数据质量。可选字段。 */
+export interface ProductModelPreviewCostingMeta {
+  currency?: string | null
+  overhead_rate?: string | number | null
+  overhead_hit_layer?: string | null
+  overhead_scope_type?: string | null
+  overhead_scope_id?: string | null
+  overhead_source?: string | null
+  overhead_data_quality?: string | null
+  overhead_strategy_id?: string | null
+  dominant_cost_center_id?: string | null
 }
 
 export interface ProductModelPreviewResponse {
@@ -1058,6 +1083,8 @@ export interface ProductModelPreviewResponse {
   labor_lines: ProductModelPreviewLaborLine[]
   totals: Record<string, string | number>
   errors: string[]
+  /** TDABC v1 H — overhead 4 层链路。老前端读不到该字段不会崩。 */
+  costing?: ProductModelPreviewCostingMeta | null
 }
 
 export type ProductModelVersionKind = 'sample' | 'standard'

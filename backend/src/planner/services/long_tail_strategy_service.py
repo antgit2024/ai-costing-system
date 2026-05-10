@@ -722,3 +722,179 @@ def resolve_overhead_rate(
         data_quality="red",
         strategy_id=None,
     )
+
+
+# ---------------------------------------------------------------------------
+# Cost Rate Hub v1.3 §5.1 — labor_per_minute / labor_per_piece resolver
+# (TDABC v1 G — A2 接通)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ResolvedLaborRate:
+    """Outcome of resolving a labor rate (per_minute / per_piece) via the Hub.
+
+    Unlike overhead, labor has **no hardcoded numeric fallback**: a "miss"
+    returns ``rate_per_minute=None`` so the caller (typically
+    ``bom_generation_service._compute_process_costing``) can fall back to
+    the legacy ``metadata_json.rate_per_minute`` snapshot recorded on the
+    model version process line. Hardcoding a default would be wrong because
+    班组级时薪 differs by 5x+ across teams (CC_PRINT vs CC_PACK_SHIP).
+
+    ``hit_layer`` is one of:
+    - ``model``         — a row matched ``scope_type='model'``
+    - ``category``      — a row matched ``scope_type='category'``
+    - ``cost_center``   — a row matched ``scope_type='cost_center'``
+    - ``global``        — a row matched ``scope_type='global'``
+    - ``hard_fallback`` — no row matched; ``rate_per_minute`` is None
+    """
+
+    rate_per_minute: Optional[Decimal]
+    hit_layer: str
+    scope_type: Optional[str]
+    scope_id: Optional[str]
+    source: Optional[str]
+    data_quality: Optional[str]
+    strategy_id: Optional[str]
+    rate_basis: Optional[str]
+    effective_from: Optional[datetime]
+    effective_to: Optional[datetime]
+
+
+def _resolve_labor_rate_impl(
+    db: Session,
+    *,
+    rate_type: str,
+    model_id: Optional[str],
+    category: Optional[str],
+    cost_center_id: Optional[str],
+    as_of: Optional[datetime],
+) -> ResolvedLaborRate:
+    """Shared 4-layer resolver implementation for labor_per_minute / labor_per_piece."""
+    now = (
+        (as_of or _utcnow()).replace(tzinfo=None)
+        if as_of and getattr(as_of, "tzinfo", None)
+        else (as_of or datetime.utcnow())
+    )
+
+    chain: List[Tuple[str, Optional[str]]] = [
+        ("model", _s(model_id) or None),
+        ("category", _s(category) or None),
+        ("cost_center", _s(cost_center_id) or None),
+        ("global", None),
+    ]
+
+    for scope_type, scope_id in chain:
+        if scope_type != "global" and not scope_id:
+            continue
+        q = db.query(models.LongTailCogsRateStrategy).filter(
+            models.LongTailCogsRateStrategy.rate_type == rate_type,
+            models.LongTailCogsRateStrategy.scope_type == scope_type,
+            models.LongTailCogsRateStrategy.enabled.is_(True),
+            models.LongTailCogsRateStrategy.is_archived.is_(False),
+        )
+        if scope_type == "global":
+            q = q.filter(
+                (models.LongTailCogsRateStrategy.scope_id.is_(None))
+                | (models.LongTailCogsRateStrategy.scope_id == "")
+            )
+        else:
+            q = q.filter(models.LongTailCogsRateStrategy.scope_id == scope_id)
+
+        rows = (
+            q.order_by(
+                models.LongTailCogsRateStrategy.effective_from.desc(),
+                models.LongTailCogsRateStrategy.priority.desc(),
+                models.LongTailCogsRateStrategy.created_at.desc(),
+            ).all()
+        )
+        for row in rows:
+            ef_from = getattr(row, "effective_from", None)
+            ef_to = getattr(row, "effective_to", None)
+            if ef_from is not None and ef_from > now:
+                continue
+            if ef_to is not None and ef_to <= now:
+                continue
+            raw_rate = row.rate
+            return ResolvedLaborRate(
+                rate_per_minute=(Decimal(str(raw_rate)) if raw_rate is not None else None),
+                hit_layer=scope_type,
+                scope_type=scope_type,
+                scope_id=scope_id,
+                source=getattr(row, "source", None),
+                data_quality=getattr(row, "data_quality", None),
+                strategy_id=row.id,
+                rate_basis=getattr(row, "rate_basis", None),
+                effective_from=ef_from,
+                effective_to=ef_to,
+            )
+
+    return ResolvedLaborRate(
+        rate_per_minute=None,
+        hit_layer="hard_fallback",
+        scope_type=None,
+        scope_id=None,
+        source=None,
+        data_quality=None,
+        strategy_id=None,
+        rate_basis=None,
+        effective_from=None,
+        effective_to=None,
+    )
+
+
+def resolve_labor_rate(
+    db: Session,
+    *,
+    model_id: Optional[str] = None,
+    category: Optional[str] = None,
+    cost_center_id: Optional[str] = None,
+    as_of: Optional[datetime] = None,
+) -> ResolvedLaborRate:
+    """Cost Rate Hub v1.3 §5.1 4-layer resolve for ``labor_per_minute``.
+
+    Walks priority chain ``model > category > cost_center > global``. Each
+    layer queries ``cost_rate_master`` for an enabled, non-archived row of
+    ``rate_type='labor_per_minute'`` with the matching ``scope_type`` /
+    ``scope_id``. ``effective_from`` (if set) must be on/before ``as_of``
+    (defaults to now); ``effective_to`` (if set) must be after ``as_of``.
+
+    Returns a ``ResolvedLaborRate`` whose ``hit_layer`` is one of
+    ``model | category | cost_center | global | hard_fallback``.
+
+    **No hardcoded numeric fallback** — ``hard_fallback`` returns
+    ``rate_per_minute=None`` and the caller MUST fall back to the legacy
+    ``metadata_json.rate_per_minute`` snapshot. Defaulting to a single
+    ¥/分钟 number would be a bug because teams differ by 5x+ (CC_PRINT
+    vs CC_PACK_SHIP).
+    """
+    return _resolve_labor_rate_impl(
+        db,
+        rate_type="labor_per_minute",
+        model_id=model_id,
+        category=category,
+        cost_center_id=cost_center_id,
+        as_of=as_of,
+    )
+
+
+def resolve_labor_per_piece(
+    db: Session,
+    *,
+    model_id: Optional[str] = None,
+    category: Optional[str] = None,
+    cost_center_id: Optional[str] = None,
+    as_of: Optional[datetime] = None,
+) -> ResolvedLaborRate:
+    """Sister resolver for ``rate_type='labor_per_piece'``. Same 4-layer
+    rules; ``hard_fallback`` again returns ``rate_per_minute=None`` so the
+    caller falls back to ``metadata_json.piece_rate``.
+    """
+    return _resolve_labor_rate_impl(
+        db,
+        rate_type="labor_per_piece",
+        model_id=model_id,
+        category=category,
+        cost_center_id=cost_center_id,
+        as_of=as_of,
+    )

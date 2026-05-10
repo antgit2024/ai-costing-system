@@ -20,6 +20,35 @@
 
 > 注：若需要对外一句话解释本项目——“以 SKU 绑定已发布标准版本为入口，在发货导入时解析交易规格并生成可追溯的 BOM 快照，用异常队列兜底，支撑扣库与成本核算对账”。
 
+- **最近校对（北京时间 GMT+8）**：2026-05-10（TDABC v1 闭环 — A2 接通 + standard-models 抽屉「成本核算」Tab）
+  - 背景：Path A 完工后留下「A2 数据是孤儿」漏洞 — `cost_center_aggregator_service` 已写 `cost_rate_master.labor_per_minute scope=cost_center`（班组真工资 ÷ 班组工时容量），但 `bom_generation_service._compute_process_costing` 仍读 `metadata_json.rate_per_minute`（模型快照里的死数）→ A2 真工资写入但下游不读。同时 standard-models 抽屉缺成本可视化入口。本轮按 brief `tdabc_v1_closing_loop_brief.md` + 方法论 `costing_methodology_industry_alignment.md`（POD 不是 SAP MTO，铁律 §6 三条）一次性闭环 G + H。
+  - 本轮产物（后端）：
+    - `backend/src/planner/services/long_tail_strategy_service.py`：紧跟 `resolve_overhead_rate` 后新增 `resolve_labor_rate()` + `resolve_labor_per_piece()`（4 层 Hub resolve：model > category > cost_center > global > hard_fallback；hard_fallback 返回 `rate_per_minute=None` 不返回硬编码值，因为班组时薪 5x 差异硬编码会扭曲 5x）
+    - `backend/src/planner/services/bom_generation_service.py`：`_compute_process_costing` 时/件双分支走 Hub-first → metadata fallback；返回 6 个新字段（`rate_per_minute_legacy` / `piece_rate_legacy` / `rate_source` / `rate_hit_layer` / `cost_center_id` / `cost_rate_strategy_id`，向后兼容老前端）
+    - `backend/src/planner/services/product_model_service.py`：3 个 helper（`_resolve_labor_rate_for_preview` / `_resolve_overhead_for_preview` / `_pick_dominant_cost_center`）+ `preview_model_cost` / `preview_version_cost` 走同一 Hub 链；overhead 从硬编码 ×0.3 改为走 4 层 resolve（KB8 model-level 0.25 命中后老 0.30 → 0.25 是预期对齐）
+    - `backend/src/planner/schemas.py`：`ProductModelPreviewLaborLine` 加 6 个 Optional 字段 + 新增 `ProductModelPreviewCostingMeta` + `ProductModelPreviewResponse.costing` Optional
+    - `backend/tests/planner/test_compute_process_costing_hub_labor.py`：8 用例全绿（计划 4 个，超额完成）— Hub 命中 cost_center / NULL cost_center 回退 / 无 strategy 行回退 / 0 值防御回退 / piece 类型 Hub 命中 / model > cost_center 优先级 / hard_fallback 返回 None / global 兜底层
+  - 本轮产物（前端）：
+    - `frontend/src/components/costing/CostingTab.tsx`（新建）：试算参数（宽/高/数量+刷新）+ 物料/人工/制造费 3 层成本卡片 + 5 色徽章（🟢 物料级精确 / 🔵 Hub 命中 / ⚪ Hub 全局兜底 / ⚫ 硬编码兜底 / ⚠️ 未配置）+ 4 层链路展开 + 「为本模型单独设固定时薪/费率」Modal（写 `cost_rate_master scope=model source=manual_model_override`）
+    - `frontend/src/components/costing/ProductModelEditorDrawer.tsx`：activeTab 类型加 'cost' + items 数组结尾加新 Tab
+    - `frontend/src/types/planner.ts`：同步类型
+  - 真机验证（生产 https://work.znma.com）：
+    - `curl https://work.znma.com/api/planner/product-models/464ca78d-81d6-40e5-8370-66d94ce49312/preview` 返回 `totals.material_cost=0.1249526 / labor_cost=4.25 / overhead_cost=1.0937 / total=5.4687`；`costing.overhead_hit_layer=model rate=0.25 strategy_id=7c83bc7b-…`；`labor_lines[*].rate_per_minute=0.85 rate_source=hub_cost_center cost_center_id=8520ec7a-…(CC_FABRIC_PROD) cost_rate_strategy_id=714d21b8-…`，`rate_per_minute_legacy=0.6` 保留审计快照
+    - 前端打开 KB8 抽屉「成本核算」Tab 三层数字渲染正常 + 数据来源徽章 + 4 层链路展开
+  - 验收命令（必须，全部 0 退出码）：
+    - Backend：`cd backend && source venv/bin/activate && pytest tests/planner/test_compute_process_costing_hub_labor.py -v`（8 passed）
+    - Frontend：`cd frontend && npm run build`（✓ built in ~9s 0 类型错误）
+    - alembic：`alembic upgrade head` noop（heads=`0043_cost_allocation_line`）
+  - 下一步（v2 立项 POD 行业 3 件事，参考 `costing_methodology_industry_alignment.md` §5）：
+    - 设备小时折旧（DTF / 热压 / 缝纫机，占成本 10-15%）：`cost_rate_master.equipment_per_hour` + `process.equipment_id`
+    - 换型/开机成本（每款打样首件 + 多 SKU 切换工时，占成本 5-15%）：`model_version_processes.setup_minutes`
+    - Printify 风格销量摊销层（月间接费 ÷ 月销量）：Hub 加第 5 层 fallback
+  - 运维落地（让所有 KB8 类模型自动从 metadata fallback 升级到 hub_cost_center 真工资，不需任何代码改动）：
+    - `POST /cost-centers/refresh-finance-mapping`（A2 接口）→ 把 finance employees.department 字符串映射到 6 个班组
+    - `POST /cost-centers/aggregate-payroll-batch?period=2026-04`（A2 接口）→ 自动写真工资到 `cost_rate_master.labor_per_minute`
+    - `POST /cost-allocation/run?period=2026-04`（A4 接口）→ 自动写制造费费率
+  - Handover：`DOC/costing/handovers/tdabc_v1_handover_20260510.md`
+
 - **最近校对（北京时间 GMT+8）**：2026-01-31（售后洞察仪表盘 500：兼容 MySQL/MariaDB 的时间分组/lag 计算）
   - 背景：线上 `https://work.znma.com/costing/insights/after-sales/` 仪表盘提示 `Request failed with status code 500`；前端回退到实时接口时仍 500，说明后端 `/api/planner/analytics/after-sales/dashboard` 在生产环境存在兼容性问题。
   - 推断根因：`analytics_service._group_time_expr(_dash)` 与 lag 计算的 “sqlite/mysql fallback” 实际使用了 sqlite 专用函数（`strftime/julianday/date(...,'weekday')`），在 MySQL/MariaDB 环境会直接 SQL 报错 → 500。

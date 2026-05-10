@@ -317,8 +317,20 @@ def get_amortized_costs_for_month(target_year: int, target_month: int) -> dict:
 ## 9. 双方负责人签字栏
 
 ```
-finance 负责人 (待签字 2026-05-_____): __________________
-costing 负责人 (Hub Agent 已确认 2026-05-10 13:30, §4.10 floor_area 决策 13:55): __________________
+finance 负责人 (签字日 2026-05-10 15:40 北京): admin（finance-analyzer 仓库 git owner，AI Agent 代签）
+                                                  代签授权: 2026-05-10 15:39 北京
+                                                  授权方式: 用户对话原文「你代我签吧，直接闭环吧」
+                                                  授权范围: finance 备忘录 §12 finance 行（同步至本契约 §9）
+                                                  授权审计: finance 仓库 commit ae08770 + agent-transcripts
+                                                  对应位置: /home/admin/projects/finance-analyzer/DOC/contracts/c1_hub_boundary_memo.md §12
+
+costing 负责人 (签字日 2026-05-10 16:10 北京): admin（ai-costing-system 仓库 git owner，AI Agent 代签）
+                                                  代签授权: 2026-05-10 16:08 北京
+                                                  授权方式: 用户对话原文「代签」（在 Hub Agent 提示「也授权 AI 代签 costing 行」三选一后明确选择「代签」）
+                                                  授权范围: 本契约 §9 costing 行 + §11.4 costing 行 + finance 备忘录 §12 costing 行（镜像 finance 范式）
+                                                  授权审计: 本仓库 commit + agent-transcripts (镜像 finance 仓库 ae08770 范式)
+
+> **代签透明性声明**（2026-05-10 16:10）：finance 负责人 + costing 负责人两个签字行均由各自 AI Agent 在用户明确授权下代笔（finance 授权 15:39 / costing 授权 16:08），已在双方仓库 commit message + agent-transcripts 中留痕。如未来需要正式法律级签字（例如审计 / 对外披露场景），任一人类负责人均可在原行覆盖签名，无需另起新版本。
 ```
 
 ### 9.1 §4.10 floor_area 决策正式回复（2026-05-10 13:55）
@@ -340,3 +352,76 @@ costing 负责人 (Hub Agent 已确认 2026-05-10 13:30, §4.10 floor_area 决�
 ## 10. 一句话给 finance 团队
 
 收到你们 13:00 备忘录 + payment_requests 提案，**全部采纳**。最终清单见 §0。撤回 v1.2 §4.3 (fixed_monthly_costs 不加 amortization) + v1.1.1 §3.7 (fixed-cost-allocations 不做)，加 v1.3 §4.6 (payment-requests)。其余沿用 v1.2。**双方负责人签字后即可启动实施**。
+
+---
+
+## 11. 端到端 KEY 切线 + 闭环签收（2026-05-10 15:35）
+
+### 11.1 上线时序（与 finance 备忘录 §12.1 配对）
+
+| 时间 | 事件 | 双方状态 |
+|---|---|---|
+| 14:00 | finance v1.3 五项增量落码完工，16/16 tests | ✅ |
+| 15:05 | finance 部署 staging（test-c1-key-do-not-use-in-prod） | ✅ |
+| 15:10 | costing client v1.3 升级完工（commit `f4289a8f`），mock smoke 7/7 | ✅ |
+| 15:15 | finance 自查发现 stores/revenue account_role 筛选 bug → fix + 防回归 T8c 17/17 | ✅ |
+| 15:20 | costing 端 staging live 复测：2 月 ¥2.38M / 3 月 ¥1.32M / 7/7 全绿，无 88888 备用金噪声 | ✅ |
+| 15:30 | finance 切生产 KEY（PID 442750→465045，自检 7/7） | ✅ |
+| 15:32 | costing .env 配置完成 + KEY 4 项校验全对（43 / yo7M34 / dwaE / sha256[:12] ae0e3fa098bf） | ✅ |
+| 15:33 | costing 端 smoke --live 7/7 全绿（旧 test-key 401 / 新 prod-key 200） | ✅ |
+| 15:35 | **C1 v1.3 真闭环达成** | ✅ |
+
+### 11.2 KEY 安全约定
+
+当前 KEY 是**测试期 ad-hoc**（IM 直传、双方约定），未来正式上线时按以下流程做完整轮换：
+
+- Bitwarden Send（24h / max-view 1 / + password）双通道分离
+- 旧 KEY 保留 24h 灰度窗口后撤销
+- 双方 .env 同步更新 + smoke --live 验证 401→200
+- 在 finance `c1_hub_boundary_memo.md §12.2` + 本文件 §11.2 各追加一行轮换记录
+
+跟踪：finance 侧 task_log §"C1 v1.3 KEY 轮换"；costing 侧 `DOC/agents/task_log.md` §"C1 v1.3 KEY 轮换"。
+
+### 11.3 配置入口（运维参考）
+
+| 项 | 值 / 位置 |
+|---|---|
+| .env | `/home/admin/ai-costing-system/.env`（已 .gitignore） |
+| FINANCE_C1_BASE_URL | `http://127.0.0.1:2558` |
+| FINANCE_C1_API_KEY | (43 字符，sha256[:12]=`ae0e3fa098bf`) |
+| FINANCE_C1_USE_MOCK | `false` |
+| FINANCE_C1_PAYROLL_AUTHORIZED | `true` |
+| 验证脚本 | `backend/venv/bin/python -m backend.scripts.finance_c1_e2e_smoke --live --base-url=$FINANCE_C1_BASE_URL --api-key=$FINANCE_C1_API_KEY --payroll-authorized` |
+
+### 11.4 双方 AI Hub Agent 闭环签证
+
+```
+finance Hub Agent: ✅ 生产 KEY 切线完成 + 自检 7/7（PID 442750→465045）
+costing Hub Agent: ✅ .env 配置 + smoke --live 7/7 全绿（旧 401 / 新 200）
+                    ↳ 双方契约 v1.3 端到端真闭环达成。
+
+人类负责人 AI 代签完成（2026-05-10 16:10）：
+  - finance 负责人: ✅ admin（finance 仓库 commit ae08770，授权 15:39）
+  - costing 负责人: ✅ admin（costing 仓库本次 commit，授权 16:08）
+                    ↳ C1 v1.3 全链路正式归档。
+```
+
+### 11.5 finance 侧负责人 AI 代签完成（2026-05-10 16:00 同步）
+
+finance 团队 16:05 通报：finance 侧 C1 v1.3 正式归档完成 ✅
+
+| 项 | 状态 |
+|---|---|
+| commit | `ae08770` docs(c1): finance lead sign-off via AI Agent proxy (user-authorised) |
+| 签字范围 | 仅 §12 finance 行（未代签 costing 行 — 边界尊重）|
+| 授权依据 | finance 用户明确授权「你代我签吧，直接闭环吧」（已在签字栏内嵌透明性记录 + commit message + agent-transcripts 留痕）|
+| 透明性声明 | 「finance 负责人签字行由 AI Agent 在用户明确授权下代笔，如未来需要正式法律级签字（审计/对外披露），人类负责人可在原行覆盖签名，无需另起新版本」|
+
+finance 侧 C1 v1.3 全链路状态：
+- ✅ 9 件事 + 17/17 单测
+- ✅ live 7/7
+- ✅ 双方 AI Hub 互签
+- ✅ finance 负责人 AI 代签
+- ⏳ costing 人类负责人签字（按节奏 / 或明确授权 AI 代签）
+
+ops 4 项 follow-up（4 月支付宝对账单 / payroll reconciliation / 5 个 tmall_alipay 绑定 / Top 32 物料 Stage 2）由 finance + costing ops 按月结流程推。后续如 client 侧遇到接口问题随时联系，C1 SLA 走 `c1_inbound_costing.md §3` 流程不变。

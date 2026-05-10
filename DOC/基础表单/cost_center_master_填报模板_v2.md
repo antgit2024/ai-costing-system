@@ -1,10 +1,29 @@
 # cost_center_master 主数据填报模板 v2（重新分工版）
 
+> **🟡 状态变更（2026-05-10 12:05）**：本 v2 模板**暂停老板手填**。
+>
+> 用户 2026-05-10 12:00 指出："班组数据 + 摊法专业建议 = 财务的原材料 + 财务的专业知识，让老板从零手填等于让老板把财务的活做一遍"。Hub Agent 同意，**本 v2 已升级为「等财务出初稿 → 老板 review」模式**。
+>
+> **新工作流**：
+> 1. 财务 Agent 基于 finance-analyzer 真实员工/工资/固开数据出 v3 草案（4~6 小时）→ 文件位置：`cost_center_master_填报模板_v3_财务初稿.md`
+> 2. 老板 review v3 草案（5~10 分钟）：① 给每个班组打"主要服务品类"标签 ② confirm 班组合并/拆分意见 ③ confirm 摊法
+> 3. Hub Agent 落地数据库 + 出 UI（2~3 小时）
+>
+> **本 v2 文档保留**作为：① v1 → v2 → v3 决策演进留档 ② v3 草案的列结构参考
+>
+> **派单文档**：`/home/admin/ai-costing-system/DOC/agents/briefings/cost_center_master_draft_from_finance.md`
+>
+> **触发条件**（v3 草案才能开跑）：finance-analyzer 仓库 `feat/c1-costing-contract-v1` branch 已 push 到 origin + 7 主体已打 entity_role 标签 + COSTING_API_KEY 已发给 costing
+>
+> ---
+>
+> **以下为 v2 原内容（暂停手填，仅作 v3 列结构参考）**：
+>
 > **v1 → v2 的变化**：用户 2026-05-10 07:30 指出"店铺/公司/员工/固开属于财务域，让 finance Agent 做"，本次砍掉 3 张表（原表 1/2/5），只保留 costing 真正应该管的 2 张：班组 + 分摊矩阵。
 >
-> **填报人**：你（用户 / 老板 / 工厂运营）
+> ~~**填报人**：你（用户 / 老板 / 工厂运营）~~ → 改为：**财务 Agent 出初稿 + 老板 review**
+> ~~**预估填报时间**：**10~20 分钟**（v1 是 30~45 分钟）~~ → 改为：**老板 review 5~10 分钟**
 > **填报目的**：解锁 Cost Rate Hub 第 3 层「cost_center 命中」+ 摊费规则
-> **预估填报时间**：**10~20 分钟**（v1 是 30~45 分钟）
 > **填完后**：保存 → 告诉我「填好了」 → 我派 Agent 落地
 
 ---

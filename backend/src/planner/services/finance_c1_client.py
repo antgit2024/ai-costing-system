@@ -1,7 +1,16 @@
-"""Finance → costing C1 client service。
+"""Finance → costing C1 client service (v1.3 终态)。
 
-按契约 `DOC/costing/blueprints/finance_to_costing_c1_contract_v1.md` v1.0
-§3 实现 5 个 GET endpoint 的拉取 + 5 分钟 TTL 缓存 + finance 挂时降级。
+按契约 v1.3 终态文档实现 7 个 GET endpoint 的拉取 + 5 分钟 TTL 缓存 + finance
+挂时降级。
+
+> 契约: `DOC/costing/blueprints/finance_to_costing_c1_contract_v1.3_aligned.md`
+> finance 备忘录: `/home/admin/projects/finance-analyzer/DOC/contracts/c1_hub_boundary_memo.md` v0.4
+
+v1.3 升级要点(派单 §2.1~§2.3):
+    - 加 2 个新方法: `list_stores_revenue` / `list_payment_requests`
+    - 7 个方法统一加 `?since/?until` 增量参数(契约 §4.4)
+    - envelope `_api_version` 升 `1.3` ·  pagination 加 `last_updated_at`
+    - mock 数据 1:1 复制契约 §4.2 / §4.6 example response
 
 设计要点(派单 brief §2.1 + §3):
     - sync httpx (现有 `executor_client` / `benchmark_client` 也是 sync · 风格一致)
@@ -46,7 +55,10 @@ logger = logging.getLogger(__name__)
 # `_cache` 存命中(TTL 内)·`_last_good` 永远存最近一次成功结果(用于 finance
 # 挂掉时降级 — 即使 TTL 已过期 ·  也优于「直接抛 503」)。
 _cache: TTLCache = TTLCache(maxsize=128, ttl=settings.finance_c1_cache_ttl_seconds)
-_last_good: Dict[Tuple[str, ...], Tuple[float, List[Dict[str, Any]], Optional[str]]] = {}
+_last_good: Dict[
+    Tuple[str, ...],
+    Tuple[float, List[Dict[str, Any]], Optional[str], Optional[Dict[str, Any]]],
+] = {}
 
 
 def clear_cache() -> None:
@@ -89,11 +101,14 @@ class FinanceC1ClientError(FinanceC1Error):
 
 
 class FinanceC1Client:
-    """对接 finance-analyzer C1 API 的轻量 sync client。
+    """对接 finance-analyzer C1 v1.3 API 的轻量 sync client。
 
     单实例可复用; 不持有连接池(每次请求 new httpx.Client 短连接 ·  finance C1
     QPS 不高 · 不需要连接复用)。
     """
+
+    # 派单 §2.3: mock 数据顶层 _api_version 从 v1.0 升到 v1.3
+    MOCK_API_VERSION = "1.3-mock"
 
     def __init__(
         self,
@@ -150,6 +165,7 @@ class FinanceC1Client:
         cache_key: Tuple[str, ...],
         data: List[Dict[str, Any]],
         api_version: Optional[str],
+        pagination: Optional[Dict[str, Any]] = None,
     ) -> None:
         """成功命中后写入 _cache + _last_good。
 
@@ -158,7 +174,7 @@ class FinanceC1Client:
         我们不忍心给用户 503 ·  故有 _last_good)。
         """
 
-        envelope_payload = (time.time(), data, api_version)
+        envelope_payload = (time.time(), data, api_version, pagination)
         _cache[cache_key] = envelope_payload
         _last_good[cache_key] = envelope_payload
 
@@ -177,16 +193,30 @@ class FinanceC1Client:
             data = mock_data.get_companies(
                 entity_role=filters.get("entity_role"),
                 is_active=filters.get("is_active"),
+                since=filters.get("since"),
+                until=filters.get("until"),
             )
         elif kind == "stores":
             data = mock_data.get_stores(
                 company_id=filters.get("company_id"),
                 is_active=filters.get("is_active"),
+                since=filters.get("since"),
+                until=filters.get("until"),
+            )
+        elif kind == "stores_revenue":
+            data = mock_data.get_stores_revenue(
+                period_year=filters["period_year"],
+                period_month=filters["period_month"],
+                store_id=filters.get("store_id"),
+                since=filters.get("since"),
+                until=filters.get("until"),
             )
         elif kind == "employees":
             data = mock_data.get_employees(
                 contract_company_id=filters.get("contract_company_id"),
                 is_active=filters.get("is_active"),
+                since=filters.get("since"),
+                until=filters.get("until"),
             )
         elif kind == "fixed_costs":
             data = mock_data.get_fixed_costs(
@@ -194,12 +224,28 @@ class FinanceC1Client:
                 period_month=filters.get("period_month"),
                 cost_category=filters.get("cost_category"),
                 company_id=filters.get("company_id"),
+                since=filters.get("since"),
+                until=filters.get("until"),
             )
         elif kind == "payroll":
             data = mock_data.get_payroll(
                 company_id=filters["company_id"],
                 period_year=filters["period_year"],
                 period_month=filters["period_month"],
+                aggregation=filters.get("aggregation", "by_department"),
+                since=filters.get("since"),
+                until=filters.get("until"),
+            )
+        elif kind == "payment_requests":
+            data = mock_data.get_payment_requests(
+                period=filters.get("period"),
+                company_id=filters.get("company_id"),
+                pay_company=filters.get("pay_company"),
+                expense_category=filters.get("expense_category"),
+                is_amortized=filters.get("is_amortized"),
+                amort_covers_period=filters.get("amort_covers_period"),
+                since=filters.get("since"),
+                until=filters.get("until"),
             )
         else:  # pragma: no cover — guarded at call site
             raise ValueError(f"unknown mock kind: {kind}")
@@ -209,12 +255,14 @@ class FinanceC1Client:
             data_source="mock",
             cache_age_seconds=None,
             fetched_at=datetime.now(timezone.utc),
-            api_version="1.0-mock",
+            api_version=self.MOCK_API_VERSION,
             pagination={
                 "page": 1,
                 "page_size": len(data),
                 "total": len(data),
                 "total_pages": 1,
+                # v1.3 §4.4: 让 costing 下次能从该时间继续拉(增量同步推进点)
+                "last_updated_at": mock_data.now_iso(),
             },
         )
 
@@ -240,13 +288,14 @@ class FinanceC1Client:
         #    age=0 vs >0;为了让 5 min TTL 的稳定期 Badge 显示绿色 · 我们这里仍标 live)。
         cached = _cache.get(cache_key)
         if cached is not None:
-            ts, data, api_version = cached
+            ts, data, api_version, pagination = cached
             return FinanceC1ListEnvelope(
                 data=data,
                 data_source="live",
                 cache_age_seconds=max(0.0, time.time() - ts),
                 fetched_at=datetime.fromtimestamp(ts, tz=timezone.utc),
                 api_version=api_version,
+                pagination=pagination,
             )
 
         url = f"{self.base_url}{path}"
@@ -298,16 +347,17 @@ class FinanceC1Client:
             or response.headers.get("X-Api-Version")
         )
         pagination = payload.get("pagination")
+        pagination_dict = pagination if isinstance(pagination, dict) else None
 
         # 4. 成功 → 写 cache + last_good
-        self._record_last_good(cache_key, data, api_version)
+        self._record_last_good(cache_key, data, api_version, pagination_dict)
         return FinanceC1ListEnvelope(
             data=data,
             data_source="live",
             cache_age_seconds=0.0,
             fetched_at=datetime.now(timezone.utc),
             api_version=api_version,
-            pagination=pagination if isinstance(pagination, dict) else None,
+            pagination=pagination_dict,
         )
 
     def _fallback_or_raise(
@@ -328,7 +378,7 @@ class FinanceC1Client:
             )
             raise FinanceC1Error(f"finance C1 unavailable and no cached data: {exc}") from exc
 
-        ts, data, api_version = last
+        ts, data, api_version, pagination = last
         age = max(0.0, time.time() - ts)
         logger.warning(
             "finance_c1_degraded_to_cache cache_key=%s age=%.1fs exc=%s",
@@ -342,10 +392,11 @@ class FinanceC1Client:
             cache_age_seconds=age,
             fetched_at=datetime.fromtimestamp(ts, tz=timezone.utc),
             api_version=api_version,
+            pagination=pagination,
         )
 
     # ------------------------------------------------------------------
-    # 5 个公开方法 (派单 §2.1)
+    # 7 个公开方法 (v1.3 终态)
     # ------------------------------------------------------------------
 
     def list_companies(
@@ -353,14 +404,26 @@ class FinanceC1Client:
         *,
         entity_role: Optional[str] = None,
         is_active: Optional[bool] = True,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
     ) -> FinanceC1ListEnvelope:
         params: Dict[str, Any] = {}
         if entity_role:
             params["entity_role"] = entity_role
         if is_active is not None:
             params["is_active"] = "true" if is_active else "false"
+        if since:
+            params["since"] = since
+        if until:
+            params["until"] = until
         if self.use_mock:
-            return self._mock_envelope("companies", entity_role=entity_role, is_active=is_active)
+            return self._mock_envelope(
+                "companies",
+                entity_role=entity_role,
+                is_active=is_active,
+                since=since,
+                until=until,
+            )
         return self._fetch_list("/api/v1/c1/companies", params)
 
     def list_stores(
@@ -369,6 +432,8 @@ class FinanceC1Client:
         company_id: Optional[str] = None,
         platform: Optional[str] = None,
         is_active: Optional[bool] = True,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
     ) -> FinanceC1ListEnvelope:
         params: Dict[str, Any] = {}
         if company_id:
@@ -377,24 +442,80 @@ class FinanceC1Client:
             params["platform"] = platform
         if is_active is not None:
             params["is_active"] = "true" if is_active else "false"
+        if since:
+            params["since"] = since
+        if until:
+            params["until"] = until
         if self.use_mock:
-            return self._mock_envelope("stores", company_id=company_id, is_active=is_active)
+            return self._mock_envelope(
+                "stores",
+                company_id=company_id,
+                is_active=is_active,
+                since=since,
+                until=until,
+            )
         return self._fetch_list("/api/v1/c1/stores", params)
+
+    def list_stores_revenue(
+        self,
+        *,
+        period_year: int,
+        period_month: int,
+        store_id: Optional[str] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+    ) -> FinanceC1ListEnvelope:
+        """v1.3 新增: GET /api/v1/c1/stores/revenue (契约 §4.2)。
+
+        基于 finance LedgerMonthlySummary `profile_name='alipay_monthly_statement'`
+        过滤后的店铺月度真实营业额(权责制优先 ·  收付制兜底)。
+        """
+
+        params: Dict[str, Any] = {
+            "period_year": period_year,
+            "period_month": period_month,
+        }
+        if store_id:
+            params["store_id"] = store_id
+        if since:
+            params["since"] = since
+        if until:
+            params["until"] = until
+        if self.use_mock:
+            return self._mock_envelope(
+                "stores_revenue",
+                period_year=period_year,
+                period_month=period_month,
+                store_id=store_id,
+                since=since,
+                until=until,
+            )
+        return self._fetch_list("/api/v1/c1/stores/revenue", params)
 
     def list_employees(
         self,
         *,
         contract_company_id: Optional[str] = None,
         is_active: Optional[bool] = True,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
     ) -> FinanceC1ListEnvelope:
         params: Dict[str, Any] = {}
         if contract_company_id:
             params["contract_company_id"] = contract_company_id
         if is_active is not None:
             params["is_active"] = "true" if is_active else "false"
+        if since:
+            params["since"] = since
+        if until:
+            params["until"] = until
         if self.use_mock:
             return self._mock_envelope(
-                "employees", contract_company_id=contract_company_id, is_active=is_active
+                "employees",
+                contract_company_id=contract_company_id,
+                is_active=is_active,
+                since=since,
+                until=until,
             )
         return self._fetch_list("/api/v1/c1/employees", params)
 
@@ -405,6 +526,8 @@ class FinanceC1Client:
         period_month: int,
         cost_category: Optional[str] = None,
         company_id: Optional[str] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
     ) -> FinanceC1ListEnvelope:
         params: Dict[str, Any] = {
             "period_year": period_year,
@@ -414,6 +537,10 @@ class FinanceC1Client:
             params["cost_category"] = cost_category
         if company_id:
             params["company_id"] = company_id
+        if since:
+            params["since"] = since
+        if until:
+            params["until"] = until
         if self.use_mock:
             return self._mock_envelope(
                 "fixed_costs",
@@ -421,6 +548,8 @@ class FinanceC1Client:
                 period_month=period_month,
                 cost_category=cost_category,
                 company_id=company_id,
+                since=since,
+                until=until,
             )
         return self._fetch_list("/api/v1/c1/fixed-costs", params)
 
@@ -431,6 +560,8 @@ class FinanceC1Client:
         period_year: int,
         period_month: int,
         aggregation: str = "by_department",
+        since: Optional[str] = None,
+        until: Optional[str] = None,
     ) -> FinanceC1ListEnvelope:
         params: Dict[str, Any] = {
             "company_id": company_id,
@@ -438,14 +569,73 @@ class FinanceC1Client:
             "period_month": period_month,
             "aggregation": aggregation,
         }
+        if since:
+            params["since"] = since
+        if until:
+            params["until"] = until
         if self.use_mock:
             return self._mock_envelope(
                 "payroll",
                 company_id=company_id,
                 period_year=period_year,
                 period_month=period_month,
+                aggregation=aggregation,
+                since=since,
+                until=until,
             )
         return self._fetch_list("/api/v1/c1/payroll", params, payroll=True)
+
+    def list_payment_requests(
+        self,
+        *,
+        period: Optional[str] = None,
+        company_id: Optional[str] = None,
+        pay_company: Optional[str] = None,
+        expense_category: Optional[str] = None,
+        is_amortized: Optional[bool] = None,
+        amort_covers_period: Optional[str] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+    ) -> FinanceC1ListEnvelope:
+        """v1.3 新增: GET /api/v1/c1/payment-requests (契约 §4.6)。
+
+        付款凭证级数据(含摊销配置 + 6 类 expense_category + pay vs receive 分离)。
+
+        `amort_covers_period` 是 finance 主动加的额外 query 参数: 拉所有
+        `amort_start_period <= period <= amort_end_period` 的凭证 — 让 costing
+        `fixed_cost_amortizer_service` 一次性拿到「覆盖目标月」的所有摊销项。
+        """
+
+        params: Dict[str, Any] = {}
+        if period:
+            params["period"] = period
+        if company_id:
+            params["company_id"] = company_id
+        if pay_company:
+            params["pay_company"] = pay_company
+        if expense_category:
+            params["expense_category"] = expense_category
+        if is_amortized is not None:
+            params["is_amortized"] = "true" if is_amortized else "false"
+        if amort_covers_period:
+            params["amort_covers_period"] = amort_covers_period
+        if since:
+            params["since"] = since
+        if until:
+            params["until"] = until
+        if self.use_mock:
+            return self._mock_envelope(
+                "payment_requests",
+                period=period,
+                company_id=company_id,
+                pay_company=pay_company,
+                expense_category=expense_category,
+                is_amortized=is_amortized,
+                amort_covers_period=amort_covers_period,
+                since=since,
+                until=until,
+            )
+        return self._fetch_list("/api/v1/c1/payment-requests", params)
 
 
 # ---------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-"""Finance C1 代理 router — 让前端不直接调 finance API。
+"""Finance C1 代理 router (v1.3 终态) — 让前端不直接调 finance API。
 
 为什么要代理(派单 brief §2.5):
     - 前端拿不到也不该拿到 finance 的 X-Costing-Api-Key
@@ -6,15 +6,25 @@
     - 缓存复用: 同一份 5 分钟 cache 给所有用户共享(不每个浏览器都拉一次)
     - Mock 切换: dev/staging/prod 切 use_mock 不需要前端改任何代码
 
-挂载路径(派单 §2.5 + §B4):
-    `/api/planner/finance/companies` 等
+挂载路径(v1.3 终态 7 个 endpoint):
+    - `/api/planner/finance/companies` (v1.0)
+    - `/api/planner/finance/stores` (v1.0)
+    - `/api/planner/finance/stores/revenue` (v1.3 新增 §4.2)
+    - `/api/planner/finance/employees` (v1.0)
+    - `/api/planner/finance/fixed-costs` (v1.0)
+    - `/api/planner/finance/payroll` (v1.0 + v1.3 by_employee 真实落地)
+    - `/api/planner/finance/payment-requests` (v1.3 新增 §4.6)
 
 Auth: 沿用 router.py 里的 `require_staff_role` 守卫 (admin/operator/finance
 /factory_admin 任一角色可访问)。Internal-only · 不暴露给匿名。
 
 返回包: 我们把 `FinanceC1ListEnvelope` (含 data_source / cache_age_seconds /
-fetched_at / api_version) 直接吐给前端 ·  前端的"数据来源"Badge 直接读
-data_source 字段渲染。
+fetched_at / api_version / pagination(含 v1.3 last_updated_at)) 直接吐给前端 ·
+前端的"数据来源"Badge 直接读 data_source 字段渲染。
+
+v1.3 增量(派单 §2.6 + §2.2):
+    - 加 2 个新 endpoint: stores/revenue + payment-requests
+    - 7 个 endpoint 统一加 ?since=&?until= query 参数
 """
 
 from __future__ import annotations
@@ -71,15 +81,20 @@ def _to_http_error(exc: BaseException) -> HTTPException:
     )
 
 
+# 复用的 ?since/?until 描述(契约 §4.4) — 让 7 个 endpoint 文案一致
+_SINCE_DESC = "ISO 8601 时间(updated_at >= since)用于增量同步推进点"
+_UNTIL_DESC = "ISO 8601 时间(updated_at < until)·  与 since 配合做时间窗口"
+
+
 # ---------------------------------------------------------------------------
-# §3.1 companies
+# §4.1 + §4.10 companies (含 4 recognition Boolean + floor_area_sqm)
 # ---------------------------------------------------------------------------
 
 
 @router.get(
     "/companies",
     response_model=FinanceC1ListEnvelope,
-    summary="finance C1: 法人主体清单 (代理)",
+    summary="finance C1: 法人主体清单 (代理 · v1.3 含 4 recognition + floor_area_sqm)",
 )
 def list_finance_companies(
     entity_role: Optional[str] = Query(
@@ -87,10 +102,17 @@ def list_finance_companies(
         description="过滤主体角色: factory / shop / holding / mixed",
     ),
     is_active: Optional[bool] = Query(True, description="默认只查启用; 传 false 看全量"),
+    since: Optional[str] = Query(None, description=_SINCE_DESC),
+    until: Optional[str] = Query(None, description=_UNTIL_DESC),
 ) -> FinanceC1ListEnvelope:
     client = get_finance_c1_client()
     try:
-        return client.list_companies(entity_role=entity_role, is_active=is_active)
+        return client.list_companies(
+            entity_role=entity_role,
+            is_active=is_active,
+            since=since,
+            until=until,
+        )
     except FinanceC1Error as exc:
         raise _to_http_error(exc) from exc
 
@@ -109,11 +131,53 @@ def list_finance_stores(
     company_id: Optional[str] = Query(None),
     platform: Optional[str] = Query(None, description="tmall / taobao / jd / douyin / ..."),
     is_active: Optional[bool] = Query(True),
+    since: Optional[str] = Query(None, description=_SINCE_DESC),
+    until: Optional[str] = Query(None, description=_UNTIL_DESC),
 ) -> FinanceC1ListEnvelope:
     client = get_finance_c1_client()
     try:
         return client.list_stores(
-            company_id=company_id, platform=platform, is_active=is_active
+            company_id=company_id,
+            platform=platform,
+            is_active=is_active,
+            since=since,
+            until=until,
+        )
+    except FinanceC1Error as exc:
+        raise _to_http_error(exc) from exc
+
+
+# ---------------------------------------------------------------------------
+# §4.2 stores/revenue (v1.3 新增) — 店铺月度真实营业额
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/stores/revenue",
+    response_model=FinanceC1ListEnvelope,
+    summary="finance C1: 店铺月度真实营业额 (代理 · v1.3 §4.2)",
+)
+def list_finance_stores_revenue(
+    period_year: int = Query(..., ge=2000, le=2100),
+    period_month: int = Query(..., ge=1, le=12),
+    store_id: Optional[str] = Query(None, description="可选 ·  按单个店铺 UUID 过滤"),
+    since: Optional[str] = Query(None, description=_SINCE_DESC),
+    until: Optional[str] = Query(None, description=_UNTIL_DESC),
+) -> FinanceC1ListEnvelope:
+    """店铺月度真实营业额(基于 finance LedgerMonthlySummary 权责制优先)。
+
+    替代 v1.0 的 master_stores.monthly_revenue_avg(均值)·  让 costing 算
+    平台佣金摊法 + 三视图 (FI/CO/Group)能用「当月真实营业额」精准聚合。
+    """
+
+    client = get_finance_c1_client()
+    try:
+        return client.list_stores_revenue(
+            period_year=period_year,
+            period_month=period_month,
+            store_id=store_id,
+            since=since,
+            until=until,
         )
     except FinanceC1Error as exc:
         raise _to_http_error(exc) from exc
@@ -132,25 +196,30 @@ def list_finance_stores(
 def list_finance_employees(
     contract_company_id: Optional[str] = Query(None),
     is_active: Optional[bool] = Query(True),
+    since: Optional[str] = Query(None, description=_SINCE_DESC),
+    until: Optional[str] = Query(None, description=_UNTIL_DESC),
 ) -> FinanceC1ListEnvelope:
     client = get_finance_c1_client()
     try:
         return client.list_employees(
-            contract_company_id=contract_company_id, is_active=is_active
+            contract_company_id=contract_company_id,
+            is_active=is_active,
+            since=since,
+            until=until,
         )
     except FinanceC1Error as exc:
         raise _to_http_error(exc) from exc
 
 
 # ---------------------------------------------------------------------------
-# §3.4 fixed-costs
+# §3.4 fixed-costs (v1.3 不加 amortization 字段 — 撤回, 跨期摊销改走 §4.6)
 # ---------------------------------------------------------------------------
 
 
 @router.get(
     "/fixed-costs",
     response_model=FinanceC1ListEnvelope,
-    summary="finance C1: 固定开支台账 (代理)",
+    summary="finance C1: 固定开支台账 (代理 · 已聚合月度视图)",
 )
 def list_finance_fixed_costs(
     period_year: int = Query(..., ge=2000, le=2100),
@@ -160,6 +229,8 @@ def list_finance_fixed_costs(
         description="按 §3.4.1 标准枚举过滤 (rent/utility/salary_admin/...)",
     ),
     company_id: Optional[str] = Query(None),
+    since: Optional[str] = Query(None, description=_SINCE_DESC),
+    until: Optional[str] = Query(None, description=_UNTIL_DESC),
 ) -> FinanceC1ListEnvelope:
     client = get_finance_c1_client()
     try:
@@ -168,26 +239,33 @@ def list_finance_fixed_costs(
             period_month=period_month,
             cost_category=cost_category,
             company_id=company_id,
+            since=since,
+            until=until,
         )
     except FinanceC1Error as exc:
         raise _to_http_error(exc) from exc
 
 
 # ---------------------------------------------------------------------------
-# §3.5 payroll (高敏感, 需要 settings.finance_c1_payroll_authorized=True)
+# §3.5 + §4.5 payroll (高敏感 ·  by_department v1.0 + by_employee v1.3 真实落地)
 # ---------------------------------------------------------------------------
 
 
 @router.get(
     "/payroll",
     response_model=FinanceC1ListEnvelope,
-    summary="finance C1: 工资单按月聚合 (代理 · 高敏感)",
+    summary="finance C1: 工资单 (代理 · 高敏感; v1.3 by_employee 真实落地)",
 )
 def list_finance_payroll(
     company_id: str = Query(...),
     period_year: int = Query(..., ge=2000, le=2100),
     period_month: int = Query(..., ge=1, le=12),
-    aggregation: str = Query("by_department"),
+    aggregation: str = Query(
+        "by_department",
+        description="by_department(v1.0 兼容) / by_employee(v1.3 真实落地 ·  每员工每月 1 行)",
+    ),
+    since: Optional[str] = Query(None, description=_SINCE_DESC),
+    until: Optional[str] = Query(None, description=_UNTIL_DESC),
 ) -> FinanceC1ListEnvelope:
     client = get_finance_c1_client()
     try:
@@ -196,6 +274,75 @@ def list_finance_payroll(
             period_year=period_year,
             period_month=period_month,
             aggregation=aggregation,
+            since=since,
+            until=until,
+        )
+    except FinanceC1Error as exc:
+        raise _to_http_error(exc) from exc
+
+
+# ---------------------------------------------------------------------------
+# §4.6 payment-requests (v1.3 新增) — 付款凭证级数据
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/payment-requests",
+    response_model=FinanceC1ListEnvelope,
+    summary="finance C1: 付款凭证 (代理 · v1.3 §4.6 含 amort + 6 类 + pay_company)",
+)
+def list_finance_payment_requests(
+    period: Optional[str] = Query(
+        None,
+        description="YYYYMM 6 位 ·  按 belong_month 过滤",
+        min_length=6,
+        max_length=6,
+    ),
+    company_id: Optional[str] = Query(None, description="按受益主体过滤"),
+    pay_company: Optional[str] = Query(
+        None,
+        description="按实际付款主体过滤 (A 付 B 受益场景)",
+    ),
+    expense_category: Optional[str] = Query(
+        None,
+        description="6 类: cogs / selling / admin / financial / capital_recovery / platform_recharge",
+    ),
+    is_amortized: Optional[bool] = Query(
+        None,
+        description="True=只看跨期摊销凭证, False=只看一次性凭证, 不传=两类都返",
+    ),
+    amort_covers_period: Optional[str] = Query(
+        None,
+        description=(
+            "YYYYMM ·  finance 主动加的额外参数: 拉所有 amort_start <= period <= amort_end "
+            "的凭证 ·  让 costing fixed_cost_amortizer 一次性拿到「覆盖目标月」的所有摊销项"
+        ),
+        min_length=6,
+        max_length=6,
+    ),
+    since: Optional[str] = Query(None, description=_SINCE_DESC),
+    until: Optional[str] = Query(None, description=_UNTIL_DESC),
+) -> FinanceC1ListEnvelope:
+    """付款凭证级数据(含摊销 + 6 类 + pay_company vs company_name 主体分离)。
+
+    用途:
+        - costing fixed_cost_amortizer_service: 用 amort 5 字段平摊跨期费用
+        - 解决「A 主体付钱、B 主体受益」场景: pay_company vs company_name
+        - 6 类 expense_category 管理会计分类(cogs/selling/admin/financial/...)
+        - 异常诊断/凭证追溯/应付账款分析(含 invoice_status / match_status)
+    """
+
+    client = get_finance_c1_client()
+    try:
+        return client.list_payment_requests(
+            period=period,
+            company_id=company_id,
+            pay_company=pay_company,
+            expense_category=expense_category,
+            is_amortized=is_amortized,
+            amort_covers_period=amort_covers_period,
+            since=since,
+            until=until,
         )
     except FinanceC1Error as exc:
         raise _to_http_error(exc) from exc

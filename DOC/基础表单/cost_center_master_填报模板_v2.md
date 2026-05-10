@@ -1,21 +1,26 @@
-# cost_center_master 主数据填报模板 v2（重新分工版）
+# cost_center_master 主数据填报模板 v2（已废弃 — 老板 0 工作量）
 
-> **🔴 状态变更（2026-05-10 12:12）— v2 模板正式废弃手填模式**
+> **🔴 终态状态（2026-05-10 14:25）— 你（老板）什么都不用填**
 >
-> 用户 12:08 二次指出："让财务出建议又让老板 review = 财务变业务大脑 = costing 没自己出主意"。**正确分工是：costing 一次性把规则定死告诉财务 → 财务按规则提供数据 → costing 直接消费 → 老板登录系统点鼠标即可**。
+> 经过 v1.0 → v1.1 → v1.2 → v1.3 多轮迭代 + finance 团队对齐，最终方案：**财务按 costing 写死的规则提供数据 → costing 自己拉数据 + 自动建班组 + 出 UI → 老板登录系统点 5~10 分钟鼠标即可**。
 >
-> **新工作流（终极版）**：
-> 1. **财务侧**：按 `finance_to_costing_c1_contract_v1.1_increment.md` 实施 2 个新聚合 API（4~6 小时），所有公式/规则 costing 已写死，财务不出业务建议
-> 2. **costing 侧**：拉数据 → 落 cost_center_master 主表（自动预填）+ 出管理 UI（3~4 小时）
-> 3. **老板**：登录 ai-costing-system → 进 `/costing/admin/cost-centers` → 看自动预填的 6~10 个班组 → 点"主要服务品类"标签 + confirm/调整 → done（5~10 分钟，不是填模板，是点鼠标）
+> **老板将来需要做的唯一动作**（不是现在）：
+> 等 finance C1 v1.3 实施完 + costing 出 UI 后，登录 `/costing/admin/cost-centers` → 点 6~10 个班组的「主要服务品类」标签（家居饰品/布艺/通用）→ done。
 >
-> **本 v2 文档不再使用**，仅保留作为 v1 → v2 → v2.5（让财务出建议）→ v3（终极方案）的决策演进留档。
+> **不需要做的**：
+> - ❌ 不填本 v2 模板的任何表格
+> - ❌ 不填员工花名册（财务那边有）
+> - ❌ 不填工资数据（财务那边有）
+> - ❌ 不填固定开支金额（财务那边有）
+> - ❌ 不出摊法建议（costing 已写死 11 项默认）
 >
-> **真正的需求文档**：
-> - `DOC/costing/blueprints/finance_to_costing_c1_contract_v1.md` v1.0（5 个原始 API）
-> - `DOC/costing/blueprints/finance_to_costing_c1_contract_v1.1_increment.md` v1.1 增量（2 个聚合 API + 公式定义）
+> **真正的权威文档**：
+> - **costing 侧**：`DOC/costing/blueprints/finance_to_costing_c1_contract_v1.3_aligned.md` v1.3 终态
+> - **finance 侧**：`/home/admin/projects/finance-analyzer/DOC/contracts/c1_hub_boundary_memo.md` v0.3 备忘录
 >
-> **触发条件**：v1.1 增量 + v1.0 全部上线 → 自动出班组数据 → 进 UI 点品类
+> **当前进度**：等 finance 负责人签字 → 双方启动实施（2~2.5 天 wall clock）→ 自动出班组数据 → 老板进 UI 点品类
+>
+> **本 v2 文档保留**仅作 v1 → v2 → v2.5（让财务出建议）→ v3（终极方案）的决策演进留档，不要按它做事。
 >
 > ---
 >

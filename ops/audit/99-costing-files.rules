@@ -1,0 +1,9 @@
+# Audit rules: detect deletions / renames anywhere under ai-costing-system tree
+# Triggered for any successful unlink/unlinkat/rename/renameat/renameat2/rmdir
+# Records: pid, ppid, auid, uid, exe, comm, cwd, target path
+# Query examples:
+#   sudo ausearch -k costing_del --start today
+#   sudo ausearch -k costing_del --start today --raw | aureport -f -i
+
+-a always,exit -F arch=b64 -S unlink,unlinkat,rename,renameat,renameat2,rmdir -F dir=/home/admin/ai-costing-system -F success=1 -k costing_del
+-a always,exit -F arch=b32 -S unlink,unlinkat,rename,renameat,renameat2,rmdir -F dir=/home/admin/ai-costing-system -F success=1 -k costing_del

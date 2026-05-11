@@ -70,7 +70,7 @@ const ProfitInsightsPage = () => {
   const didInitRef = useRef(false)
   // 默认走实时：当前用于固定历史月份校验（快照仅支持近N天）
   const [useSnapshot, setUseSnapshot] = useState(false)
-  const [quickDays, setQuickDays] = useState<7 | 30 | 90>(30)
+  const [quickDays, setQuickDays] = useState<7 | 30 | 90>(7)
   const [computedAt, setComputedAt] = useState<string | null>(null)
   // Path A §A5 — 法人主体多选(client-side fuzzy on row.channel)
   const [selectedCompanyIds, setSelectedCompanyIds] = useState<string[]>([])
@@ -554,7 +554,7 @@ const ProfitInsightsPage = () => {
               form={form}
               layout="vertical"
               initialValues={{
-                range: [dayjs().subtract(30, 'day'), dayjs()],
+                range: [dayjs().subtract(7, 'day'), dayjs()],
               }}
             >
               <Row gutter={12}>

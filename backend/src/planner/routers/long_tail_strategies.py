@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..dependencies import get_db_session
@@ -259,3 +260,121 @@ def resolve_preview(
         category=resolved.category,
         matched_keyword=resolved.matched_keyword,
     )
+
+
+# ============================================================================
+# v1.4 制造费按模型设置 — GET resolve + POST upsert 便捷封装
+#
+# 用户原话（2026-05-11）："制造费一定要指定模型，不能通用"。
+# 这两个 endpoint 让 ProductModelEditorDrawer 的「计算汇总」能够：
+#   1) 实时拿当前 model 的 hub 命中费率（取代写死的 0.30），不用走 POST + body
+#   2) 一键写入/更新「scope=model + scope_id=<model_id>」那一行 overhead_rate
+#      （内部自动处理「新建 vs 更新已存在 vs 复活 archived」三种情况）
+# ============================================================================
+
+
+@router.get(
+    "/resolve/overhead",
+    response_model=LongTailCogsRateResolvePreviewResponse,
+)
+def resolve_overhead_for_model(
+    model_id: Optional[str] = Query(None, description="product_models.id；空则只走 category > global"),
+    category: Optional[str] = Query(None, description="模型品类（model 层未命中后兜 category 层）"),
+    cost_center_id: Optional[str] = Query(None, description="班组 ID（兜 cost_center 层）"),
+    db: Session = Depends(get_db_session),
+):
+    """4 层 resolve 包装为 GET，方便 React useQuery 按 model_id 缓存。"""
+    hit = long_tail_strategy_service.resolve_overhead_rate(
+        db,
+        model_id=model_id,
+        category=category,
+        cost_center_id=cost_center_id,
+    )
+    return LongTailCogsRateResolvePreviewResponse(
+        rate=float(hit.rate),
+        source=hit.source or ("hard_fallback" if hit.hit_layer == "hard_fallback" else "overhead_rate_hub"),
+        strategy_id=hit.strategy_id,
+        category=category,
+        matched_keyword=None,
+        hit_layer=hit.hit_layer,
+        hit_scope_type=hit.scope_type,
+        hit_scope_id=hit.scope_id,
+        data_quality=hit.data_quality,
+    )
+
+
+class _UpsertModelOverheadRequest(BaseModel):
+    """POST /upsert/model-overhead 的简化入参（不暴露 long_tail 全套字段）。"""
+
+    model_id: str = Field(..., min_length=1, description="product_models.id")
+    rate: float = Field(..., gt=0, lt=10, description="制造费率（0~10 之间，常见 0.20~0.40）")
+    note: Optional[str] = Field(None, description="备注（写到 metadata.history）")
+    actor: Optional[str] = Field(None, description="操作人（审计）")
+
+
+@router.post(
+    "/upsert/model-overhead",
+    response_model=LongTailCogsRateStrategyRead,
+)
+def upsert_model_overhead(
+    payload: _UpsertModelOverheadRequest,
+    db: Session = Depends(get_db_session),
+):
+    """Upsert 一行 scope_type=model + scope_id=<model_id> 的 overhead_rate。
+
+    内部自动处理 3 种情况：
+      - 已有非 archived 行：PATCH（rate / note / source）
+      - 已有 archived 行：复活（unarchive）+ 更新值
+      - 不存在：新建
+
+    category 由后端 `_synthesize_category_for_hub` 自动合成
+    （`__overhead_rate__model__<model_id_lower>`），前端不需要感知。
+    """
+    rate_type = "overhead_rate"
+    scope_type = "model"
+    scope_id = payload.model_id.strip()
+    if not scope_id:
+        raise HTTPException(status_code=400, detail="model_id 必填")
+
+    synthesized_category = long_tail_strategy_service._synthesize_category_for_hub(
+        rate_type, scope_type, scope_id
+    )
+    existing = long_tail_strategy_service.get_by_category(
+        db, category=synthesized_category
+    )
+
+    body = {
+        "category": synthesized_category,
+        "rate": payload.rate,
+        "rate_type": rate_type,
+        "scope_type": scope_type,
+        "scope_id": scope_id,
+        "source": "manual_model_override",
+        "data_quality": "green",  # 用户手动设的算 green（明确意图）
+        "enabled": True,
+        "note": payload.note,
+    }
+
+    try:
+        if existing is None or existing.is_archived:
+            # 新建（或复活 archived）走 create_strategy 内部自动判断
+            row = long_tail_strategy_service.create_strategy(
+                db, payload=body, actor=payload.actor
+            )
+        else:
+            # 已存在且 active：走 update_strategy（PATCH 语义）
+            row = long_tail_strategy_service.update_strategy(
+                db,
+                strategy_id=existing.id,
+                patch={
+                    "rate": payload.rate,
+                    "source": "manual_model_override",
+                    "data_quality": "green",
+                    "note": payload.note,
+                },
+                actor=payload.actor,
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return _to_read(row)

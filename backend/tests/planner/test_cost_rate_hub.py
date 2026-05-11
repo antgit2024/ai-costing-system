@@ -364,3 +364,93 @@ def test_api_create_overhead_rejects_missing_scope_id(client):
     )
     assert r.status_code == 400
     assert "scope_id" in r.json().get("detail", "")
+
+
+# ===========================================================================
+# v1.4 制造费按模型设置 — GET resolve/overhead + POST upsert/model-overhead
+# 配套：ProductModelEditorDrawer 清单编辑「制造费」徽章 + 一键覆盖
+# ===========================================================================
+
+
+def test_api_resolve_overhead_get_returns_hard_fallback_when_empty(client):
+    """空 DB 命中 hard_fallback 0.30，data_quality=red，前端徽章显示 ⚠️。"""
+    r = client.get("/api/planner/long-tail-strategies/resolve/overhead", params={"model_id": "no-such-model"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["rate"] == 0.3
+    assert body["hit_layer"] == "hard_fallback"
+    assert body["source"] == "hard_fallback"
+
+
+def test_api_resolve_overhead_get_walks_chain(client):
+    """global 写一条，model_id 不命中 → 兜底走到 global。"""
+    client.post(
+        "/api/planner/long-tail-strategies",
+        json={
+            "rate_type": "overhead_rate",
+            "scope_type": "global",
+            "rate": 0.27,
+            "rate_basis": "pct_of_cost",
+            "data_quality": "yellow",
+        },
+    )
+    r = client.get("/api/planner/long-tail-strategies/resolve/overhead", params={"model_id": "model-x"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["rate"] == 0.27
+    assert body["hit_layer"] == "global"
+
+
+def test_api_upsert_model_overhead_create_then_update_idempotent(client):
+    """POST 第一次新建；第二次同 model_id 走 update 路径，不报 'category already exists'。"""
+    payload = {"model_id": "kb8-test-uuid-001", "rate": 0.28, "note": "首次设值"}
+    r1 = client.post("/api/planner/long-tail-strategies/upsert/model-overhead", json=payload)
+    assert r1.status_code == 200, r1.text
+    body1 = r1.json()
+    assert body1["rate"] == 0.28
+    assert body1["scope_type"] == "model"
+    assert body1["scope_id"] == "kb8-test-uuid-001"
+    assert body1["source"] == "manual_model_override"
+    assert body1["data_quality"] == "green"
+    strategy_id_1 = body1["id"]
+
+    # 第二次同 model_id，rate 改成 0.32 → 应是 update（同一行 id）
+    r2 = client.post(
+        "/api/planner/long-tail-strategies/upsert/model-overhead",
+        json={"model_id": "kb8-test-uuid-001", "rate": 0.32, "note": "调高 4 个点"},
+    )
+    assert r2.status_code == 200, r2.text
+    body2 = r2.json()
+    assert body2["id"] == strategy_id_1, "幂等性破坏：upsert 第二次应复用同一行"
+    assert body2["rate"] == 0.32
+    assert body2["note"] == "调高 4 个点"
+
+    # resolve 同 model_id 应拿到最新值 + hit_layer=model
+    rget = client.get(
+        "/api/planner/long-tail-strategies/resolve/overhead",
+        params={"model_id": "kb8-test-uuid-001"},
+    )
+    assert rget.status_code == 200
+    rget_body = rget.json()
+    assert rget_body["rate"] == 0.32
+    assert rget_body["hit_layer"] == "model"
+    assert rget_body["hit_scope_id"] == "kb8-test-uuid-001"
+
+
+def test_api_upsert_model_overhead_rejects_invalid_input(client):
+    """rate <= 0 / >= 10 / 缺 model_id 都应 422 或 400。"""
+    # 缺 model_id
+    r = client.post("/api/planner/long-tail-strategies/upsert/model-overhead", json={"rate": 0.25})
+    assert r.status_code == 422
+    # rate <= 0
+    r = client.post(
+        "/api/planner/long-tail-strategies/upsert/model-overhead",
+        json={"model_id": "x", "rate": 0},
+    )
+    assert r.status_code == 422
+    # rate >= 10
+    r = client.post(
+        "/api/planner/long-tail-strategies/upsert/model-overhead",
+        json={"model_id": "x", "rate": 10.5},
+    )
+    assert r.status_code == 422

@@ -56,6 +56,10 @@ import usageCalculationGuide from '@doc/costing/manuals/guides/usage_calculation
 import LineVariantDrawer from '@/components/costing/LineVariantDrawer'
 import MaterialPickerDrawer, { type MaterialPickerResult, type MaterialPickerTab } from '@/components/costing/MaterialPickerDrawer'
 import {
+  resolveOverheadForModel,
+  upsertModelOverhead,
+} from '@/services/longTailStrategy'
+import {
   bindSkuModelVersion,
   createLineVariant,
   createProductModelVersion,
@@ -521,6 +525,54 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     queryKey: ['taxonomy-items', 'product_model_category'],
     queryFn: () => fetchTaxonomyItems('product_model_category', { include_inactive: true }),
     enabled: open,
+  })
+
+  // v1.4 制造费按模型设置：4 层 hub resolve（model > category > cost_center > global）
+  // 用户原话："制造费一定要指定模型，不能通用"。
+  // 取代 refreshSummary 里写死的 0.30 系数。
+  const overheadRateQuery = useQuery({
+    queryKey: [
+      'overhead-rate-resolve',
+      modelId,
+      (modelQuery.data as any)?.category ?? null,
+    ],
+    queryFn: () =>
+      resolveOverheadForModel({
+        model_id: modelId || undefined,
+        category: ((modelQuery.data as any)?.category as string | null) ?? undefined,
+      }),
+    enabled: open && !!modelId,
+    staleTime: 5_000, // 5s 内不重复请求；点「设费率」按钮后会立即 invalidate
+  })
+
+  const overheadHit = overheadRateQuery.data
+  const overheadRateValue = (() => {
+    const r = overheadHit?.rate
+    if (typeof r === 'number' && Number.isFinite(r) && r > 0) return r
+    return 0.3 // 接口暂未到位时兜底，与历史 0.3 一致，避免抽屉刚打开闪 0
+  })()
+  const overheadRatePct = `${(overheadRateValue * 100).toFixed(2)}%`
+
+  // 「为本模型设费率」Modal 状态
+  const [overheadOverrideOpen, setOverheadOverrideOpen] = useState(false)
+  const [overheadOverrideRate, setOverheadOverrideRate] = useState<number>(0.3)
+  const [overheadOverrideNote, setOverheadOverrideNote] = useState<string>('')
+
+  const upsertOverheadMutation = useMutation({
+    mutationFn: (payload: { rate: number; note?: string }) =>
+      upsertModelOverhead({
+        model_id: modelId as string,
+        rate: payload.rate,
+        note: payload.note,
+      }),
+    onSuccess: () => {
+      message.success('已保存本模型制造费率')
+      setOverheadOverrideOpen(false)
+      queryClient.invalidateQueries({ queryKey: ['overhead-rate-resolve', modelId] })
+    },
+    onError: (err: any) => {
+      message.error(err?.response?.data?.detail ?? err?.message ?? '保存失败')
+    },
   })
 
   const taxonomyTeamQuery = useQuery({
@@ -1324,7 +1376,9 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
         laborCost += minutes * rate
       }
 
-      const overheadCost = 0.3 * (materialCost + laborCost)
+      // v1.4: 制造费率从 hub 4 层 resolve 拿（model > category > cost_center > global）
+      // 取代写死的 0.30。overheadRateValue 已在外层 useQuery 缓存。
+      const overheadCost = overheadRateValue * (materialCost + laborCost)
       const totalCost = materialCost + laborCost + overheadCost
       setSummary({
         material_cost: materialCost,
@@ -1344,7 +1398,7 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
     }, 120)
     return () => window.clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, activeTab, sampleSpec.width_mm, sampleSpec.height_mm, sampleSpec.quantity, sampleSpec.unit_label, materials, processes])
+  }, [open, activeTab, sampleSpec.width_mm, sampleSpec.height_mm, sampleSpec.quantity, sampleSpec.unit_label, materials, processes, overheadRateValue])
 
   const handleRefreshMaterialPrices = async () => {
     if (!modelId) {
@@ -3959,8 +4013,51 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
                       人工费：{summary.labor_cost.toFixed(2)}
                     </Tag>
                     <Tag style={{ ...buildTintStyle('var(--ant-color-warning)'), color: 'var(--ant-color-warning)' }}>
-                      制造费（23%）：{summary.overhead_cost.toFixed(2)}
+                      制造费（{overheadRatePct}）：{summary.overhead_cost.toFixed(2)}
                     </Tag>
+                    {/* v1.4 制造费率徽章 + 4 层链路 + 一键覆盖 */}
+                    {(() => {
+                      const layer = overheadHit?.hit_layer ?? 'hard_fallback'
+                      // 徽章配色：model = 🔵 success / category = 🟢 success / cost_center = 🔵 processing
+                      // global = ⚪ default / hard_fallback = ⚠️ warning
+                      const layerMeta: Record<string, { color: string; label: string }> = {
+                        model: { color: 'success', label: '🔵 模型级（已设）' },
+                        category: { color: 'green', label: '🟢 品类级' },
+                        cost_center: { color: 'processing', label: '🔵 班组级' },
+                        global: { color: 'default', label: '⚪ 全局兜底（建议为本模型设值）' },
+                        hard_fallback: { color: 'warning', label: '⚠️ 未配置（用 0.30 兜底）' },
+                      }
+                      const meta = layerMeta[layer] ?? layerMeta.hard_fallback
+                      const tooltip = (
+                        <div style={{ fontSize: 12, lineHeight: 1.6 }}>
+                          <div style={{ marginBottom: 6, fontWeight: 600 }}>制造费率 4 层 resolve 链路</div>
+                          <div>1. model（本模型）{layer === 'model' ? `✓ ${overheadRateValue.toFixed(4)}` : '（空）'}</div>
+                          <div>2. category（{(modelQuery.data as any)?.category || '空'}）{layer === 'category' ? `✓ ${overheadRateValue.toFixed(4)}` : '（空）'}</div>
+                          <div>3. cost_center（班组）{layer === 'cost_center' ? `✓ ${overheadRateValue.toFixed(4)}` : '（空）'}</div>
+                          <div>4. global（全局）{layer === 'global' ? `✓ ${overheadRateValue.toFixed(4)}` : '（空）'}</div>
+                          <div>5. hard_fallback {layer === 'hard_fallback' ? `✓ 0.30` : ''}</div>
+                          {overheadHit?.source ? <div style={{ marginTop: 6, color: 'rgba(255,255,255,0.65)' }}>来源：{overheadHit.source}</div> : null}
+                          {overheadHit?.data_quality ? <div style={{ color: 'rgba(255,255,255,0.65)' }}>质量：{overheadHit.data_quality}</div> : null}
+                        </div>
+                      )
+                      return (
+                        <Tooltip title={tooltip} getPopupContainer={() => document.body}>
+                          <Tag color={meta.color}>{meta.label}</Tag>
+                        </Tooltip>
+                      )
+                    })()}
+                    <Button
+                      size="small"
+                      icon={<EditOutlined />}
+                      disabled={!modelId}
+                      onClick={() => {
+                        setOverheadOverrideRate(overheadRateValue)
+                        setOverheadOverrideNote('')
+                        setOverheadOverrideOpen(true)
+                      }}
+                    >
+                      为本模型设费率
+                    </Button>
                     <Tag style={{ ...buildTintStyle('var(--ant-color-success)'), color: 'var(--ant-color-success)' }}>
                       合计：{summary.total_cost.toFixed(2)}{' '}
                       <Text
@@ -6189,6 +6286,63 @@ export default function ProductModelEditorDrawer(props: ProductModelEditorDrawer
         tip="提示：物料组与工序组共用同一套“用量/计量口径”，请先读本说明再调参。"
         onClose={() => setUsageGuideOpen(false)}
       />
+
+      {/* v1.4 制造费率 — 为本模型单独设值 */}
+      <Modal
+        open={overheadOverrideOpen}
+        onCancel={() => setOverheadOverrideOpen(false)}
+        onOk={() => {
+          if (!Number.isFinite(overheadOverrideRate) || overheadOverrideRate <= 0 || overheadOverrideRate >= 10) {
+            message.warning('费率必须在 0~10 之间（常见 0.20~0.40）')
+            return
+          }
+          upsertOverheadMutation.mutate({
+            rate: overheadOverrideRate,
+            note: overheadOverrideNote || undefined,
+          })
+        }}
+        confirmLoading={upsertOverheadMutation.isPending}
+        title="为本模型设制造费率"
+        width={520}
+        okText="保存（model 层覆盖）"
+      >
+        <Form layout="vertical">
+          <Form.Item
+            label="制造费率（小数）"
+            extra={
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                例：0.25 表示 (物料费 + 人工费) × 25%。建议 0.20~0.40 之间，超出请确认是否合理。
+                当前 hub 命中：{overheadHit?.hit_layer ?? '加载中…'} · 值 {overheadRateValue.toFixed(4)}
+              </Text>
+            }
+          >
+            <InputNumber
+              style={{ width: 160 }}
+              min={0.01}
+              max={9.99}
+              step={0.01}
+              precision={4}
+              value={overheadOverrideRate}
+              onChange={(v) => setOverheadOverrideRate(typeof v === 'number' ? v : 0.3)}
+            />
+          </Form.Item>
+          <Form.Item label="备注（可选）">
+            <Input
+              placeholder="例：转印工艺单独定价 / 2026-Q2 临时调整"
+              value={overheadOverrideNote}
+              onChange={(e) => setOverheadOverrideNote(e.target.value)}
+              maxLength={200}
+            />
+          </Form.Item>
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginTop: 8 }}
+            message="保存后立即生效"
+            description="model 层覆盖会写入 cost_rate_master，所有用到此模型的成本计算（清单编辑预览 / 发货 BOM 落库）都会按本值算。修改 4 层链路任何一层都会立刻反映在此抽屉的「制造费」数字上。"
+          />
+        </Form>
+      </Modal>
 
       {/* Module picker */}
       <Modal

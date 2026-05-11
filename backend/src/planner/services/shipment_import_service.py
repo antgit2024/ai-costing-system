@@ -35,14 +35,15 @@ PREVIEW_CACHE_DIR = Path("logs") / "shipment_previews"
 
 def _extract_shop_spec_code_from_line(line: Any) -> Optional[str]:
     """
-    从 ShipmentLine 抽取"商家编码"（merchant SKU），按可靠度排序：
-      1. line.metadata_json.shop_spec_code（最新协议；新版 jackyun mapper / Excel 路径都写）
-      2. line.product_link_id（旧版 jackyun mapper 把 tradeGoodsno 写在这）
-      3. raw_row_json.detail.tradeGoodsno（吉客云 detail 段；老批次兜底）
+    从 ShipmentLine 抽取"商家编码"（merchant SKU，归一化后的展示值），按可靠度排序：
+      1. line.metadata_json.shop_spec_code（最新协议；新版 jackyun mapper 已做"剥前缀"归一化）
+      2. line.product_link_id（旧版 jackyun mapper 把 tradeGoodsno 写在这；可能含前缀）
+      3. raw_row_json.detail.tradeGoodsno（吉客云 detail 段；可能含前缀）
       4. raw_row_json.shipment.goodsDetail[*].tradeGoodsno（极少数嵌套场景）
       5. raw_row_json 顶层中文/英文别名（手工 Excel 路径）
 
     返回 None 表示真没有；调用方应避免用空串覆盖已有值。
+    需要拿到 ERP 原始拼装值（归一化前）请用 ``_extract_shop_spec_code_raw_from_line``。
     """
     if line is None:
         return None
@@ -75,6 +76,30 @@ def _extract_shop_spec_code_from_line(line: Any) -> Optional[str]:
             v = rr.get(key) if isinstance(rr, dict) else None
             if v not in (None, "", "null"):
                 return str(v).strip() or None
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def _extract_shop_spec_code_raw_from_line(line: Any) -> Optional[str]:
+    """
+    返回归一化前的 ERP 原始 ``tradeGoodsno`` —— 仅当它跟归一化后的展示值不同时返回，否则 None。
+
+    给 UI Tooltip 用：让运营能看到我们对脏数据"剥前缀"的归一化决策。
+    若该行从未做过归一化（或 raw 已与 normalized 一致），返回 None；前端就不会显示
+    "(已归一化) ERP 原始: ..." 提示。
+    """
+    if line is None:
+        return None
+    try:
+        meta = getattr(line, "metadata_json", None) or {}
+        if isinstance(meta, dict):
+            raw = meta.get("shop_spec_code_raw")
+            if raw not in (None, "", "null"):
+                s = str(raw).strip()
+                normalized = str(meta.get("shop_spec_code") or "").strip()
+                if s and s != normalized:
+                    return s
     except Exception:  # noqa: BLE001
         return None
     return None
@@ -2843,6 +2868,8 @@ def list_shipment_lines(
             # 聚水潭：raw_row.detail.tradeGoodsno（核心入口）
             or _from_jackyun_detail(raw_row)
         )
+        # 归一化前的 ERP 原始拼装值（仅当不同时返回；前端 Tooltip 用）
+        shop_spec_code_raw = _extract_shop_spec_code_raw_from_line(line)
         platform_sku_id = (
             meta.get("platform_sku_id")
             or raw_row.get("平台规格Id")
@@ -2944,6 +2971,7 @@ def list_shipment_lines(
                 "sku_code": getattr(line, "sku_code", None),
                 "tag": getattr(line, "tag", None),
                 "shop_spec_code": (str(shop_spec_code).strip() if shop_spec_code not in (None, "") else None),
+                "shop_spec_code_raw": shop_spec_code_raw,
                 "platform_sku_id": (str(platform_sku_id).strip() if platform_sku_id not in (None, "") else None),
                 "bundle_template_code": (str(bundle_template_code).strip() if bundle_template_code not in (None, "") else None),
                 "bundle_preset_selector": (

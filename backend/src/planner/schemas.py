@@ -2428,8 +2428,11 @@ class ShipmentLineListItem(BaseModel):
     channel: Optional[str] = None
     sku_code: Optional[str] = None
     tag: Optional[str] = None
-    # 商家编码 / 网店规格编码（若渠道/导出表提供）
+    # 商家编码 / 网店规格编码（归一化后的展示值）
     shop_spec_code: Optional[str] = None
+    # 归一化前的 ERP 原始拼装值，仅当跟 shop_spec_code 不同时返回（如 "Q26041801KB8-001" → "KB8-001"）
+    # 前端 Tooltip 用，让运营能溯源 ERP 实际录入是什么
+    shop_spec_code_raw: Optional[str] = None
     # 平台规格Id（网店）（若导出表提供）
     platform_sku_id: Optional[str] = None
     # 套装锚点（Phase0：来自 sku-master 绑定并贯穿到发货行）

@@ -516,8 +516,10 @@ const SkuMasterWorkspacePage = () => {
       dataIndex: 'shop_spec_code',
       width: 220,
       render: (v, record) => {
-        const raw = (v ?? (record.metadata_json as any)?.shop_spec_code) as string | null | undefined
-        return <ShopSpecCodeCell value={raw ?? null} />
+        const meta = (record.metadata_json as any) || {}
+        const code = (v ?? meta.shop_spec_code) as string | null | undefined
+        const rawErp = meta.shop_spec_code_raw as string | null | undefined
+        return <ShopSpecCodeCell value={code ?? null} rawValue={rawErp ?? null} />
       },
     },
     {
@@ -2480,7 +2482,10 @@ const SkuMasterWorkspacePage = () => {
                   {detailQuery.data.platform_sku_id ?? '-'}
                 </Descriptions.Item>
                 <Descriptions.Item label="规格编码（网店）/商家编码">
-                  <ShopSpecCodeCell value={((detailQuery.data as any).shop_spec_code ?? (detailQuery.data.metadata_json as any)?.shop_spec_code) ?? null} />
+                  <ShopSpecCodeCell
+                    value={((detailQuery.data as any).shop_spec_code ?? (detailQuery.data.metadata_json as any)?.shop_spec_code) ?? null}
+                    rawValue={(detailQuery.data.metadata_json as any)?.shop_spec_code_raw ?? null}
+                  />
                 </Descriptions.Item>
                 <Descriptions.Item label="套装模板绑定">
                   {(() => {

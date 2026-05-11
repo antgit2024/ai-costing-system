@@ -14,10 +14,12 @@ Strategy:
 from __future__ import annotations
 
 import hashlib
+import re
+import time
 import uuid
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from sqlalchemy.orm import Session
 
@@ -29,6 +31,97 @@ from ....planner.services import sku_master_service
 # the JSON payload). We normalize them to UTC for storage so the rest of the
 # system can treat ShipmentLine timestamps uniformly.
 _BEIJING_TZ = timezone(timedelta(hours=8))
+
+
+# ---------------------------------------------------------------------------
+# shop_spec_code 归一化（2026-05-12 加，背景见 issue 0.0k）
+# ---------------------------------------------------------------------------
+# 吉客云 detail.tradeGoodsno 是网店"商家编码"。运营在网店端有把
+# "商品款号前缀 + 模型变体码" 直接拼起来的习惯，例如：
+#     Q26041801KB8-001         （款号 Q26041801 + 变体码 KB8-001）
+#     J26042802KB8-001
+# 这种复合形式让我们的 _extract_model_code_from_shop_spec 抓不到 KB8，
+# 自动绑定走不到 P0 锚点路径。我们这边没法改 ERP 端，只能在落库时归一化。
+#
+# 安全规则：**只有当末尾子串能精准匹配 product_models.model_code 中真实存在
+# 的模型编码时才剥前缀**。这样：
+#   - "Q26041801KB8-001" → 剥成 "KB8-001"（KB8 真实存在）
+#   - "Q25111602DDXNEF001X-4060" → 不剥（DDX 不存在 / 后缀过长不像变体码）
+#   - "J24070104SY0301--AREA150-J22082101" → 不剥（J22082101 不会是 model_code）
+#
+# 用进程级缓存装 model_code 集合，避免每条发货行往 DB 跑。
+
+_MODEL_CODE_CACHE: Dict[str, Tuple[float, Set[str]]] = {}
+_MODEL_CODE_CACHE_TTL_SEC = 300  # 5 分钟，sync 任务刚跑完一批一定刷新
+
+# 末尾形如 "<3 字符头>-<2~8 位>(可选 -<1~16 位>)"
+# 头不能是纯数字（避免误把 "123-456" 这种数字串当成模型编码段）
+_MODEL_VARIANT_TAIL_RE = re.compile(
+    r"(?P<head>[A-Z][A-Z0-9]{2})-(?P<tail>[A-Z0-9]{2,8})(?:-(?P<extra>[A-Z0-9]{1,16}))?$"
+)
+# 末尾形如 "<3 字符独立模型编码>"，也要求头有字母
+_MODEL_BARE_TAIL_RE = re.compile(r"(?<![A-Z0-9])(?P<head>[A-Z][A-Z0-9]{2})$")
+
+
+def _load_model_codes(db: Session) -> Set[str]:
+    """拉一次 product_models.model_code 集合，TTL 5 分钟缓存。"""
+    cache_key = "model_codes"
+    now = time.time()
+    cached = _MODEL_CODE_CACHE.get(cache_key)
+    if cached and now - cached[0] < _MODEL_CODE_CACHE_TTL_SEC:
+        return cached[1]
+    rows = (
+        db.query(planner_models.ProductModel.model_code)
+        .filter(planner_models.ProductModel.is_archived.is_(False))
+        .all()
+    )
+    codes: Set[str] = set()
+    for (code,) in rows:
+        s = str(code or "").strip().upper()
+        if s:
+            codes.add(s)
+    _MODEL_CODE_CACHE[cache_key] = (now, codes)
+    return codes
+
+
+def _normalize_shop_spec_code(
+    raw: Optional[str], *, db: Session
+) -> Tuple[Optional[str], Optional[str]]:
+    """归一化 shop_spec_code，返回 ``(normalized, raw_if_changed)``。
+
+    ``raw_if_changed`` 仅在归一化结果与原值不同时返回原值，否则 None。
+    用法：
+        normalized, raw_kept = _normalize_shop_spec_code(...)
+        meta["shop_spec_code"] = normalized
+        if raw_kept:
+            meta["shop_spec_code_raw"] = raw_kept
+    """
+    if raw is None:
+        return None, None
+    s = str(raw).strip()
+    if not s:
+        return None, None
+    upper = s.upper()
+    model_codes = _load_model_codes(db)
+
+    # Case 1: "<前缀><MMM-NNN[-XXX]>" — 剥前缀保留尾段
+    m = _MODEL_VARIANT_TAIL_RE.search(upper)
+    if m and m.group("head") in model_codes:
+        # 保护：如果整段就是 "MMM-NNN[-XXX]"（即匹配位置在开头），不算剥
+        if m.start() == 0:
+            return s, None
+        normalized = upper[m.start() :]
+        return normalized, s
+
+    # Case 2: "<前缀><MMM>" — 末尾独立 3 字符模型编码（前面要有非字母数字字符或多字符前缀）
+    # 这种情况比较少，仅当前缀长度 >= 3 且尾段确实在 model_codes 时才剥
+    m2 = _MODEL_BARE_TAIL_RE.search(upper)
+    if m2 and m2.group("head") in model_codes and m2.start() >= 3:
+        normalized = upper[m2.start() :]
+        return normalized, s
+
+    # 不需要归一化
+    return s, None
 
 
 def _utcnow() -> datetime:
@@ -302,14 +395,27 @@ def upsert_shipment_from_payload(
         # 商家编码（吉客云 detail.tradeGoodsno）：自动匹配引擎的 P0 锚点。
         # 写到 line.metadata.shop_spec_code（标准协议字段，与 Excel 路径对齐），
         # 后续 _finalize_shipment_line 会读这个字段并下沉到 SkuMaster.metadata。
+        #
+        # 归一化（2026-05-12）：ERP 端运营常把 "款号前缀+模型变体码" 拼起来录入
+        # （如 "Q26041801KB8-001"）。这里识别末尾真实存在的 model_code 段后剥前缀，
+        # 落库 shop_spec_code 是干净的 "KB8-001"，原始 raw 留在 shop_spec_code_raw
+        # 给运营审计。剥不动的形式（如 "DDXNEF001X-4060"）保持原样。
         trade_goodsno = (det.get("tradeGoodsno") or det.get("tradeGoodsNo") or "").strip() or None
+        normalized_shop_spec, shop_spec_raw_if_changed = _normalize_shop_spec_code(
+            trade_goodsno, db=db
+        )
 
         # Tag completed_at provenance so analytics / financial audits can
         # opt out of fallback rows. Always overwrite (idempotent on resync).
         meta = dict(line.metadata_json or {})
         meta["completed_at_source"] = completed_at_source
-        if trade_goodsno:
-            meta["shop_spec_code"] = trade_goodsno
+        if normalized_shop_spec:
+            meta["shop_spec_code"] = normalized_shop_spec
+            if shop_spec_raw_if_changed:
+                meta["shop_spec_code_raw"] = shop_spec_raw_if_changed
+            else:
+                # 归一化没变化，确保旧的 raw 标记被清掉避免误导
+                meta.pop("shop_spec_code_raw", None)
         line.metadata_json = meta
 
         rows.append(line)
@@ -339,7 +445,10 @@ def upsert_shipment_from_payload(
                         "source_system": source_system,
                         "source_record_id": order_no,
                         "source_line_id": detail_id,
-                        "shop_spec_code": trade_goodsno,
+                        # 跟 line.metadata.shop_spec_code 写一致的归一化值，
+                        # 避免下游 SkuMaster 自动绑定再被脏数据噎住。
+                        "shop_spec_code": normalized_shop_spec,
+                        "shop_spec_code_raw": shop_spec_raw_if_changed,
                     },
                 )
             except Exception:

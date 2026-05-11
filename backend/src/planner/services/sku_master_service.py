@@ -229,7 +229,11 @@ def _extract_model_code_hint(spec_text: Optional[str]) -> Optional[str]:
     return None
 
 
-def _extract_model_code_from_shop_spec(shop_spec: Optional[str]) -> Optional[str]:
+def _extract_model_code_from_shop_spec(
+    shop_spec: Optional[str],
+    *,
+    known_model_codes: Optional[set] = None,
+) -> Optional[str]:
     """
     严格版"商家编码 → 模型码"抽取器（用于 auto_bind_preview 的 P0 锚点）。
 
@@ -249,6 +253,13 @@ def _extract_model_code_from_shop_spec(shop_spec: Optional[str]) -> Optional[str
       - "F26040205"      9 位无破折号字符（订单号 / 批次号样式）
       - "Q26010601C丝圈地垫"  前 3 位字母数字但后接非破折号字符
 
+    防御性容错（2026-05-12）：当传入 ``known_model_codes`` 时，对于 strict
+    规则抓不到的输入，再尝试"末尾子串匹配"——识别像 ``Q26041801KB8-001``
+    这种 ERP 端运营把"款号前缀+模型变体码"拼起来录入的脏数据，**前提是
+    末尾段的 3 字符头确实在 known_model_codes 里**，避免误剥
+    ``DDXNEF001X-4060`` / ``J22082101`` 等不该剥的尾段。
+    一般 mapper 入库时已归一化，这里是双保险。
+
     返回 None 时，调用方应回退到 spec_text 关键词匹配。
     """
     raw = (shop_spec or "").strip().upper()
@@ -266,6 +277,16 @@ def _extract_model_code_from_shop_spec(shop_spec: Optional[str]) -> Optional[str
     # PM 传统前缀
     if raw.startswith("PM") and all(ch.isalnum() or ch in ("_", "-") for ch in raw):
         return raw
+    # 容错：末尾子串匹配 "<前缀><MMM-NNN[-XXX]>"，仅当 MMM 是真实存在的 model_code
+    if known_model_codes:
+        m2 = re.search(
+            r"(?P<head>[A-Z][A-Z0-9]{2})-(?P<tail>[A-Z0-9]{2,8})(?:-(?P<extra>[A-Z0-9]{1,16}))?$",
+            raw,
+        )
+        if m2 and m2.start() > 0:  # 必须有前缀才剥
+            head = m2.group("head")
+            if head in known_model_codes:
+                return head
     return None
 
 
@@ -4780,7 +4801,13 @@ def auto_bind_preview(
         .order_by(models.ProductModel.model_code.asc())
         .all()
     )
+    # 真实存在的 model_code 集合：传给 _extract_model_code_from_shop_spec
+    # 做容错（识别 "<款号前缀><MMM-NNN>" 复合形式末尾的真实模型码）
+    known_model_codes: set = set()
     for m, v in rows:
+        mc = str(getattr(m, "model_code", "") or "").strip().upper()
+        if mc:
+            known_model_codes.add(mc)
         meta = m.metadata_json or {}
         kws = _extract_model_keywords(meta)
         if not kws:
@@ -4859,8 +4886,13 @@ def auto_bind_preview(
         shop_code = str(meta.get("shop_spec_code") or getattr(r, "shop_spec_code", "") or "").strip()
         variant_hint = _extract_variant_code_hint(shop_code) if shop_code else None
         # P0 锚点：商家编码必须用**严格抽取器**，拒绝 12 位淘宝 ID 形态
-        # （避免 model_code='024' 一旦上线，所有 024 开头的平台 ID 被错绑）
-        shop_hint = _extract_model_code_from_shop_spec(shop_code) if shop_code else None
+        # （避免 model_code='024' 一旦上线，所有 024 开头的平台 ID 被错绑）。
+        # 同时传入 known_model_codes 启用"末尾子串容错"——识别 ERP 端遗留的
+        # 复合脏数据 "Q26041801KB8-001" → KB8（mapper 已归一化新数据）。
+        shop_hint = (
+            _extract_model_code_from_shop_spec(shop_code, known_model_codes=known_model_codes)
+            if shop_code else None
+        )
         # P1：spec_text 抽取的 hint（保留 _extract_model_code_hint 宽松行为，因为规格文本上下文更可信）
         hint = meta.get("model_code_hint_shipment") or meta.get("model_code_hint_erp")
         if not hint:

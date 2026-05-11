@@ -12,6 +12,12 @@ const { Text } = Typography
 
 interface CellProps {
   value: string | null | undefined
+  /**
+   * 原始 ERP 商家编码（归一化前），如 "Q26041801KB8-001"。
+   * 当 `value` 是被 mapper 归一化后的版本（如 "KB8-001"）时，
+   * 把这个传进来会在 Tooltip 里加一行 "ERP 原始: ..." 给运营审计。
+   */
+  rawValue?: string | null | undefined
   /** When true, render the value as monospace + copyable (table cell mode). Default true. */
   copyable?: boolean
 }
@@ -26,8 +32,11 @@ interface CellProps {
  * 设计取舍：去掉了"可自动匹配 / 平台默认ID / 不规范"的 Tag 文字，
  * 因为运营只关心两件事：① 这条能不能自动绑（绿✓）② 还是得手工改吉客云（灰）。
  * Tag 文字反而占地方、稀释信息密度。
+ *
+ * 归一化提示（2026-05-12）：当 ``rawValue`` 与 ``value`` 不同时，在
+ * Tooltip 末尾追加 "ERP 原始: <rawValue>"，让运营知道我们做了归一化。
  */
-export const ShopSpecCodeCell: React.FC<CellProps> = ({ value, copyable = true }) => {
+export const ShopSpecCodeCell: React.FC<CellProps> = ({ value, rawValue, copyable = true }) => {
   const cls: ShopSpecCodeClassification = classifyShopSpecCode(value)
   if (cls.kind === 'empty') {
     return (
@@ -37,9 +46,24 @@ export const ShopSpecCodeCell: React.FC<CellProps> = ({ value, copyable = true }
     )
   }
   const text = (value ?? '').toString().trim()
+  const rawText = (rawValue ?? '').toString().trim()
+  const wasNormalized = !!rawText && rawText !== text
   const isStructured = cls.kind === 'structured'
+  const tooltipNode = wasNormalized ? (
+    <span>
+      {cls.tooltip}
+      <br />
+      <span style={{ opacity: 0.85 }}>
+        ERP 原始：<code>{rawText}</code>
+        <br />
+        （我们识别出末尾 <code>{text}</code> 是真实模型编码，已自动剥前缀；如错请联系研发）
+      </span>
+    </span>
+  ) : (
+    cls.tooltip
+  )
   return (
-    <Tooltip title={cls.tooltip}>
+    <Tooltip title={tooltipNode}>
       <Space size={4} wrap={false} align="center">
         {isStructured ? (
           <CheckCircleFilled style={{ color: '#52c41a', fontSize: 12 }} />
@@ -55,6 +79,11 @@ export const ShopSpecCodeCell: React.FC<CellProps> = ({ value, copyable = true }
         >
           {text}
         </Text>
+        {wasNormalized ? (
+          <Text type="secondary" style={{ fontSize: 11 }}>
+            (已归一化)
+          </Text>
+        ) : null}
       </Space>
     </Tooltip>
   )

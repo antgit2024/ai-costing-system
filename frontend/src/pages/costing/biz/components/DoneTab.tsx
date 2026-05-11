@@ -172,7 +172,9 @@ export default function DoneTab() {
       dataIndex: 'shop_spec_code',
       key: 'shop_spec_code',
       width: 220,
-      render: (v?: string | null) => <ShopSpecCodeCell value={v ?? null} />,
+      render: (v: string | null | undefined, record: ShipmentLineListItem) => (
+        <ShopSpecCodeCell value={v ?? null} rawValue={record.shop_spec_code_raw ?? null} />
+      ),
     },
     {
       title: '绑定模型',

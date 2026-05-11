@@ -500,7 +500,12 @@ const ShipmentLedgerPage = () => {
       title: '商家编码',
       dataIndex: 'shop_spec_code',
       width: 230,
-      render: (v) => <ShopSpecCodeCell value={safeString(v).trim() || null} />,
+      render: (v, record: any) => (
+        <ShopSpecCodeCell
+          value={safeString(v).trim() || null}
+          rawValue={record?.shop_spec_code_raw ?? null}
+        />
+      ),
     },
     { title: '订单号', dataIndex: 'order_no', width: 215, ellipsis: true },
     {
@@ -1369,7 +1374,10 @@ const ShipmentLedgerPage = () => {
                   )}
                 </Descriptions.Item>
                 <Descriptions.Item label="商家编码">
-                  <ShopSpecCodeCell value={safeString((detailRow as any)?.shop_spec_code).trim() || null} />
+                  <ShopSpecCodeCell
+                    value={safeString((detailRow as any)?.shop_spec_code).trim() || null}
+                    rawValue={(detailRow as any)?.shop_spec_code_raw ?? null}
+                  />
                 </Descriptions.Item>
                 <Descriptions.Item label="平台规格Id">{safeString((detailRow as any)?.platform_sku_id) || '-'}</Descriptions.Item>
                 <Descriptions.Item label="套装锚点">

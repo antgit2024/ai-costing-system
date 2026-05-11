@@ -1566,6 +1566,12 @@ export interface ShipmentLineListItem {
   channel?: string | null
   sku_code?: string | null
   shop_spec_code?: string | null
+  /**
+   * 归一化前的 ERP 原始 tradeGoodsno（如 "Q26041801KB8-001"），仅当跟
+   * ``shop_spec_code`` 不同时由后端返回。前端 ShopSpecCodeCell 拿到后
+   * 在 Tooltip 里显示 "ERP 原始: <raw>" 让运营溯源。
+   */
+  shop_spec_code_raw?: string | null
   platform_sku_id?: string | null
   bundle_template_code?: string | null
   bundle_preset_selector?: string | null

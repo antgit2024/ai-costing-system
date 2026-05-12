@@ -59,7 +59,6 @@ const formatCoveragePercent = (num: number, den: number) => {
 }
 
 const ProfitInsightsPage = () => {
-  const DEBUG_DEFAULT_RANGE: [dayjs.Dayjs, dayjs.Dayjs] = [dayjs('2025-12-01'), dayjs('2025-12-31')]
   const [form] = Form.useForm()
   const [loadingSummary, setLoadingSummary] = useState(false)
   const [loadingDetail, setLoadingDetail] = useState(false)
@@ -187,18 +186,12 @@ const ProfitInsightsPage = () => {
     if (didInitRef.current) return
     didInitRef.current = true
 
-    try {
-      const raw = typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_KEY) : null
-      void raw
-      // 固定默认范围，方便验证历史数据（近期可能未导入）
-      form.setFieldsValue({
-        range: DEBUG_DEFAULT_RANGE,
-        // 验数模式：默认不带历史渠道，避免误以为“全量”
-        channel: undefined,
-      })
-    } catch {
-      // ignore
-    }
+    // 默认展示近 7 天；不要再用历史验数月份覆盖表单默认值。
+    // localStorage 仍只在用户主动查询后写入，当前页面刷新应回到业务默认口径。
+    form.setFieldsValue({
+      range: [dayjs().subtract(7, 'day'), dayjs()],
+      channel: undefined,
+    })
 
     // auto preview: show recent real data by default
     onQuerySummary()

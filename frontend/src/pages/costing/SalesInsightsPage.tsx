@@ -136,7 +136,9 @@ type SalesPeriodMode = 'day' | 'week' | 'month' | 'custom'
 
 const SalesInsightsPage = (props: SalesInsightsPageProps) => {
   const embedded = !!props.embedded
-  const DEBUG_DEFAULT_CUSTOM_RANGE: [dayjs.Dayjs, dayjs.Dayjs] = [dayjs('2025-12-01'), dayjs('2025-12-31')]
+  // 默认时间窗口：本周 (周一 → 今天)。原 DEBUG_DEFAULT_CUSTOM_RANGE 是 2025-12 写死的
+  // 历史区间 — 现在数据已经按日同步进来，默认值需要跟运营当前节奏对齐。
+  const DEFAULT_WEEK_RANGE: [dayjs.Dayjs, dayjs.Dayjs] = [dayjs().startOf('isoWeek'), dayjs().endOf('day')]
   const navigate = useNavigate()
   const location = useLocation()
   const [form] = Form.useForm()
@@ -161,8 +163,8 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
   }, [selectedCompanyIds, companyOptions])
   const [useSnapshot] = useState(true)
   const [dashboardComputedAt, setDashboardComputedAt] = useState<string | null>(null)
-  const [periodMode, setPeriodMode] = useState<SalesPeriodMode>('custom')
-  const [anchorDate, setAnchorDate] = useState(() => dayjs().subtract(1, 'day').startOf('day'))
+  const [periodMode, setPeriodMode] = useState<SalesPeriodMode>('week')
+  const [anchorDate, setAnchorDate] = useState(() => dayjs().startOf('isoWeek'))
   const [showAdvanced, setShowAdvanced] = useState(false)
   // 通用绑定目标 selection；filters 用 useMemo 派生（与旧 BoundTargetPickerFilters 同形）
   const [boundTarget, setBoundTarget] = useState<TargetSelection | null>(null)
@@ -188,13 +190,14 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
     if (periodMode === 'custom') {
       const r = watchedRange
       if (r && r[0] && r[1]) return [r[0].startOf('day'), r[1].endOf('day')] as const
-      return [dayjs().subtract(30, 'day').startOf('day'), dayjs().endOf('day')] as const
+      // custom 兜底也跟默认 periodMode='week' 保持一致：本周 (周一 → 今天)
+      return [DEFAULT_WEEK_RANGE[0], DEFAULT_WEEK_RANGE[1]] as const
     }
-    const a = anchorDate || dayjs().subtract(1, 'day').startOf('day')
+    const a = anchorDate || dayjs().startOf('isoWeek')
     if (periodMode === 'day') return [a.startOf('day'), a.endOf('day')] as const
     if (periodMode === 'week') return [a.startOf('isoWeek'), a.endOf('isoWeek')] as const
     return [a.startOf('month'), a.endOf('month')] as const
-  }, [anchorDate, periodMode, watchedRange])
+  }, [DEFAULT_WEEK_RANGE, anchorDate, periodMode, watchedRange])
 
   const shiftAnchorDate = (dir: -1 | 1) => {
     if (periodMode === 'custom') return
@@ -658,9 +661,10 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
         const nextPageSize = Number(saved?.page_size)
         if (Number.isFinite(nextPageSize) && nextPageSize > 0) setPageSize(nextPageSize)
 
-        // 固定默认“自定义”范围，方便验证历史数据（近期可能未导入）
-        setPeriodMode('custom')
-        const range: [dayjs.Dayjs, dayjs.Dayjs] = DEBUG_DEFAULT_CUSTOM_RANGE
+        // 默认进入「本周」模式，跟实时同步节奏对齐。
+        setPeriodMode('week')
+        setAnchorDate(dayjs().startOf('isoWeek'))
+        const range: [dayjs.Dayjs, dayjs.Dayjs] = DEFAULT_WEEK_RANGE
         form.setFieldsValue({
           range,
           // 验数模式：默认不带历史渠道，避免误以为“全量”但实际被筛选
@@ -682,8 +686,9 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
         }
         setLastQuery(base)
       } catch {
-        setPeriodMode('custom')
-        form.setFieldsValue({ range: DEBUG_DEFAULT_CUSTOM_RANGE })
+        setPeriodMode('week')
+        setAnchorDate(dayjs().startOf('isoWeek'))
+        form.setFieldsValue({ range: DEFAULT_WEEK_RANGE })
       }
     }
 
@@ -789,7 +794,7 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
           form={form}
           layout="inline"
           initialValues={{
-            range: [dayjs().subtract(30, 'day'), dayjs()],
+            range: DEFAULT_WEEK_RANGE,
             shop: undefined,
           }}
         >
@@ -818,9 +823,11 @@ const SalesInsightsPage = (props: SalesInsightsPageProps) => {
                 onChange={(v) => {
                   const next = v as SalesPeriodMode
                   setPeriodMode(next)
-                  if (next === 'day') setAnchorDate(dayjs().subtract(1, 'day').startOf('day'))
-                  if (next === 'week') setAnchorDate(dayjs().subtract(1, 'week').startOf('isoWeek'))
-                  if (next === 'month') setAnchorDate(dayjs().subtract(1, 'month').startOf('month'))
+                  // 切档时锚到「当前」周期 (今天/本周/本月)，与默认入场行为一致；
+                  // 用户用左/右箭头按钮再回退到上一/下一期。
+                  if (next === 'day') setAnchorDate(dayjs().startOf('day'))
+                  if (next === 'week') setAnchorDate(dayjs().startOf('isoWeek'))
+                  if (next === 'month') setAnchorDate(dayjs().startOf('month'))
                 }}
                 options={[
                   { label: '日', value: 'day' },

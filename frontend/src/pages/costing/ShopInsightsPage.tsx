@@ -194,16 +194,19 @@ const ShopInsightsPage = () => {
     didInitRef.current = true
 
     try {
+      // 默认时间窗口：本周 (周一 → 今天)，与 Sales / AfterSales 两个 insights 页面对齐。
+      // localStorage 里 saved.start/end 仅在用户**明确**存过自定义范围时才读回，
+      // 否则一律用本周 — 避免开发期写死的历史区间死掉在缓存里。
+      const defaultRange: [dayjs.Dayjs, dayjs.Dayjs] = [dayjs().startOf('isoWeek'), dayjs().endOf('day')]
       const raw = typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_KEY) : null
       if (raw) {
         const saved = JSON.parse(raw || '{}') as any
         const start = String(saved?.start ?? '').trim()
         const end = String(saved?.end ?? '').trim()
-        const groupBy = (String(saved?.group_by ?? 'month').trim() as GroupBy) || 'month'
-        const range: [dayjs.Dayjs, dayjs.Dayjs] = [
-          dayjs(start || dayjs().subtract(30, 'day').startOf('day').toISOString()),
-          dayjs(end || dayjs().endOf('day').toISOString()),
-        ]
+        const groupBy = (String(saved?.group_by ?? 'week').trim() as GroupBy) || 'week'
+        const range: [dayjs.Dayjs, dayjs.Dayjs] = start && end
+          ? [dayjs(start), dayjs(end)]
+          : defaultRange
         form.setFieldsValue({
           group_by: groupBy,
           range,
@@ -213,8 +216,8 @@ const ShopInsightsPage = () => {
         setOnlyFullCoverage(Boolean(saved?.only_full_coverage))
       } else {
         form.setFieldsValue({
-          group_by: 'month',
-          range: [dayjs().subtract(30, 'day'), dayjs()],
+          group_by: 'week',
+          range: defaultRange,
         })
       }
     } catch {
@@ -297,8 +300,8 @@ const ShopInsightsPage = () => {
           form={form}
           layout="inline"
           initialValues={{
-            group_by: 'month',
-            range: [dayjs().subtract(30, 'day'), dayjs()],
+            group_by: 'week',
+            range: [dayjs().startOf('isoWeek'), dayjs().endOf('day')],
           }}
         >
           <Form.Item label="时间范围" name="range" rules={[{ required: true, message: '请选择时间范围' }]}>

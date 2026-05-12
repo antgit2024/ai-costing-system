@@ -57,7 +57,7 @@ import {
   useLegalEntityFilter,
 } from '@/components/insights/LegalEntityFilter'
 
-type GroupBy = 'day' | 'month'
+type GroupBy = 'day' | 'week' | 'month'
 
 const STORAGE_KEY = 'insights.after_sales.lastSkuQuery.v1'
 
@@ -130,11 +130,13 @@ const Sparkline = ({
 }
 
 const AfterSalesInsightsPage = () => {
-  const DEBUG_DEFAULT_CUSTOM_RANGE: [dayjs.Dayjs, dayjs.Dayjs] = [dayjs('2025-12-01'), dayjs('2025-12-31')]
+  // 默认时间窗口：本周 (周一 → 今天)。原 DEBUG_DEFAULT_CUSTOM_RANGE 保留作为 custom
+  // 模式 fallback 兜底，仅在 watchedRange 尚未注入时短暂使用。
+  const DEFAULT_WEEK_RANGE: [dayjs.Dayjs, dayjs.Dayjs] = [dayjs().startOf('isoWeek'), dayjs().endOf('day')]
   const [form] = Form.useForm()
   const [activeTab, setActiveTab] = useState<'dashboard' | 'rate' | 'detail'>('dashboard')
-  const [periodMode, setPeriodMode] = useState<'day' | 'week' | 'month' | 'custom'>('custom')
-  const [anchorDate, setAnchorDate] = useState(() => dayjs().subtract(1, 'week').startOf('isoWeek'))
+  const [periodMode, setPeriodMode] = useState<'day' | 'week' | 'month' | 'custom'>('week')
+  const [anchorDate, setAnchorDate] = useState(() => dayjs().startOf('isoWeek'))
   // 默认用“运营口径”（申请期全量），更贴近售后验数直觉
   const [dashboardView, setDashboardView] = useState<'ops' | 'factory'>('ops')
   // 默认自动加载：减少“加载仪表盘”按钮/提示
@@ -202,14 +204,15 @@ const AfterSalesInsightsPage = () => {
     if (periodMode === 'custom') {
       const r = watchedRange
       if (r && r[0] && r[1]) return [r[0].startOf('day'), r[1].endOf('day')] as const
-      // 避免首次进入/字段尚未同步时弹“请选择时间范围”
-      return [DEBUG_DEFAULT_CUSTOM_RANGE[0].startOf('day'), DEBUG_DEFAULT_CUSTOM_RANGE[1].endOf('day')] as const
+      // 避免首次进入/字段尚未同步时弹“请选择时间范围”—— 用本周作为兜底，
+      // 与默认 periodMode='week' 保持视觉一致。
+      return [DEFAULT_WEEK_RANGE[0], DEFAULT_WEEK_RANGE[1]] as const
     }
-    const a = anchorDate || dayjs().subtract(1, 'week').startOf('isoWeek')
+    const a = anchorDate || dayjs().startOf('isoWeek')
     if (periodMode === 'day') return [a.startOf('day'), a.endOf('day')] as const
     if (periodMode === 'week') return [a.startOf('isoWeek'), a.endOf('isoWeek')] as const
     return [a.startOf('month'), a.endOf('month')] as const
-  }, [DEBUG_DEFAULT_CUSTOM_RANGE, anchorDate, periodMode, watchedRange])
+  }, [DEFAULT_WEEK_RANGE, anchorDate, periodMode, watchedRange])
 
   const shiftAnchorDate = (dir: -1 | 1) => {
     if (periodMode === 'custom') return
@@ -425,10 +428,13 @@ const AfterSalesInsightsPage = () => {
 
     setLoading(true)
     try {
+      // /returns-rate-by-sku 后端只支持 day | month；'week' (默认值) 在该 API 上
+      // 退化为 'month' 以便前端能拿到一个非空表，同时不阻塞用户切换。
+      const groupByForReturnsRate: 'day' | 'month' = groupBy === 'day' ? 'day' : 'month'
       const resp = await fetchReturnsRateBySku({
         start,
         end,
-        group_by: groupBy,
+        group_by: groupByForReturnsRate,
         channel: v.channel?.trim() || undefined,
         sku_code: v.sku_code?.trim() || undefined,
       }, { timeoutMs: 120000 })
@@ -513,29 +519,21 @@ const AfterSalesInsightsPage = () => {
 
     try {
       const raw = typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_KEY) : null
-      if (raw) {
-        const saved = JSON.parse(raw || '{}') as any
-        const groupBy = (String(saved?.group_by ?? 'month').trim() as GroupBy) || 'month'
-        // 固定默认“自定义”范围，方便验证历史数据（近期可能未导入）
-        setPeriodMode('custom')
-        const range: [dayjs.Dayjs, dayjs.Dayjs] = DEBUG_DEFAULT_CUSTOM_RANGE
-        form.setFieldsValue({
-          group_by: groupBy,
-          range,
-          // 验数模式：默认不带历史筛选（渠道/条码），避免误以为“全量”
-          channel: undefined,
-          sku_code: undefined,
-        })
-      } else {
-        // default: fixed debug range for easier verification
-        setPeriodMode('custom')
-        form.setFieldsValue({
-          group_by: 'month',
-          range: DEBUG_DEFAULT_CUSTOM_RANGE,
-          channel: undefined,
-          sku_code: undefined,
-        })
-      }
+      // 默认进入「本周」模式 (周一 → 今天)，跟同步的实时数据节奏对齐。
+      // 用户可通过顶部 Segmented 切换到 day/month/custom；切换是即时的，
+      // 不会回写 localStorage 的 group_by 选择。
+      setPeriodMode('week')
+      setAnchorDate(dayjs().startOf('isoWeek'))
+      const groupBy: GroupBy = raw
+        ? ((String((JSON.parse(raw || '{}') as any)?.group_by ?? 'week').trim() as GroupBy) || 'week')
+        : 'week'
+      form.setFieldsValue({
+        group_by: groupBy,
+        range: DEFAULT_WEEK_RANGE,
+        // 验数模式：默认不带历史筛选（渠道/条码），避免误以为“全量”
+        channel: undefined,
+        sku_code: undefined,
+      })
     } catch {
       // ignore
     }
@@ -613,8 +611,8 @@ const AfterSalesInsightsPage = () => {
           form={form}
           layout="inline"
           initialValues={{
-            group_by: 'month',
-            range: [dayjs().subtract(30, 'day'), dayjs()],
+            group_by: 'week',
+            range: DEFAULT_WEEK_RANGE,
           }}
         >
           <Form.Item label="统计时间">
@@ -642,9 +640,11 @@ const AfterSalesInsightsPage = () => {
                 onChange={(v) => {
                   const next = v as any
                   setPeriodMode(next)
-                  if (next === 'day') setAnchorDate(dayjs().subtract(1, 'day').startOf('day'))
-                  if (next === 'week') setAnchorDate(dayjs().subtract(1, 'week').startOf('isoWeek'))
-                  if (next === 'month') setAnchorDate(dayjs().subtract(1, 'month').startOf('month'))
+                  // 切档时锚到「当前」周期 (今天/本周/本月)，与默认入场行为一致；
+                  // 用户用左/右箭头按钮回退到上一/下一期。
+                  if (next === 'day') setAnchorDate(dayjs().startOf('day'))
+                  if (next === 'week') setAnchorDate(dayjs().startOf('isoWeek'))
+                  if (next === 'month') setAnchorDate(dayjs().startOf('month'))
                 }}
                 options={[
                   { label: '日', value: 'day' },

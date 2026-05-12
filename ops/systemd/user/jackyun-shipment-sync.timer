@@ -1,0 +1,18 @@
+[Unit]
+Description=Trigger jackyun-shipment-sync.service nightly at 02:30 Asia/Shanghai
+
+[Timer]
+# 02:30 every night. Picked because:
+#   - Jackyun ERP nightly close-of-business writes finish by ~01:00.
+#   - Our sweeps / report cron jobs (if any) historically run 03:00+,
+#     so we leave 30 minutes for the sync to complete and watermark to advance.
+#   - Server timezone is Asia/Shanghai (verified 2026-05-07).
+OnCalendar=*-*-* 02:30:00
+# If the host was off at trigger time, run as soon as it comes back up.
+Persistent=true
+# Avoid all timers firing simultaneously after a long downtime.
+RandomizedDelaySec=120
+Unit=jackyun-shipment-sync.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,20 @@
+[Unit]
+Description=Trigger ai-costing-nightly-refresh.service nightly at 04:00 Asia/Shanghai
+
+[Timer]
+# 04:00 every night. Picked because:
+#   - jackyun-shipment-sync.timer 02:30 ~30min 完事，新发货行落库；
+#   - ai-costing-snapshot-sweep.timer 05:30 才补 BomSnapshot 兜底，
+#     若 nightly-refresh 跟它撞会读到不完整数据。所以选 02:30+90min=04:00,
+#     既等 jackyun 同步落地，又赶在 snapshot-sweep 前生成第一波缓存
+#     (snapshot-sweep 完后 05:30+ 用户实际开工前缓存还会被 worker 自然刷)。
+#   - 服务器时区 Asia/Shanghai (验证于 2026-05-07).
+OnCalendar=*-*-* 04:00:00
+# 若主机在触发时关机，开机后立刻补跑（避免 insights 页面整天没缓存）。
+Persistent=true
+# 错峰；和 02:30 / 05:30 / 05:50 已经有间隔，这里 ±2min 防极端 NTP 抖动。
+RandomizedDelaySec=120
+Unit=ai-costing-nightly-refresh.service
+
+[Install]
+WantedBy=timers.target

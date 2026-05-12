@@ -7,17 +7,28 @@ set -euo pipefail
 #   BASE_URL="https://<host>/api/planner" ./ops/nightly_refresh_reports.sh
 #
 # Notes:
-# - These endpoints are synchronous today; keep the range small (default 30 days).
+# - These endpoints are synchronous today; keep the range small (default 7 days,
+#   aligned with the UI default in ProfitInsightsPage v1.4 since 2026-05-12).
 # - For per-channel caches, run this script per channel (add channel=...).
+# - Auth: 走 require_staff_role 双轨认证的服务账号通道
+#   (X-PLANNER-ADMIN-KEY header). 若 .env 里 PLANNER_ADMIN_KEY 为空,
+#   后端会落入 "dev-friendly 放行" 分支 (见 dependencies.py:75-82),
+#   所以 fallback 任意字符串都能在 dev/staging 上 200; 生产侧一旦配了
+#   PLANNER_ADMIN_KEY, 这个 cron 也会自动用上 (因为 systemd service
+#   EnvironmentFile=.env 会注入).
 
 BASE_URL="${BASE_URL:-http://127.0.0.1:8800/api/planner}"
-RANGE_DAYS="${RANGE_DAYS:-30}"
+RANGE_DAYS="${RANGE_DAYS:-7}"
 OPERATOR_ID="${OPERATOR_ID:-cron}"
+ADMIN_KEY="${PLANNER_ADMIN_KEY:-ai-costing-internal-cron}"
 
 curl_json() {
   local url="$1"
   echo "[refresh] $url"
-  curl -sS -X POST "$url" >/dev/null
+  # 失败不拉整个脚本下水: 一个 endpoint 503 不应导致后续 12 个不刷.
+  if ! curl -fsS -X POST -H "X-PLANNER-ADMIN-KEY: $ADMIN_KEY" "$url" >/dev/null; then
+    echo "[WARN] refresh failed: $url" >&2
+  fi
 }
 
 # Models summary (profit-by-model list in insights/models)

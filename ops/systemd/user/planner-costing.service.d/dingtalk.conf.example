@@ -1,0 +1,9 @@
+# Template for ~/.config/systemd/user/planner-costing.service.d/dingtalk.conf
+# Copy to dingtalk.conf and fill in real values; that file is .gitignored.
+[Service]
+Environment="DINGTALK_APP_KEY=<dingyu...>"
+Environment="DINGTALK_APP_SECRET=<...>"
+Environment="DINGTALK_BASE_URL=https://oapi.dingtalk.com"
+Environment="DINGTALK_ATTACHMENT_BASE_URL=https://appcenter.dingtalk.com"
+Environment="DINGTALK_CACHE_DIR=/home/admin/ai-costing-system/backend/.cache/dingtalk"
+Environment="DINGTALK_CACHE_TTL_SECONDS=3600"

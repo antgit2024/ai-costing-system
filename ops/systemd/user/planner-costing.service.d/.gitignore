@@ -1,0 +1,6 @@
+# Secret drop-in files — DO NOT commit.
+# These contain DingTalk APP_SECRET, LLM API keys, etc.
+# Deployed manually, restored from secure backup, never tracked in git.
+dingtalk.conf
+llm_key.conf
+*.secret.conf

@@ -1,0 +1,18 @@
+[Unit]
+Description=Trigger ai-costing-data-quality.service nightly at 05:50 Asia/Shanghai
+
+[Timer]
+# 05:50 every night. Picked because:
+#   - Snapshot sweep (ai-costing-snapshot-sweep.timer) runs at 05:30 and
+#     usually finishes within 5-10 min. Running data-quality 20 min later
+#     ensures snapshots are stable and we read consistent shipment state.
+#   - Both before 06:00, the typical "first user check-in" hour.
+#   - Server timezone is Asia/Shanghai.
+OnCalendar=*-*-* 05:50:00
+# If the host was off at trigger time, run as soon as it comes back up.
+Persistent=true
+RandomizedDelaySec=60
+Unit=ai-costing-data-quality.service
+
+[Install]
+WantedBy=timers.target

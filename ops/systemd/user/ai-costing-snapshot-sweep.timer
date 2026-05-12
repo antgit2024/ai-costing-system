@@ -1,0 +1,22 @@
+[Unit]
+Description=Trigger ai-costing-snapshot-sweep.service nightly at 05:30 Asia/Shanghai
+
+[Timer]
+# 05:30 every night. Picked because:
+#   - Jackyun nightly sync (jackyun-shipment-sync.timer) runs at 02:30 and
+#     finishes well within 30 min; new shipments get their snapshots inline
+#     during that pass.
+#   - This sweep is the *defensive backstop* for SKUs the bind-time hook
+#     missed (bulk binds > 500 lines per SKU; transient hook failures;
+#     bind-then-rebuild-material flows). 05:30 leaves ~3h slack after sync
+#     so DB & worker pool are quiet and the user is unlikely to be testing.
+#   - Server timezone is Asia/Shanghai (verified 2026-05-07).
+OnCalendar=*-*-* 05:30:00
+# If the host was off at trigger time, run as soon as it comes back up.
+Persistent=true
+# Avoid all timers firing simultaneously after a long downtime.
+RandomizedDelaySec=120
+Unit=ai-costing-snapshot-sweep.service
+
+[Install]
+WantedBy=timers.target

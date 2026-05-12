@@ -1,0 +1,21 @@
+[Unit]
+Description=AI-Costing nightly data-quality recompute — flag SKUs with SPU attribute conflicts (multi-category shipping under one barcode)
+Documentation=file:///home/admin/ai-costing-system/backend/scripts/backfill_data_quality_status.py
+After=planner-costing.service network.target
+# Independent of API uptime — uses its own DB session.
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/admin/ai-costing-system/backend
+EnvironmentFile=/home/admin/ai-costing-system/.env
+# --lookback 90 = look at the last 90 days of shipments. Going back further
+# would re-flag SKUs that were "polluted long ago but cleaned up since".
+ExecStart=/home/admin/ai-costing-system/backend/.venv/bin/python scripts/backfill_data_quality_status.py --lookback 90
+StandardOutput=journal
+StandardError=journal
+# 10 min ceiling — full scan is ~10s on current data (28k shipment groups,
+# 26k SkuMaster). Beyond 10 min something's wrong, let next run retry.
+TimeoutStartSec=600
+
+[Install]
+WantedBy=default.target

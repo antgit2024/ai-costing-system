@@ -14,6 +14,7 @@
 | Logrotate hook | `/etc/cron.daily/restore-audit-acl` | 防 audit 内部轮转后丢 ACL |
 | 查询脚本 | `ops/audit/who-deleted.sh` | 友好查询封装，按时间窗口聚合 SYSCALL+CWD+PATH 三段，输出"谁/何时/在哪/删了什么" |
 | 每日汇总 | `ops/audit/daily_summary.sh` + `~/.config/systemd/user/costing-audit-summary.{service,timer}` | 每天 08:00 自动汇总过去 24h，写到 `~/.local/share/costing-audit/summary.log`；24h 内 ≥20 条事件触发 ALERT 文件 |
+| **工作区健康巡检** | `ops/audit/workspace-health.sh` + `ops/systemd/user/costing-workspace-health.{service,timer}` | **每小时 :05 自动跑**，对比 git index vs working tree，任何 git tracked 但工作区不见的文件 → 自动 `git checkout HEAD --` 恢复 + 写报警；同时巡检 `ops/systemd/user/install.sh --check` 发现 unit 缺失/断链。即使发生未来某次"无形批量删除"，**最长 1 小时内自动检测+自动恢复+留痕** |
 
 ---
 
@@ -37,6 +38,15 @@ tail -200 ~/.local/share/costing-audit/summary.log
 
 # 看异常报警（24h 内删除超过 20 条文件就生成）
 ls -la ~/.local/share/costing-audit/ALERT_*.txt 2>/dev/null
+
+# 主动健康巡检：当前工作区还少不少东西？（不改任何文件，只看）
+ops/audit/workspace-health.sh --check
+
+# 健康巡检的累积日志（每小时一行）
+tail -50 ~/.local/share/costing-audit/workspace-health.log
+
+# 健康巡检触发的批量删除报警（缺失 ≥ 5 文件就生成）
+ls -la ~/.local/share/costing-audit/HEALTH_ALERT_*.txt 2>/dev/null
 ```
 
 每条事件输出格式：
@@ -96,7 +106,27 @@ monitor 范围：整个 `/home/admin/ai-costing-system/` 目录树（递归生�
 
 ---
 
-## 六、为什么用 audit 不用 inotify
+## 六、防御层次（防御纵深）
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ 层 1: 主动健康巡检（workspace-health, 每小时 :05）             │
+│   "现在工作区还少不少东西？少了立刻自动 git restore + 报警"    │
+│   答：少了什么 / 立刻补回来                                    │
+├─────────────────────────────────────────────────────────────┤
+│ 层 2: 事后取证（auditd, syscall hook）                         │
+│   "上一小时哪个进程在哪一秒删了哪个文件？"                       │
+│   答：谁删的 / 何时 / 用什么命令                                 │
+├─────────────────────────────────────────────────────────────┤
+│ 层 3: 远程 git（origin/backup/20251214-1535）                  │
+│   终极真相，IDE / 本地任何动作都删不掉                           │
+│   答：任何时候都能 git restore 回来                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+层 1 是新增——回答用户对"无形删除"的核心恐惧：**即使没有 audit 监控，每小时也会有一道闸门检查"工作区还在不在"**。
+
+## 七、为什么用 audit 不用 inotify
 
 | 维度 | auditd | inotify (用户态) |
 |---|---|---|

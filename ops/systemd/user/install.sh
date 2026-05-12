@@ -18,6 +18,8 @@ UNITS=(
   ai-costing-snapshot-sweep.timer
   ai-costing-data-quality.service
   ai-costing-data-quality.timer
+  costing-workspace-health.service
+  costing-workspace-health.timer
 )
 
 mkdir -p "$DEST_DIR"
@@ -65,7 +67,14 @@ echo "→ daemon-reload"
 systemctl --user daemon-reload
 
 echo "→ enable + start timers"
-systemctl --user enable --now ai-costing-snapshot-sweep.timer ai-costing-data-quality.timer
+systemctl --user enable --now \
+  ai-costing-snapshot-sweep.timer \
+  ai-costing-data-quality.timer \
+  costing-workspace-health.timer
 
 echo "→ done. timers status:"
-systemctl --user list-timers ai-costing-snapshot-sweep.timer ai-costing-data-quality.timer --no-pager
+systemctl --user list-timers \
+  ai-costing-snapshot-sweep.timer \
+  ai-costing-data-quality.timer \
+  costing-workspace-health.timer \
+  --no-pager

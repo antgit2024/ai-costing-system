@@ -5,6 +5,6 @@ Each function returns the parsed ``data`` portion of the response (i.e.
 """
 
 from . import shipment  # noqa: F401
-from . import after_sales  # noqa: F401
+from . import refund  # noqa: F401
 from . import goods  # noqa: F401
 from . import memo  # noqa: F401

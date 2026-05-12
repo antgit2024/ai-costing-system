@@ -25,6 +25,7 @@ SERVICES=(
   costing-workspace-health.service
   costing-audit-summary.service
   jackyun-shipment-sync.service
+  jackyun-refund-sync.service
   planner-costing.service
 )
 
@@ -36,6 +37,7 @@ TIMERS=(
   costing-workspace-health.timer
   costing-audit-summary.timer
   jackyun-shipment-sync.timer
+  jackyun-refund-sync.timer
 )
 
 # Secret drop-in files that MUST exist in destination but NOT in git.

@@ -22,7 +22,8 @@
 | `ai-costing-nightly-refresh.service/.timer` | nightly 04:00 insights 缓存预热 | symlink |
 | `costing-workspace-health.service/.timer` | hourly 工作区健康巡检 | symlink |
 | `costing-audit-summary.service/.timer` | daily 08:00 删除事件汇总 | symlink |
-| `jackyun-shipment-sync.service/.timer` | nightly 02:30 ERP 增量同步 | symlink |
+| `jackyun-shipment-sync.service/.timer` | nightly 02:30 ERP 发货增量同步 | symlink |
+| `jackyun-refund-sync.service/.timer` | nightly 03:00 ERP 售后增量同步 (omsapi-business.refund.listrefund) | symlink |
 | `planner-costing.service` | backend API 主服务 | symlink |
 | `planner-costing.service.d/llm.conf` | LLM 非 secret 配置 | symlink |
 

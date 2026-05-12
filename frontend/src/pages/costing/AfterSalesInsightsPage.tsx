@@ -594,6 +594,20 @@ const AfterSalesInsightsPage = () => {
         </Tooltip>
       </div>
 
+      <Alert
+        type="success"
+        showIcon
+        style={{ marginBottom: 12 }}
+        message="售后数据已开通吉客云 API 自动同步（每日 03:00）"
+        description={
+          <Space split={<span style={{ color: 'var(--ant-color-border)' }}>·</span>} wrap>
+            <span>退款 / 补发 / 换货状态会按 gmtModified 增量回写</span>
+            <a href="/costing/biz/after-sales">去售后管理台账</a>
+            <a href="/costing/integrations">手动触发同步</a>
+          </Space>
+        }
+      />
+
       <Card size="small" style={{ marginBottom: 12 }}>
         <Form
           form={form}

@@ -2949,6 +2949,14 @@ class AfterSalesLineRead(BaseModel):
     sku_code: Optional[str] = None
     # Optional join field for "归因到发货期" detail mode
     shipment_completed_at: Optional[datetime] = None
+    # Source provenance + business state (jackyun-pulled rows fill these;
+    # legacy Excel rows leave most blank).
+    source_system: Optional[str] = None
+    erp_order_no: Optional[str] = None
+    platform_order_no: Optional[str] = None
+    warehouse_name: Optional[str] = None
+    status: Optional[str] = None
+    status_name: Optional[str] = None
     normalize_warnings: List[Dict[str, Any]] = Field(default_factory=list, alias="normalize_warnings_json")
     metadata: Dict[str, Any] = Field(default_factory=dict, alias="metadata_json")
     created_at: datetime
@@ -3217,6 +3225,30 @@ class ProfitByModelResponse(BaseModel):
     note: Optional[str] = None
 
 
+class ModelInsightsVariantBreakdownItem(BaseModel):
+    variant_code: Optional[str] = None
+    variant_label: Optional[str] = None
+    shipped_qty: Decimal = Decimal("0")
+    revenue_amount: Decimal = Decimal("0")
+    cost_material_amount: Decimal = Decimal("0")
+    cost_process_amount: Decimal = Decimal("0")
+    cost_overhead_amount: Decimal = Decimal("0")
+    cost_amount: Decimal = Decimal("0")
+    gross_profit: Decimal = Decimal("0")
+    gross_margin: Optional[Decimal] = None
+    returned_qty: Decimal = Decimal("0")
+    refund_amount: Decimal = Decimal("0")
+    net_revenue: Decimal = Decimal("0")
+    net_profit: Decimal = Decimal("0")
+    net_margin: Optional[Decimal] = None
+    line_count: int = 0
+    costed_line_count: int = 0
+    missing_costing_line_count: int = 0
+
+    class Config:
+        json_encoders = {Decimal: _decimal_to_str}
+
+
 class ModelInsightsSummaryItem(BaseModel):
     channel: Optional[str] = None
     model_id: str
@@ -3246,6 +3278,7 @@ class ModelInsightsSummaryItem(BaseModel):
     top_version_status: Optional[str] = None
     top_version_label: Optional[str] = None
     version_count: int = 0
+    variant_breakdown: List[ModelInsightsVariantBreakdownItem] = Field(default_factory=list)
     # U7-A 成本可信度徽章（按 model_id 直接 resolve 4 层链）
     cost_quality: Optional[CostQualityBadge] = None
 
@@ -3335,6 +3368,8 @@ class ModelInsightsDetailResponse(BaseModel):
     model_id: str
     model_code: str
     model_name: str
+    variant_code: Optional[str] = None
+    variant_label: Optional[str] = None
     selected_version_id: Optional[str] = None
     versions: List[ModelInsightsVersionStat] = Field(default_factory=list)
 

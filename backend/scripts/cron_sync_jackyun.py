@@ -39,7 +39,13 @@ from src.planner import models  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Cron entry for Jackyun shipment incremental sync.")
+    p = argparse.ArgumentParser(description="Cron entry for Jackyun incremental syncs (shipment / refund).")
+    p.add_argument(
+        "--task", type=str, default="shipment", choices=["shipment", "refund"],
+        help="Which Jackyun sync to run: 'shipment' (wms.order.query-info.page) or"
+             " 'refund' (omsapi-business.refund.listrefund). Default=shipment for"
+             " backward compat with the existing systemd unit.",
+    )
     p.add_argument(
         "--start", type=str, default=None,
         help="Override start_modify_time (e.g. '2026-05-07 00:00:00'). "
@@ -67,19 +73,30 @@ def main() -> int:
     db = SessionLocal()
     t0 = time.time()
     sync_run_id: str | None = None
+    log_tag = f"cron-jackyun-{args.task}-sync"
     try:
-        sync_run_id = jackyun_sync_jobs.sync_shipments(
-            db,
-            start_modify_time=args.start,
-            end_modify_time=args.end,
-            page_size=args.page_size,
-            triggered_by="cron-nightly",
-            use_watermark=not args.no_watermark,
-        )
+        if args.task == "refund":
+            sync_run_id = jackyun_sync_jobs.sync_refunds(
+                db,
+                start_modify_time=args.start,
+                end_modify_time=args.end,
+                page_size=args.page_size,
+                triggered_by="cron-nightly",
+                use_watermark=not args.no_watermark,
+            )
+        else:
+            sync_run_id = jackyun_sync_jobs.sync_shipments(
+                db,
+                start_modify_time=args.start,
+                end_modify_time=args.end,
+                page_size=args.page_size,
+                triggered_by="cron-nightly",
+                use_watermark=not args.no_watermark,
+            )
     except Exception as exc:  # noqa: BLE001
         elapsed = int(time.time() - t0)
         print(
-            f"[cron-jackyun-sync] FAILED after {elapsed}s: {exc!r}",
+            f"[{log_tag}] FAILED after {elapsed}s: {exc!r}",
             file=sys.stderr,
             flush=True,
         )
@@ -99,7 +116,7 @@ def main() -> int:
         run = db2.get(models.IntegrationSyncRun, sync_run_id) if sync_run_id else None
         if run is None:
             print(
-                f"[cron-jackyun-sync] OK (run_id={sync_run_id}) but row not found - elapsed={elapsed}s",
+                f"[{log_tag}] OK (run_id={sync_run_id}) but row not found - elapsed={elapsed}s",
                 flush=True,
             )
             return 0
@@ -111,7 +128,7 @@ def main() -> int:
         errors = int(getattr(run, "error_rows", 0) or 0)
         cursor_end = getattr(run, "cursor_end", None) or "-"
         print(
-            f"[cron-jackyun-sync] {status} run_id={sync_run_id} total={total}"
+            f"[{log_tag}] {status} run_id={sync_run_id} total={total}"
             f" inserted={inserted} updated={updated} skipped={skipped} errors={errors}"
             f" cursor_end={cursor_end} elapsed={elapsed}s",
             flush=True,

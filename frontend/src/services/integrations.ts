@@ -84,6 +84,27 @@ export const triggerJackyunShipmentSync = async (
   return data
 }
 
+// 售后退款 (omsapi-business.refund.listrefund) — same shape as shipment except
+// no order_status_list (refund namespace doesn't have an equivalent filter).
+export interface JackyunRefundSyncRequest {
+  start_modify_time?: string | null
+  end_modify_time?: string | null
+  page_size?: number
+  use_watermark?: boolean
+  wait?: boolean
+  triggered_by?: string | null
+}
+
+export const triggerJackyunRefundSync = async (
+  body: JackyunRefundSyncRequest = {},
+): Promise<TriggerSyncResponse> => {
+  const { data } = await plannerClient.post<TriggerSyncResponse>(
+    '/integrations/jackyun/sync/refunds',
+    body,
+  )
+  return data
+}
+
 export interface ListSyncRunsParams {
   source_system?: string
   sync_type?: string

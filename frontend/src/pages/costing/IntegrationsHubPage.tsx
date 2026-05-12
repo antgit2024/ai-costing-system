@@ -46,12 +46,14 @@ import CheckCircleOutlined from '@ant-design/icons/lib/icons/CheckCircleOutlined
 
 import {
   type DeadLetterRead,
+  type JackyunRefundSyncRequest,
   type JackyunShipmentSyncRequest,
   type SyncRunRead,
   getSyncRunDetail,
   listDeadLetters,
   listSyncRuns,
   resolveDeadLetter,
+  triggerJackyunRefundSync,
   triggerJackyunShipmentSync,
 } from '@/services/integrations'
 import { beijingTime, formatBeijingTime, nowBeijing } from '@/utils/beijingTime'
@@ -268,6 +270,162 @@ const TriggerJackyunCard = ({ onTriggered }: TriggerJackyunCardProps) => {
 }
 
 // ---------------------------------------------------------------------------
+// Trigger card (吉客云售后退款)
+// ---------------------------------------------------------------------------
+
+interface TriggerJackyunRefundCardProps {
+  onTriggered: () => void
+}
+
+const TriggerJackyunRefundCard = ({ onTriggered }: TriggerJackyunRefundCardProps) => {
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [form] = Form.useForm<JackyunRefundSyncRequest>()
+
+  const trigger = useMutation({
+    mutationFn: (body: JackyunRefundSyncRequest) => triggerJackyunRefundSync(body),
+    onSuccess: (resp) => {
+      const note = resp.note ? `\n${resp.note}` : ''
+      const tail = resp.effective_start_modify_time
+        ? `（实际起始 gmtModified = ${resp.effective_start_modify_time}）`
+        : ''
+      if (resp.mode === 'inline' && resp.run) {
+        const sup = (resp.run.result as Record<string, unknown> | null)?.superseded_excel_rows
+        const supTail = typeof sup === 'number' && sup > 0 ? ` / 标记原 Excel 行 ${sup}` : ''
+        message.success(
+          `售后同步完成：新增 ${resp.run.inserted_rows} / 更新 ${resp.run.updated_rows} / 失败 ${resp.run.error_rows}${supTail}${tail}`,
+        )
+      } else {
+        message.success(`已派发后台售后同步任务，请在下方运行历史查看进度。${tail}${note}`)
+      }
+      onTriggered()
+    },
+    onError: (err: any) => {
+      const detail = err?.response?.data?.detail ?? err?.message ?? '未知错误'
+      message.error(`触发售后同步失败：${detail}`)
+    },
+  })
+
+  const submitQuick = () => {
+    trigger.mutate({
+      use_watermark: true,
+      wait: false,
+      triggered_by: 'ui-quick-refund',
+    })
+  }
+
+  const submitAdvanced = async () => {
+    const values = await form.validateFields()
+    trigger.mutate({
+      ...values,
+      triggered_by: values.triggered_by || 'ui-advanced-refund',
+    })
+  }
+
+  return (
+    <Card
+      size="small"
+      title={
+        <Space>
+          <ThunderboltOutlined style={{ color: '#722ed1' }} />
+          <span>吉客云 · 售后退款同步</span>
+          <Tag color="purple">jackyun.omsapi-business.refund.listrefund.v1</Tag>
+        </Space>
+      }
+      extra={
+        <Space>
+          <Button onClick={() => setAdvancedOpen(true)}>高级参数…</Button>
+          <Button
+            type="primary"
+            icon={<ThunderboltOutlined />}
+            loading={trigger.isPending}
+            onClick={submitQuick}
+          >
+            立即同步（增量）
+          </Button>
+        </Space>
+      }
+    >
+      <Paragraph type="secondary" style={{ marginBottom: 0 }}>
+        默认增量模式：第一次会自动从「最近 7 天」拉取，后续根据
+        <Text code>水位线 (gmtModified)</Text> 自动续跑。售后同步会
+        <Text strong>升级</Text>已存在的 Excel 行（标 <Tag color="default">superseded_by_jackyun</Tag>），
+        不会删除原数据。
+      </Paragraph>
+
+      <Modal
+        title="高级售后同步参数"
+        open={advancedOpen}
+        onCancel={() => setAdvancedOpen(false)}
+        onOk={submitAdvanced}
+        okText="立即触发"
+        confirmLoading={trigger.isPending}
+        width={620}
+      >
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="售后单量较小，可放心回填"
+          description="omsapi-business.refund.listrefund 单店每日通常 < 100 单，回填一个月也不会有 API 配额压力。建议把 use_watermark 关掉 + 给一个 30 天前的 start，把全部历史拉一次。"
+        />
+        <Form
+          form={form}
+          layout="vertical"
+          initialValues={{
+            page_size: 50,
+            use_watermark: true,
+            wait: false,
+          }}
+        >
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="start_modify_time" label="start_modify_time (起，含)">
+                <Input placeholder="YYYY-MM-DD HH:mm:ss，留空走水位线" allowClear />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="end_modify_time" label="end_modify_time (止，含)">
+                <Input placeholder="YYYY-MM-DD HH:mm:ss，留空到现在" allowClear />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="page_size" label="page_size">
+                <InputNumber min={1} max={100} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="use_watermark" label="使用水位线">
+                <Select
+                  options={[
+                    { value: true, label: '是（推荐）' },
+                    { value: false, label: '否' },
+                  ]}
+                />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="wait" label="等待完成">
+                <Select
+                  options={[
+                    { value: false, label: '否（后台跑）' },
+                    { value: true, label: '是（前台等）' },
+                  ]}
+                />
+              </Form.Item>
+            </Col>
+            <Col span={24}>
+              <Form.Item name="triggered_by" label="备注/触发者">
+                <Input placeholder="例如 manual-refund-backfill-2026-04" allowClear maxLength={64} />
+              </Form.Item>
+            </Col>
+          </Row>
+        </Form>
+      </Modal>
+    </Card>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Sync runs table + detail drawer
 // ---------------------------------------------------------------------------
 
@@ -429,13 +587,15 @@ const RunDetailDrawer = ({ runId, onClose }: RunDetailDrawerProps) => {
 const SyncRunsTab = ({ refreshKey }: { refreshKey: number }) => {
   const [filterSource, setFilterSource] = useState<string | undefined>('jackyun')
   const [filterStatus, setFilterStatus] = useState<string | undefined>(undefined)
+  const [filterSyncType, setFilterSyncType] = useState<string | undefined>(undefined)
   const [openRunId, setOpenRunId] = useState<string | null>(null)
 
   const runsQuery = useQuery({
-    queryKey: ['integrations', 'sync-runs', { filterSource, filterStatus, refreshKey }],
+    queryKey: ['integrations', 'sync-runs', { filterSource, filterStatus, filterSyncType, refreshKey }],
     queryFn: () =>
       listSyncRuns({
         source_system: filterSource,
+        sync_type: filterSyncType,
         status: filterStatus,
         limit: 100,
       }),
@@ -515,6 +675,17 @@ const SyncRunsTab = ({ refreshKey }: { refreshKey: number }) => {
           value={filterSource}
           onChange={setFilterSource}
           options={[{ value: 'jackyun', label: 'jackyun (吉客云)' }]}
+        />
+        <Select
+          allowClear
+          placeholder="同步类型"
+          style={{ width: 180 }}
+          value={filterSyncType}
+          onChange={setFilterSyncType}
+          options={[
+            { value: 'shipment_pull', label: 'shipment_pull (发货)' },
+            { value: 'refund_pull', label: 'refund_pull (售后)' },
+          ]}
         />
         <Select
           allowClear
@@ -690,6 +861,7 @@ const IntegrationsHubPage = () => {
       </div>
 
       <TriggerJackyunCard onTriggered={bumpRefresh} />
+      <TriggerJackyunRefundCard onTriggered={bumpRefresh} />
 
       <Card size="small">
         <Tabs items={tabItems} />

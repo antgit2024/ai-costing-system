@@ -93,6 +93,43 @@ class JackyunShipmentSyncRequest(BaseModel):
     triggered_by: Optional[str] = Field(None, max_length=64)
 
 
+class JackyunRefundSyncRequest(BaseModel):
+    """Body for triggering a Jackyun after-sales refund sync.
+
+    Mirrors ``JackyunShipmentSyncRequest`` but maps to
+    ``omsapi-business.refund.listrefund``. Time window is the OMS
+    ``gmtModified`` range (any header status change updates this column).
+    """
+
+    start_modify_time: Optional[str] = Field(
+        None,
+        description=(
+            "Inclusive lower bound on Jackyun refund ``gmtModified`` "
+            "(``YYYY-MM-DD HH:MM:SS``). Omit + ``use_watermark=true`` to resume "
+            "from the last watermark (or last 7 days if none)."
+        ),
+    )
+    end_modify_time: Optional[str] = Field(
+        None, description="Inclusive upper bound; omit to pull up to 'now'."
+    )
+    page_size: int = Field(50, ge=1, le=100)
+    use_watermark: bool = Field(
+        True,
+        description=(
+            "When true, an empty start_modify_time resumes from the watermark; "
+            "after the run completes the watermark advances to the latest gmtModified."
+        ),
+    )
+    wait: bool = Field(
+        False,
+        description=(
+            "When true, run the sync inline and return when finished. "
+            "When false (default), runs in background and the response returns immediately."
+        ),
+    )
+    triggered_by: Optional[str] = Field(None, max_length=64)
+
+
 class SyncRunRead(BaseModel):
     id: str
     source_system: str
@@ -363,6 +400,135 @@ def trigger_jackyun_shipment_sync(
         note=(
             (note or "")
             + " | background dispatched; poll GET /integrations/sync-runs?source_system=jackyun"
+        ).strip(" |"),
+    )
+
+
+def _resolve_effective_refund_start(
+    db: Session,
+    *,
+    requested_start: Optional[str],
+    use_watermark: bool,
+) -> tuple[Optional[str], Optional[str]]:
+    """Refund-flavored counterpart of ``_resolve_effective_start``.
+
+    Defaults to *7 days back* (not "today 00:00") on the first-ever run
+    because refund volume is far lower than shipments and the upstream
+    has a built-in 24h-window constraint that pages well even over a
+    week. Skipping a week-of-history would force every operator to use
+    --start manually for the very first sync.
+    """
+    if requested_start:
+        return requested_start.strip(), "explicit start_modify_time provided by caller"
+
+    if use_watermark:
+        wm = get_watermark(
+            db,
+            source_system="jackyun",
+            sync_type=jackyun_sync_jobs.REFUND_SYNC_TYPE,
+        )
+        if wm and wm.watermark_value:
+            return None, f"resuming from watermark={wm.watermark_value}"
+
+    # First-ever run / watermark disabled — backfill 7 days, mirroring
+    # the cron CLI default in ``sync_refunds``.
+    default_start = (datetime.now(_SHANGHAI_TZ) - timedelta(days=7)).strftime("%Y-%m-%d 00:00:00")
+    return default_start, "no watermark yet; defaulting to last 7 days"
+
+
+def _run_refund_sync_in_background(
+    *,
+    start_modify_time: Optional[str],
+    end_modify_time: Optional[str],
+    page_size: int,
+    use_watermark: bool,
+    triggered_by: Optional[str],
+) -> None:
+    if planner_db.SessionLocal is None:
+        planner_db.configure_engine()
+    db: Session = planner_db.SessionLocal()  # type: ignore[misc]
+    try:
+        try:
+            jackyun_sync_jobs.sync_refunds(
+                db,
+                start_modify_time=start_modify_time,
+                end_modify_time=end_modify_time,
+                page_size=page_size,
+                use_watermark=use_watermark,
+                triggered_by=triggered_by or "background",
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+    finally:
+        db.close()
+
+
+@router.post(
+    "/jackyun/sync/refunds",
+    response_model=TriggerSyncResponse,
+    summary="触发吉客云售后退款同步",
+)
+def trigger_jackyun_refund_sync(
+    body: JackyunRefundSyncRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db_session),
+) -> TriggerSyncResponse:
+    """Trigger one Jackyun refund pull (omsapi-business.refund.listrefund).
+
+    Same shape as the shipment endpoint — see ``trigger_jackyun_shipment_sync``
+    for the wait/background semantics. Status updates land in
+    ``after_sales_lines`` (source_system='jackyun'); pre-existing Excel rows
+    for the same after_sales_no are tagged ``superseded_by_jackyun``
+    (never deleted).
+    """
+
+    effective_start, note = _resolve_effective_refund_start(
+        db,
+        requested_start=body.start_modify_time,
+        use_watermark=body.use_watermark,
+    )
+
+    if body.wait:
+        sync_run_id = jackyun_sync_jobs.sync_refunds(
+            db,
+            start_modify_time=effective_start,
+            end_modify_time=body.end_modify_time,
+            page_size=body.page_size,
+            use_watermark=body.use_watermark,
+            triggered_by=body.triggered_by or "manual-inline",
+        )
+        db.commit()
+        run = (
+            db.query(models.IntegrationSyncRun)
+            .filter(models.IntegrationSyncRun.id == sync_run_id)
+            .one()
+        )
+        return TriggerSyncResponse(
+            sync_run_id=sync_run_id,
+            accepted=True,
+            mode="inline",
+            effective_start_modify_time=effective_start,
+            note=note,
+            run=_serialize_run(run),
+        )
+
+    background_tasks.add_task(
+        _run_refund_sync_in_background,
+        start_modify_time=effective_start,
+        end_modify_time=body.end_modify_time,
+        page_size=body.page_size,
+        use_watermark=body.use_watermark,
+        triggered_by=body.triggered_by or "manual-bg",
+    )
+    return TriggerSyncResponse(
+        sync_run_id="",
+        accepted=True,
+        mode="background",
+        effective_start_modify_time=effective_start,
+        note=(
+            (note or "")
+            + " | background dispatched; poll GET /integrations/sync-runs?source_system=jackyun&sync_type=refund_pull"
         ).strip(" |"),
     )
 

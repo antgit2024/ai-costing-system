@@ -1,0 +1,22 @@
+[Unit]
+Description=Jackyun nightly after-sales refund incremental sync
+Documentation=file:///home/admin/ai-costing-system/DOC/agents/known_issues.md
+After=planner-costing.service network.target jackyun-shipment-sync.service
+# Run AFTER the shipment sync — the refund mapper does a best-effort
+# join on shipment_lines.platform_order_no to backfill erp_order_no.
+# If shipments are still in flight when refunds start, that join fails
+# and erp_order_no stays null. 30 min gap (02:30 → 03:00) is plenty.
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/admin/ai-costing-system/backend
+EnvironmentFile=/home/admin/ai-costing-system/.env
+ExecStart=/home/admin/ai-costing-system/backend/.venv/bin/python scripts/cron_sync_jackyun.py --task=refund
+StandardOutput=journal
+StandardError=journal
+# Refund volume is much lower than shipments (typically <100 records/day)
+# but the upstream OMS-API endpoint is slower. 15 min ceiling is generous.
+TimeoutStartSec=900
+
+[Install]
+WantedBy=default.target

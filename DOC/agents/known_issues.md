@@ -1,6 +1,50 @@
 ## 已知坑（新 Agent 必读）
 
-> 最近校对（北京时间 GMT+8）：2026-05-09（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
+> 最近校对（北京时间 GMT+8）：2026-05-12（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
+
+### 0.0k) 吉客云售后 API 上线 + 两条 client 隐藏 bug（2026-05-12 上线）
+
+- **背景**：上线 `omsapi-business.refund.listrefund` 同步，把 ERP 售后单合并到
+  `after_sales_lines` 表，发现 `JackyunClient` 在 OMS-API namespace 下有两条
+  WMS namespace 没碰到的 bug，需要 client 层修。
+- **bug #1：业务子码 200 被误判为失败**
+  - WMS namespace 用 `subCode="0000000000"` 表示成功，OMS-API namespace 用
+    `subCode="200"`。`_BUSINESS_OK_SUB_CODES` 原来只覆盖前者，导致整批 OMS 请求
+    被 `parse_response` 全报失败。
+  - 修复：`_BUSINESS_OK_SUB_CODES` 加 `"200"`。
+- **bug #2：result.data 是 JSON 字符串而非对象**
+  - WMS namespace `result.data` 直接是 `dict/list`；OMS-API namespace 是
+    **JSON-encoded string**（要 `json.loads` 一次才能看到内层 `{count, tradeAfterOnlineDtoArr}`）。
+  - 修复：`parse_response` 检测到 `data` 是 `str` 且首字符 `{`/`[` 时自动二次解析，
+    所有下游 mapper 看到的形状统一。
+- **upstream 强约束（实测 2026-05-12）**——以下错一点都返回「未知错误」：
+  - `pageInfo` 必须是 `{pageIndex,pageSize}` **嵌套对象**（不能是平铺 key）。
+  - `pageIndex` **从 1 开始**（传 0 返回空数组）。
+  - `memberName="jackyun"` （吉客号）**必填**，缺了会报「创建起止时间或更新起止时间不能全为空」（误导性错误）。
+  - 4 组时间区间任选其一：`gmtModifiedBegin/End` / `gmtCreateBegin/End` /
+    `createTimeBegin/End` / `modifiedTimeBegin/End` —— 我们用 `gmtModified*` 做水位线。
+  - `isQueryCount=true` 返回 `count` 但 `tradeAfterOnlineDtoArr=[]`；
+    `isQueryCount=false`（默认）返回数据但 `count=0`。**翻页停止条件靠"短页"**，不能依赖 `count`。
+- **mapper 关键设计**：
+  1. `external_line_key_hash = sha1("jackyun|{tradeAfterOnlineId}|{afterSubTradeId}")`
+     全局唯一 → 重跑/二次 sync **幂等**（已实测 1898 行第二次跑全部走 update 分支）。
+  2. 同售后单号 (`after_sales_no`) 同时存在 Excel + 吉客云数据时：
+     **不删除** Excel 行，打 `tag="superseded_by_jackyun"` + metadata 指针指向新 jackyun 行。
+     审计可逆，分析可按 tag 过滤。
+  3. `erp_order_no` best-effort：用 `platOrderNo` 反查 `shipment_lines.platform_order_no`，
+     找到唯一匹配才填，多匹配 / 0 匹配都留 null。**因此 refund timer 编排在 shipment timer 之后 30min**
+     （02:30 → 03:00），让发货行先落库再回填。
+  4. PII 脱敏：`customerName/name/mobile/address` 在上游就是 `~xxx~/tb/~N~~` 包裹；
+     `_strip_redaction` 只剥外壳（保 `王**` 之类内层）→ 进 metadata，不进任何分析聚合字段。
+- **入口**：
+  - 手动：`/costing/integrations` 「吉客云 · 售后退款同步」卡片
+  - API：`POST /api/planner/integrations/jackyun/sync/refunds`
+  - CLI：`python -m scripts.cron_sync_jackyun --task=refund [--start ...] [--end ...]`
+  - 自动：`jackyun-refund-sync.timer` 每晚 03:00 (Asia/Shanghai)
+- **首跑数据**：7 天窗口拉到 1898 行 / 1668 单售后；erp_order_no 命中率 36% (683/1898)，
+  剩余 64% 是发货还没同步过来 / 历史发货已 archive。
+
+---
 
 ### 0.0j) SPU 属性冲突检测必须只看真实订单，不能算 Excel 历史（2026-05-09 上线）
 

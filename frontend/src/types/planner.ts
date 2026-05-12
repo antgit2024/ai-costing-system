@@ -2009,6 +2009,26 @@ export interface ModelInsightsSummaryItem {
   top_version_status?: string | null
   top_version_label?: string | null
   version_count?: number
+  variant_breakdown?: Array<{
+    variant_code?: string | null
+    variant_label?: string | null
+    shipped_qty: string
+    revenue_amount: string
+    cost_material_amount: string
+    cost_process_amount: string
+    cost_overhead_amount: string
+    cost_amount: string
+    gross_profit: string
+    gross_margin?: string | null
+    returned_qty?: string | null
+    refund_amount: string
+    net_revenue: string
+    net_profit: string
+    net_margin?: string | null
+    line_count?: number
+    costed_line_count?: number
+    missing_costing_line_count?: number
+  }>
   cost_quality?: CostQualityBadge | null
 }
 
@@ -2082,6 +2102,8 @@ export interface ModelInsightsDetailResponse {
   model_id: string
   model_code: string
   model_name: string
+  variant_code?: string | null
+  variant_label?: string | null
   selected_version_id?: string | null
   versions: ModelInsightsVersionStat[]
 
@@ -2369,6 +2391,13 @@ export interface AfterSalesLineItem {
   refund_amount?: string | null
   allocated_refund_amount?: string | null
   sku_code?: string | null
+  source_system?: string | null
+  erp_order_no?: string | null
+  platform_order_no?: string | null
+  warehouse_name?: string | null
+  status?: string | null
+  status_name?: string | null
+  tag?: string | null
   normalize_warnings_json?: Array<Record<string, unknown>>
   metadata_json?: Record<string, unknown>
   created_at: string

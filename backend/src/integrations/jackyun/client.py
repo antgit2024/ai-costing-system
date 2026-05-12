@@ -41,7 +41,14 @@ _SHANGHAI_TZ = timezone(timedelta(hours=8))
 
 # Treat any of these as "framework/business OK" — anything else in subCode is
 # a real business failure.
-_BUSINESS_OK_SUB_CODES = {"0", "0000000000", "00000000"}
+#
+# - "0" / "0000000000" / "00000000": classic Jackyun WMS-API success codes
+# - "200": OMS-API namespace (e.g. omsapi-business.refund.listrefund) returns
+#   subCode="200" on success instead of zero. Discovered 2026-05-12 while
+#   wiring up refund sync; without this entry the parse_response below would
+#   classify a HTTP-200/code-200/subCode-200 response as a business failure
+#   and drop a real success into the dead-letter queue.
+_BUSINESS_OK_SUB_CODES = {"0", "0000000000", "00000000", "200"}
 
 
 # Sub-codes that indicate the *caller* (key/secret/token/subscription)
@@ -142,6 +149,18 @@ class JackyunClient(BaseClient):
         if isinstance(result, dict):
             context_id = result.get("contextId") or result.get("contextid")
             data = result.get("data", result)
+            # OMS-API namespace (omsapi-business.*) returns ``result.data`` as
+            # a JSON-encoded STRING rather than a nested object. Decode it
+            # once here so all downstream callers see uniform dict/list
+            # shapes. Discovered 2026-05-12 with omsapi-business.refund.listrefund.
+            if isinstance(data, str):
+                stripped = data.strip()
+                if stripped[:1] in ("{", "["):
+                    try:
+                        data = json.loads(stripped)
+                    except (ValueError, TypeError):
+                        # Not valid JSON; leave as-is so mappers can decide.
+                        pass
 
         biz_code = body.get("code") if isinstance(body, dict) else None
         sub_code_raw = body.get("subCode") if isinstance(body, dict) else None

@@ -33,13 +33,19 @@ from ..base import (
     run_sync,
 )
 from ..base.errors import IntegrationError
+from .api import refund as refund_api
 from .api import shipment as shipment_api
 from .client import JackyunClient, build_default_client
+from .mappers import refund as refund_mapper
 from .mappers import shipment as shipment_mapper
 
 SHIPMENT_SCHEMA_VERSION = "jackyun.shipment.v1"
 SHIPMENT_SYNC_TYPE = "shipment_pull"
 SHIPMENT_WATERMARK_FIELD = "modifyTime"
+
+REFUND_SCHEMA_VERSION = "jackyun.refund.v1"
+REFUND_SYNC_TYPE = "refund_pull"
+REFUND_WATERMARK_FIELD = "gmtModified"
 
 _SHANGHAI_TZ = timezone(timedelta(hours=8))
 _TS_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -327,6 +333,195 @@ def sync_shipments(
         ctx.extra_result["window_count"] = len(windows)
         ctx.extra_result["max_payload_time"] = max_payload_time
         ctx.extra_result["last_window_end"] = last_window_end
+        return ctx.sync_run_id
+
+
+def _refund_payload_max_timestamp(record: dict) -> Optional[str]:
+    """Pick the most recent business-time string out of a Jackyun refund record.
+
+    Refund records nest the header under ``tradeAfterOnlineDTO``; we walk
+    the same fallback list as shipments but adapted to the OMS field names.
+    ``gmtModified`` is the canonical "last upstream change" — both shipment
+    edits and downstream status flips (退货签收/退款成功) update it.
+    """
+    header = record.get("tradeAfterOnlineDTO") if isinstance(record, dict) else None
+    if not isinstance(header, dict):
+        return None
+    for key in ("gmtModified", "refundTimeModified", "refundSuccessTime", "gmtCreate", "refundTimeCreate"):
+        value = header.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def sync_refunds(
+    db: Session,
+    *,
+    start_modify_time: Optional[str] = None,
+    end_modify_time: Optional[str] = None,
+    page_size: int = 50,
+    triggered_by: Optional[str] = "manual",
+    use_watermark: bool = True,
+    client: Optional[JackyunClient] = None,
+) -> str:
+    """Pull Jackyun refunds (omsapi-business.refund.listrefund) and upsert into ``after_sales_lines``.
+
+    Mirrors ``sync_shipments`` design:
+    - Watermark: ``gmtModified`` (any header status change pushes the cursor).
+    - 24h window splitter (refund namespace doesn't strictly enforce this
+      but smaller windows make watermark advance + dead-letter triage saner).
+    - Per-record mapper failures land in ``integration_dead_letters``; the
+      run continues. Caller is responsible for surfacing dead-letter count.
+
+    Returns the ``IntegrationSyncRun.id`` for caller diagnostics.
+    """
+
+    use_client = client or build_default_client()
+
+    effective_start = start_modify_time
+    start_resolution: str
+    if effective_start is None and use_watermark:
+        effective_start = get_watermark_value(
+            db, source_system="jackyun", sync_type=REFUND_SYNC_TYPE
+        )
+        start_resolution = "watermark-resume" if effective_start else "watermark-empty"
+    else:
+        start_resolution = "explicit" if effective_start else "no-watermark-disabled"
+
+    if effective_start is None:
+        # Refunds typically lag behind shipments; default to last 7 days
+        # rather than today-only so the very first run isn't empty.
+        effective_start = (
+            datetime.now(_SHANGHAI_TZ) - timedelta(days=7)
+        ).strftime("%Y-%m-%d 00:00:00")
+        if start_resolution in ("watermark-empty", "no-watermark-disabled"):
+            start_resolution = f"default-7d ({start_resolution})"
+
+    effective_end = end_modify_time
+
+    request_params = {
+        "start_modify_time": effective_start,
+        "end_modify_time": effective_end,
+        "page_size": page_size,
+        "use_watermark": bool(use_watermark),
+        "start_resolution": start_resolution,
+    }
+    windows: List[Tuple[Optional[str], Optional[str]]] = list(
+        _iter_24h_windows(effective_start, effective_end)
+    )
+    request_params["effective_windows"] = [
+        {"start": w[0], "end": w[1]} for w in windows
+    ]
+
+    superseded_total = 0
+
+    with run_sync(
+        db=db,
+        source_system="jackyun",
+        sync_type=REFUND_SYNC_TYPE,
+        api_method=refund_api.DEFAULT_LIST_API,
+        request_params=request_params,
+        direction="pull",
+        triggered_by=triggered_by,
+        cursor_start=effective_start,
+    ) as ctx:
+        batch = refund_mapper.get_or_create_jackyun_refund_batch(
+            db, sync_run_id=ctx.sync_run_id
+        )
+        max_payload_time: Optional[str] = None
+        last_window_end: Optional[str] = None
+        try:
+            for win_start, win_end in windows:
+                last_window_end = win_end or last_window_end
+                if not win_start or not win_end:
+                    continue  # iter_refunds requires concrete bounds
+                for record in refund_api.iter_refunds(
+                    use_client,
+                    page_size=page_size,
+                    gmt_modified_begin=win_start,
+                    gmt_modified_end=win_end,
+                    sync_run_id=ctx.sync_run_id,
+                    db=db,
+                ):
+                    header = record.get("tradeAfterOnlineDTO") or {}
+                    refund_no = (header.get("refundNo") or "").strip()
+                    if not refund_no:
+                        ctx.inc_skipped()
+                        continue
+                    try:
+                        archived = ctx.archive_record(
+                            record_type="refund",
+                            external_id=refund_no,
+                            payload=record,
+                            schema_version=REFUND_SCHEMA_VERSION,
+                        )
+                        rows, inserted, updated, superseded = refund_mapper.upsert_refund_from_payload(
+                            db,
+                            record=record,
+                            batch=batch,
+                            source_payload_id=archived.id,
+                        )
+                        ctx.inc_total(len(rows))
+                        ctx.inc_inserted(inserted)
+                        ctx.inc_updated(updated)
+                        ctx.cursor_end = refund_no
+                        superseded_total += superseded
+                        payload_ts = _refund_payload_max_timestamp(record)
+                        if payload_ts and (
+                            max_payload_time is None or payload_ts > max_payload_time
+                        ):
+                            max_payload_time = payload_ts
+                    except Exception as exc:  # noqa: BLE001 - per-record mapper isolation
+                        ctx.inc_errored()
+                        record_dead_letter(
+                            db,
+                            source_system="jackyun",
+                            api_method=refund_api.DEFAULT_LIST_API,
+                            record_type="refund",
+                            stage="mapper",
+                            sync_run_id=ctx.sync_run_id,
+                            external_id=refund_no,
+                            error=exc,
+                            payload_snapshot={"refund": record},
+                            metadata={"schema_version": REFUND_SCHEMA_VERSION},
+                        )
+        except IntegrationError:
+            raise
+        finally:
+            # Same status convention as shipment + import services: 'success'
+            # not 'succeeded'. Aligns with frontend BatchWorkbench filters.
+            batch.status = "success"
+            batch.export_date = batch.export_date or ctx.cursor_end or ""
+            batch.inserted_rows = ctx.inserted
+            batch.exception_rows = ctx.errored
+
+        watermark_target = _compute_watermark_target(
+            max_payload_time=max_payload_time,
+            last_window_end=last_window_end,
+        )
+        if use_watermark and watermark_target:
+            advance_watermark_if_newer(
+                db,
+                source_system="jackyun",
+                sync_type=REFUND_SYNC_TYPE,
+                watermark_field=REFUND_WATERMARK_FIELD,
+                new_value=watermark_target,
+                sync_run_id=ctx.sync_run_id,
+                cursor_extra={
+                    "page_size": int(page_size),
+                    "window_count": len(windows),
+                },
+            )
+            ctx.cursor_end = watermark_target
+        elif effective_end:
+            ctx.cursor_end = ctx.cursor_end or effective_end
+        ctx.extra_result["watermark_value"] = watermark_target
+        ctx.extra_result["watermark_field"] = REFUND_WATERMARK_FIELD
+        ctx.extra_result["schema_version"] = REFUND_SCHEMA_VERSION
+        ctx.extra_result["window_count"] = len(windows)
+        ctx.extra_result["max_payload_time"] = max_payload_time
+        ctx.extra_result["last_window_end"] = last_window_end
+        ctx.extra_result["superseded_excel_rows"] = superseded_total
         return ctx.sync_run_id
 
 

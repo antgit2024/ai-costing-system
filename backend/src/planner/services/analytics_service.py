@@ -3572,6 +3572,50 @@ def model_insights_summary(
             q = q.filter(func.coalesce(models.ShipmentLine.metadata_json["bundle_preset_selector"].as_string(), "") == s)
     rows = q.all()
 
+    sku_codes = {
+        str(getattr(row[0], "sku_code", "") or "").strip()
+        for row in rows
+        if getattr(row[0], "sku_code", None)
+    }
+    sku_to_variant: Dict[str, str] = {}
+    if sku_codes:
+        sku_rows = (
+            db.query(models.SkuMaster.erp_sku_barcode, models.SkuMaster.metadata_json)
+            .filter(models.SkuMaster.erp_sku_barcode.in_(list(sku_codes)))
+            .all()
+        )
+        for sku_code, meta in sku_rows:
+            mj = meta or {}
+            vc = str(mj.get("bound_variant_code") or "").strip().upper()
+            if sku_code and vc:
+                sku_to_variant[str(sku_code).strip()] = vc
+
+    variant_codes = {vc for vc in sku_to_variant.values() if vc}
+    version_ids = {str(row[7] or "").strip() for row in rows if row[7]}
+    variant_label_by_code: Dict[str, str] = {}
+    if variant_codes and version_ids:
+        variant_rows = (
+            db.query(models.ProductModelLineVariant)
+            .filter(
+                models.ProductModelLineVariant.version_id.in_(list(version_ids)),
+                models.ProductModelLineVariant.is_archived.is_(False),
+            )
+            .all()
+        )
+        for vr in variant_rows:
+            meta = vr.metadata_json or {}
+            vc = str(meta.get("variant_code") or "").strip().upper()
+            if not vc or vc not in variant_codes or vc in variant_label_by_code:
+                continue
+            display_name = str(meta.get("display_name") or "").strip() or None
+            if not display_name:
+                for it2 in vr.items or []:
+                    name = str(getattr(it2, "material_name", "") or "").strip()
+                    if name:
+                        display_name = name
+                        break
+            variant_label_by_code[vc] = f"{display_name}({vc})" if display_name else vc
+
     refund_q = db.query(
         models.ShipmentLine.id.label("shipment_line_id"),
         func.coalesce(func.sum(models.AfterSalesLine.refund_amount), 0).label("refund_amount"),
@@ -3661,6 +3705,7 @@ def model_insights_summary(
                 "missing_costing_line_count": 0,
                 "_ver_rev": {},
                 "_ver_info": {},
+                "_variant_agg": {},
             },
         )
 
@@ -3672,6 +3717,32 @@ def model_insights_summary(
         ref = refund_by_line.get(str(line.id)) or {"refund_amount": Decimal("0"), "returned_qty": Decimal("0")}
         bucket["refund_amount"] += _d(ref.get("refund_amount"))
         bucket["returned_qty"] += _d(ref.get("returned_qty"))
+
+        sku_code = str(getattr(line, "sku_code", "") or "").strip()
+        variant_code = sku_to_variant.get(sku_code) or "__unassigned__"
+        variant_bucket = bucket["_variant_agg"].setdefault(
+            variant_code,
+            {
+                "variant_code": None if variant_code == "__unassigned__" else variant_code,
+                "variant_label": "未指定变体" if variant_code == "__unassigned__" else variant_label_by_code.get(variant_code, variant_code),
+                "shipped_qty": Decimal("0"),
+                "revenue_amount": Decimal("0"),
+                "cost_material_amount": Decimal("0"),
+                "cost_process_amount": Decimal("0"),
+                "cost_overhead_amount": Decimal("0"),
+                "cost_amount": Decimal("0"),
+                "refund_amount": Decimal("0"),
+                "returned_qty": Decimal("0"),
+                "line_count": 0,
+                "costed_line_count": 0,
+                "missing_costing_line_count": 0,
+            },
+        )
+        variant_bucket["line_count"] += 1
+        variant_bucket["shipped_qty"] += qty
+        variant_bucket["revenue_amount"] += revenue
+        variant_bucket["refund_amount"] += _d(ref.get("refund_amount"))
+        variant_bucket["returned_qty"] += _d(ref.get("returned_qty"))
 
         mv_id_str = str(mv_id or "").strip()
         if mv_id_str:
@@ -3695,9 +3766,15 @@ def model_insights_summary(
                     bucket["cost_process_amount"] += _d(sp)
                     bucket["cost_overhead_amount"] += _d(so)
                     bucket["cost_amount"] += _d(snap_total)
+                    variant_bucket["costed_line_count"] += 1
+                    variant_bucket["cost_material_amount"] += _d(sm)
+                    variant_bucket["cost_process_amount"] += _d(sp)
+                    variant_bucket["cost_overhead_amount"] += _d(so)
+                    variant_bucket["cost_amount"] += _d(snap_total)
                 else:
                     bucket["missing_costing_line_count"] += 1
                     missing_costing_lines += 1
+                    variant_bucket["missing_costing_line_count"] += 1
             else:
                 bucket["costed_line_count"] += 1
                 costed_lines += 1
@@ -3705,11 +3782,17 @@ def model_insights_summary(
                 bucket["cost_process_amount"] += p
                 bucket["cost_overhead_amount"] += o
                 bucket["cost_amount"] += total
+                variant_bucket["costed_line_count"] += 1
+                variant_bucket["cost_material_amount"] += m
+                variant_bucket["cost_process_amount"] += p
+                variant_bucket["cost_overhead_amount"] += o
+                variant_bucket["cost_amount"] += total
         else:
             total, m, p, o, status = _extract_cost_breakdown_from_trace(snap_trace_json)
             if status == "missing_costing":
                 bucket["missing_costing_line_count"] += 1
                 missing_costing_lines += 1
+                variant_bucket["missing_costing_line_count"] += 1
             else:
                 bucket["costed_line_count"] += 1
                 costed_lines += 1
@@ -3717,6 +3800,11 @@ def model_insights_summary(
                 bucket["cost_process_amount"] += _d(p)
                 bucket["cost_overhead_amount"] += _d(o)
                 bucket["cost_amount"] += _d(total)
+                variant_bucket["costed_line_count"] += 1
+                variant_bucket["cost_material_amount"] += _d(m)
+                variant_bucket["cost_process_amount"] += _d(p)
+                variant_bucket["cost_overhead_amount"] += _d(o)
+                variant_bucket["cost_amount"] += _d(total)
 
     # U7-A: prefetch overhead_rate cost_rate_master rows once for the whole
     # response so each model row gets a cost_quality badge without N+1.
@@ -3726,6 +3814,7 @@ def model_insights_summary(
     for _, b in agg.items():
         ver_rev = b.pop("_ver_rev", {}) or {}
         ver_info = b.pop("_ver_info", {}) or {}
+        variant_agg = b.pop("_variant_agg", {}) or {}
         if ver_rev:
             top_ver_id = max(ver_rev.items(), key=lambda kv: kv[1])[0]
             kind, status, label = ver_info.get(top_ver_id, ("", "", None))
@@ -3749,6 +3838,24 @@ def model_insights_summary(
         net_revenue = revenue - refund
         net_profit = net_revenue - cost
         net_margin = (net_profit / net_revenue) if net_revenue > 0 else None
+        variant_breakdown: List[Dict[str, Any]] = []
+        for vb in variant_agg.values():
+            vr = vb["revenue_amount"]
+            vc = vb["cost_amount"]
+            v_refund = vb["refund_amount"]
+            v_gross_profit = vr - vc
+            v_net_revenue = vr - v_refund
+            variant_breakdown.append(
+                {
+                    **vb,
+                    "gross_profit": v_gross_profit,
+                    "gross_margin": (v_gross_profit / vr) if vr > 0 else None,
+                    "net_revenue": v_net_revenue,
+                    "net_profit": v_net_revenue - vc,
+                    "net_margin": ((v_net_revenue - vc) / v_net_revenue) if v_net_revenue > 0 else None,
+                }
+            )
+        variant_breakdown.sort(key=lambda r: _d(r.get("revenue_amount")), reverse=True)
         items.append(
             {
                 **b,
@@ -3757,6 +3864,7 @@ def model_insights_summary(
                 "net_revenue": net_revenue,
                 "net_profit": net_profit,
                 "net_margin": net_margin,
+                "variant_breakdown": variant_breakdown,
                 "cost_quality": cost_quality_service.derive_badge_for_model(
                     quality_lookup, model_id=str(b.get("model_id") or "") or None
                 ),
@@ -3785,6 +3893,7 @@ def model_insights_detail(
     model_code: str,
     channel: Optional[str] = None,
     version_id: Optional[str] = None,
+    variant_code: Optional[str] = None,
     bundle_template_code: Optional[str] = None,
     bundle_preset_selector: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -3861,6 +3970,45 @@ def model_insights_detail(
     )
     if channel:
         base_q = base_q.filter(models.ShipmentLine.channel == channel)
+    variant_code_norm = str(variant_code or "").strip().upper()
+    variant_label: Optional[str] = None
+    if variant_code_norm:
+        variant_label = variant_code_norm
+        variant_label_row = (
+            db.query(models.ProductModelLineVariant)
+            .join(
+                models.ProductModelVersion,
+                models.ProductModelVersion.id == models.ProductModelLineVariant.version_id,
+            )
+            .filter(
+                models.ProductModelVersion.model_id == mdl.id,
+                models.ProductModelLineVariant.is_archived.is_(False),
+                func.upper(func.coalesce(models.ProductModelLineVariant.metadata_json["variant_code"].as_string(), ""))
+                == variant_code_norm,
+            )
+            .first()
+        )
+        if variant_label_row is not None:
+            meta = variant_label_row.metadata_json or {}
+            display_name = str(meta.get("display_name") or "").strip() or None
+            if not display_name:
+                for it2 in variant_label_row.items or []:
+                    name = str(getattr(it2, "material_name", "") or "").strip()
+                    if name:
+                        display_name = name
+                        break
+            if display_name:
+                variant_label = f"{display_name}({variant_code_norm})"
+        variant_sku_sq = (
+            db.query(models.SkuMaster.erp_sku_barcode)
+            .filter(
+                func.upper(func.coalesce(models.SkuMaster.metadata_json["bound_variant_code"].as_string(), ""))
+                == variant_code_norm,
+                models.SkuMaster.is_archived.is_(False),
+            )
+            .subquery()
+        )
+        base_q = base_q.filter(models.ShipmentLine.sku_code.in_(db.query(variant_sku_sq.c.erp_sku_barcode)))
     if bundle_template_code:
         b = str(bundle_template_code or "").strip()
         if b:
@@ -4051,6 +4199,8 @@ def model_insights_detail(
         "model_id": str(mdl.id),
         "model_code": str(mdl.model_code),
         "model_name": str(mdl.model_name),
+        "variant_code": variant_code_norm or None,
+        "variant_label": variant_label,
         "selected_version_id": selected_version_id,
         "versions": versions,
         "sample_shipment_line_id": str(sample_line.id) if sample_line else None,

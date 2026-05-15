@@ -3097,3 +3097,61 @@ export interface CostAllocationRunResponse {
   by_cost_center: Record<string, number>
   warnings: string[]
 }
+
+// ============================================================================
+// Ops Assumption Scheme（运营参数方案：/costing/insights/daily-pnl 顶部下拉源）
+// 后端复用 taxonomy domain='ops_assumption_scheme'，不新建表。
+// ============================================================================
+
+export interface OpsAssumptionScheme {
+  id: string
+  name: string
+  description?: string | null
+  promotion_pct: number
+  platform_fee_pct: number
+  tax_pct: number
+  labor_pct: number
+  venue_logistics_pct: number
+  unmodeled_cost_pct: number
+  is_default: boolean
+  sort_order: number
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface OpsAssumptionSchemeListResponse {
+  items: OpsAssumptionScheme[]
+}
+
+export interface OpsAssumptionSchemeCreatePayload {
+  name: string
+  description?: string | null
+  promotion_pct: number
+  platform_fee_pct: number
+  tax_pct: number
+  labor_pct: number
+  venue_logistics_pct: number
+  unmodeled_cost_pct: number
+  is_default?: boolean
+  sort_order?: number
+}
+
+export interface OpsAssumptionSchemeUpdatePayload {
+  name?: string
+  description?: string | null
+  promotion_pct?: number
+  platform_fee_pct?: number
+  tax_pct?: number
+  labor_pct?: number
+  venue_logistics_pct?: number
+  unmodeled_cost_pct?: number
+  is_default?: boolean
+  sort_order?: number
+}
+
+export interface OpsAssumptionSchemeSeedResponse {
+  inserted: number
+  existed: number
+  total: number
+  items: OpsAssumptionScheme[]
+}

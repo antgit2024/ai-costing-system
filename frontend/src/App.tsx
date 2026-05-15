@@ -32,6 +32,7 @@ const AfterSalesInsightsPage = lazy(() => import('./pages/costing/AfterSalesInsi
 const ProfitInsightsPage = lazy(() => import('./pages/costing/ProfitInsightsPage'))
 const ShopInsightsPage = lazy(() => import('./pages/costing/ShopInsightsPage'))
 const SalesInsightsPage = lazy(() => import('./pages/costing/SalesInsightsPage'))
+const SimpleDailyPnlPage = lazy(() => import('./pages/costing/SimpleDailyPnlPage'))
 const IntegrationsHubPage = lazy(() => import('./pages/costing/IntegrationsHubPage'))
 const ShipmentManagementPage = lazy(() => import('./pages/costing/biz/ShipmentManagementPage'))
 const AfterSalesManagementPage = lazy(() => import('./pages/costing/biz/AfterSalesManagementPage'))
@@ -82,6 +83,7 @@ const ProtectedShell = () => (
           <Route path="/costing/insights/models" element={<ProfitInsightsPage />} />
           <Route path="/costing/insights/shops" element={<ShopInsightsPage />} />
           <Route path="/costing/insights/sales" element={<SalesInsightsPage />} />
+          <Route path="/costing/insights/daily-pnl" element={<SimpleDailyPnlPage />} />
           <Route path="/costing/integrations" element={<IntegrationsHubPage />} />
           <Route path="/costing/biz/shipments" element={<ShipmentManagementPage />} />
           <Route path="/costing/biz/after-sales" element={<AfterSalesManagementPage />} />

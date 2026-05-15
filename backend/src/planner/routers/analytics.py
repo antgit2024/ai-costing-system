@@ -229,6 +229,7 @@ def models_detail(
     model_code: str = Query(..., description="model_code"),
     channel: Optional[str] = None,
     version_id: Optional[str] = None,
+    variant_code: Optional[str] = None,
     bundle_template_code: Optional[str] = None,
     bundle_preset_selector: Optional[str] = None,
     db: Session = Depends(get_db_session),
@@ -249,6 +250,7 @@ def models_detail(
         channel=channel,
         model_code=model_code,
         version_id=version_id,
+        variant_code=variant_code,
         bundle_template_code=bundle_template_code,
         bundle_preset_selector=bundle_preset_selector,
     )

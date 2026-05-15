@@ -158,6 +158,11 @@ import type {
   ShippingRuleEvaluateResponse,
   ShippingRuleListResponse,
   ShippingRuleUpsertRequest,
+  OpsAssumptionScheme,
+  OpsAssumptionSchemeListResponse,
+  OpsAssumptionSchemeCreatePayload,
+  OpsAssumptionSchemeUpdatePayload,
+  OpsAssumptionSchemeSeedResponse,
 } from '@/types/planner'
 
 const resolvePlannerApiBase = (raw?: string): string => {
@@ -2658,6 +2663,7 @@ export const fetchModelInsightsDetail = async (params: {
   model_code: string
   channel?: string
   version_id?: string
+  variant_code?: string
   bundle_template_code?: string
   bundle_preset_selector?: string
 }): Promise<ModelInsightsDetailResponse> => {
@@ -3434,6 +3440,40 @@ export const validateProductModelRecognitionKeywords = async (
   payload: { keywords: string[] },
 ): Promise<RecognitionKeywordsValidateResponse> => {
   const response = await plannerClient.post(`/product-models/${modelId}/recognition/validate`, payload)
+  return response.data
+}
+
+// ============================================================================
+// Ops Assumption Scheme（运营参数方案：/costing/insights/daily-pnl 顶部下拉源）
+// 后端 5 个 endpoint，复用 taxonomy domain='ops_assumption_scheme'，不新建表。
+// ============================================================================
+
+export const fetchOpsAssumptionSchemes = async (): Promise<OpsAssumptionSchemeListResponse> => {
+  const response = await plannerClient.get('/ops-assumption-schemes')
+  return response.data
+}
+
+export const createOpsAssumptionScheme = async (
+  payload: OpsAssumptionSchemeCreatePayload,
+): Promise<OpsAssumptionScheme> => {
+  const response = await plannerClient.post('/ops-assumption-schemes', payload, { headers: adminHeaders() })
+  return response.data
+}
+
+export const updateOpsAssumptionScheme = async (
+  id: string,
+  payload: OpsAssumptionSchemeUpdatePayload,
+): Promise<OpsAssumptionScheme> => {
+  const response = await plannerClient.put(`/ops-assumption-schemes/${id}`, payload, { headers: adminHeaders() })
+  return response.data
+}
+
+export const deleteOpsAssumptionScheme = async (id: string): Promise<void> => {
+  await plannerClient.delete(`/ops-assumption-schemes/${id}`, { headers: adminHeaders() })
+}
+
+export const seedOpsAssumptionSchemes = async (): Promise<OpsAssumptionSchemeSeedResponse> => {
+  const response = await plannerClient.post('/ops-assumption-schemes/seed', {}, { headers: adminHeaders() })
   return response.data
 }
 

@@ -156,6 +156,7 @@ const menuItems: MenuProps['items'] = [
       { key: '/costing/insights/sales', label: subItemLabel('销售分析', '/costing/insights/sales') },
       { key: '/costing/insights/models', label: subItemLabel('模型分析', '/costing/insights/models') },
       { key: '/costing/insights/shops', label: subItemLabel('店铺数据', '/costing/insights/shops') },
+      { key: '/costing/insights/daily-pnl', label: subItemLabel('💰 简易日盈亏', '/costing/insights/daily-pnl') },
     ],
   },
   {
@@ -318,6 +319,9 @@ const AppLayout = ({ children }: AppLayoutProps) => {
       }
       if (location.pathname.startsWith('/costing/insights/shops')) {
         return ['/costing/insights/shops']
+      }
+      if (location.pathname.startsWith('/costing/insights/daily-pnl')) {
+        return ['/costing/insights/daily-pnl']
       }
       if (location.pathname.startsWith('/costing/tmall-sku-generator')) {
         return ['/costing/tmall-sku-generator']

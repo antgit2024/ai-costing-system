@@ -661,6 +661,68 @@ class TaxonomyMappingListResponse(BaseModel):
     categories: List[str] = Field(default_factory=list)
 
 
+# ---------------------------------------------------------------------------
+# Ops Assumption Scheme（运营参数方案：简易日盈亏页面用，存 taxonomy domain='ops_assumption_scheme'）
+# ---------------------------------------------------------------------------
+# 一行 = 一个"运营参数方案"，metadata 存 6 个百分比 + description + is_default。
+# 复用 TaxonomyItem 表，不新建表。`name` = 方案名（domain+name 唯一约束）。
+
+
+class OpsAssumptionScheme(BaseModel):
+    """运营参数方案（推广 / 扣点 / 税 / 人工 / 场地+快递 / 未建模兜底成本比）。"""
+
+    id: str
+    name: str
+    description: Optional[str] = None
+    promotion_pct: float = Field(..., ge=0.0, le=1.0, description="推广费率（0~1）")
+    platform_fee_pct: float = Field(..., ge=0.0, le=1.0, description="平台扣点率（0~1）")
+    tax_pct: float = Field(..., ge=0.0, le=1.0, description="综合税率（0~1）")
+    labor_pct: float = Field(..., ge=0.0, le=1.0, description="人工占销售额比（0~1）")
+    venue_logistics_pct: float = Field(..., ge=0.0, le=1.0, description="场地+快递占销售额比（0~1）")
+    unmodeled_cost_pct: float = Field(..., ge=0.0, le=1.0, description="未建模 SKU 兜底成本占销售额比（0~1）")
+    is_default: bool = False
+    sort_order: int = 0
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class OpsAssumptionSchemeCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    description: Optional[str] = Field(None, max_length=512)
+    promotion_pct: float = Field(..., ge=0.0, le=1.0)
+    platform_fee_pct: float = Field(..., ge=0.0, le=1.0)
+    tax_pct: float = Field(..., ge=0.0, le=1.0)
+    labor_pct: float = Field(..., ge=0.0, le=1.0)
+    venue_logistics_pct: float = Field(..., ge=0.0, le=1.0)
+    unmodeled_cost_pct: float = Field(..., ge=0.0, le=1.0)
+    is_default: bool = False
+    sort_order: int = 0
+
+
+class OpsAssumptionSchemeUpdateRequest(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=128)
+    description: Optional[str] = Field(None, max_length=512)
+    promotion_pct: Optional[float] = Field(None, ge=0.0, le=1.0)
+    platform_fee_pct: Optional[float] = Field(None, ge=0.0, le=1.0)
+    tax_pct: Optional[float] = Field(None, ge=0.0, le=1.0)
+    labor_pct: Optional[float] = Field(None, ge=0.0, le=1.0)
+    venue_logistics_pct: Optional[float] = Field(None, ge=0.0, le=1.0)
+    unmodeled_cost_pct: Optional[float] = Field(None, ge=0.0, le=1.0)
+    is_default: Optional[bool] = None
+    sort_order: Optional[int] = None
+
+
+class OpsAssumptionSchemeListResponse(BaseModel):
+    items: List[OpsAssumptionScheme]
+
+
+class OpsAssumptionSchemeSeedResponse(BaseModel):
+    inserted: int
+    existed: int
+    total: int
+    items: List[OpsAssumptionScheme]
+
+
 class MaterialUpdateRequest(BaseModel):
     is_active: Optional[bool] = None
     status: Optional[str] = Field(None, max_length=32)

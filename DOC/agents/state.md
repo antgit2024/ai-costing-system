@@ -1,5 +1,22 @@
 ## 当前状态（崩了也能继续）
 
+- **最近校对（北京时间 GMT+8）**：2026-05-15（简易日盈亏 /costing/insights/daily-pnl 闭环）
+  - 背景：老板看完《电商税负下低毛利经营应对报告》要求"昨天发了多少单、哪个赚哪个亏、按单笔税后贡献排名"。
+  - 落地：复刻一份简化版 ProfitInsightsPage → `/costing/insights/daily-pnl`，加 5 个运营经营参数（推广17%/扣点6.1%/税8%/人工20%/场地+快递10%）+ 未建模兜底成本比 50%；多方案库（4 预置方案下拉切换：默认标准/大促降推广/试涨价/0推广（最低边界））；左侧模型日报按"税后贡献"倒序+🟢/🟡/🔴/⚠️ 颜色徽章；右侧父 Tabs 模型明细（保留 ProfitInsights 原貌 BOM/工序/扣库单 3 子 Tab）+ 商品明细（Top 赚/Top 亏 SKU + 全量行级明细，按当前方案重算）；每张表加 Excel 导出（xlsx 库，文件名 `简易日盈亏_<方案名>_<起>_<止>_<导出时间>.xlsx`，含「方案与口径」首 sheet）。
+  - 后端：`backend/src/planner/routers/ops_assumptions.py`（CRUD via taxonomy domain='ops_assumption_scheme' **不新建表**）+ `backend/tests/planner/test_ops_assumption_schemes.py` 6 单测全过 + schemas/router 挂载。analytics 加 `variant_code/variant_breakdown` 向下兼容增量。
+  - 前端：`frontend/src/pages/costing/SimpleDailyPnlPage.tsx`（1493 行，复用 fetchModelInsightsSummary/fetchModelInsightsDetail/fetchSalesProfitDashboardSnapshot/fetchSalesLines，前端 JS 按当前方案重算"运营扣减/税后贡献/税后率/颜色"）+ App.tsx Route + AppLayout.tsx 菜单「💰 简易日盈亏」。
+  - 验收命令（全部 0 退出码）：
+    - `source backend/venv/bin/activate && pytest backend/tests/planner/test_ops_assumption_schemes.py -v` → 6 passed
+    - `npm -C frontend run build` → ✓ built in 9.49s 0 类型错误
+    - `alembic upgrade head` → noop（heads=`0043_cost_allocation_line` 不变）
+    - `systemctl --user restart planner-costing.service` Active running PID 103101 + `/api/planner/health = ok`
+    - `bash frontend/scripts/deploy_static.sh` 原子切换 `/var/www/html/ai-costing/dist`
+    - `curl https://work.znma.com/api/planner/ops-assumption-schemes -H "X-PLANNER-ADMIN-KEY: dev"` → `total=4 default=1`（4 预置方案就位）
+    - `curl https://work.znma.com/costing/insights/daily-pnl` → HTTP 200
+  - 红线遵守：未动 ProfitInsightsPage / SalesInsightsPage / ShopInsightsPage / AfterSalesInsightsPage 任何一行（前一个挂死 subagent 错误改了 ProfitInsightsPage 232 行+删法人主体筛选已被 Hub git checkout HEAD 回退）。
+  - 派单文档：`DOC/agents/briefings/simple_daily_pnl_page_brief.md`。
+  - 下一步：(1) 运营建模 Top 50 头部 SKU 让"未建模兜底50%估算"逐步替换为真 BOM 成本；(2) 老板决定后单独派 PR 删法人主体筛选（不混入本任务）；(3) 6 项参数若有"按渠道一组"需求另开闭环（本期是全店一组）；(4) Excel 导出当前为客户端 xlsx 库，10w+ 订单需求时改后端流式导出。
+
 ### 项目定义（仓库单一真相：当前项目是什么）
 
 本仓库（`/home/admin/ai-costing-system`）是一个 **ERP 级的“SKU 绑定 + 规格解析 + 动态 BOM 生成 + 发货对账/扣库/成本核算”系统**，核心理念是 **“发货时再解析（Shipment-time parse）”**：  

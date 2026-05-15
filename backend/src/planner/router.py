@@ -24,6 +24,7 @@ from .routers import (
     line_items,
     line_variants,
     long_tail_strategies,
+    ops_assumptions,
     packages,
     process_modules,
     processes,
@@ -67,6 +68,7 @@ guarded.include_router(product_model_versions.router)
 guarded.include_router(reports.router)
 guarded.include_router(line_variants.router)
 guarded.include_router(long_tail_strategies.router)
+guarded.include_router(ops_assumptions.router)
 guarded.include_router(shipping_rules.router)
 guarded.include_router(shipments.router)
 guarded.include_router(sku_master.router)

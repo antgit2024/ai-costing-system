@@ -15,11 +15,6 @@ import type {
   ModelInsightsSummaryResponse,
 } from '@/types/planner'
 import { CostQualityBadge } from '@/components/costing/CostQualityBadge'
-import {
-  LegalEntityFilter,
-  rowMatchesLegalEntity,
-  useLegalEntityFilter,
-} from '@/components/insights/LegalEntityFilter'
 
 const STORAGE_KEY = 'insights.models.lastQuery.v1'
 
@@ -71,22 +66,7 @@ const ProfitInsightsPage = () => {
   const [useSnapshot, setUseSnapshot] = useState(false)
   const [quickDays, setQuickDays] = useState<7 | 30 | 90>(7)
   const [computedAt, setComputedAt] = useState<string | null>(null)
-  // Path A §A5 — 法人主体多选(client-side fuzzy on row.channel)
-  const [selectedCompanyIds, setSelectedCompanyIds] = useState<string[]>([])
-  const { options: companyOptions } = useLegalEntityFilter()
-  const selectedKeywords = useMemo(() => {
-    const set = new Set<string>()
-    for (const id of selectedCompanyIds) {
-      const opt = companyOptions.find(o => o.value === id)
-      if (opt) opt.keywords.forEach(k => set.add(k))
-    }
-    return Array.from(set)
-  }, [selectedCompanyIds, companyOptions])
-  const filteredSummaryItems = useMemo(() => {
-    const items = summary?.items ?? []
-    if (!selectedKeywords.length) return items
-    return items.filter(it => rowMatchesLegalEntity(it.channel, selectedKeywords))
-  }, [summary, selectedKeywords])
+  const filteredSummaryItems = useMemo(() => summary?.items ?? [], [summary])
 
   const shopOptions = useMemo(() => {
     const s = new Set<string>()
@@ -565,15 +545,6 @@ const ProfitInsightsPage = () => {
                   </Form.Item>
                 </Col>
                 <Col span={24}>
-                  <Form.Item label="法人主体">
-                    <LegalEntityFilter
-                      value={selectedCompanyIds}
-                      onChange={setSelectedCompanyIds}
-                      width={'100%'}
-                    />
-                  </Form.Item>
-                </Col>
-                <Col span={24}>
                   <Form.Item label="日期范围" name="range" rules={[{ required: true, message: '请选择日期范围' }]}>
                     <DatePicker.RangePicker allowClear={false} style={{ width: '100%' }} />
                   </Form.Item>
@@ -682,6 +653,51 @@ const ProfitInsightsPage = () => {
               })}
               rowClassName={(r) => (String(r.model_code ?? '') === String(selectedModelCode ?? '') ? 'ant-table-row-selected' : '')}
               scroll={{ x: 1090 }}
+              expandable={{
+                rowExpandable: (r) => Array.isArray((r as any)?.variant_breakdown) && ((r as any).variant_breakdown as any[]).length > 0,
+                expandedRowRender: (r) => {
+                  const variants = (((r as any)?.variant_breakdown ?? []) as Array<{
+                    variant_code?: string | null
+                    variant_label?: string | null
+                    shipped_qty: string
+                    revenue_amount: string
+                    cost_amount: string
+                    gross_profit: string
+                    gross_margin?: string | null
+                    returned_qty?: string | null
+                    refund_amount: string
+                    line_count?: number
+                  }>)
+                  return (
+                    <Table
+                      size="small"
+                      rowKey={(v: any) => String(v.variant_code ?? '__unassigned__')}
+                      dataSource={variants}
+                      pagination={false}
+                      columns={[
+                        {
+                          title: '变体',
+                          dataIndex: 'variant_label',
+                          width: 220,
+                          render: (_: any, vv: any) => (
+                            vv?.variant_code
+                              ? <Tag color="gold">{String(vv.variant_label ?? vv.variant_code)}</Tag>
+                              : <Tag>未指定变体</Tag>
+                          ),
+                        },
+                        { title: '发货行数', dataIndex: 'line_count', width: 80, align: 'right' as const, render: (v: any) => v ?? '-' },
+                        { title: '发货数量', dataIndex: 'shipped_qty', width: 90, align: 'right' as const, render: (v: any) => formatQty(v) },
+                        { title: '销售金额', dataIndex: 'revenue_amount', width: 110, align: 'right' as const, render: (v: any) => formatMoney(v) },
+                        { title: '成本', dataIndex: 'cost_amount', width: 110, align: 'right' as const, render: (v: any) => formatMoney(v) },
+                        { title: '毛利', dataIndex: 'gross_profit', width: 110, align: 'right' as const, render: (v: any) => formatMoney(v) },
+                        { title: '毛利率', dataIndex: 'gross_margin', width: 90, align: 'right' as const, render: (v: any) => formatPercent(v) },
+                        { title: '退货数量', dataIndex: 'returned_qty', width: 90, align: 'right' as const, render: (v: any) => formatQty(v) },
+                        { title: '退款金额', dataIndex: 'refund_amount', width: 110, align: 'right' as const, render: (v: any) => formatMoney(v) },
+                      ]}
+                    />
+                  )
+                },
+              }}
             />
           </Card>
         </Col>

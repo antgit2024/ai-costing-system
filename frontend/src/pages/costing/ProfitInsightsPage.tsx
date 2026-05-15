@@ -1,4 +1,4 @@
-import { Alert, Badge, Button, Card, DatePicker, Descriptions, Divider, Form, Row, Col, Select, Space, Table, Tabs, Tag, Typography } from 'antd'
+import { Alert, Button, Card, DatePicker, Descriptions, Divider, Form, Row, Col, Select, Space, Table, Tabs, Tag, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -566,11 +566,23 @@ const ProfitInsightsPage = () => {
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>{name}</Typography.Text>
               ) : null}
               {vCount > 0 ? (
-                <Badge
-                  count={vCount}
-                  size="small"
-                  style={{ backgroundColor: '#52c41a', fontSize: 10, height: 14, lineHeight: '14px', minWidth: 14, padding: '0 4px' }}
-                />
+                <span
+                  style={{
+                    display: 'inline-block',
+                    padding: '0 5px',
+                    borderRadius: 6,
+                    border: '1px solid color-mix(in srgb, var(--ant-color-success) 45%, var(--ant-color-border))',
+                    background: 'color-mix(in srgb, var(--ant-color-success) 18%, var(--ant-color-fill-tertiary))',
+                    color: 'var(--ant-color-success)',
+                    fontSize: 10,
+                    lineHeight: '14px',
+                    fontWeight: 600,
+                    minWidth: 14,
+                    textAlign: 'center',
+                  }}
+                >
+                  {vCount}
+                </span>
               ) : null}
             </Space>
           )

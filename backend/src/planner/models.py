@@ -879,7 +879,10 @@ class TaxonomyItem(Base, TimestampMixin, SoftDeleteMixin):
 
     id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
     domain: Mapped[str] = Column(String(64), nullable=False, index=True)
-    name: Mapped[str] = Column(String(128), nullable=False)
+    # 升到 varchar(512) for report_snapshot domain：snapshot_key 含完整查询参数
+    # （ISO timestamp + group_by + view + start/end），常 130~150+ 字符。
+    # 见 migration 0044_taxonomy_items_name_512。
+    name: Mapped[str] = Column(String(512), nullable=False)
     scopes_json: Mapped[List[str]] = Column("scopes", JSON, default=list, nullable=False)
     is_active: Mapped[bool] = Column(Boolean, nullable=False, default=True)
     sort_order: Mapped[int] = Column(Integer, nullable=False, default=0)

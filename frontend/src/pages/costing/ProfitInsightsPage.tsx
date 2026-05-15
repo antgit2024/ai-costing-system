@@ -1,4 +1,4 @@
-import { Alert, Button, Card, DatePicker, Descriptions, Divider, Form, Row, Col, Select, Space, Table, Tabs, Tag, Typography } from 'antd'
+import { Alert, Badge, Button, Card, DatePicker, Descriptions, Divider, Form, Row, Col, Select, Space, Table, Tabs, Tag, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -11,20 +11,11 @@ import {
 } from '@/services/planner'
 import type {
   ModelInsightsDetailResponse,
-  ModelInsightsSummaryItem,
   ModelInsightsSummaryResponse,
 } from '@/types/planner'
 import { CostQualityBadge } from '@/components/costing/CostQualityBadge'
 
 const STORAGE_KEY = 'insights.models.lastQuery.v1'
-
-const hashString = (s: string) => {
-  let h = 0
-  for (let i = 0; i < s.length; i += 1) {
-    h = (h * 31 + s.charCodeAt(i)) | 0
-  }
-  return Math.abs(h)
-}
 
 const formatPercent = (raw?: string | number | null) => {
   if (raw == null || raw === '') return '-'
@@ -60,13 +51,146 @@ const ProfitInsightsPage = () => {
   const [summary, setSummary] = useState<ModelInsightsSummaryResponse | null>(null)
   const [detail, setDetail] = useState<ModelInsightsDetailResponse | null>(null)
   const [selectedModelCode, setSelectedModelCode] = useState<string | null>(null)
+  const [selectedVariantCode, setSelectedVariantCode] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const didInitRef = useRef(false)
   // 默认走实时：当前用于固定历史月份校验（快照仅支持近N天）
   const [useSnapshot, setUseSnapshot] = useState(false)
   const [quickDays, setQuickDays] = useState<7 | 30 | 90>(7)
   const [computedAt, setComputedAt] = useState<string | null>(null)
-  const filteredSummaryItems = useMemo(() => summary?.items ?? [], [summary])
+  // 合并同 model_code 多渠道行；同时把 variant_breakdown 转成 children（树形二级）。
+  // 数字字段累加；gross_margin 用 (gross_profit / revenue) 重算（避免直接对率求平均）。
+  const unifiedRows = useMemo(() => {
+    type Num = number
+    type Variant = {
+      variant_code?: string | null
+      variant_label?: string | null
+      shipped_qty: Num
+      revenue_amount: Num
+      cost_amount: Num
+      gross_profit: Num
+      gross_margin?: Num | null
+      returned_qty?: Num | null
+      refund_amount: Num
+      line_count: Num
+    }
+    type Row = {
+      row_kind: 'model' | 'variant'
+      model_code?: string | null
+      model_id?: string | null
+      model_name?: string | null
+      variant_code?: string | null
+      variant_label?: string | null
+      shipped_qty: Num
+      revenue_amount: Num
+      cost_amount: Num
+      gross_profit: Num
+      gross_margin?: Num | null
+      returned_qty?: Num | null
+      refund_amount: Num
+      line_count?: Num
+      cost_quality?: any
+      children?: Row[]
+      // 透传，用于 onRow 点击 / 后端 detail 查询
+      _channels?: string[]
+    }
+    const items = summary?.items ?? []
+    const groups = new Map<string, Row & { _variantMap: Map<string, Variant> }>()
+    const num = (v: any): number => {
+      if (v == null || v === '') return 0
+      const n = Number(v)
+      return Number.isFinite(n) ? n : 0
+    }
+    for (const it of items) {
+      const code = String((it as any).model_code ?? '').trim() || `__noid__${(it as any).model_id ?? ''}`
+      let g = groups.get(code)
+      if (!g) {
+        g = {
+          row_kind: 'model',
+          model_code: (it as any).model_code,
+          model_id: (it as any).model_id,
+          model_name: (it as any).model_name,
+          shipped_qty: 0,
+          revenue_amount: 0,
+          cost_amount: 0,
+          gross_profit: 0,
+          returned_qty: 0,
+          refund_amount: 0,
+          cost_quality: (it as any).cost_quality ?? null,
+          _channels: [],
+          _variantMap: new Map(),
+        }
+        groups.set(code, g)
+      }
+      g.shipped_qty += num((it as any).shipped_qty)
+      g.revenue_amount += num((it as any).revenue_amount)
+      g.cost_amount += num((it as any).cost_amount)
+      g.gross_profit += num((it as any).gross_profit)
+      g.refund_amount += num((it as any).refund_amount)
+      g.returned_qty = (g.returned_qty ?? 0) + num((it as any).returned_qty)
+      const ch = String((it as any).channel ?? '').trim()
+      if (ch && !g._channels!.includes(ch)) g._channels!.push(ch)
+      // cost_quality 多渠道相同（来自 model 4 层链解析），保留首次
+      if (!g.cost_quality && (it as any).cost_quality) g.cost_quality = (it as any).cost_quality
+      const vbs: any[] = Array.isArray((it as any).variant_breakdown) ? (it as any).variant_breakdown : []
+      for (const vb of vbs) {
+        const vc = String(vb?.variant_code ?? '').trim() || '__unassigned__'
+        let vAgg = g._variantMap.get(vc)
+        if (!vAgg) {
+          vAgg = {
+            variant_code: vb?.variant_code ?? null,
+            variant_label: vb?.variant_label ?? null,
+            shipped_qty: 0,
+            revenue_amount: 0,
+            cost_amount: 0,
+            gross_profit: 0,
+            returned_qty: 0,
+            refund_amount: 0,
+            line_count: 0,
+          }
+          g._variantMap.set(vc, vAgg)
+        }
+        vAgg.shipped_qty += num(vb.shipped_qty)
+        vAgg.revenue_amount += num(vb.revenue_amount)
+        vAgg.cost_amount += num(vb.cost_amount)
+        vAgg.gross_profit += num(vb.gross_profit)
+        vAgg.refund_amount += num(vb.refund_amount)
+        vAgg.returned_qty = (vAgg.returned_qty ?? 0) + num(vb.returned_qty)
+        vAgg.line_count += num(vb.line_count)
+      }
+    }
+    const out: Row[] = []
+    for (const g of groups.values()) {
+      g.gross_margin = g.revenue_amount > 0 ? g.gross_profit / g.revenue_amount : null
+      const variantChildren: Row[] = Array.from(g._variantMap.values())
+        .map((v) => ({
+          row_kind: 'variant' as const,
+          model_code: g.model_code,
+          model_id: g.model_id,
+          model_name: g.model_name,
+          variant_code: v.variant_code ?? null,
+          variant_label: v.variant_label ?? null,
+          shipped_qty: v.shipped_qty,
+          revenue_amount: v.revenue_amount,
+          cost_amount: v.cost_amount,
+          gross_profit: v.gross_profit,
+          gross_margin: v.revenue_amount > 0 ? v.gross_profit / v.revenue_amount : null,
+          returned_qty: v.returned_qty ?? 0,
+          refund_amount: v.refund_amount,
+          line_count: v.line_count,
+        }))
+        .sort((a, b) => b.revenue_amount - a.revenue_amount)
+      // 删 _variantMap，避免污染 dataSource
+      const { _variantMap, ...gNoMap } = g
+      void _variantMap
+      out.push({
+        ...gNoMap,
+        children: variantChildren.length > 0 ? variantChildren : undefined,
+      })
+    }
+    out.sort((a, b) => b.revenue_amount - a.revenue_amount)
+    return out
+  }, [summary])
 
   const shopOptions = useMemo(() => {
     const s = new Set<string>()
@@ -178,7 +302,7 @@ const ProfitInsightsPage = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const loadDetail = async (modelCode: string, versionId?: string) => {
+  const loadDetail = async (modelCode: string, versionId?: string, variantCode?: string) => {
     const v = await form.validateFields()
     const range = v.range as [dayjs.Dayjs, dayjs.Dayjs]
     const start = range[0].startOf('day').toISOString()
@@ -191,6 +315,7 @@ const ProfitInsightsPage = () => {
         channel: v.channel?.trim() || undefined,
         model_code: modelCode,
         version_id: versionId || undefined,
+        variant_code: variantCode || undefined,
       })
       setDetail(resp)
     } catch (e: any) {
@@ -391,44 +516,6 @@ const ProfitInsightsPage = () => {
     [],
   )
 
-  const renderModelCodePill = (code: string) => {
-    const text = String(code ?? '').trim()
-    if (!text) return <Typography.Text type="secondary">-</Typography.Text>
-
-    // Use Ant Design theme colors (deterministic per code)
-    const palette = [
-      'var(--ant-color-blue)',
-      'var(--ant-color-purple)',
-      'var(--ant-color-cyan)',
-      'var(--ant-color-green)',
-      'var(--ant-color-magenta)',
-      'var(--ant-color-volcano)',
-      'var(--ant-color-gold)',
-      'var(--ant-color-geekblue)',
-    ]
-    const c = palette[hashString(text) % palette.length] ?? 'var(--ant-color-primary)'
-    return (
-      <span
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          height: 22,
-          padding: '0 8px',
-          borderRadius: 999,
-          border: `1px solid color-mix(in srgb, ${c} 45%, var(--ant-color-border))`,
-          background: `color-mix(in srgb, ${c} 18%, var(--ant-color-fill-tertiary))`,
-          color: c,
-          fontWeight: 600,
-          fontSize: 12,
-          lineHeight: '22px',
-          whiteSpace: 'nowrap',
-        }}
-      >
-        {text}
-      </span>
-    )
-  }
-
   const renderVersionLabelPill = (label: string) => {
     const text = String(label ?? '').trim()
     if (!text) return <Typography.Text type="secondary">-</Typography.Text>
@@ -451,25 +538,50 @@ const ProfitInsightsPage = () => {
     )
   }
 
-  const modelListColumns = useMemo<ColumnsType<ModelInsightsSummaryItem>>(
+  const modelListColumns = useMemo<ColumnsType<any>>(
     () => [
       {
         title: '编码',
-        key: 'model_code',
-        width: 90,
-        fixed: 'left',
-        render: (_: any, r) => renderModelCodePill(String(r.model_code ?? '')),
-      },
-      {
-        title: '模型名称',
-        dataIndex: 'model_name',
-        width: 180,
-        ellipsis: true,
-        render: (v) => (
-          <Typography.Text style={{ fontSize: 13 }} ellipsis>
-            {String(v ?? '-') || '-'}
-          </Typography.Text>
-        ),
+        key: 'code_pill',
+        width: 220,
+        render: (_: any, r: any) => {
+          if (r?.row_kind === 'variant') {
+            const vc = String(r?.variant_code ?? '').trim()
+            const label = String(r?.variant_label ?? '').trim()
+            if (!vc) {
+              return (
+                <Space size={6}>
+                  <Tag color="warning" style={{ marginInlineEnd: 0 }}>⚠ 兜底</Tag>
+                  <Typography.Text type="warning" style={{ fontSize: 12 }}>未指定变体</Typography.Text>
+                </Space>
+              )
+            }
+            // 紫色 monospace Tag（与 target-picker 模式 0 完全同款），后接物料名/展示串
+            const display = label.replace(new RegExp(`\\(${vc}\\)$`), '').trim() || vc
+            return (
+              <Space size={6}>
+                <Tag color="purple" style={{ marginInlineEnd: 0, fontFamily: 'monospace' }}>{vc}</Tag>
+                {display && display !== vc ? <Typography.Text style={{ fontSize: 13 }}>{display}</Typography.Text> : null}
+              </Space>
+            )
+          }
+          // 一级 model 行：[模型蓝Tag] OZU 模型名 [变体数Badge]
+          const code = String(r?.model_code ?? '')
+          const name = String(r?.model_name ?? '').trim()
+          const vCount = Array.isArray(r?.children) ? r.children.length : 0
+          return (
+            <Space size={6}>
+              <Tag color="blue" style={{ marginInlineEnd: 0 }}>模型</Tag>
+              <Typography.Text strong>{code}</Typography.Text>
+              {name ? (
+                <Typography.Text type="secondary" ellipsis style={{ fontSize: 12, maxWidth: 90 }}>{name}</Typography.Text>
+              ) : null}
+              {vCount > 0 ? (
+                <Badge count={vCount} style={{ backgroundColor: '#52c41a' }} />
+              ) : null}
+            </Space>
+          )
+        },
       },
       { title: '发货数量', dataIndex: 'shipped_qty', width: 90, align: 'right', render: (v) => formatQty(v as any) },
       { title: '销售金额', dataIndex: 'revenue_amount', width: 110, align: 'right', render: (v) => formatMoney(v as any) },
@@ -489,7 +601,7 @@ const ProfitInsightsPage = () => {
         key: 'cost_quality',
         width: 110,
         align: 'center',
-        render: (_v, r) => <CostQualityBadge badge={(r as any).cost_quality} size="small" />,
+        render: (_v, r: any) => (r?.row_kind === 'model' ? <CostQualityBadge badge={r.cost_quality} size="small" /> : null),
       },
     ],
     [],
@@ -580,6 +692,7 @@ const ProfitInsightsPage = () => {
                         form.resetFields()
                         setSummary(null)
                         setSelectedModelCode(null)
+                        setSelectedVariantCode(null)
                         setDetail(null)
                         setError(null)
                       }}
@@ -635,69 +748,56 @@ const ProfitInsightsPage = () => {
               </Typography.Text>
             ) : null}
 
-            <Table<ModelInsightsSummaryItem>
+            <Table<any>
               size="small"
               loading={loadingSummary}
-              rowKey={(r) => String(r.model_code ?? '') || String((r as any)?.model_id ?? '')}
-              dataSource={filteredSummaryItems.slice()}
+              rowKey={(r: any) => (
+                r?.row_kind === 'variant'
+                  ? `v::${r?.model_code ?? ''}::${r?.variant_code ?? '__unassigned__'}`
+                  : `m::${r?.model_code ?? r?.model_id ?? ''}`
+              )}
+              dataSource={unifiedRows}
               columns={modelListColumns}
               pagination={{ pageSize: 12, showSizeChanger: true }}
               locale={{ emptyText: '暂无数据（请先选择范围并查询）' }}
-              onRow={(r) => ({
+              indentSize={24}
+              expandable={{
+                rowExpandable: (r: any) => Array.isArray(r?.children) && r.children.length > 0,
+                defaultExpandAllRows: false,
+              }}
+              onRow={(r: any) => ({
                 onClick: async () => {
-                  const code = String(r.model_code ?? '').trim()
+                  const code = String(r?.model_code ?? '').trim()
                   if (!code) return
-                  setSelectedModelCode(code)
-                  await loadDetail(code)
+                  if (r?.row_kind === 'variant') {
+                    const vc = String(r?.variant_code ?? '').trim()
+                    setSelectedModelCode(code)
+                    setSelectedVariantCode(vc || null)
+                    await loadDetail(code, undefined, vc || undefined)
+                  } else {
+                    setSelectedModelCode(code)
+                    setSelectedVariantCode(null)
+                    await loadDetail(code)
+                  }
                 },
               })}
-              rowClassName={(r) => (String(r.model_code ?? '') === String(selectedModelCode ?? '') ? 'ant-table-row-selected' : '')}
-              scroll={{ x: 1090 }}
-              expandable={{
-                rowExpandable: (r) => Array.isArray((r as any)?.variant_breakdown) && ((r as any).variant_breakdown as any[]).length > 0,
-                expandedRowRender: (r) => {
-                  const variants = (((r as any)?.variant_breakdown ?? []) as Array<{
-                    variant_code?: string | null
-                    variant_label?: string | null
-                    shipped_qty: string
-                    revenue_amount: string
-                    cost_amount: string
-                    gross_profit: string
-                    gross_margin?: string | null
-                    returned_qty?: string | null
-                    refund_amount: string
-                    line_count?: number
-                  }>)
+              rowClassName={(r: any) => {
+                if (r?.row_kind === 'variant') {
                   return (
-                    <Table
-                      size="small"
-                      rowKey={(v: any) => String(v.variant_code ?? '__unassigned__')}
-                      dataSource={variants}
-                      pagination={false}
-                      columns={[
-                        {
-                          title: '变体',
-                          dataIndex: 'variant_label',
-                          width: 220,
-                          render: (_: any, vv: any) => (
-                            vv?.variant_code
-                              ? <Tag color="gold">{String(vv.variant_label ?? vv.variant_code)}</Tag>
-                              : <Tag>未指定变体</Tag>
-                          ),
-                        },
-                        { title: '发货行数', dataIndex: 'line_count', width: 80, align: 'right' as const, render: (v: any) => v ?? '-' },
-                        { title: '发货数量', dataIndex: 'shipped_qty', width: 90, align: 'right' as const, render: (v: any) => formatQty(v) },
-                        { title: '销售金额', dataIndex: 'revenue_amount', width: 110, align: 'right' as const, render: (v: any) => formatMoney(v) },
-                        { title: '成本', dataIndex: 'cost_amount', width: 110, align: 'right' as const, render: (v: any) => formatMoney(v) },
-                        { title: '毛利', dataIndex: 'gross_profit', width: 110, align: 'right' as const, render: (v: any) => formatMoney(v) },
-                        { title: '毛利率', dataIndex: 'gross_margin', width: 90, align: 'right' as const, render: (v: any) => formatPercent(v) },
-                        { title: '退货数量', dataIndex: 'returned_qty', width: 90, align: 'right' as const, render: (v: any) => formatQty(v) },
-                        { title: '退款金额', dataIndex: 'refund_amount', width: 110, align: 'right' as const, render: (v: any) => formatMoney(v) },
-                      ]}
-                    />
+                    String(r?.model_code ?? '') === String(selectedModelCode ?? '') &&
+                      String(r?.variant_code ?? '') === String(selectedVariantCode ?? '')
+                      ? 'ant-table-row-selected'
+                      : ''
                   )
-                },
+                }
+                // 一级行高亮：选中模型且当前没选 variant
+                return (
+                  String(r?.model_code ?? '') === String(selectedModelCode ?? '') && !selectedVariantCode
+                    ? 'ant-table-row-selected'
+                    : ''
+                )
               }}
+              scroll={{ x: 1090 }}
             />
           </Card>
         </Col>
@@ -710,10 +810,14 @@ const ProfitInsightsPage = () => {
               selectedModelCode ? (
                 <Space size={8}>
                   <Typography.Text type="secondary">已选：</Typography.Text>
+                  <Tag color="blue" style={{ marginInlineEnd: 0 }}>模型</Tag>
                   <Typography.Text strong>{selectedModelCode}</Typography.Text>
+                  {selectedVariantCode ? (
+                    <Tag color="purple" style={{ marginInlineEnd: 0, fontFamily: 'monospace' }}>{selectedVariantCode}</Tag>
+                  ) : null}
                 </Space>
               ) : (
-                <Typography.Text type="secondary">从左侧点击一个模型</Typography.Text>
+                <Typography.Text type="secondary">点击一级看模型整体；点二级（紫色 Tag）看该变体明细</Typography.Text>
               )
             }
           >

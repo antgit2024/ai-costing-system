@@ -13,8 +13,6 @@ import type {
   ModelInsightsDetailResponse,
   ModelInsightsSummaryResponse,
 } from '@/types/planner'
-import { CostQualityBadge } from '@/components/costing/CostQualityBadge'
-
 const STORAGE_KEY = 'insights.models.lastQuery.v1'
 
 const formatPercent = (raw?: string | number | null) => {
@@ -134,7 +132,8 @@ const ProfitInsightsPage = () => {
       if (!g.cost_quality && (it as any).cost_quality) g.cost_quality = (it as any).cost_quality
       const vbs: any[] = Array.isArray((it as any).variant_breakdown) ? (it as any).variant_breakdown : []
       for (const vb of vbs) {
-        const vc = String(vb?.variant_code ?? '').trim() || '__unassigned__'
+        const vc = String(vb?.variant_code ?? '').trim()
+        if (!vc) continue // 跳过"未指定变体"兜底行（不展示）
         let vAgg = g._variantMap.get(vc)
         if (!vAgg) {
           vAgg = {
@@ -543,41 +542,35 @@ const ProfitInsightsPage = () => {
       {
         title: '编码',
         key: 'code_pill',
-        width: 220,
+        width: 320,
         render: (_: any, r: any) => {
           if (r?.row_kind === 'variant') {
             const vc = String(r?.variant_code ?? '').trim()
             const label = String(r?.variant_label ?? '').trim()
-            if (!vc) {
-              return (
-                <Space size={6}>
-                  <Tag color="warning" style={{ marginInlineEnd: 0 }}>⚠ 兜底</Tag>
-                  <Typography.Text type="warning" style={{ fontSize: 12 }}>未指定变体</Typography.Text>
-                </Space>
-              )
-            }
-            // 紫色 monospace Tag（与 target-picker 模式 0 完全同款），后接物料名/展示串
             const display = label.replace(new RegExp(`\\(${vc}\\)$`), '').trim() || vc
             return (
-              <Space size={6}>
+              <Space size={6} wrap={false}>
                 <Tag color="purple" style={{ marginInlineEnd: 0, fontFamily: 'monospace' }}>{vc}</Tag>
                 {display && display !== vc ? <Typography.Text style={{ fontSize: 13 }}>{display}</Typography.Text> : null}
               </Space>
             )
           }
-          // 一级 model 行：[模型蓝Tag] OZU 模型名 [变体数Badge]
           const code = String(r?.model_code ?? '')
           const name = String(r?.model_name ?? '').trim()
           const vCount = Array.isArray(r?.children) ? r.children.length : 0
           return (
-            <Space size={6}>
+            <Space size={6} wrap={false}>
               <Tag color="blue" style={{ marginInlineEnd: 0 }}>模型</Tag>
               <Typography.Text strong>{code}</Typography.Text>
               {name ? (
-                <Typography.Text type="secondary" ellipsis style={{ fontSize: 12, maxWidth: 90 }}>{name}</Typography.Text>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>{name}</Typography.Text>
               ) : null}
               {vCount > 0 ? (
-                <Badge count={vCount} style={{ backgroundColor: '#52c41a' }} />
+                <Badge
+                  count={vCount}
+                  size="small"
+                  style={{ backgroundColor: '#52c41a', fontSize: 10, height: 14, lineHeight: '14px', minWidth: 14, padding: '0 4px' }}
+                />
               ) : null}
             </Space>
           )
@@ -596,13 +589,6 @@ const ProfitInsightsPage = () => {
         render: (_v: any, r) => formatQty(((r as any)?.returned_qty ?? '-') as any),
       },
       { title: '退货金额', dataIndex: 'refund_amount', width: 110, align: 'right', render: (v) => formatMoney(v as any) },
-      {
-        title: '成本可信度',
-        key: 'cost_quality',
-        width: 110,
-        align: 'center',
-        render: (_v, r: any) => (r?.row_kind === 'model' ? <CostQualityBadge badge={r.cost_quality} size="small" /> : null),
-      },
     ],
     [],
   )

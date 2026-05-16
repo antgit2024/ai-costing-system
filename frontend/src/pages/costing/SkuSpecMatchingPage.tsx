@@ -34,7 +34,7 @@ import {
 } from '@/services/planner'
 import type { SkuMaster, SpecParseResponse } from '@/types/planner'
 import { formatBeijingTime } from '@/utils/beijingTime'
-import { normalizeSpecText } from '@/utils/specNormalize'
+import { normalizeSpecForCompare as normalizeSpecForCompareImpl, normalizeSpecText } from '@/utils/specNormalize'
 
 const { Title, Text } = Typography
 
@@ -53,9 +53,10 @@ const safeString = (v: unknown): string => {
 const isFilled = (v: unknown): boolean => !!safeString(v).trim()
 
 // 规格归一化已抽到 utils/specNormalize.ts (与后端 normalize_tx_spec_text 对齐).
-// 早期这里有两份本地实现 (stripCnAttrLabels / normalizeSpecForCompare), 现统一为 normalizeSpecText.
+// 早期这里有两份本地实现 (stripCnAttrLabels / normalizeSpecForCompare), 现统一为 utils 版本.
+// 比对用 normalizeSpecForCompare (把空格也当分隔符, 更激进).
 const stripCnAttrLabels = (input: unknown): string => normalizeSpecText(input)
-const normalizeSpecForCompare = (v: unknown): string => normalizeSpecText(v)
+const normalizeSpecForCompare = (v: unknown): string => normalizeSpecForCompareImpl(v)
 
 const dimGet = (dims: any, key: string): string => {
   const v = dims?.[key]

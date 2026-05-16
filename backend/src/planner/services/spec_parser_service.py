@@ -142,6 +142,10 @@ def normalize_tx_spec_text(spec_text: str) -> str:
     - strip Chinese attribute label prefixes like "颜色分类:" / "尺寸:" / "组合形式:"
     - strip half-width bracket annotations like "[夏野漫花]" (天猫颜色名注释)
     - normalize delimiters to ';' and collapse whitespace
+
+    NOTE: 保留 token 内空格 (如 "30 * 40", "定制设计费用 详情联系客服") 因为
+    DIMENSION_PATTERN / parse_spec 依赖 \\s* 在 normalize 后的文本上跑.
+    判等价场景请用 ``normalize_for_compare``, 它在此基础上把空格也视为分隔符.
     """
     t = str(spec_text or "").strip()
     if not t:
@@ -157,6 +161,32 @@ def normalize_tx_spec_text(spec_text: str) -> str:
     t = re.sub(r"\s+", " ", t).strip()
     # trim leading/trailing separators
     t = t.strip(" ;")
+    return t
+
+
+def normalize_for_compare(spec_text: str) -> str:
+    """
+    比较友好版归一化 — 在 ``normalize_tx_spec_text`` 之上把所有空格也视为分隔符.
+
+    适用场景: 档案规格 vs 最后发货规格 的等价性判定. 不影响 parser/hashing.
+
+    举例:
+        档案 "Q25120402C皮革桌垫;80*160"     normalize_for_compare → "Q25120402C皮革桌垫;80*160"
+        发货 "Q25120402C皮革桌垫 80*160"     normalize_for_compare → "Q25120402C皮革桌垫;80*160"
+        判等价: True ✓
+
+    为什么不直接把空格放到 ``TOKEN_SPLIT_PATTERN``?
+      DIMENSION_PATTERN 等正则在 ``normalize_tx_spec_text`` 后的文本上跑, 用 \\s* 匹配
+      "30 * 40" 这种空格分隔的尺寸. 若 normalize 阶段就把空格替换成 ;, 这类尺寸识别会失效.
+      因此把"激进归一化"留给比较场景, 不污染 parse_spec / spec_hash.
+    """
+    t = normalize_tx_spec_text(spec_text)
+    if not t:
+        return ""
+    # 把空格统一为 ; (token 分隔符), 再去重连续分号
+    t = re.sub(r"\s+", ";", t)
+    t = re.sub(r";{2,}", ";", t)
+    t = t.strip(";")
     return t
 
 

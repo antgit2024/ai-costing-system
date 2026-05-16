@@ -62,10 +62,55 @@ export const normalizeSpecText = (input: unknown): string => {
   return t
 }
 
-/** 等价比较 — 归一化后字面相等 (大小写敏感, 因为有 KB8-001 这种码) */
+/**
+ * 比较友好版归一化 — 在 normalizeSpecText 之上把所有空格也视为分隔符.
+ *
+ * 适用场景: 档案规格 vs 最后发货规格 的等价性判定. 不影响 parser/hashing.
+ *
+ * 举例:
+ *   档案 "Q25120402C皮革桌垫;80*160"     → "Q25120402C皮革桌垫;80*160"
+ *   发货 "Q25120402C皮革桌垫 80*160"     → "Q25120402C皮革桌垫;80*160"
+ *   一致 ✓
+ *
+ * 与后端 `spec_parser_service.normalize_for_compare` 保持同语义.
+ */
+export const normalizeSpecForCompare = (input: unknown): string => {
+  let t = normalizeSpecText(input)
+  if (!t) return ''
+  t = t.replace(/\s+/g, ';').replace(/;{2,}/g, ';')
+  return t.replace(/^;+|;+$/g, '')
+}
+
+/**
+ * 显示用的轻量美化 — 只剥中文属性标签前缀, 其他原貌保留.
+ *
+ * 用途: 列表/抽屉里展示"最后发货规格"等天猫订单字段时, 把
+ *   "颜色分类:xxx;规格:yyy;组合形式:zzz;尺寸:..."
+ * 这种刺眼的标签前缀剥掉, 看起来与"商品规格(网店)"一致.
+ *
+ * 与 normalizeSpecText / normalizeSpecForCompare 不同:
+ *   - 后两者是给比对/解析用的, 会做激进归一化 (全角→半角 / 剥 [] / 空格→分号 / 分隔符统一为 ;)
+ *   - 本函数只剥前缀, 视觉上最接近原文, 给"看"用的
+ */
+export const prettifyDisplaySpec = (input: unknown): string => {
+  const raw = String(input ?? '').trim()
+  if (!raw) return ''
+  // 跟 ATTR_LABEL_PREFIX_PATTERN 同规则, 但单独构造一份: 不依赖前面已经做过其他 normalize
+  // (因为本函数要保留原文风格, 不替换全角/半角)
+  const RE = new RegExp(
+    `(^|[${TOKEN_SEP_CHARS}])\\s*([^${TOKEN_SEP_CHARS}:：]{1,40}[\\u4e00-\\u9fff][^${TOKEN_SEP_CHARS}:：]{0,40})\\s*[：:]\\s*`,
+    'g',
+  )
+  let t = raw.replace(RE, '$1')
+  // 修剪首尾遗留的分隔符 / 空白 (可能因为剥前缀后行首多出来)
+  t = t.replace(/^[;；\s]+/, '').replace(/[;；\s]+$/, '')
+  return t
+}
+
+/** 等价比较 — normalize_for_compare 后字面相等 (大小写敏感, 因为有 KB8-001 这种码) */
 export const isSpecTextEquivalent = (a: unknown, b: unknown): boolean => {
-  const na = normalizeSpecText(a)
-  const nb = normalizeSpecText(b)
+  const na = normalizeSpecForCompare(a)
+  const nb = normalizeSpecForCompare(b)
   if (!na && !nb) return true
   if (!na || !nb) return false
   return na === nb

@@ -497,8 +497,10 @@ def _evaluate_spec_mismatch(
             "shipment_normalized": "",
         }
 
-    erp_norm = spec_parser_service.normalize_tx_spec_text(erp_raw)
-    ship_norm = spec_parser_service.normalize_tx_spec_text(ship_raw)
+    # 等价判定用 normalize_for_compare (比 normalize_tx_spec_text 更激进, 把空格也视为分隔符)
+    # 这样能识别 "Q25120402C皮革桌垫;80*160" ↔ "Q25120402C皮革桌垫 80*160" 这种等价情况.
+    erp_norm = spec_parser_service.normalize_for_compare(erp_raw)
+    ship_norm = spec_parser_service.normalize_for_compare(ship_raw)
     if erp_norm == ship_norm:
         # normalize 后字面相等：肯定无差异
         return {
@@ -1760,8 +1762,8 @@ def _update_shipment_seen(
             mismatch_reason = judge.get("reason")
             mismatch_detail = judge.get("detail")
         else:
-            erp_norm = spec_parser_service.normalize_tx_spec_text(erp_text)
-            ship_norm = spec_parser_service.normalize_tx_spec_text(ship_text)
+            erp_norm = spec_parser_service.normalize_for_compare(erp_text)
+            ship_norm = spec_parser_service.normalize_for_compare(ship_text)
             is_mismatch = bool(erp_text and ship_text and erp_norm != ship_norm)
             mismatch_reason = "legacy_text_diff" if is_mismatch else None
             mismatch_detail = None

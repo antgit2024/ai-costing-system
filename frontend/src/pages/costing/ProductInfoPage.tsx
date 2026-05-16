@@ -19,7 +19,7 @@ import type { TargetSelection } from '@/components/common/TargetPicker'
 import ProductInfoDetailDrawer from '@/components/costing/ProductInfoDetailDrawer'
 import { PENDING_FIELD_UPDATE_SESSION_KEY, type PendingFieldUpdate } from '@/components/sku-master/FieldUpdateWorkbenchTab'
 import { computeTripleTagState, describeConflict, TAG_COLORS } from '@/utils/skuMasterTagState'
-import { normalizeSpecText } from '@/utils/specNormalize'
+import { normalizeSpecForCompare as normalizeSpecForCompareImpl, prettifyDisplaySpec } from '@/utils/specNormalize'
 
 const { Text, Title } = Typography
 
@@ -37,9 +37,9 @@ const safeString = (v: unknown): string => {
 
 const isFilled = (v: unknown): boolean => !!safeString(v).trim()
 
-// 规格归一化已抽到 utils/specNormalize.ts, 与后端 normalize_tx_spec_text 保持同语义.
-// 这里只保留一个薄包装, 便于在 JSX 内点出 normalizeSpecText 时短一点.
-const normalizeSpecForCompare = (v: unknown): string => normalizeSpecText(v)
+// 规格比对用 normalizeSpecForCompare (utils/specNormalize.ts),
+// 与后端 normalize_for_compare 保持同语义 — 比 normalize_tx_spec_text 更激进, 把空格也视为分隔符.
+const normalizeSpecForCompare = (v: unknown): string => normalizeSpecForCompareImpl(v)
 
 export default function ProductInfoPage() {
   const [page, setPage] = useState(1)
@@ -541,7 +541,7 @@ export default function ProductInfoPage() {
       },
       {
         title: (
-          <Tooltip title="最近一次发货单里抓的实际规格文本. 如果这条 SKU 从未发过货, 该列留空 (规格识别会退回到「商品规格(网店)」). 当该值与档案规格归一化后仍不同, 显示红色「规格不一致」.">
+          <Tooltip title="最近一次发货单里抓的实际规格文本. 如果这条 SKU 从未发过货, 该列留空. 展示时已剥掉天猫订单的属性标签前缀 (颜色分类:/规格:/组合形式: 等), 看起来与「商品规格(网店)」一致; 原文可点击 hover 查看. 当与档案规格归一化后仍不同, 显示红色「规格不一致」.">
             <span>
               最后发货规格{' '}
               <Text type="secondary" style={{ fontSize: 11 }}>
@@ -557,10 +557,30 @@ export default function ProductInfoPage() {
           const shop = safeString(row?.spec_text).trim()
           // 空就空 — 不再回退到 spec_text, 也不再显示「回退:网店规格」橙色标签.
           if (!ship) return <Text type="secondary">—</Text>
+          const shipPretty = prettifyDisplaySpec(ship)
+          const beautified = shipPretty !== ship
           const mismatch = !!shop && normalizeSpecForCompare(ship) !== normalizeSpecForCompare(shop)
+          const textNode = (
+            <div style={{ whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.2 }}>
+              {shipPretty || ship}
+            </div>
+          )
           return (
             <Space direction="vertical" size={2}>
-              <div style={{ whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.2 }}>{ship}</div>
+              {beautified ? (
+                <Tooltip
+                  title={
+                    <div style={{ maxWidth: 560, lineHeight: 1.6 }}>
+                      <div style={{ color: '#ccc', fontSize: 12, marginBottom: 4 }}>显示已剥前缀, 原文如下:</div>
+                      <div>{ship}</div>
+                    </div>
+                  }
+                >
+                  <span style={{ cursor: 'help' }}>{textNode}</span>
+                </Tooltip>
+              ) : (
+                textNode
+              )}
               {mismatch ? (
                 <Tooltip
                   title={
@@ -569,7 +589,7 @@ export default function ProductInfoPage() {
                         <b>档案规格 (网店)</b>: {shop}
                       </div>
                       <div style={{ marginTop: 6 }}>
-                        <b>最后发货规格</b>: {ship}
+                        <b>最后发货规格 (原文)</b>: {ship}
                       </div>
                       <div style={{ marginTop: 6, color: '#ccc' }}>
                         归一化后两边仍不同, 说明档案规格 与实际发货规格 有真实差异 (尺寸/材质/颜色等).

@@ -57,7 +57,7 @@ import {
   OVERALL_LABEL,
   TAG_COLORS,
 } from '@/utils/skuMasterTagState'
-import { normalizeSpecText } from '@/utils/specNormalize'
+import { normalizeSpecForCompare, prettifyDisplaySpec } from '@/utils/specNormalize'
 
 const { Text, Paragraph } = Typography
 const { TextArea } = Input
@@ -498,8 +498,8 @@ export default function ProductInfoDetailDrawer({ skuId, open, onClose, onUpdate
         {(() => {
           const archive = (sku.spec_text || '').trim()
           const shipment = (sku.last_shipment_spec_text || '').trim()
-          const archiveNorm = normalizeSpecText(archive)
-          const shipmentNorm = normalizeSpecText(shipment)
+          const archiveNorm = normalizeSpecForCompare(archive)
+          const shipmentNorm = normalizeSpecForCompare(shipment)
           const hasBoth = !!archive && !!shipment
           const normEqual = hasBoth && archiveNorm === shipmentNorm
           const lookDiff = hasBoth && archive !== shipment
@@ -510,7 +510,21 @@ export default function ProductInfoDetailDrawer({ skuId, open, onClose, onUpdate
               </Descriptions.Item>
               <Descriptions.Item label="最后发货规格">
                 {shipment ? (
-                  <div style={{ whiteSpace: 'normal', wordBreak: 'break-word' }}>{shipment}</div>
+                  (() => {
+                    const pretty = prettifyDisplaySpec(shipment)
+                    const beautified = pretty !== shipment
+                    return (
+                      <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                        <div style={{ whiteSpace: 'normal', wordBreak: 'break-word' }}>{pretty || shipment}</div>
+                        {beautified ? (
+                          <details style={{ fontSize: 12 }}>
+                            <summary style={{ color: '#888', cursor: 'pointer' }}>查看原文 (含天猫属性标签前缀)</summary>
+                            <div style={{ marginTop: 4, color: '#666', whiteSpace: 'normal', wordBreak: 'break-word' }}>{shipment}</div>
+                          </details>
+                        ) : null}
+                      </Space>
+                    )
+                  })()
                 ) : (
                   <Text type="secondary">— (这条 SKU 还未发过货, 识别会退回到档案规格)</Text>
                 )}

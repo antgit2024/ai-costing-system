@@ -18,7 +18,7 @@ import {
 import type { TargetSelection } from '@/components/common/TargetPicker'
 import ProductInfoDetailDrawer from '@/components/costing/ProductInfoDetailDrawer'
 import { PENDING_FIELD_UPDATE_SESSION_KEY, type PendingFieldUpdate } from '@/components/sku-master/FieldUpdateWorkbenchTab'
-import { computeTripleTagState, OVERALL_LABEL, TAG_COLORS } from '@/utils/skuMasterTagState'
+import { computeTripleTagState, TAG_COLORS } from '@/utils/skuMasterTagState'
 
 const { Text, Title } = Typography
 
@@ -272,7 +272,6 @@ export default function ProductInfoPage() {
         width: 300,
         render: (_v, row: any) => {
           const s = computeTripleTagState(row)
-          const overall = OVERALL_LABEL[s.overall]
 
           const sysTag = (() => {
             if (s.sys.kind === 'matched') {
@@ -315,10 +314,16 @@ export default function ProductInfoPage() {
               )
             }
             return (
-              <Tooltip title={`商家标签 (历史脏): 网店端历史录入的款号字符串, 没有按 KB8-001 这种规范格式. 历史几十万条认了, 新上架会按规范填.\n值: ${s.shop.value}${s.shop.rawIfChanged ? ' (raw: ' + s.shop.rawIfChanged + ')' : ''}`}>
-                <Tag color={TAG_COLORS.shop_dirty} style={{ margin: 0, fontSize: 11, maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  商 {s.shop.value.length > 12 ? s.shop.value.slice(0, 10) + '…' : s.shop.value}
-                </Tag>
+              <Tooltip
+                title={(
+                  <div style={{ lineHeight: 1.7, maxWidth: 320 }}>
+                    <div><b>商家标签: 未识别</b> — 网店历史值, 不符合标准变体码格式</div>
+                    <div style={{ marginTop: 4, color: '#ccc' }}>值: {s.shop.value}{s.shop.rawIfChanged ? ` (raw: ${s.shop.rawIfChanged})` : ''}</div>
+                    <div style={{ marginTop: 4 }}>详情/手修请打开抽屉的「三标签对账」面板</div>
+                  </div>
+                )}
+              >
+                <Tag color={TAG_COLORS.shop_dirty} style={{ margin: 0, fontSize: 11 }}>商 未识别</Tag>
               </Tooltip>
             )
           })()
@@ -346,18 +351,11 @@ export default function ProductInfoPage() {
           })()
 
           return (
-            <div>
-              <div style={{ marginBottom: 4 }}>
-                <Tooltip title={`整体: ${overall.text}`}>
-                  <span style={{ fontSize: 10, color: overall.color, fontWeight: 600 }}>{overall.text}</span>
-                </Tooltip>
-              </div>
-              <Space wrap size={4}>
-                {sysTag}
-                {shopTag}
-                {erpTag}
-              </Space>
-            </div>
+            <Space wrap size={4}>
+              {sysTag}
+              {shopTag}
+              {erpTag}
+            </Space>
           )
         },
       },
@@ -581,11 +579,11 @@ export default function ProductInfoPage() {
                   tip="shop_spec_code 符合标准变体码格式 (^[A-Z0-9]{3}-[A-Z0-9]{2,8}). 新上架按规范填的才会落到这里, 极少."
                 />
                 <Block
-                  label="🅑 商家标签 历史脏值"
+                  label="🅑 商家标签 未识别"
                   value={ov.shop_dirty}
                   sub={`${pct(ov.shop_dirty)}%`}
-                  color="#fa8c16"
-                  tip="shop_spec_code 有值但不符合规范 (Q24091001 这种历史款号). 历史几十万存量, 不强求人工梳理."
+                  color="#faad14"
+                  tip="shop_spec_code 有值但不符合规范 (Q24091001 这种历史款号), 我们识别不出标准变体码. 历史几十万存量, 不强求人工梳理, 进抽屉可手修."
                 />
                 <Block
                   label="🅔 ERP 标签 已反写"

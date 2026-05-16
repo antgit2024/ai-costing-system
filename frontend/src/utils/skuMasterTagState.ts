@@ -156,7 +156,7 @@ export const TAG_COLORS = {
   sys_bundle: 'purple', // 系统 已识别 套装模板
   sys_unmatched: 'default', // 系统 未匹配 (灰色)
   shop_clean: 'green', // 商家 干净格式 (KB8-001)
-  shop_dirty: 'orange', // 商家 脏值 (历史 Q24091001)
+  shop_dirty: 'gold', // 商家 脏值 (历史 Q24091001) — 黄色, 比橙色柔和, 仅作为"提示需关注"
   shop_empty: 'default', // 商家 没有 (灰)
   erp_synced: 'green', // ERP 已反写
   erp_mismatch: 'red', // ERP 不一致

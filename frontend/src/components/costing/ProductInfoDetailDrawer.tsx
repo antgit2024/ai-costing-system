@@ -314,9 +314,9 @@ export default function ProductInfoDetailDrawer({ skuId, open, onClose, onUpdate
               <Space direction="vertical" style={{ width: '100%' }} size={6}>
                 <Space wrap>
                   {tagState.shop.kind === 'clean' ? (
-                    <Tag color={TAG_COLORS.shop_clean}>✓ 干净 {tagState.shop.value}</Tag>
+                    <Tag color={TAG_COLORS.shop_clean}>✓ 已识别 {tagState.shop.value}</Tag>
                   ) : tagState.shop.kind === 'dirty' ? (
-                    <Tag color={TAG_COLORS.shop_dirty}>⚠ 历史脏 {tagState.shop.value}</Tag>
+                    <Tag color={TAG_COLORS.shop_dirty}>⚠ 未识别 (原值: {tagState.shop.value})</Tag>
                   ) : (
                     <Tag color={TAG_COLORS.shop_empty}>— 网店未填</Tag>
                   )}

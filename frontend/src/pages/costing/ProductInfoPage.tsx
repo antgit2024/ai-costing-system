@@ -5,10 +5,15 @@ import type { ColumnsType } from 'antd/es/table'
 import { useEffect, useMemo, useState } from 'react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 
-import { fetchBundleTemplates, fetchPublishedStandardModels, fetchSkuMaster } from '@/services/planner'
+import { fetchSkuMaster } from '@/services/planner'
 import type { SkuMaster } from '@/types/planner'
 import { formatBeijingTime } from '@/utils/beijingTime'
 import { IMAGE_FALLBACK_SVG, pickRowImageUrl } from '@/utils/imageUrl'
+import {
+  TargetPickerBrowserButton,
+  renderTargetSelectionTags,
+} from '@/components/common/TargetPicker'
+import type { TargetSelection } from '@/components/common/TargetPicker'
 
 const { Text, Title } = Typography
 
@@ -70,17 +75,11 @@ export default function ProductInfoPage() {
   const [channel, setChannel] = useState<string | undefined>(undefined)
   const [matchStatus, setMatchStatus] = useState<string | undefined>(undefined)
 
-  // “模型分类/一级/二级”：
-  // - 目标类型：any/model/bundle
-  // - 一级：模型/套装模板
-  // - 二级：套装 selector（AA/AB...）
-  const [targetKind, setTargetKind] = useState<'any' | 'model' | 'bundle'>('any')
-  const [modelSearch, setModelSearch] = useState<string>('')
-  const [boundModelId, setBoundModelId] = useState<string | undefined>(undefined)
-  const [onlyPublishedVersion, setOnlyPublishedVersion] = useState<boolean>(false)
-  const [bundleSearch, setBundleSearch] = useState<string>('')
-  const [selectedBundleTemplateId, setSelectedBundleTemplateId] = useState<string | undefined>(undefined)
-  const [selectedBundlePresetSelector, setSelectedBundlePresetSelector] = useState<string | undefined>(undefined)
+  // 绑定目标（标准模型 / 套装模板）— 统一通过浏览弹窗（target-picker-playground 模式 0）选择。
+  // - 不选 → 不按目标筛选（target_kind=any）
+  // - 选 model → bound_state=bound + bound_model_id
+  // - 选 bundle → bundle_bound_state=bound + bundle_template_id + bundle_preset_selector
+  const [pickedTarget, setPickedTarget] = useState<TargetSelection | null>(null)
 
   useEffect(() => {
     try {
@@ -90,110 +89,37 @@ export default function ProductInfoPage() {
     }
   }, [pageSize])
 
-  useEffect(() => {
-    // 切换目标类型时清理无效筛选，避免“看不见数据”的误解
-    if (targetKind === 'model') {
-      setSelectedBundleTemplateId(undefined)
-      setSelectedBundlePresetSelector(undefined)
-    } else if (targetKind === 'bundle') {
-      setBoundModelId(undefined)
-      setOnlyPublishedVersion(false)
+  // 派生后端筛选参数：把统一 TargetSelection 转成 list_sku_master 接受的扁平参数
+  const targetFilters = useMemo(() => {
+    if (!pickedTarget) {
+      return {
+        target_kind: 'any' as const,
+        bound_state: 'all' as const,
+        bound_model_id: undefined as string | undefined,
+        bundle_bound_state: undefined as 'bound' | undefined,
+        bundle_template_id: undefined as string | undefined,
+        bundle_preset_selector: undefined as string | undefined,
+      }
     }
-    setPage(1)
-  }, [targetKind])
-
-  const publishedModelsQuery = useQuery({
-    queryKey: ['product-info', 'published-standard-models', modelSearch],
-    queryFn: () => fetchPublishedStandardModels({ search: modelSearch || undefined, limit: 50 }),
-    placeholderData: keepPreviousData,
-  })
-
-  const publishedModelById = useMemo(() => {
-    const items = (publishedModelsQuery.data as any)?.items ?? []
-    const m = new Map<string, any>()
-    for (const it of items) {
-      const id = String(it?.model_id ?? '').trim()
-      if (!id) continue
-      m.set(id, it)
+    if (pickedTarget.kind === 'model') {
+      return {
+        target_kind: 'model' as const,
+        bound_state: 'bound' as const,
+        bound_model_id: pickedTarget.model_id,
+        bundle_bound_state: undefined,
+        bundle_template_id: undefined,
+        bundle_preset_selector: undefined,
+      }
     }
-    return m
-  }, [publishedModelsQuery.data])
-
-  const boundVersionId = useMemo(() => {
-    if (!onlyPublishedVersion || !boundModelId) return undefined
-    const hit = publishedModelById.get(String(boundModelId))
-    const vid = String(hit?.published_version_id ?? '').trim()
-    return vid || undefined
-  }, [onlyPublishedVersion, boundModelId, publishedModelById])
-
-  const modelOptions = useMemo(() => {
-    const items = (publishedModelsQuery.data as any)?.items ?? []
-    return (items as any[])
-      .map((m: any) => ({
-        label: `${String(m?.model_code ?? '').trim()} ${String(m?.model_name ?? '').trim()}`.trim(),
-        value: String(m?.model_id ?? '').trim(),
-      }))
-      .filter((x: any) => x.value)
-  }, [publishedModelsQuery.data])
-
-  const bundleTemplatesQuery = useQuery({
-    queryKey: ['product-info', 'bundle-templates', bundleSearch],
-    queryFn: () => fetchBundleTemplates({ search: bundleSearch || undefined, page: 1, page_size: 50 }),
-    placeholderData: keepPreviousData,
-  })
-
-  const bundleTemplates = useMemo(() => {
-    const items = (bundleTemplatesQuery.data as any)?.items
-    return Array.isArray(items) ? (items as any[]) : []
-  }, [bundleTemplatesQuery.data])
-
-  const bundleTemplateOptions = useMemo(() => {
-    return (bundleTemplates as any[])
-      .map((t) => ({
-        label: `${safeString((t as any)?.code)} ${safeString((t as any)?.name)}`.trim(),
-        value: String((t as any)?.id ?? '').trim(),
-      }))
-      .filter((x) => x.value)
-  }, [bundleTemplates])
-
-  const bundlePresetsForSelectedTemplate = useMemo(() => {
-    if (!selectedBundleTemplateId) return []
-    const hit = (bundleTemplates as any[]).find((x) => String((x as any)?.id ?? '') === String(selectedBundleTemplateId))
-    const meta = (hit as any)?.metadata ?? (hit as any)?.metadata_json ?? hit ?? {}
-    const pp = Array.isArray((meta as any)?.phrase_presets) ? (meta as any).phrase_presets : []
-    if (!pp.length) return [{ selector: 'AA', phrase: '默认', mode: 'parse', enabled: true }]
-    const normalize = (s: string) => String(s || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '')
-    return pp
-      .map((p: any) => ({
-        selector: String(p?.selector ?? '').trim().toUpperCase(),
-        phrase: String(p?.phrase ?? '').trim(),
-        mode: String(p?.mode ?? 'parse').trim(),
-        enabled: p?.enabled !== false,
-        _norm: normalize(String(p?.selector ?? '')),
-      }))
-      .filter((p: any) => !!p.selector)
-  }, [bundleTemplates, selectedBundleTemplateId])
-
-  const bundlePresetOptions = useMemo(() => {
-    return (bundlePresetsForSelectedTemplate as any[]).map((p) => {
-      const mode = String(p.mode || 'parse').trim() === 'force' ? '指定' : '解析'
-      const label = `${p.selector}（${mode}）${p.phrase ? ` ${p.phrase}` : ''}`.trim()
-      return { label, value: p.selector }
-    })
-  }, [bundlePresetsForSelectedTemplate])
-
-  useEffect(() => {
-    if (targetKind !== 'bundle') return
-    if (!selectedBundleTemplateId) {
-      setSelectedBundlePresetSelector(undefined)
-      return
+    return {
+      target_kind: 'bundle' as const,
+      bound_state: 'all' as const,
+      bound_model_id: undefined,
+      bundle_bound_state: 'bound' as const,
+      bundle_template_id: pickedTarget.bundle_id,
+      bundle_preset_selector: pickedTarget.preset_selector ?? undefined,
     }
-    const first =
-      (bundlePresetsForSelectedTemplate as any[]).find((x: any) => x?.enabled !== false) ??
-      (bundlePresetsForSelectedTemplate as any[])?.[0]
-    const sel = String((first as any)?.selector ?? '').trim().toUpperCase()
-    setSelectedBundlePresetSelector(sel || undefined)
-  }, [targetKind, selectedBundleTemplateId, bundlePresetsForSelectedTemplate])
+  }, [pickedTarget])
 
   const listQuery = useQuery({
     queryKey: [
@@ -204,11 +130,12 @@ export default function ProductInfoPage() {
       search,
       channel,
       matchStatus,
-      targetKind,
-      boundModelId,
-      boundVersionId,
-      selectedBundleTemplateId,
-      selectedBundlePresetSelector,
+      targetFilters.target_kind,
+      targetFilters.bound_state,
+      targetFilters.bound_model_id,
+      targetFilters.bundle_bound_state,
+      targetFilters.bundle_template_id,
+      targetFilters.bundle_preset_selector,
     ],
     queryFn: () =>
       fetchSkuMaster({
@@ -217,21 +144,22 @@ export default function ProductInfoPage() {
         search: search || undefined,
         channel,
         match_status: matchStatus,
-        target_kind: targetKind === 'any' ? 'any' : targetKind,
-        bound_state: targetKind === 'model' ? 'bound' : 'all',
-        bound_model_id: boundModelId,
-        bound_version_id: boundVersionId,
-        bundle_bound_state: targetKind === 'bundle' ? 'bound' : undefined,
-        bundle_template_id: selectedBundleTemplateId,
-        bundle_preset_selector: selectedBundlePresetSelector,
+        target_kind: targetFilters.target_kind,
+        bound_state: targetFilters.bound_state,
+        bound_model_id: targetFilters.bound_model_id,
+        bound_version_id: undefined,
+        bundle_bound_state: targetFilters.bundle_bound_state,
+        bundle_template_id: targetFilters.bundle_template_id,
+        bundle_preset_selector: targetFilters.bundle_preset_selector,
         preparse_state: undefined,
-        compute_total: false,
+        compute_total: true,
         include_shop_count: true,
       }),
     placeholderData: keepPreviousData,
   })
 
   const items = (listQuery.data?.items ?? []) as SkuMaster[]
+  const total = Number((listQuery.data as any)?.total ?? -1)
 
   const columns: ColumnsType<SkuMaster> = useMemo(
     () => [
@@ -292,7 +220,40 @@ export default function ProductInfoPage() {
         ellipsis: true,
         render: (v) => safeString(v) || <Text type="secondary">—</Text>,
       },
-      { title: '商家编码', dataIndex: 'shop_spec_code', width: 160, render: (v) => safeString(v) || '-' },
+      {
+        title: (
+          <Tooltip title="ERP 自定义字段「模型编码」(skuField1) 的系统侧规范值，从发货明细自动解析（如 KB8-001）。读 sku_master.shop_spec_code，反写时映射到 ERP outSkuCode。">
+            <span>
+              模型编码{' '}
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                ⓘ
+              </Text>
+            </span>
+          </Tooltip>
+        ),
+        dataIndex: 'shop_spec_code',
+        width: 160,
+        render: (v) => safeString(v) || <Text type="secondary">—</Text>,
+      },
+      {
+        title: (
+          <Tooltip title="ERP 货品档案的「外部编码」(outSkuCode)，反写目标字段。当前若为空，表示还未把「模型编码」反写到 ERP；下一轮 G1/H 反写后会回灌此列。">
+            <span>
+              ERP 外部编码{' '}
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                ⓘ
+              </Text>
+            </span>
+          </Tooltip>
+        ),
+        dataIndex: 'out_sku_code',
+        width: 160,
+        render: (v) => {
+          const s = safeString(v).trim()
+          if (!s) return <Tag color="default" style={{ fontSize: 11 }}>待反写</Tag>
+          return <Text style={{ fontFamily: 'monospace' }}>{s}</Text>
+        },
+      },
       {
         title: '分类',
         key: 'erp_category',
@@ -387,8 +348,9 @@ export default function ProductInfoPage() {
             let displayBase = base
             if (sel && !displayBase.endsWith(sel)) displayBase = `${displayBase}${sel}`
             const label = `B-${displayBase}`
-            const tpl = (bundleTemplates as any[]).find((t: any) => normalize(String(t?.code ?? '')) === base)
-            const name = String((tpl as any)?.name ?? '').trim()
+            const name = String(
+              (row as any)?.bundle_template_name ?? (meta as any)?.bundle_template_name ?? '',
+            ).trim()
             const text = name ? `${label} ${name}` : label
             return <Tag color="purple">{text}</Tag>
           })()
@@ -437,7 +399,7 @@ export default function ProductInfoPage() {
                         <b>网店规格</b>：{shop}
                       </div>
                       <div style={{ marginTop: 6, color: 'var(--ant-color-text-secondary)' }}>
-                        建议以“发货规格”为准；如网店规格长期不可信，可通过自动化/作业中心做批量修正或建立更稳定的商家编码锚点。
+                        建议以“发货规格”为准；如网店规格长期不可信，可通过自动化/作业中心做批量修正或建立更稳定的模型编码锚点。
                       </div>
                     </div>
                   }
@@ -487,7 +449,7 @@ export default function ProductInfoPage() {
       },
       { title: '更新时间', dataIndex: 'updated_at', width: 170, render: (v) => formatTime(v) },
     ],
-    [bundleTemplates],
+    [],
   )
 
   return (
@@ -525,7 +487,7 @@ export default function ProductInfoPage() {
             <Col xs={24} lg={6}>
               <Input.Search
                 allowClear
-                placeholder="搜索：条码/商家编码/规格/商品名"
+                placeholder="搜索：条码/模型编码/外部编码/规格/商品名"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 onSearch={() => setPage(1)}
@@ -567,96 +529,42 @@ export default function ProductInfoPage() {
                 ]}
               />
             </Col>
-            <Col xs={24} lg={3}>
-              <Select
-                value={targetKind}
-                onChange={(v) => setTargetKind(v)}
-                style={{ width: '100%' }}
-                options={[
-                  { value: 'any', label: '目标类型：全部' },
-                  { value: 'model', label: '目标类型：标准模型' },
-                  { value: 'bundle', label: '目标类型：套装模板' },
-                ]}
-              />
-            </Col>
-            <Col xs={24} lg={9}>
-              <Space.Compact style={{ width: '100%' }}>
-                {targetKind === 'model' ? (
+            <Col xs={24} lg={12}>
+              <Space size={8} wrap style={{ width: '100%' }}>
+                <Tooltip title="按已绑定的「标准模型 / 套装模板」筛选。点击按钮打开浏览弹窗（Tab 切换 + 一级展开二级），不知道叫什么也能浏览全候选；选完即筛。再次点击可改选或清除。">
+                  <span>
+                    <TargetPickerBrowserButton
+                      value={pickedTarget}
+                      onChange={(next) => {
+                        setPickedTarget(next)
+                        setPage(1)
+                      }}
+                      buttonProps={{ type: pickedTarget ? 'primary' : 'default' }}
+                      placeholder="按绑定目标筛选（标准模型 / 套装模板）"
+                    />
+                  </span>
+                </Tooltip>
+                {pickedTarget ? (
                   <>
-                    <Select
-                      showSearch
-                      allowClear
-                      placeholder="一级：标准模型（已发布）"
-                      value={boundModelId}
-                      options={modelOptions as any}
-                      onSearch={(q) => setModelSearch(q)}
-                      onChange={(v) => {
-                        setBoundModelId(v)
-                        setPage(1)
-                      }}
-                      // 运营常用：模型名较长，但这里主用于筛选，缩窄以给“版本”更多空间
-                      style={{ width: 160 }}
-                      filterOption={false}
-                      loading={publishedModelsQuery.isFetching}
-                    />
-                    <Select
-                      value={onlyPublishedVersion ? 'published' : 'all'}
-                      onChange={(v) => {
-                        setOnlyPublishedVersion(v === 'published')
-                        setPage(1)
-                      }}
-                      // 放大版本筛选，避免“二级：版本(全部)”挤压
-                      style={{ width: 400 }}
-                      options={[
-                        { value: 'all', label: '二级：版本(全部)' },
-                        { value: 'published', label: '二级：仅发布' },
-                      ]}
-                      disabled={!boundModelId}
-                    />
-                  </>
-                ) : targetKind === 'bundle' ? (
-                  <>
-                    <Select
-                      showSearch
-                      allowClear
-                      placeholder="一级：套装模板"
-                      value={selectedBundleTemplateId}
-                      options={bundleTemplateOptions as any}
-                      onSearch={(q) => setBundleSearch(q)}
-                      onChange={(v) => {
-                        setSelectedBundleTemplateId(v)
-                        setSelectedBundlePresetSelector(undefined)
-                        setPage(1)
-                      }}
-                      style={{ width: 160 }}
-                      filterOption={false}
-                      loading={bundleTemplatesQuery.isFetching}
-                    />
-                    <Select
-                      allowClear
-                      placeholder="二级：selector"
-                      value={selectedBundlePresetSelector}
-                      options={bundlePresetOptions as any}
-                      onChange={(v) => {
-                        setSelectedBundlePresetSelector(v)
-                        setPage(1)
-                      }}
-                      style={{ width: 400 }}
-                      disabled={!selectedBundleTemplateId}
-                    />
+                    <Text type="secondary">已选：</Text>
+                    {renderTargetSelectionTags(pickedTarget)}
                   </>
                 ) : (
-                  <Select disabled placeholder="一级/二级筛选" style={{ width: '100%' }} />
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    未筛选目标 — 显示全部商品（含未关联）
+                  </Text>
                 )}
-              </Space.Compact>
+              </Space>
             </Col>
           </Row>
         </Card>
 
         <div style={{ marginTop: 4, marginBottom: 4 }}>
           <Space size={8} align="center">
-            <Text type="secondary">当前页：{items.length} 条</Text>
-            <Tooltip title="默认不计算总数（compute_total=false），以支持后续几十万条数据仍能快速首屏加载。需要统计总数再单独加“统计总数”入口。">
+            <Text type="secondary">
+              当前页：{items.length} 条{total >= 0 ? `，全库共 ${total.toLocaleString()} 条` : ''}
+            </Text>
+            <Tooltip title="开启精确总数（compute_total=true）。商品档案是生产维护主战场，需要明确的『还有多少待维护』感知。如后续超过 100 万行性能下降，会切换到 pg_class.reltuples 近似估算。">
               <InfoCircleOutlined style={{ color: '#999' }} />
             </Tooltip>
           </Space>
@@ -673,13 +581,16 @@ export default function ProductInfoPage() {
           pagination={{
             current: page,
             pageSize,
+            total: total >= 0 ? total : undefined,
             onChange: (p) => setPage(p),
             showSizeChanger: true,
+            showQuickJumper: true,
             pageSizeOptions: [50, 100, 200, 500],
             onShowSizeChange: (_p, ps) => {
               setPage(1)
               setPageSize(ps)
             },
+            showTotal: (t, range) => `第 ${range[0]}-${range[1]} 条，共 ${t.toLocaleString()} 条`,
           }}
           locale={{ emptyText: '暂无数据（先调整筛选条件）' }}
         />

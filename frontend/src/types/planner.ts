@@ -2565,6 +2565,8 @@ export interface SkuMaster {
   match_status?: string | null
   active_version_binding_id?: string | null
   active_model_version_id?: string | null
+  /** 该条码在 shop_sku_mappings (active) 里的店铺映射数 — 仅当请求 ?include_shop_count=true 时填充. */
+  shop_count?: number | null
   bound_model_code?: string | null
   bound_model_name?: string | null
   bound_version_label?: string | null

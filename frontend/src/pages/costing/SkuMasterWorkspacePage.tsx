@@ -505,11 +505,31 @@ const SkuMasterWorkspacePage = () => {
       render: (v) => safeString(v) || '-',
     },
     {
-      title: '销售渠道',
+      title: (
+        <Tooltip
+          title={
+            <span>
+              <strong>主渠道（最近一次同步）</strong> · 取自 sku_master.channel 单值字段。
+              <br />
+              ⚠ 一个 ERP 货品可能在多个店铺发货, 此列只显示最近一次发货 / ERP 导入覆盖的渠道,
+              <br />
+              不代表该商品的所有销售渠道。完整店铺映射见 shop_sku_mappings 表 / 商品详情抽屉。
+            </span>
+          }
+          placement="top"
+        >
+          <span>
+            主渠道{' '}
+            <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+              ⓘ
+            </Typography.Text>
+          </span>
+        </Tooltip>
+      ),
       dataIndex: 'channel',
       width: 110,
       ellipsis: true,
-      render: (v) => safeString(v) || '-',
+      render: (v) => safeString(v) || <Typography.Text type="secondary">—</Typography.Text>,
     },
     {
       title: '商家编码',

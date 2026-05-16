@@ -1,5 +1,6 @@
-import { Card, Col, Input, Row, Select, Space, Table, Tag, Tooltip, Typography } from 'antd'
+import { Card, Col, Image, Input, Row, Select, Space, Table, Tag, Tooltip, Typography } from 'antd'
 import InfoCircleOutlined from '@ant-design/icons/lib/icons/InfoCircleOutlined'
+import ShopOutlined from '@ant-design/icons/lib/icons/ShopOutlined'
 import type { ColumnsType } from 'antd/es/table'
 import { useEffect, useMemo, useState } from 'react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
@@ -7,6 +8,7 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { fetchBundleTemplates, fetchPublishedStandardModels, fetchSkuMaster } from '@/services/planner'
 import type { SkuMaster } from '@/types/planner'
 import { formatBeijingTime } from '@/utils/beijingTime'
+import { IMAGE_FALLBACK_SVG, pickRowImageUrl } from '@/utils/imageUrl'
 
 const { Text, Title } = Typography
 
@@ -224,6 +226,7 @@ export default function ProductInfoPage() {
         bundle_preset_selector: selectedBundlePresetSelector,
         preparse_state: undefined,
         compute_total: false,
+        include_shop_count: true,
       }),
     placeholderData: keepPreviousData,
   })
@@ -233,14 +236,127 @@ export default function ProductInfoPage() {
   const columns: ColumnsType<SkuMaster> = useMemo(
     () => [
       {
+        title: '主图',
+        key: 'main_image',
+        width: 64,
+        fixed: 'left',
+        render: (_v, row: any) => {
+          // 缩略 96px (Retina 屏 44px 显示更清晰); 预览大图用 800px 重新拿
+          const thumbUrl = pickRowImageUrl(row?.images_json, 96)
+          const previewUrl = pickRowImageUrl(row?.images_json, 800)
+          if (!thumbUrl) {
+            return (
+              <div
+                style={{
+                  width: 44,
+                  height: 44,
+                  background: 'rgba(0,0,0,0.04)',
+                  borderRadius: 4,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <Text type="secondary" style={{ fontSize: 10 }}>
+                  无图
+                </Text>
+              </div>
+            )
+          }
+          return (
+            <Image
+              src={thumbUrl}
+              width={44}
+              height={44}
+              style={{ borderRadius: 4, objectFit: 'cover' }}
+              fallback={IMAGE_FALLBACK_SVG}
+              preview={{
+                src: previewUrl,
+                mask: <Text style={{ color: '#fff', fontSize: 11 }}>预览</Text>,
+              }}
+            />
+          )
+        },
+      },
+      {
         title: '货品条码（系统）',
         dataIndex: 'erp_sku_barcode',
         width: 170,
         fixed: 'left',
         render: (v) => <Text style={{ fontFamily: 'monospace' }}>{safeString(v).trim() || '-'}</Text>,
       },
-      { title: '店铺', dataIndex: 'channel', width: 120, render: (v) => safeString(v) || '-' },
+      {
+        title: '货品名称',
+        dataIndex: 'product_name',
+        width: 200,
+        ellipsis: true,
+        render: (v) => safeString(v) || <Text type="secondary">—</Text>,
+      },
       { title: '商家编码', dataIndex: 'shop_spec_code', width: 160, render: (v) => safeString(v) || '-' },
+      {
+        title: '分类',
+        key: 'erp_category',
+        width: 130,
+        render: (_v, row: any) => {
+          const erp = (row?.metadata_json as any)?.erp ?? {}
+          const cat = safeString(erp?.category).trim()
+          return cat ? <Tag>{cat}</Tag> : <Text type="secondary">—</Text>
+        },
+      },
+      {
+        title: (
+          <Tooltip title="ERP 货品档案里的「规格标记」(skuFlag) — 多值字段, 用于业务标签 / 分组. 来自 metadata.erp.sku_flag_synced">
+            <span>
+              规格标记{' '}
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                ⓘ
+              </Text>
+            </span>
+          </Tooltip>
+        ),
+        key: 'sku_flag',
+        width: 200,
+        render: (_v, row: any) => {
+          const erp = (row?.metadata_json as any)?.erp ?? {}
+          const flags = erp?.sku_flag_synced
+          const arr = Array.isArray(flags) ? flags : flags ? [String(flags)] : []
+          if (!arr.length) return <Text type="secondary">—</Text>
+          return (
+            <Space wrap size={[4, 4]}>
+              {arr.slice(0, 4).map((f, i) => (
+                <Tag key={i} color="purple" style={{ margin: 0 }}>
+                  {String(f)}
+                </Tag>
+              ))}
+              {arr.length > 4 ? <Text type="secondary">+{arr.length - 4}</Text> : null}
+            </Space>
+          )
+        },
+      },
+      {
+        title: (
+          <Tooltip title="该商品在 shop_sku_mappings 里的店铺映射数 (一个 ERP 货品可能在多个店铺销售). 0 = 还未在任何店铺发过货. 详细映射见详情抽屉(待开发).">
+            <span>
+              店铺数{' '}
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                ⓘ
+              </Text>
+            </span>
+          </Tooltip>
+        ),
+        key: 'shop_count',
+        width: 90,
+        align: 'center' as const,
+        render: (_v, row: any) => {
+          const n = Number(row?.shop_count ?? 0)
+          if (n === 0) return <Text type="secondary">—</Text>
+          return (
+            <Tag icon={<ShopOutlined />} color={n >= 3 ? 'green' : 'blue'}>
+              {n} 店
+            </Tag>
+          )
+        },
+      },
       {
         title: '已绑定目标',
         key: 'bound_target',
@@ -358,6 +474,17 @@ export default function ProductInfoPage() {
           return <Text>{tokensPreview(tokens)}</Text>
         },
       },
+      {
+        title: '状态',
+        key: 'status',
+        width: 110,
+        render: (_v, row: any) => {
+          const tags: React.ReactNode[] = []
+          if (row?.is_blocked) tags.push(<Tag key="b" color="red">停用</Tag>)
+          if (row?.is_deleted_at_source) tags.push(<Tag key="d" color="default">ERP 已删除</Tag>)
+          return tags.length ? <Space size={4}>{tags}</Space> : <Tag color="success">正常</Tag>
+        },
+      },
       { title: '更新时间', dataIndex: 'updated_at', width: 170, render: (v) => formatTime(v) },
     ],
     [bundleTemplates],
@@ -369,14 +496,22 @@ export default function ProductInfoPage() {
         <div>
           <Space align="center" size={8}>
             <Title level={4} style={{ margin: 0 }}>
-              商品信息（只读）
+              商品档案（ERP 视角，只读）
             </Title>
             <Tooltip
               title={
-                <div style={{ maxWidth: 520 }}>
-                  <div>口径：解析结果以“用于解析的规格（发货规格优先，缺省回退网店规格）”与预解析缓存为准。</div>
-                  <div>筛选：二级 selector 仅用于套装筛选（不改变解析口径）。</div>
-                  <div>操作入口：绑定与批量作业在“自动化/作业中心”。</div>
+                <div style={{ maxWidth: 560 }}>
+                  <div>
+                    <b>定位</b>：以 ERP 货品 (erp_sku_barcode) 为主键的商品主档；
+                    所有 ERP 字段 (分类 / 规格标记 / 主图 / 规格 / 物理参数) 已在「吉客云·货品档案 Excel 导入」铺底。
+                  </div>
+                  <div style={{ marginTop: 6 }}>
+                    <b>多店铺</b>：「店铺数」一列取自 shop_sku_mappings (active),
+                    一个 ERP 货品可在 N 个店铺销售；上面的「主渠道」筛选器只代表最后一次同步覆盖的渠道, 仅用于检索辅助。
+                  </div>
+                  <div style={{ marginTop: 6 }}>
+                    <b>解析口径</b>：「用于解析的规格」= 发货规格优先 + 缺省回退网店规格 (spec_text)；预解析缓存请见「自动化 / 作业中心」。
+                  </div>
                 </div>
               }
             >
@@ -399,7 +534,7 @@ export default function ProductInfoPage() {
             <Col xs={24} lg={3}>
               <Select
                 allowClear
-                placeholder="店铺"
+                placeholder="主渠道（最后同步）"
                 value={channel}
                 onChange={(v) => {
                   setChannel(v)
@@ -531,7 +666,7 @@ export default function ProductInfoPage() {
           rowKey={(r) => String(r.id)}
           size="small"
           bordered
-          scroll={{ x: 2200 }}
+          scroll={{ x: 2700 }}
           loading={listQuery.isFetching}
           columns={columns}
           dataSource={items}

@@ -3824,6 +3824,9 @@ class SkuMasterRead(BaseModel):
     # Costing integration summary (computed fields; avoid N+1 on frontend)
     active_version_binding_id: Optional[str] = None
     active_model_version_id: Optional[str] = None
+    # 该条码在 shop_sku_mappings 里的 active 店铺映射数 — 仅当请求 ?include_shop_count=true 时填充.
+    # 一个 ERP 货品可能在多个店铺 / platform_sku_id 下卖, 用于商品档案展示「店铺数」。
+    shop_count: Optional[int] = None
     bound_model_code: Optional[str] = None
     bound_model_name: Optional[str] = None
     bound_version_label: Optional[str] = None

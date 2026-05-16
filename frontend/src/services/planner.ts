@@ -2650,6 +2650,10 @@ export const fetchModelInsightsSummary = async (params: {
   channel?: string
   bundle_template_code?: string
   bundle_preset_selector?: string
+  /** 仅以"商家编码"为权威源做模型/变体归类（绕开 SkuModelVersionMapping 历史误绑） */
+  merchant_sku_only?: boolean
+  /** 仅保留已计价（有 BOM 成本）的发货行；与 sales/profit-dashboard 对齐口径 */
+  costed_only?: boolean
 }): Promise<ModelInsightsSummaryResponse> => {
   const response = await plannerClient.get('/analytics/models/summary', {
     params: sanitizeParams(params as Record<string, unknown>),
@@ -2739,6 +2743,8 @@ export const fetchSalesLines = async (params: {
   bundle_template_code?: string
   bundle_preset_selector?: string
   include_missing?: boolean
+  /** 仅以"商家编码"为权威源做模型/变体归类（与 daily-pnl 左表同源） */
+  merchant_sku_only?: boolean
 }): Promise<SalesLinesResponse> => {
   const response = await plannerClient.get('/analytics/sales/lines', {
     params: sanitizeParams(params as Record<string, unknown>),
@@ -2753,6 +2759,14 @@ export const fetchSalesProfitDashboard = async (
     group_by?: 'day' | 'week' | 'month'
     channel?: string
     top_n?: number
+    /** 仅以"商家编码"为权威源做模型/变体归类（与 daily-pnl 左表同源） */
+    merchant_sku_only?: boolean
+    /** 服务端按 bound_model_code 过滤 top_skus_profit/loss（daily-pnl 左→右联动） */
+    bound_model_code?: string
+    /** 服务端按 bound_variant_code 过滤 top_skus_profit/loss（与 daily-pnl 左表二级行同源） */
+    bound_variant_code?: string
+    /** 仅保留已计价（有 BOM 成本）的发货行；与 models/summary?costed_only=true 对齐口径 */
+    costed_only?: boolean
   },
   opts: PlannerRequestOptions = {},
 ): Promise<SalesProfitDashboardResponse> => {
@@ -2900,6 +2914,8 @@ export const fetchSkuMaster = async (
     compute_total?: boolean
     include_bindings?: boolean
     include_parsed_fields?: boolean
+    /** 注入 row.shop_count = 该条码在 shop_sku_mappings (active) 里的店铺映射数. */
+    include_shop_count?: boolean
   } = {},
   opts: PlannerRequestOptions = {},
 ): Promise<SkuMasterListResponse> => {

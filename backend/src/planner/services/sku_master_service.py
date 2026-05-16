@@ -1080,6 +1080,7 @@ def list_sku_master(
     compute_total: bool = True,
     include_bindings: bool = True,
     include_parsed_fields: bool = True,
+    include_shop_count: bool = False,
 ) -> Tuple[int, List[models.SkuMaster]]:
     page = max(int(page or 1), 1)
     cap = int(page_size_cap or 200)
@@ -1339,7 +1340,38 @@ def list_sku_master(
         _attach_active_version_bindings(db, items)
     if include_parsed_fields:
         _attach_parsed_fields(items)
+    if include_shop_count:
+        _attach_shop_count(db, items)
     return total, items
+
+
+def _attach_shop_count(db: Session, rows: List[models.SkuMaster]) -> None:
+    """注入 row.shop_count: int — 该条码在 shop_sku_mappings (active) 里的店铺映射条数.
+
+    一个 ERP 货品 (barcode) 可能在多个店铺 / 多个 platform_sku_id 下卖,
+    商品档案展示时需要让用户一眼看到「这个商品有多少店铺映射」。
+    """
+    if not rows:
+        return
+    barcodes = [r.erp_sku_barcode for r in rows if getattr(r, "erp_sku_barcode", None)]
+    if not barcodes:
+        for r in rows:
+            r.shop_count = 0  # type: ignore[attr-defined]
+        return
+    counts = dict(
+        db.query(
+            models.ShopSkuMapping.erp_sku_barcode,
+            func.count(models.ShopSkuMapping.id),
+        )
+        .filter(
+            models.ShopSkuMapping.erp_sku_barcode.in_(list(set(barcodes))),
+            models.ShopSkuMapping.is_archived.is_(False),
+        )
+        .group_by(models.ShopSkuMapping.erp_sku_barcode)
+        .all()
+    )
+    for r in rows:
+        r.shop_count = int(counts.get(r.erp_sku_barcode, 0) or 0)  # type: ignore[attr-defined]
 
 
 def get_sku_master(db: Session, sku_id: str) -> Optional[models.SkuMaster]:

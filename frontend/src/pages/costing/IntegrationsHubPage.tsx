@@ -46,6 +46,7 @@ import CheckCircleOutlined from '@ant-design/icons/lib/icons/CheckCircleOutlined
 
 import {
   type DeadLetterRead,
+  type JackyunGoodsSyncRequest,
   type JackyunRefundSyncRequest,
   type JackyunShipmentSyncRequest,
   type SyncRunRead,
@@ -53,6 +54,7 @@ import {
   listDeadLetters,
   listSyncRuns,
   resolveDeadLetter,
+  triggerJackyunGoodsSync,
   triggerJackyunRefundSync,
   triggerJackyunShipmentSync,
 } from '@/services/integrations'
@@ -417,6 +419,165 @@ const TriggerJackyunRefundCard = ({ onTriggered }: TriggerJackyunRefundCardProps
             <Col span={24}>
               <Form.Item name="triggered_by" label="备注/触发者">
                 <Input placeholder="例如 manual-refund-backfill-2026-04" allowClear maxLength={64} />
+              </Form.Item>
+            </Col>
+          </Row>
+        </Form>
+      </Modal>
+    </Card>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Trigger card (吉客云 ERP 货品档案 API 同步)
+// ---------------------------------------------------------------------------
+
+interface TriggerJackyunGoodsCardProps {
+  onTriggered: () => void
+}
+
+const TriggerJackyunGoodsCard = ({ onTriggered }: TriggerJackyunGoodsCardProps) => {
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [form] = Form.useForm<JackyunGoodsSyncRequest>()
+
+  const trigger = useMutation({
+    mutationFn: (body: JackyunGoodsSyncRequest) => triggerJackyunGoodsSync(body),
+    onSuccess: (resp) => {
+      const note = resp.note ? `\n${resp.note}` : ''
+      const tail = resp.effective_start_modify_time
+        ? `（实际起始 skuGmtModified = ${resp.effective_start_modify_time}）`
+        : ''
+      if (resp.mode === 'inline' && resp.run) {
+        const fc = (resp.run.result as Record<string, unknown> | null)?.fields_changed_total
+        const fcTail = typeof fc === 'number' ? ` / 字段变更 ${fc}` : ''
+        message.success(
+          `货品档案同步完成：新增 ${resp.run.inserted_rows} / 更新 ${resp.run.updated_rows} / 失败 ${resp.run.error_rows}${fcTail}${tail}`,
+        )
+      } else {
+        message.success(`已派发后台货品档案同步任务，请在下方运行历史查看进度。${tail}${note}`)
+      }
+      onTriggered()
+    },
+    onError: (err: any) => {
+      const detail = err?.response?.data?.detail ?? err?.message ?? '未知错误'
+      message.error(`触发货品档案同步失败：${detail}`)
+    },
+  })
+
+  const submitQuick = () => {
+    trigger.mutate({
+      use_watermark: true,
+      wait: false,
+      triggered_by: 'ui-quick-goods',
+    })
+  }
+
+  const submitAdvanced = async () => {
+    const values = await form.validateFields()
+    trigger.mutate({
+      ...values,
+      triggered_by: values.triggered_by || 'ui-advanced-goods',
+    })
+  }
+
+  return (
+    <Card
+      size="small"
+      title={
+        <Space>
+          <ThunderboltOutlined style={{ color: '#13c2c2' }} />
+          <span>吉客云 · ERP 货品档案 API 同步</span>
+          <Tag color="cyan">jackyun.erp.storage.goodslist.v1</Tag>
+          <Tag color="default">每晚 03:30 自动跑</Tag>
+        </Space>
+      }
+      extra={
+        <Space>
+          <Button onClick={() => setAdvancedOpen(true)}>高级参数…</Button>
+          <Button
+            type="primary"
+            icon={<ThunderboltOutlined />}
+            loading={trigger.isPending}
+            onClick={submitQuick}
+          >
+            立即同步（增量）
+          </Button>
+        </Space>
+      }
+    >
+      <Paragraph type="secondary" style={{ marginBottom: 0 }}>
+        默认增量模式：第一次会自动从「最近 7 天」拉取，后续根据
+        <Text code>水位线 (skuGmtModified)</Text> 自动续跑。同步只
+        <Text strong>窄覆盖</Text>本次返回里有值的字段——已存在的
+        <Tag color="default">production_process</Tag>
+        <Tag color="default">sku_flag</Tag>
+        等本系统字段完全保留，不会被擦掉。
+      </Paragraph>
+
+      <Modal
+        title="高级货品档案同步参数"
+        open={advancedOpen}
+        onCancel={() => setAdvancedOpen(false)}
+        onOk={submitAdvanced}
+        okText="立即触发"
+        confirmLoading={trigger.isPending}
+        width={620}
+      >
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="erp.storage.goodslist 是收费接口，按调用计费"
+          description="每页最多 200 条 (上限)；增量模式按 24h 切窗，每窗最多 2000 页 = 40 万条。日常一天的修改一般 < 500 条，单次调用即可。如果要回填超过 7 天，建议关掉 use_watermark + 给一个 30 天前的 start。"
+        />
+        <Form
+          form={form}
+          layout="vertical"
+          initialValues={{
+            page_size: 200,
+            use_watermark: true,
+            wait: false,
+          }}
+        >
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="start_modify_time" label="start_modify_time (起，含)">
+                <Input placeholder="YYYY-MM-DD HH:mm:ss，留空走水位线" allowClear />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="end_modify_time" label="end_modify_time (止，含)">
+                <Input placeholder="YYYY-MM-DD HH:mm:ss，留空到现在" allowClear />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="page_size" label="page_size (上限 200)">
+                <InputNumber min={1} max={200} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="use_watermark" label="使用水位线">
+                <Select
+                  options={[
+                    { value: true, label: '是（推荐）' },
+                    { value: false, label: '否' },
+                  ]}
+                />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="wait" label="等待完成">
+                <Select
+                  options={[
+                    { value: false, label: '否（后台跑）' },
+                    { value: true, label: '是（前台等）' },
+                  ]}
+                />
+              </Form.Item>
+            </Col>
+            <Col span={24}>
+              <Form.Item name="triggered_by" label="备注/触发者">
+                <Input placeholder="例如 manual-goods-backfill-2026-04" allowClear maxLength={64} />
               </Form.Item>
             </Col>
           </Row>
@@ -863,6 +1024,7 @@ const IntegrationsHubPage = () => {
 
       <TriggerJackyunCard onTriggered={bumpRefresh} />
       <TriggerJackyunRefundCard onTriggered={bumpRefresh} />
+      <TriggerJackyunGoodsCard onTriggered={bumpRefresh} />
       <JackyunGoodsImportCard onCommitted={bumpRefresh} />
 
       <Card size="small">

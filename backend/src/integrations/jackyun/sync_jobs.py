@@ -33,9 +33,11 @@ from ..base import (
     run_sync,
 )
 from ..base.errors import IntegrationError
+from .api import goods as goods_api
 from .api import refund as refund_api
 from .api import shipment as shipment_api
 from .client import JackyunClient, build_default_client
+from .mappers import goods as goods_mapper
 from .mappers import refund as refund_mapper
 from .mappers import shipment as shipment_mapper
 
@@ -46,6 +48,13 @@ SHIPMENT_WATERMARK_FIELD = "modifyTime"
 REFUND_SCHEMA_VERSION = "jackyun.refund.v1"
 REFUND_SYNC_TYPE = "refund_pull"
 REFUND_WATERMARK_FIELD = "gmtModified"
+
+GOODS_SCHEMA_VERSION = "jackyun.goods.v1"
+GOODS_SYNC_TYPE = "goods_pull"
+# Use sku-level modify timestamp as the watermark — it's strictly more
+# granular than goodsGmtModified (per-spec edits bump only sku timestamp).
+# advances on every per-spec edit. See ``api/goods.py`` field doc.
+GOODS_WATERMARK_FIELD = "skuGmtModified"
 
 _SHANGHAI_TZ = timezone(timedelta(hours=8))
 _TS_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -522,6 +531,214 @@ def sync_refunds(
         ctx.extra_result["max_payload_time"] = max_payload_time
         ctx.extra_result["last_window_end"] = last_window_end
         ctx.extra_result["superseded_excel_rows"] = superseded_total
+        return ctx.sync_run_id
+
+
+def _goods_payload_max_timestamp(record: dict) -> Optional[str]:
+    """Pick the highest sku/goods modify timestamp out of a goods record.
+
+    The API returns these as **millisecond epoch ints**; convert to the
+    canonical ``YYYY-MM-DD HH:MM:SS`` Shanghai-time string used by the
+    watermark machinery (must compare lexicographically with the strings
+    we send in ``startDateModifiedSku`` / ``endDateModifiedSku``).
+    """
+    if not isinstance(record, dict):
+        return None
+    candidates: List[int] = []
+    for key in ("skuGmtModified", "goodsGmtModified"):
+        v = record.get(key)
+        try:
+            ms = int(v) if v is not None else 0
+        except (TypeError, ValueError):
+            continue
+        if ms > 0:
+            candidates.append(ms)
+    if not candidates:
+        return None
+    best_ms = max(candidates)
+    try:
+        dt = datetime.fromtimestamp(best_ms / 1000, tz=timezone.utc).astimezone(_SHANGHAI_TZ)
+    except (OverflowError, OSError, ValueError):
+        return None
+    return dt.strftime(_TS_FORMAT)
+
+
+def sync_goods(
+    db: Session,
+    *,
+    start_modify_time: Optional[str] = None,
+    end_modify_time: Optional[str] = None,
+    page_size: int = goods_api.DEFAULT_PAGE_SIZE,
+    triggered_by: Optional[str] = "manual",
+    use_watermark: bool = True,
+    client: Optional[JackyunClient] = None,
+) -> str:
+    """Pull Jackyun ERP goods master (``erp.storage.goodslist``) and upsert
+    into ``sku_master``.
+
+    Mirrors ``sync_refunds`` design:
+    - Watermark: ``skuGmtModified`` (per-spec edits bump it; goods-level
+      edits bump goodsGmtModified, but the upstream sets BOTH on most
+      header changes so this is a safe choice for incremental cursor).
+    - 24h window splitter (the endpoint accepts wider windows but smaller
+      windows make watermark advance + dead-letter triage saner; matches
+      shipment / refund convention).
+    - Per-record mapper failures land in ``integration_dead_letters``;
+      the run continues. Caller surfaces dead-letter count.
+
+    First-run defaults: when watermark is empty and start_modify_time is
+    None, default to last 7 days (so a fresh deployment sees yesterday's
+    edits, not nothing). For the very first 40-万-row bootstrap we expect
+    Excel import (阶段 C) to already be complete; this incremental sync
+    just keeps things current.
+
+    Returns the ``IntegrationSyncRun.id`` for caller diagnostics.
+    """
+
+    use_client = client or build_default_client()
+
+    effective_start = start_modify_time
+    start_resolution: str
+    if effective_start is None and use_watermark:
+        effective_start = get_watermark_value(
+            db, source_system="jackyun", sync_type=GOODS_SYNC_TYPE
+        )
+        start_resolution = "watermark-resume" if effective_start else "watermark-empty"
+    else:
+        start_resolution = "explicit" if effective_start else "no-watermark-disabled"
+
+    if effective_start is None:
+        # Default to last 7 days on first run — same rationale as refunds.
+        effective_start = (
+            datetime.now(_SHANGHAI_TZ) - timedelta(days=7)
+        ).strftime("%Y-%m-%d 00:00:00")
+        if start_resolution in ("watermark-empty", "no-watermark-disabled"):
+            start_resolution = f"default-7d ({start_resolution})"
+
+    effective_end = end_modify_time
+
+    request_params = {
+        "start_modify_time": effective_start,
+        "end_modify_time": effective_end,
+        "page_size": page_size,
+        "use_watermark": bool(use_watermark),
+        "start_resolution": start_resolution,
+    }
+    windows: List[Tuple[Optional[str], Optional[str]]] = list(
+        _iter_24h_windows(effective_start, effective_end)
+    )
+    request_params["effective_windows"] = [
+        {"start": w[0], "end": w[1]} for w in windows
+    ]
+
+    with run_sync(
+        db=db,
+        source_system="jackyun",
+        sync_type=GOODS_SYNC_TYPE,
+        api_method=goods_api.DEFAULT_LIST_API,
+        request_params=request_params,
+        direction="pull",
+        triggered_by=triggered_by,
+        cursor_start=effective_start,
+    ) as ctx:
+        max_payload_time: Optional[str] = None
+        last_window_end: Optional[str] = None
+        fields_changed_total = 0
+        unchanged_total = 0
+        try:
+            for win_start, win_end in windows:
+                last_window_end = win_end or last_window_end
+                if not win_start or not win_end:
+                    continue  # iter_goods requires concrete bounds
+                for record in goods_api.iter_goods(
+                    use_client,
+                    start_date_modified_sku=win_start,
+                    end_date_modified_sku=win_end,
+                    page_size=page_size,
+                    sync_run_id=ctx.sync_run_id,
+                    db=db,
+                ):
+                    barcode = (record.get("skuBarcode") or "").strip() if isinstance(record, dict) else ""
+                    if not barcode:
+                        ctx.inc_skipped()
+                        continue
+                    try:
+                        archived = ctx.archive_record(
+                            record_type="goods",
+                            external_id=barcode,
+                            payload=record,
+                            schema_version=GOODS_SCHEMA_VERSION,
+                        )
+                        rows, inserted, updated, fields_changed = (
+                            goods_mapper.upsert_goods_from_payload(
+                                db,
+                                record=record,
+                                requested_by=f"sync_run:{ctx.sync_run_id}",
+                            )
+                        )
+                        ctx.inc_total(rows)
+                        ctx.inc_inserted(inserted)
+                        ctx.inc_updated(updated)
+                        ctx.cursor_end = barcode
+                        fields_changed_total += fields_changed
+                        if rows == 1 and inserted == 0 and updated == 0:
+                            unchanged_total += 1
+                        # Commit periodically so 40k+ deltas don't sit in
+                        # a single transaction (mirrors Excel-importer batching).
+                        if (ctx.total or 0) % 1000 == 0:
+                            db.commit()
+                        payload_ts = _goods_payload_max_timestamp(record)
+                        if payload_ts and (
+                            max_payload_time is None or payload_ts > max_payload_time
+                        ):
+                            max_payload_time = payload_ts
+                    except Exception as exc:  # noqa: BLE001 - per-record mapper isolation
+                        ctx.inc_errored()
+                        record_dead_letter(
+                            db,
+                            source_system="jackyun",
+                            api_method=goods_api.DEFAULT_LIST_API,
+                            record_type="goods",
+                            stage="mapper",
+                            sync_run_id=ctx.sync_run_id,
+                            external_id=barcode,
+                            error=exc,
+                            payload_snapshot={"goods": record},
+                            metadata={"schema_version": GOODS_SCHEMA_VERSION},
+                        )
+            # Flush whatever's left.
+            db.commit()
+        except IntegrationError:
+            raise
+
+        watermark_target = _compute_watermark_target(
+            max_payload_time=max_payload_time,
+            last_window_end=last_window_end,
+        )
+        if use_watermark and watermark_target:
+            advance_watermark_if_newer(
+                db,
+                source_system="jackyun",
+                sync_type=GOODS_SYNC_TYPE,
+                watermark_field=GOODS_WATERMARK_FIELD,
+                new_value=watermark_target,
+                sync_run_id=ctx.sync_run_id,
+                cursor_extra={
+                    "page_size": int(page_size),
+                    "window_count": len(windows),
+                },
+            )
+            ctx.cursor_end = watermark_target
+        elif effective_end:
+            ctx.cursor_end = ctx.cursor_end or effective_end
+        ctx.extra_result["watermark_value"] = watermark_target
+        ctx.extra_result["watermark_field"] = GOODS_WATERMARK_FIELD
+        ctx.extra_result["schema_version"] = GOODS_SCHEMA_VERSION
+        ctx.extra_result["window_count"] = len(windows)
+        ctx.extra_result["max_payload_time"] = max_payload_time
+        ctx.extra_result["last_window_end"] = last_window_end
+        ctx.extra_result["fields_changed_total"] = fields_changed_total
+        ctx.extra_result["unchanged_records"] = unchanged_total
         return ctx.sync_run_id
 
 

@@ -48,7 +48,10 @@ _SHANGHAI_TZ = timezone(timedelta(hours=8))
 #   wiring up refund sync; without this entry the parse_response below would
 #   classify a HTTP-200/code-200/subCode-200 response as a business failure
 #   and drop a real success into the dead-letter queue.
-_BUSINESS_OK_SUB_CODES = {"0", "0000000000", "00000000", "200"}
+# - "0030000004": ERP namespace (e.g. erp.storage.goodslist) returns
+#   subCode="0030000004" with msg="操作成功" on success. Discovered 2026-05-16
+#   while wiring up goods master sync.
+_BUSINESS_OK_SUB_CODES = {"0", "0000000000", "00000000", "200", "0030000004"}
 
 
 # Sub-codes that indicate the *caller* (key/secret/token/subscription)

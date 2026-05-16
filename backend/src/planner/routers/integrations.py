@@ -131,6 +131,45 @@ class JackyunRefundSyncRequest(BaseModel):
     triggered_by: Optional[str] = Field(None, max_length=64)
 
 
+class JackyunGoodsSyncRequest(BaseModel):
+    """Body for triggering a Jackyun ERP goods master sync.
+
+    Maps to ``erp.storage.goodslist`` (see DOC/costing/blueprints/
+    jackyun_erp_goods_master_sync_backlog.md §10.2 phase F). Time window
+    is the ``skuGmtModified`` range (per-spec edits bump it; goods-level
+    edits bump goodsGmtModified, but upstream usually sets BOTH on header
+    changes so this is the safer cursor).
+    """
+
+    start_modify_time: Optional[str] = Field(
+        None,
+        description=(
+            "Inclusive lower bound on Jackyun ``skuGmtModified`` "
+            "(``YYYY-MM-DD HH:MM:SS``). Omit + ``use_watermark=true`` to resume "
+            "from the last watermark (or last 7 days if none)."
+        ),
+    )
+    end_modify_time: Optional[str] = Field(
+        None, description="Inclusive upper bound; omit to pull up to 'now'."
+    )
+    page_size: int = Field(200, ge=1, le=200)
+    use_watermark: bool = Field(
+        True,
+        description=(
+            "When true, an empty start_modify_time resumes from the watermark; "
+            "after the run completes the watermark advances to the latest skuGmtModified."
+        ),
+    )
+    wait: bool = Field(
+        False,
+        description=(
+            "When true, run the sync inline and return when finished. "
+            "When false (default), runs in background and the response returns immediately."
+        ),
+    )
+    triggered_by: Optional[str] = Field(None, max_length=64)
+
+
 class SyncRunRead(BaseModel):
     id: str
     source_system: str
@@ -465,6 +504,62 @@ def _run_refund_sync_in_background(
         db.close()
 
 
+def _resolve_effective_goods_start(
+    db: Session,
+    *,
+    requested_start: Optional[str],
+    use_watermark: bool,
+) -> tuple[Optional[str], Optional[str]]:
+    """Goods-flavored counterpart of ``_resolve_effective_refund_start``.
+
+    Defaults to *7 days back* on first run. Excel import (phase C) is
+    expected to have already loaded the historical 40-万-row baseline,
+    so the daily incremental cursor only needs to catch recent edits.
+    """
+    if requested_start:
+        return requested_start.strip(), "explicit start_modify_time provided by caller"
+
+    if use_watermark:
+        wm = get_watermark(
+            db,
+            source_system="jackyun",
+            sync_type=jackyun_sync_jobs.GOODS_SYNC_TYPE,
+        )
+        if wm and wm.watermark_value:
+            return None, f"resuming from watermark={wm.watermark_value}"
+
+    default_start = (datetime.now(_SHANGHAI_TZ) - timedelta(days=7)).strftime("%Y-%m-%d 00:00:00")
+    return default_start, "no watermark yet; defaulting to last 7 days"
+
+
+def _run_goods_sync_in_background(
+    *,
+    start_modify_time: Optional[str],
+    end_modify_time: Optional[str],
+    page_size: int,
+    use_watermark: bool,
+    triggered_by: Optional[str],
+) -> None:
+    if planner_db.SessionLocal is None:
+        planner_db.configure_engine()
+    db: Session = planner_db.SessionLocal()  # type: ignore[misc]
+    try:
+        try:
+            jackyun_sync_jobs.sync_goods(
+                db,
+                start_modify_time=start_modify_time,
+                end_modify_time=end_modify_time,
+                page_size=page_size,
+                use_watermark=use_watermark,
+                triggered_by=triggered_by or "background",
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+    finally:
+        db.close()
+
+
 @router.post(
     "/jackyun/sync/refunds",
     response_model=TriggerSyncResponse,
@@ -530,6 +625,79 @@ def trigger_jackyun_refund_sync(
         note=(
             (note or "")
             + " | background dispatched; poll GET /integrations/sync-runs?source_system=jackyun&sync_type=refund_pull"
+        ).strip(" |"),
+    )
+
+
+@router.post(
+    "/jackyun/sync/goods",
+    response_model=TriggerSyncResponse,
+    summary="触发吉客云 ERP 货品档案同步",
+)
+def trigger_jackyun_goods_sync(
+    body: JackyunGoodsSyncRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db_session),
+) -> TriggerSyncResponse:
+    """Trigger one Jackyun ERP goods master pull (``erp.storage.goodslist``).
+
+    Same shape as the shipment / refund endpoints — see
+    ``trigger_jackyun_shipment_sync`` for the wait/background semantics.
+    Updates land in ``sku_master`` with ``metadata.source='jackyun_erp_goods_api'``;
+    pre-existing rows from Excel import keep their physical columns intact
+    except for those API explicitly overwrites (narrow overwrite).
+
+    Watermark cursor: ``skuGmtModified`` per spec. First-ever run defaults
+    to last 7 days (Excel import phase C is expected to have loaded the
+    historical baseline already).
+    """
+
+    effective_start, note = _resolve_effective_goods_start(
+        db,
+        requested_start=body.start_modify_time,
+        use_watermark=body.use_watermark,
+    )
+
+    if body.wait:
+        sync_run_id = jackyun_sync_jobs.sync_goods(
+            db,
+            start_modify_time=effective_start,
+            end_modify_time=body.end_modify_time,
+            page_size=body.page_size,
+            use_watermark=body.use_watermark,
+            triggered_by=body.triggered_by or "manual-inline",
+        )
+        db.commit()
+        run = (
+            db.query(models.IntegrationSyncRun)
+            .filter(models.IntegrationSyncRun.id == sync_run_id)
+            .one()
+        )
+        return TriggerSyncResponse(
+            sync_run_id=sync_run_id,
+            accepted=True,
+            mode="inline",
+            effective_start_modify_time=effective_start,
+            note=note,
+            run=_serialize_run(run),
+        )
+
+    background_tasks.add_task(
+        _run_goods_sync_in_background,
+        start_modify_time=effective_start,
+        end_modify_time=body.end_modify_time,
+        page_size=body.page_size,
+        use_watermark=body.use_watermark,
+        triggered_by=body.triggered_by or "manual-bg",
+    )
+    return TriggerSyncResponse(
+        sync_run_id="",
+        accepted=True,
+        mode="background",
+        effective_start_modify_time=effective_start,
+        note=(
+            (note or "")
+            + " | background dispatched; poll GET /integrations/sync-runs?source_system=jackyun&sync_type=goods_pull"
         ).strip(" |"),
     )
 

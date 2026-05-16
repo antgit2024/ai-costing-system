@@ -13,9 +13,127 @@
 
 ## 0. 当前状态
 
-本任务已**部分启动**：方案已锁定，等用户从吉客云后台导出 40 万行 + 必补 4 列后，进入实施阶段 B（详见 §10 落地节奏）。
+阶段 A / B / C / D / **F**（API 每日增量同步）全部已开发完成。详见 §10 落地节奏 / §0.1 / §0.2。
 
 更紧急的发货+成本主线仍在并行推进，本任务的代码动作不抢主线时间。
+
+### 0.2 ✅ F 阶段开发完成（2026-05-16）
+
+**接口订购** ✅ 用户已订购 `erp.storage.goodslist`，appKey=22258171，立即生效。
+
+**关键实测数据**（verified live 2026-05-16 against 用户的真实 ERP）：
+
+| 项 | 值 | 备注 |
+|---|---|---|
+| 成功子码 | `subCode="0030000004"` | ERP 命名空间专用，已加进 `client._BUSINESS_OK_SUB_CODES` |
+| pageIndex | **0-based** | 注意与 OMS 1-based 不同！ |
+| pageSize 上限 | 200 | 实测 200 行返回 ~500ms |
+| 时间戳格式 | **毫秒级 Unix epoch** | 例如 `1751707629000` = 2025-07-05 17:27 |
+| 响应 list 路径 | `result.data.goods` | 不是 `result.data` |
+| 增量参数 | `startDateModifiedSku/endDateModifiedSku` | 也支持 `*Goods` 版，我们用 sku 更细粒度 |
+| 全量游标 | `maxSkuId=0` 起步 | 用于 bootstrap，但本期 Excel 已打底 |
+
+**关键字段填充率**（n=50 实测样本，appKey=22258171）：
+
+| 字段 | 填充率 | 我们的字段 |
+|---|---|---|
+| `goodsId` / `skuId` / `goodsName` / `skuName` / `isBlockup` / `skuIsBlockup` / `isDelete` / `goodsAttr` / `cateName` / `gmtModified` | 100% | physical + metadata |
+| `skuNo` / `skuBarcode` | ~92% | physical (`spec_text`/`erp_sku_barcode`) |
+| `cateFullName` | 94% | metadata.erp.category_full |
+| `skuImgUrl` | 68% | images.spec_image |
+| `imgUrlList`（主图列表）| 8% | images.product_image |
+| `skuCode` (=outSkuCode) | **0%** | 用户 ERP 全空，待 G1 反写后才有 |
+| `flagData` (规格标记) | 0%（前 50 条）| metadata.erp.sku_flag_synced，不同分类可能有 |
+| `goodsField1-50` / `skuField1-30` | 0% | 用户未启用自定义字段 |
+
+**冒烟测试结果**（2026-05-16 14:24:51 ~ 14:24:54，3.5 秒）：
+
+```
+sync_run_id    = c43500d3-2c35-4f70-9d25-bdd365aa60bc
+status         = succeeded
+total_rows     = 643      ← 5-15 当天 ERP 修改的 SKU 数
+inserted_rows  = 0        ← Excel 已打底, 全部 update 路径
+updated_rows   = 643
+skipped_rows   = 0
+error_rows     = 0        ← 死信表 0 条
+cursor_end     = 6084486685092 (最后处理的 skuBarcode)
+```
+
+字段回灌验证：643 行里 593 行获得了 `erp_goods_id` / `erp_sku_id`（Excel 没这两个字段，全靠 API 回灌），剩下 50 行因为 `skuBarcode` 在 Excel 也没出现，是新建行（其实 inserted=0 说明并没新建，那 50 行可能是源数据本身没 goodsId — 待观察）。
+
+**已交付的代码（含路径 + 行号锚点，便于下次接续）**：
+
+| # | 文件 | 关键内容 |
+|---|---|---|
+| F-1 | `backend/src/integrations/jackyun/api/goods.py` | `iter_goods()` 增量分页 + `iter_goods_by_cursor()` 全量游标 |
+| F-2 | `backend/src/integrations/jackyun/mappers/goods.py` | `api_payload_to_row_payload()` + `upsert_goods_from_payload()` 复用窄覆盖 |
+| F-3 | `backend/src/integrations/jackyun/sync_jobs.py::sync_goods` | 24h 切窗 + 水印 `skuGmtModified` + 死信兜底 |
+| F-4 | `backend/src/planner/services/jackyun_goods_import_service.py::apply_payload_to_row` | 提升公开 + 加 `source` 参数（区分 xlsx / api） |
+| F-5 | `backend/src/planner/routers/integrations.py::trigger_jackyun_goods_sync` | `POST /integrations/jackyun/sync/goods` |
+| F-6 | `ops/systemd/user/jackyun-goods-sync.service` + `.timer` | 每晚 03:30 自动跑 + `RandomizedDelaySec=120` |
+| F-7 | `backend/scripts/cron_sync_jackyun.py` | 加 `--task=goods` |
+| F-8 | `frontend/src/pages/costing/IntegrationsHubPage.tsx::TriggerJackyunGoodsCard` | UI 卡片 + 高级参数模态框 |
+| 副作用 | `backend/src/integrations/jackyun/client.py` | `_BUSINESS_OK_SUB_CODES` 加 `"0030000004"` |
+
+**未做但下期可做（不阻塞日常运行）**：
+
+- `metadata.erp.last_api_sync_at` 时间戳（让 ProductInfoPage 显示"上次 API 同步于 X 分钟前"）
+- 接 `erp.goods.customfield`（自定义字段字典，免费 API）— 等用户启用了自定义字段后再说
+- F 跑完后自动触发 G3 反写状态回收（对比 `shop_spec_code` 与新拉回的 `out_sku_code`）
+
+### 0.1 历史记录：F 阶段订购前阻塞（2026-05-16 早上实测）
+
+实测调用，6 个候选货品 API **全部未订购**，appKey=22258171：
+
+```
+❌ 未订  erp.storage.goodslist          ← P0 必订（168 字段全字段读，本期主接口）
+❌ 未订  erp-goods.goods.sku.search     ← P1 备用（条件筛选）
+❌ 未订  erp.storage.goodsskulist
+❌ 未订  erp.goods.sku.modify.search
+❌ 未订  wms.goods.sku.list
+❌ 未订  erp-storage.goods.list
+```
+
+错误码：`[0130020310] 未查询到应用或应用未订阅此API`
+
+#### 用户操作指引（必须先做完才能进入 F 阶段开发）
+
+1. 登录 [吉客云开放平台开发者控制台](https://open.jackyun.com/developer/) （需要管理员账号）
+2. 进入"应用管理"，找到 `appKey = 22258171` 的应用
+3. 在"接口订购"或"API 订阅"页订购下面的接口（最小集）：
+
+| 必选 | 接口 method | 用途 | 备注 |
+|---|---|---|---|
+| ✔ 必订 | `erp.storage.goodslist` | 全字段读（168 字段，每日增量同步主接口） | 收费，按调用计费 |
+| ✔ 免费 | `erp.goods.customfield` | 自定义字段字典（goodsField1-50 中文翻译） | **不需订购但要接入** |
+| 后期 | `erp.goods.skuimportbatch` | 反写 ERP（写商家编码 / 自定义字段） | G4-H 阶段才用，暂不订 |
+| 备用 | `erp-goods.goods.sku.search` | 条件筛选（修改时间增量） | 字段少，可不订 |
+
+4. 订购通常立即生效或人工审核 1-3 个工作日（视吉客云策略）
+5. 订购通过后，**告诉 agent 一句"erp.storage.goodslist 订购通过了"**，开干 F 阶段（约 5 小时一次性完成）
+
+#### 订购通过后开发任务清单（已就绪，等命令）
+
+| # | 文件 | 动作 | 工作量 |
+|---|---|---|---|
+| F-1 | `backend/src/integrations/jackyun/api/goods.py` (新) | `iter_goods()` 双模分页：首次按 `maxSkuId` 游标 + 后续按 `startDateModifiedSku/Goods` 增量 | 1.5h |
+| F-2 | `backend/src/integrations/jackyun/mappers/goods.py` (新) | `api_payload_to_row_payload()`：API JSON → `RowPayload`（复用 `_apply_payload_to_row` 窄覆盖） | 1.5h |
+| F-3 | `backend/src/integrations/jackyun/sync_jobs.py` | 加 `sync_goods()`，参考 `sync_shipments` 的水印 + 24h 切窗 + 死信模式 | 1h |
+| F-4 | `backend/src/planner/services/jackyun_goods_import_service.py` | 把 `_apply_payload_to_row` 提升为公开 API（薄封装），区分 source = `jackyun_erp_goods_xlsx` / `jackyun_erp_goods_api` | 0.3h |
+| F-5 | `backend/src/planner/routers/integrations.py` | `POST /integrations/jackyun/sync/goods`，BackgroundTask 模式 | 0.3h |
+| F-6 | `ops/systemd/user/jackyun-goods-sync.service` + `.timer` (新) | 每日 03:30（晚于 shipment 02:30 / refund 03:00）+ `RandomizedDelaySec=120` | 0.2h |
+| F-7 | `scripts/cron_sync_jackyun.py` | 加 `--task=goods` 选项 | 0.2h |
+| F-8 | `frontend/src/pages/costing/IntegrationsHubPage.tsx` | "吉客云·货品档案 API 同步"卡片，与现有发货/退款卡片对齐 | 0.5h |
+| F-9 | 验证 | 调一次 `pageSize=1` 实测 → 跑一次 24h 增量 → 看死信 → 验证 ProductInfoPage 数据更新 | 0.5h |
+
+合计 ~5 小时，全部代码路径已调研清楚（见 [此次开发的 explore 调研](#)），不需要重新摸源码。
+
+#### 复用要点（避免重写）
+
+- ✅ **窄覆盖核心 100% 复用** `jackyun_goods_import_service._apply_payload_to_row`——它不依赖 Excel 列映射，只要 `RowPayload` 即可
+- ✅ **死信 / 水印 / 跑批跟踪** 100% 复用 `sync_jobs.py` 内的 `run_sync` / `archive_record` / `record_dead_letter` / `advance_watermark_if_newer`
+- ✅ **公共参数 / 签名 / 重试** 100% 复用 `JackyunClient` + `BaseClient.call`
+- ⚠ **Excel 路径下 `metadata.source = jackyun_erp_goods_xlsx`**——API 路径要改成 `jackyun_erp_goods_api`，便于审计区分
 
 ## 1. 现行发货链路真相（务必先理解）
 

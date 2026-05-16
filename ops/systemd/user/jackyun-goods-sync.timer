@@ -1,0 +1,16 @@
+[Unit]
+Description=Trigger jackyun-goods-sync.service nightly at 03:30 Asia/Shanghai
+
+[Timer]
+# 03:30 every night — 30 min after refund sync (03:00) so all three Jackyun
+# nightly jobs (shipment 02:30 → refund 03:00 → goods 03:30) stagger neatly
+# in journalctl. Server timezone is Asia/Shanghai (verified 2026-05-07).
+OnCalendar=*-*-* 03:30:00
+# If the host was off at trigger time, run as soon as it comes back up.
+Persistent=true
+# Avoid all timers firing simultaneously after a long downtime.
+RandomizedDelaySec=120
+Unit=jackyun-goods-sync.service
+
+[Install]
+WantedBy=timers.target

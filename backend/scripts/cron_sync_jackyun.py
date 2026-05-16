@@ -41,9 +41,10 @@ from src.planner import models  # noqa: E402
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Cron entry for Jackyun incremental syncs (shipment / refund).")
     p.add_argument(
-        "--task", type=str, default="shipment", choices=["shipment", "refund"],
-        help="Which Jackyun sync to run: 'shipment' (wms.order.query-info.page) or"
-             " 'refund' (omsapi-business.refund.listrefund). Default=shipment for"
+        "--task", type=str, default="shipment", choices=["shipment", "refund", "goods"],
+        help="Which Jackyun sync to run: 'shipment' (wms.order.query-info.page),"
+             " 'refund' (omsapi-business.refund.listrefund), or"
+             " 'goods' (erp.storage.goodslist). Default=shipment for"
              " backward compat with the existing systemd unit.",
     )
     p.add_argument(
@@ -57,7 +58,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--page-size", type=int, default=50,
-        help="Page size for upstream API (default=50, the upstream cap).",
+        help="Page size for upstream API (default=50; goods task overrides to 200).",
     )
     p.add_argument(
         "--no-watermark", action="store_true",
@@ -81,6 +82,18 @@ def main() -> int:
                 start_modify_time=args.start,
                 end_modify_time=args.end,
                 page_size=args.page_size,
+                triggered_by="cron-nightly",
+                use_watermark=not args.no_watermark,
+            )
+        elif args.task == "goods":
+            # erp.storage.goodslist accepts pageSize up to 200; if the caller
+            # left the default 50 (shipment-tuned), bump to 200 for throughput.
+            goods_page_size = args.page_size if args.page_size > 50 else 200
+            sync_run_id = jackyun_sync_jobs.sync_goods(
+                db,
+                start_modify_time=args.start,
+                end_modify_time=args.end,
+                page_size=goods_page_size,
                 triggered_by="cron-nightly",
                 use_watermark=not args.no_watermark,
             )

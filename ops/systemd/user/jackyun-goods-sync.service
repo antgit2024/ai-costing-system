@@ -1,0 +1,23 @@
+[Unit]
+Description=Jackyun nightly ERP goods master incremental sync (erp.storage.goodslist)
+Documentation=file:///home/admin/ai-costing-system/DOC/costing/blueprints/jackyun_erp_goods_master_sync_backlog.md
+After=planner-costing.service network.target jackyun-refund-sync.service
+# Run AFTER refunds (which run after shipments) so all three nightly jobs
+# stagger nicely; goods master changes are the most independent of the
+# three so this ordering is purely for journalctl readability.
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/admin/ai-costing-system/backend
+EnvironmentFile=/home/admin/ai-costing-system/.env
+ExecStart=/home/admin/ai-costing-system/backend/.venv/bin/python scripts/cron_sync_jackyun.py --task=goods
+StandardOutput=journal
+StandardError=journal
+# Goods master deltas are typically small (<<1000 records/day) but the
+# upstream returns 168 fields per row so each page is heavier than refunds.
+# 30 min ceiling matches shipments. If we hit this on a normal night,
+# something is wrong (likely Jackyun rate-limiting or schema change).
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=default.target

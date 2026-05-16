@@ -105,6 +105,28 @@ export const triggerJackyunRefundSync = async (
   return data
 }
 
+// ERP 货品主档 (erp.storage.goodslist) — same shape as refund. Watermark cursor
+// is skuGmtModified; first run defaults to last 7 days. Excel import (phase C)
+// is expected to have already loaded the historical baseline.
+export interface JackyunGoodsSyncRequest {
+  start_modify_time?: string | null
+  end_modify_time?: string | null
+  page_size?: number
+  use_watermark?: boolean
+  wait?: boolean
+  triggered_by?: string | null
+}
+
+export const triggerJackyunGoodsSync = async (
+  body: JackyunGoodsSyncRequest = {},
+): Promise<TriggerSyncResponse> => {
+  const { data } = await plannerClient.post<TriggerSyncResponse>(
+    '/integrations/jackyun/sync/goods',
+    body,
+  )
+  return data
+}
+
 export interface ListSyncRunsParams {
   source_system?: string
   sync_type?: string

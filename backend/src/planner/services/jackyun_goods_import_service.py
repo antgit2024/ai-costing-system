@@ -545,19 +545,27 @@ class DryRunReport:
         }
 
 
-def _apply_payload_to_row(
+def apply_payload_to_row(
     row_obj: models.SkuMaster,
     payload: RowPayload,
     *,
     is_new: bool,
     requested_by: Optional[str],
+    source: str = "jackyun_erp_goods_xlsx",
 ) -> int:
     """Apply ``payload`` to ``row_obj`` with **narrow overwrite** semantics.
 
     Only fields present in ``payload`` are touched. Fields not in payload
     (e.g. ``production_process`` when not in mapping) are left intact.
 
+    ``source`` is recorded in ``metadata.source`` on new rows for audit.
+    Callers from the API sync path should pass ``"jackyun_erp_goods_api"``
+    so dead-letter triage can distinguish Excel imports from API syncs.
+
     Returns the number of fields actually changed (for the diff report).
+
+    PUBLIC API — also imported by ``integrations.jackyun.mappers.goods`` for
+    the daily API sync line. Keep the signature backward compatible.
     """
     changed = 0
 
@@ -593,11 +601,16 @@ def _apply_payload_to_row(
             erp_meta.setdefault("imported_by", requested_by)
             meta["erp"] = erp_meta
         if is_new:
-            meta.setdefault("source", "jackyun_erp_goods_xlsx")
+            meta.setdefault("source", source)
             meta.setdefault("imported_by", requested_by)
         row_obj.metadata_json = meta
 
     return changed
+
+
+# Backward compatibility shim: keep the underscored alias so existing
+# callers in this module (and any external imports we missed) keep working.
+_apply_payload_to_row = apply_payload_to_row
 
 
 def _execute(

@@ -2960,6 +2960,28 @@ export const fetchShopSpecCodeSummary = async (
   return response.data
 }
 
+/** 三标签全局指标 — 商品档案顶部"指标条". 见 backend summarize_triple_tag_overview. */
+export interface TripleTagOverview {
+  total: number
+  sys_bound: number
+  sys_bundle: number
+  shop_clean: number
+  shop_dirty: number
+  shop_empty: number
+  erp_synced: number
+  erp_waiting: number
+  ready_to_writeback: number
+}
+
+export const fetchTripleTagOverview = async (
+  params: { channel?: string } = {},
+): Promise<TripleTagOverview> => {
+  const response = await plannerClient.get('/sku-master/triple-tag-overview', {
+    params: sanitizeParams(params),
+  })
+  return response.data
+}
+
 export const fetchSkuMasterDetail = async (skuId: string): Promise<SkuMaster> => {
   const response = await plannerClient.get(`/sku-master/${skuId}`)
   return response.data

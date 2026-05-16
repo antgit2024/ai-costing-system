@@ -1017,6 +1017,120 @@ def _apply_shop_spec_code_kind_filter(q, kind: str):
     return q
 
 
+def summarize_triple_tag_overview(
+    db: Session,
+    *,
+    channel: Optional[str] = None,
+) -> Dict[str, Any]:
+    """三标签全局指标 — 给商品档案顶部"指标条"用.
+
+    Returns:
+      {
+        "total": int,                  # 总 SKU 数
+        "sys_bound": int,              # 系统标签: 已绑定到 standard_model (反写源)
+        "sys_bundle": int,             # 系统标签: 已绑定到 bundle template
+        "shop_clean": int,             # 商家标签: 干净的标准变体码 (KB8-001 格式)
+        "shop_dirty": int,             # 商家标签: 历史脏值 (Q24091001 等)
+        "shop_empty": int,             # 商家标签: 网店未填
+        "erp_synced": int,             # ERP 标签: out_sku_code 已填 (反写已发生)
+        "erp_waiting": int,            # ERP 标签: 待反写
+        "ready_to_writeback": int,     # 已绑标模但 ERP 还没反写 (M4 的真正目标量)
+      }
+
+    设计 (2026-05-16 与用户对齐, jackyun_erp_goods_master_sync_backlog.md §17):
+    - 系统标签 = 真源 (bound_*)
+    - 商家标签 = 输入材料 (shop_spec_code, 含历史脏)
+    - ERP 标签 = 下游镜像 (out_sku_code, 反写后才有)
+    - 三者数据单向流动: 商家 → 系统 → ERP, ERP 严禁反推
+    """
+    # 商家编码"干净格式"判定 (跟前端 isShopSpecCodeClean 一致):
+    #   ^[A-Z0-9]{3}-[A-Z0-9]{2,8}(-[A-Z0-9]{1,16})?$
+    CLEAN_RE = r"^[A-Z0-9]{3}-[A-Z0-9]{2,8}(-[A-Z0-9]{1,16})?$"
+
+    base = db.query(models.SkuMaster).filter(models.SkuMaster.is_archived.is_(False))
+    if channel:
+        base = base.filter(models.SkuMaster.channel == channel)
+
+    # 单条 SQL 把 shop / erp 一起算 (110ms 实测扫 43 万行)
+    row = base.with_entities(
+        func.count().label("total"),
+        func.count().filter(models.SkuMaster.shop_spec_code.op("~")(CLEAN_RE)).label("shop_clean"),
+        func.count()
+        .filter(
+            models.SkuMaster.shop_spec_code.isnot(None),
+            models.SkuMaster.shop_spec_code != "",
+            ~models.SkuMaster.shop_spec_code.op("~")(CLEAN_RE),
+        )
+        .label("shop_dirty"),
+        func.count()
+        .filter(
+            or_(
+                models.SkuMaster.shop_spec_code.is_(None),
+                models.SkuMaster.shop_spec_code == "",
+            )
+        )
+        .label("shop_empty"),
+        func.count()
+        .filter(
+            models.SkuMaster.out_sku_code.isnot(None),
+            models.SkuMaster.out_sku_code != "",
+        )
+        .label("erp_synced"),
+    ).one()
+
+    # 系统标签 (bound) 走 EXISTS 子查询, 避免重复计数
+    bound_subq = (
+        db.query(models.SkuModelVersionMapping.id)
+        .filter(
+            models.SkuModelVersionMapping.sku_code == models.SkuMaster.erp_sku_barcode,
+            models.SkuModelVersionMapping.is_active.is_(True),
+            models.SkuModelVersionMapping.is_archived.is_(False),
+        )
+    )
+
+    sys_bound_q = base.filter(bound_subq.exists())
+    sys_bound = sys_bound_q.with_entities(func.count()).scalar() or 0
+
+    # 套装绑定: metadata.bundle_template_id 非空
+    bt_expr = func.coalesce(
+        models.SkuMaster.metadata_json["bundle_template_id"].as_string(), ""
+    )
+    sys_bundle = (
+        base.filter(bt_expr != "")
+        .with_entities(func.count())
+        .scalar()
+        or 0
+    )
+
+    # ready_to_writeback: 已绑标模 AND ERP 待反写
+    ready_to_writeback = (
+        sys_bound_q.filter(
+            or_(
+                models.SkuMaster.out_sku_code.is_(None),
+                models.SkuMaster.out_sku_code == "",
+            )
+        )
+        .with_entities(func.count())
+        .scalar()
+        or 0
+    )
+
+    total = int(row.total or 0)
+    erp_synced = int(row.erp_synced or 0)
+
+    return {
+        "total": total,
+        "sys_bound": int(sys_bound),
+        "sys_bundle": int(sys_bundle),
+        "shop_clean": int(row.shop_clean or 0),
+        "shop_dirty": int(row.shop_dirty or 0),
+        "shop_empty": int(row.shop_empty or 0),
+        "erp_synced": erp_synced,
+        "erp_waiting": total - erp_synced,
+        "ready_to_writeback": int(ready_to_writeback),
+    }
+
+
 def summarize_shop_spec_code(
     db: Session,
     *,
@@ -3935,6 +4049,16 @@ _UPDATE_BULK_ALLOWED_FIELDS: Dict[str, Dict[str, Any]] = {
         "json_path": ("erp", "sku_flag"),
         "modes": {"set", "append_unique", "remove"},
         "value_type": "string_array",
+    },
+    # 商家标签 - 网店"商家编码" 物理列. 允许编辑让运营把脏值 (Q26041801KB8-001)
+    # 手动归一化为干净的标准变体码 (KB8-001). 见 §17 三标签架构.
+    # 不允许批量"按筛选改 N 万条", 因为不同 SKU 的脏值各不相同, 必须人工逐个看;
+    # 后端不限制 (允许批量), 但 UI 上只在抽屉单条入口暴露.
+    "shop_spec_code": {
+        "kind": "physical",
+        "column": "shop_spec_code",
+        "modes": {"set"},
+        "value_type": "string_or_null",
     },
 }
 

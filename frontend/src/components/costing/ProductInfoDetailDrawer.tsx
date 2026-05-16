@@ -35,6 +35,7 @@ import {
   Table,
   Tabs,
   Tag,
+  Tooltip,
   Typography,
   message,
 } from 'antd'
@@ -49,6 +50,12 @@ import {
 import type { ShopSkuMappingRead, SkuMaster } from '@/types/planner'
 import { formatBeijingTime } from '@/utils/beijingTime'
 import { IMAGE_FALLBACK_SVG, pickRowImageUrl } from '@/utils/imageUrl'
+import {
+  computeTripleTagState,
+  isShopSpecCodeClean,
+  OVERALL_LABEL,
+  TAG_COLORS,
+} from '@/utils/skuMasterTagState'
 
 const { Text, Paragraph } = Typography
 const { TextArea } = Input
@@ -73,6 +80,7 @@ export default function ProductInfoDetailDrawer({ skuId, open, onClose, onUpdate
   const queryClient = useQueryClient()
   const [processDraft, setProcessDraft] = useState<string>('')
   const [flagDraft, setFlagDraft] = useState<string>('')
+  const [shopSpecDraft, setShopSpecDraft] = useState<string>('')
   const [requestedBy] = useState<string>('product-info-drawer')
 
   const detailQuery = useQuery({
@@ -95,8 +103,9 @@ export default function ProductInfoDetailDrawer({ skuId, open, onClose, onUpdate
   useEffect(() => {
     if (sku) {
       setProcessDraft(String(sku.production_process ?? ''))
+      setShopSpecDraft(String(sku.shop_spec_code ?? ''))
     }
-  }, [sku?.id, sku?.production_process])
+  }, [sku?.id, sku?.production_process, sku?.shop_spec_code])
 
   const currentFlags = useMemo(() => {
     const meta = (sku?.metadata_json ?? {}) as Record<string, unknown>
@@ -179,6 +188,39 @@ export default function ProductInfoDetailDrawer({ skuId, open, onClose, onUpdate
     },
   })
 
+  // shop_spec_code — 让运营把脏值 (Q26041801KB8-001) 手动改成干净的 KB8-001
+  const saveShopSpecMutation = useMutation({
+    mutationFn: async (newValue: string) => {
+      if (!sku?.id) throw new Error('no sku selected')
+      return updateSkuMasterFieldBulk(
+        {
+          field_name: 'shop_spec_code',
+          new_value: newValue.trim() || null,
+          mode: 'set',
+          sku_master_ids: [sku.id],
+          requested_by: requestedBy,
+        },
+        { timeoutMs: 30_000 },
+      )
+    },
+    onSuccess: (resp) => {
+      if (resp.errors.length > 0) {
+        message.warning(`保存有错误: ${resp.errors[0].error}`)
+      } else if (resp.skipped_no_change > 0) {
+        message.info('值未变化, 跳过')
+      } else if (resp.updated_count > 0) {
+        message.success('商家编码已保存')
+      }
+      detailQuery.refetch()
+      onUpdated?.()
+      queryClient.invalidateQueries({ queryKey: ['product-info', 'list'] })
+      queryClient.invalidateQueries({ queryKey: ['product-info', 'triple-tag-overview'] })
+    },
+    onError: (e: any) => {
+      message.error(e?.response?.data?.detail || e?.message || '保存失败')
+    },
+  })
+
   const removeFlagMutation = useMutation({
     mutationFn: async (tag: string) => {
       if (!sku?.id) throw new Error('no sku selected')
@@ -210,8 +252,151 @@ export default function ProductInfoDetailDrawer({ skuId, open, onClose, onUpdate
   // Render: Tabs
   // ============================================================
 
+  const tagState = sku ? computeTripleTagState(sku) : null
+  const erpModelCodeReg = (() => {
+    if (!sku) return ''
+    const erp = ((sku.metadata_json ?? {}) as any).erp ?? {}
+    return String(erp.model_code_reg ?? '').trim()
+  })()
+
   const tabBasic = sku ? (
     <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      {tagState ? (
+        <Card
+          size="small"
+          title={
+            <span>
+              三标签对账{' '}
+              <Text type="secondary" style={{ fontSize: 12, fontWeight: 'normal' }}>
+                — 系统是真源, 商家是输入, ERP 是反写后的下游镜像
+              </Text>
+            </span>
+          }
+        >
+          <div style={{ marginBottom: 8 }}>
+            <Tag color={OVERALL_LABEL[tagState.overall].color} style={{ fontSize: 12 }}>
+              {OVERALL_LABEL[tagState.overall].text}
+            </Tag>
+          </div>
+          <Descriptions size="small" column={1} bordered>
+            <Descriptions.Item
+              label={
+                <Tooltip title="我们系统权威识别的标准模型变体编码 — 真源. 来自商品关联绑定结果 (bound_model_code + bound_variant_code).">
+                  <span>🅂 系统标签 (真源)</span>
+                </Tooltip>
+              }
+            >
+              {tagState.sys.kind === 'matched' ? (
+                <Space>
+                  <Tag color={TAG_COLORS.sys_matched}>{tagState.sys.variantCode || tagState.sys.modelCode}</Tag>
+                  {tagState.sys.modelName ? <Text type="secondary">{tagState.sys.modelName}</Text> : null}
+                  <Text type="success" style={{ fontSize: 12 }}>✓ 可作为 ERP 反写源</Text>
+                </Space>
+              ) : tagState.sys.kind === 'bundle' ? (
+                <Space>
+                  <Tag color={TAG_COLORS.sys_bundle}>{`B-${tagState.sys.bundleCode}${tagState.sys.presetSelector || ''}`}</Tag>
+                  {tagState.sys.bundleName ? <Text type="secondary">{tagState.sys.bundleName}</Text> : null}
+                </Space>
+              ) : (
+                <Space>
+                  <Tag color={TAG_COLORS.sys_unmatched}>未匹配</Tag>
+                  <Text type="warning" style={{ fontSize: 12 }}>请到「商品关联」做绑定</Text>
+                </Space>
+              )}
+            </Descriptions.Item>
+            <Descriptions.Item
+              label={
+                <Tooltip title="网店运营在商家编码字段录入的原始值. 历史脏值 (Q24091001 这种款号) 几十万存量认了, 新上架的会按规范填.">
+                  <span>🅑 商家标签 (输入材料)</span>
+                </Tooltip>
+              }
+            >
+              <Space direction="vertical" style={{ width: '100%' }} size={6}>
+                <Space wrap>
+                  {tagState.shop.kind === 'clean' ? (
+                    <Tag color={TAG_COLORS.shop_clean}>✓ 干净 {tagState.shop.value}</Tag>
+                  ) : tagState.shop.kind === 'dirty' ? (
+                    <Tag color={TAG_COLORS.shop_dirty}>⚠ 历史脏 {tagState.shop.value}</Tag>
+                  ) : (
+                    <Tag color={TAG_COLORS.shop_empty}>— 网店未填</Tag>
+                  )}
+                  {tagState.shop.kind !== 'empty' && tagState.shop.rawIfChanged ? (
+                    <Text type="secondary" style={{ fontSize: 12 }}>(原始: {tagState.shop.rawIfChanged})</Text>
+                  ) : null}
+                </Space>
+                <Space.Compact style={{ width: '100%', maxWidth: 420 }}>
+                  <Input
+                    value={shopSpecDraft}
+                    onChange={(e) => setShopSpecDraft(e.target.value)}
+                    placeholder="可手动修正为标准变体码 (如 KB8-001)"
+                    disabled={saveShopSpecMutation.isPending}
+                    suffix={
+                      shopSpecDraft && isShopSpecCodeClean(shopSpecDraft) ? (
+                        <Tag color="green" style={{ margin: 0, fontSize: 11 }}>格式合规</Tag>
+                      ) : shopSpecDraft ? (
+                        <Tag color="orange" style={{ margin: 0, fontSize: 11 }}>非标准</Tag>
+                      ) : null
+                    }
+                  />
+                  <Button
+                    type="primary"
+                    loading={saveShopSpecMutation.isPending}
+                    onClick={() => saveShopSpecMutation.mutate(shopSpecDraft)}
+                    disabled={shopSpecDraft === (sku.shop_spec_code ?? '')}
+                  >
+                    保存
+                  </Button>
+                </Space.Compact>
+                <Text type="secondary" style={{ fontSize: 11 }}>
+                  修正脏数据为标准格式 (例: KB8-001 / OZU-004) 后, 才能被自动绑定到标准模型。
+                </Text>
+              </Space>
+            </Descriptions.Item>
+            <Descriptions.Item
+              label={
+                <Tooltip title="ERP 那边的 outSkuCode 字段值 — 反写后的下游镜像, 给工厂排产/采购/对账用. 严禁用它反推系统真源.">
+                  <span>🅔 ERP 标签 (下游镜像)</span>
+                </Tooltip>
+              }
+            >
+              {tagState.erp.kind === 'synced' ? (
+                <Space>
+                  <Tag color={TAG_COLORS.erp_synced}>✓ 已反写 {tagState.erp.value}</Tag>
+                  <Text type="secondary" style={{ fontSize: 12 }}>工厂可按此查询</Text>
+                </Space>
+              ) : tagState.erp.kind === 'mismatch' ? (
+                <Space wrap>
+                  <Tag color={TAG_COLORS.erp_mismatch}>≠ 不一致</Tag>
+                  <Text type="danger" style={{ fontSize: 12 }}>ERP={tagState.erp.erpValue} ≠ 系统期望={tagState.erp.sysExpected}</Text>
+                </Space>
+              ) : (
+                <Space>
+                  <Tag color={TAG_COLORS.erp_waiting}>— 待反写</Tag>
+                  <Text type="secondary" style={{ fontSize: 12 }}>等 M4 反写阶段把系统真源推过去</Text>
+                </Space>
+              )}
+            </Descriptions.Item>
+            {erpModelCodeReg ? (
+              <Descriptions.Item
+                label={
+                  <Tooltip title="ERP 那边原有的「模型编码(规)」字段值, 仅做参考显示. 不会自动覆盖我们的系统真源 — 用户已对齐这是铁律.">
+                    <span>ERP 原有 model_code_reg (仅参考)</span>
+                  </Tooltip>
+                }
+              >
+                <Tag color="default">{erpModelCodeReg}</Tag>
+                {tagState.sys.kind === 'matched' &&
+                erpModelCodeReg.toUpperCase() !== tagState.sys.modelCode.toUpperCase() ? (
+                  <Text type="warning" style={{ fontSize: 12, marginLeft: 6 }}>
+                    ⚠ 跟系统真源不同 (系统: {tagState.sys.modelCode}). 决定权在运营, 不自动同步.
+                  </Text>
+                ) : null}
+              </Descriptions.Item>
+            ) : null}
+          </Descriptions>
+        </Card>
+      ) : null}
+
       <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
         {(() => {
           const previewUrl = pickRowImageUrl(sku.images_json, 600)
@@ -251,16 +436,6 @@ export default function ProductInfoDetailDrawer({ skuId, open, onClose, onUpdate
             </Descriptions.Item>
             <Descriptions.Item label="货品编号">{sku.product_code || '-'}</Descriptions.Item>
             <Descriptions.Item label="主渠道">{sku.channel || '-'}</Descriptions.Item>
-            <Descriptions.Item label="模型编码 (shop_spec_code)">
-              <Text copyable={!!sku.shop_spec_code}>{sku.shop_spec_code || '-'}</Text>
-            </Descriptions.Item>
-            <Descriptions.Item label="ERP 外部编码 (out_sku_code)">
-              {sku.out_sku_code ? (
-                <Text copyable style={{ fontFamily: 'monospace' }}>{sku.out_sku_code}</Text>
-              ) : (
-                <Tag color="default">待反写</Tag>
-              )}
-            </Descriptions.Item>
             <Descriptions.Item label="ERP 货品 ID">{sku.erp_goods_id || '-'}</Descriptions.Item>
             <Descriptions.Item label="ERP 规格 ID">{sku.erp_sku_id || '-'}</Descriptions.Item>
             <Descriptions.Item label="状态" span={2}>

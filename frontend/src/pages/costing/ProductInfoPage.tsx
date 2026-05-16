@@ -7,7 +7,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 
-import { fetchSkuMaster } from '@/services/planner'
+import { fetchSkuMaster, fetchTripleTagOverview } from '@/services/planner'
 import type { SkuMaster } from '@/types/planner'
 import { formatBeijingTime } from '@/utils/beijingTime'
 import { IMAGE_FALLBACK_SVG, pickRowImageUrl } from '@/utils/imageUrl'
@@ -18,6 +18,7 @@ import {
 import type { TargetSelection } from '@/components/common/TargetPicker'
 import ProductInfoDetailDrawer from '@/components/costing/ProductInfoDetailDrawer'
 import { PENDING_FIELD_UPDATE_SESSION_KEY, type PendingFieldUpdate } from '@/components/sku-master/FieldUpdateWorkbenchTab'
+import { computeTripleTagState, OVERALL_LABEL, TAG_COLORS } from '@/utils/skuMasterTagState'
 
 const { Text, Title } = Typography
 
@@ -141,6 +142,12 @@ export default function ProductInfoPage() {
     }
   }, [pickedTarget])
 
+  const overviewQuery = useQuery({
+    queryKey: ['product-info', 'triple-tag-overview', channel],
+    queryFn: () => fetchTripleTagOverview({ channel: channel || undefined }),
+    staleTime: 60_000, // 1 分钟内不重新拉, 切筛选会重新拉
+  })
+
   const listQuery = useQuery({
     queryKey: [
       'product-info',
@@ -242,36 +249,116 @@ export default function ProductInfoPage() {
       },
       {
         title: (
-          <Tooltip title="ERP 自定义字段「模型编码」(skuField1) 的系统侧规范值，从发货明细自动解析（如 KB8-001）。读 sku_master.shop_spec_code，反写时映射到 ERP outSkuCode。">
+          <Tooltip
+            title={(
+              <div style={{ lineHeight: 1.7, maxWidth: 380 }}>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>三标签 = 模型编码的三路来源</div>
+                <div><b>🅂 系统</b> (蓝/紫) — 我们权威识别出的标准模型变体, 真源</div>
+                <div><b>🅑 商家</b> (绿=干净 / 橙=历史脏) — 网店原值 shop_spec_code</div>
+                <div><b>🅔 ERP</b> (绿=已反写 / 红=不一致 / 灰=待反写) — ERP outSkuCode</div>
+                <div style={{ marginTop: 6, color: '#999', fontSize: 12 }}>
+                  数据流: 商家 → 系统 → ERP. 系统标签是真源, ERP 不能反向覆盖.
+                </div>
+              </div>
+            )}
+          >
             <span>
-              模型编码{' '}
-              <Text type="secondary" style={{ fontSize: 11 }}>
-                ⓘ
-              </Text>
+              模型编码 (三路){' '}
+              <Text type="secondary" style={{ fontSize: 11 }}>ⓘ</Text>
             </span>
           </Tooltip>
         ),
-        dataIndex: 'shop_spec_code',
-        width: 160,
-        render: (v) => safeString(v) || <Text type="secondary">—</Text>,
-      },
-      {
-        title: (
-          <Tooltip title="ERP 货品档案的「外部编码」(outSkuCode)，反写目标字段。当前若为空，表示还未把「模型编码」反写到 ERP；下一轮 G1/H 反写后会回灌此列。">
-            <span>
-              ERP 外部编码{' '}
-              <Text type="secondary" style={{ fontSize: 11 }}>
-                ⓘ
-              </Text>
-            </span>
-          </Tooltip>
-        ),
-        dataIndex: 'out_sku_code',
-        width: 160,
-        render: (v) => {
-          const s = safeString(v).trim()
-          if (!s) return <Tag color="default" style={{ fontSize: 11 }}>待反写</Tag>
-          return <Text style={{ fontFamily: 'monospace' }}>{s}</Text>
+        key: 'triple_tag',
+        width: 300,
+        render: (_v, row: any) => {
+          const s = computeTripleTagState(row)
+          const overall = OVERALL_LABEL[s.overall]
+
+          const sysTag = (() => {
+            if (s.sys.kind === 'matched') {
+              const display = s.sys.variantCode && s.sys.variantCode !== s.sys.modelCode ? s.sys.variantCode : s.sys.modelCode
+              return (
+                <Tooltip title={`系统标签 (真源): 已绑定标准模型 ${s.sys.modelCode}${s.sys.modelName ? ' / ' + s.sys.modelName : ''}${s.sys.variantCode ? '; 变体: ' + s.sys.variantCode : ''}`}>
+                  <Tag color={TAG_COLORS.sys_matched} style={{ margin: 0, fontSize: 11 }}>系 {display}</Tag>
+                </Tooltip>
+              )
+            }
+            if (s.sys.kind === 'bundle') {
+              const label = `B-${s.sys.bundleCode}${s.sys.presetSelector || ''}`
+              return (
+                <Tooltip title={`系统标签 (真源): 已绑定套装 ${label}${s.sys.bundleName ? ' / ' + s.sys.bundleName : ''}`}>
+                  <Tag color={TAG_COLORS.sys_bundle} style={{ margin: 0, fontSize: 11 }}>系 {label}</Tag>
+                </Tooltip>
+              )
+            }
+            return (
+              <Tooltip title="系统标签: 未匹配到标准模型/套装. 是真源的缺口, 需要去商品关联做绑定.">
+                <Tag color={TAG_COLORS.sys_unmatched} style={{ margin: 0, fontSize: 11 }}>系 未匹配</Tag>
+              </Tooltip>
+            )
+          })()
+
+          const shopTag = (() => {
+            if (s.shop.kind === 'empty') {
+              return (
+                <Tooltip title="商家标签: 网店未填商家编码. 旧 SKU 居多, 新上架的会强制按规范填.">
+                  <Tag color={TAG_COLORS.shop_empty} style={{ margin: 0, fontSize: 11 }}>商 —</Tag>
+                </Tooltip>
+              )
+            }
+            if (s.shop.kind === 'clean') {
+              const tip = `商家标签 (干净): 网店端按规范录入的标准变体码${s.shop.rawIfChanged ? '\\n归一化前原值: ' + s.shop.rawIfChanged : ''}`
+              return (
+                <Tooltip title={tip.split('\\n').map((line, i) => <div key={i}>{line}</div>)}>
+                  <Tag color={TAG_COLORS.shop_clean} style={{ margin: 0, fontSize: 11 }}>商 {s.shop.value}</Tag>
+                </Tooltip>
+              )
+            }
+            return (
+              <Tooltip title={`商家标签 (历史脏): 网店端历史录入的款号字符串, 没有按 KB8-001 这种规范格式. 历史几十万条认了, 新上架会按规范填.\n值: ${s.shop.value}${s.shop.rawIfChanged ? ' (raw: ' + s.shop.rawIfChanged + ')' : ''}`}>
+                <Tag color={TAG_COLORS.shop_dirty} style={{ margin: 0, fontSize: 11, maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  商 {s.shop.value.length > 12 ? s.shop.value.slice(0, 10) + '…' : s.shop.value}
+                </Tag>
+              </Tooltip>
+            )
+          })()
+
+          const erpTag = (() => {
+            if (s.erp.kind === 'waiting') {
+              return (
+                <Tooltip title="ERP 标签: 待反写. ERP 那边的 outSkuCode 字段还是空, 等 M4 反写阶段把系统真源推过去.">
+                  <Tag color={TAG_COLORS.erp_waiting} style={{ margin: 0, fontSize: 11 }}>ERP —</Tag>
+                </Tooltip>
+              )
+            }
+            if (s.erp.kind === 'synced') {
+              return (
+                <Tooltip title={`ERP 标签: 已反写. ERP 端 outSkuCode = ${s.erp.value}, 跟系统真源一致. 工厂可按这个值查工艺/排产/采购.`}>
+                  <Tag color={TAG_COLORS.erp_synced} style={{ margin: 0, fontSize: 11 }}>ERP ✓</Tag>
+                </Tooltip>
+              )
+            }
+            return (
+              <Tooltip title={`⚠ ERP 标签: 不一致! ERP 端 outSkuCode = ${s.erp.erpValue}, 但系统真源是 ${s.erp.sysExpected}. 可能是 ERP 端有人手改了, 或本次重新绑定后未触发反写. 请人工核对.`}>
+                <Tag color={TAG_COLORS.erp_mismatch} style={{ margin: 0, fontSize: 11 }}>ERP ≠</Tag>
+              </Tooltip>
+            )
+          })()
+
+          return (
+            <div>
+              <div style={{ marginBottom: 4 }}>
+                <Tooltip title={`整体: ${overall.text}`}>
+                  <span style={{ fontSize: 10, color: overall.color, fontWeight: 600 }}>{overall.text}</span>
+                </Tooltip>
+              </div>
+              <Space wrap size={4}>
+                {sysTag}
+                {shopTag}
+                {erpTag}
+              </Space>
+            </div>
+          )
         },
       },
       {
@@ -335,56 +422,6 @@ export default function ProductInfoPage() {
             <Tag icon={<ShopOutlined />} color={n >= 3 ? 'green' : 'blue'}>
               {n} 店
             </Tag>
-          )
-        },
-      },
-      {
-        title: '已绑定目标',
-        key: 'bound_target',
-        width: 320,
-        render: (_v, row: any) => {
-          const modelCode = safeString(row?.bound_model_code).trim()
-          const modelName = safeString(row?.bound_model_name).trim()
-          const hasModel = !!modelCode
-
-          const meta = row?.metadata_json ?? {}
-          const codeRaw = safeString(row?.bundle_template_code ?? meta?.bundle_template_code).trim()
-          const selRaw = safeString(row?.bundle_preset_selector ?? meta?.bundle_preset_selector).trim().toUpperCase()
-          const hasBundle = !!codeRaw
-
-          if (!hasModel && !hasBundle) return <Tag>未关联</Tag>
-
-          const normalize = (s: string) =>
-            String(s || '')
-              .trim()
-              .toUpperCase()
-              .replace(/^([BZ])-/, '')
-              .replace(/[^A-Z0-9]/g, '')
-
-          const bundleTag = (() => {
-            if (!hasBundle) return null
-            const base = normalize(codeRaw)
-            const sel = normalize(selRaw)
-            let displayBase = base
-            if (sel && !displayBase.endsWith(sel)) displayBase = `${displayBase}${sel}`
-            const label = `B-${displayBase}`
-            const name = String(
-              (row as any)?.bundle_template_name ?? (meta as any)?.bundle_template_name ?? '',
-            ).trim()
-            const text = name ? `${label} ${name}` : label
-            return <Tag color="purple">{text}</Tag>
-          })()
-
-          return (
-            <Space direction="vertical" size={2}>
-              {hasModel ? (
-                <span>
-                  <Tag color="blue">{modelCode}</Tag>
-                  {modelName ? <span style={{ color: '#666' }}> {modelName}</span> : null}
-                </span>
-              ) : null}
-              {bundleTag}
-            </Space>
           )
         },
       },
@@ -484,15 +521,12 @@ export default function ProductInfoPage() {
               title={
                 <div style={{ maxWidth: 560 }}>
                   <div>
-                    <b>定位</b>：以 ERP 货品 (erp_sku_barcode) 为主键的商品主档；
-                    所有 ERP 字段 (分类 / 规格标记 / 主图 / 规格 / 物理参数) 已在「吉客云·货品档案 Excel 导入」铺底。
+                    <b>定位</b>：商品维护主战场。三标签 (系统/商家/ERP) 是模型编码的三路来源，
+                    系统标签是真源 (bound_variant_code), 商家是输入材料 (历史脏认了, 新上架按规范填),
+                    ERP 是反写后给工厂用的下游镜像。
                   </div>
                   <div style={{ marginTop: 6 }}>
-                    <b>多店铺</b>：「店铺数」一列取自 shop_sku_mappings (active),
-                    一个 ERP 货品可在 N 个店铺销售；上面的「主渠道」筛选器只代表最后一次同步覆盖的渠道, 仅用于检索辅助。
-                  </div>
-                  <div style={{ marginTop: 6 }}>
-                    <b>解析口径</b>：「用于解析的规格」= 发货规格优先 + 缺省回退网店规格 (spec_text)；预解析缓存请见「自动化 / 作业中心」。
+                    <b>数据流</b>: 商家 → 系统 → ERP. 严禁 ERP 反推系统 (那样会让我们系统失去权威性)。
                   </div>
                 </div>
               }
@@ -501,6 +535,76 @@ export default function ProductInfoPage() {
             </Tooltip>
           </Space>
         </div>
+
+        {(() => {
+          const ov = overviewQuery.data
+          if (!ov) {
+            return (
+              <Card size="small" loading={overviewQuery.isFetching} bodyStyle={{ padding: '10px 16px' }}>
+                <Text type="secondary">指标加载中…</Text>
+              </Card>
+            )
+          }
+          const pct = (n: number) => (ov.total > 0 ? ((100 * n) / ov.total).toFixed(1) : '0')
+          const Block: React.FC<{ label: string; value: number; sub?: string; color: string; tip: string }> = ({ label, value, sub, color, tip }) => (
+            <Tooltip title={tip}>
+              <div style={{ flex: '1 1 0', minWidth: 130, padding: '6px 10px', borderLeft: `3px solid ${color}` }}>
+                <div style={{ fontSize: 11, color: '#999' }}>{label}</div>
+                <div style={{ fontSize: 18, fontWeight: 600, color, lineHeight: 1.2 }}>
+                  {value.toLocaleString()}
+                  {sub ? <span style={{ fontSize: 11, color: '#999', marginLeft: 4, fontWeight: 400 }}>{sub}</span> : null}
+                </div>
+              </div>
+            </Tooltip>
+          )
+          return (
+            <Card size="small" bodyStyle={{ padding: '8px 12px' }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'stretch' }}>
+                <Block
+                  label="全库总数"
+                  value={ov.total}
+                  color="#666"
+                  tip="sku_master 表 is_archived=false 的总条数 (不含归档/删除)"
+                />
+                <Block
+                  label="🅂 系统标签 已绑标模"
+                  value={ov.sys_bound}
+                  sub={`${pct(ov.sys_bound)}%`}
+                  color="#1890ff"
+                  tip="已绑定到 standard_models 的 SKU 数. 这是真源, 也是 M4 反写 ERP 的真正目标量."
+                />
+                <Block
+                  label="🅑 商家标签 干净 (KB8-001)"
+                  value={ov.shop_clean}
+                  sub={`${pct(ov.shop_clean)}%`}
+                  color="#52c41a"
+                  tip="shop_spec_code 符合标准变体码格式 (^[A-Z0-9]{3}-[A-Z0-9]{2,8}). 新上架按规范填的才会落到这里, 极少."
+                />
+                <Block
+                  label="🅑 商家标签 历史脏值"
+                  value={ov.shop_dirty}
+                  sub={`${pct(ov.shop_dirty)}%`}
+                  color="#fa8c16"
+                  tip="shop_spec_code 有值但不符合规范 (Q24091001 这种历史款号). 历史几十万存量, 不强求人工梳理."
+                />
+                <Block
+                  label="🅔 ERP 标签 已反写"
+                  value={ov.erp_synced}
+                  sub={`${pct(ov.erp_synced)}%`}
+                  color="#52c41a"
+                  tip="out_sku_code 非空, 表示已经把系统真源反推到了 ERP. M4 阶段会大量增加."
+                />
+                <Block
+                  label="🚀 待反写 ERP"
+                  value={ov.ready_to_writeback}
+                  sub={`${pct(ov.ready_to_writeback)}%`}
+                  color="#722ed1"
+                  tip="已绑标模 AND ERP 端为空 = M4 反写阶段一开就能立刻处理的量. 这是真正可以闭环的目标."
+                />
+              </div>
+            </Card>
+          )
+        })()}
 
         <Card size="small">
           <Row gutter={[12, 12]}>
@@ -625,7 +729,7 @@ export default function ProductInfoPage() {
           rowKey={(r) => String(r.id)}
           size="small"
           bordered
-          scroll={{ x: 2700 }}
+          scroll={{ x: 2400 }}
           loading={listQuery.isFetching}
           columns={columns}
           dataSource={items}

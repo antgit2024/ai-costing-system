@@ -94,6 +94,21 @@ def list_sku_master(
     return {"total": total, "page": page, "page_size": page_size, "items": items}
 
 
+@router.get("/triple-tag-overview")
+def triple_tag_overview(
+    channel: str | None = None,
+    db: Session = Depends(get_db_session),
+):
+    """三标签全局指标 — 商品档案顶部"指标条"用.
+
+    系统标签 = 真源 (sys_bound 是 M4 反写的真正目标量)
+    商家标签 = 输入材料 (干净/脏/空)
+    ERP 标签 = 下游镜像 (反写完成度)
+    见 services/sku_master_service.summarize_triple_tag_overview 详细注释.
+    """
+    return sku_master_service.summarize_triple_tag_overview(db, channel=channel)
+
+
 @router.get("/shop-spec-code-summary")
 def shop_spec_code_summary(
     channel: str | None = None,

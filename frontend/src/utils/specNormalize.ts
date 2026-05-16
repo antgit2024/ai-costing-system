@@ -28,6 +28,11 @@ const ATTR_LABEL_PREFIX_PATTERN = new RegExp(
 
 const TOKEN_SPLIT_PATTERN = new RegExp(`[${TOKEN_SEP_CHARS}]`, 'g')
 
+// 半角方括号注释 [xxx] — 天猫"颜色分类"经常写成 <款号>[<颜色名>], 如 J26051102A[夏野漫花].
+// 档案规格里只有款号 → 必须剥掉 [...] 才能正确判等价.
+// 保留全角【】(常出现于规格描述, 如 "【适用于0.6~0.8米方桌】") 与圆括号 () (材质组合).
+const BRACKET_ANNOTATION_PATTERN = /\[[^\[\]\n]{1,40}\]/g
+
 /**
  * 把规格文本归一化为可比对/可哈希的形式:
  *   1) 统一全角标点 → 半角
@@ -46,6 +51,8 @@ export const normalizeSpecText = (input: unknown): string => {
     .replace(/）/g, ')')
   // 剥中文属性标签前缀, 保留前导分隔符
   t = t.replace(ATTR_LABEL_PREFIX_PATTERN, '$1')
+  // 剥半角方括号注释 (颜色名等天猫附加注释)
+  t = t.replace(BRACKET_ANNOTATION_PATTERN, '')
   // 分隔符统一
   t = t.replace(TOKEN_SPLIT_PATTERN, ';').replace(/;{2,}/g, ';')
   t = t.replace(/\s+/g, ' ').trim()

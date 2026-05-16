@@ -47,6 +47,18 @@ ATTR_LABEL_PREFIX_PATTERN = re.compile(
     r"(^|[;\n\r,，/\\\+|、])\s*(?P<label>[^;\n\r,，/\\\+|、:：]{1,40}[\u4e00-\u9fff][^;\n\r,，/\\\+|、:：]{0,40})\s*[：:]\s*"
 )
 
+# 半角方括号注释 [xxx] — 天猫"颜色分类"经常写成 <款号>[<颜色名>], 如 J26051102A[夏野漫花].
+# 档案规格里只有款号 J26051102A, 两边语义等价但字面不同 → 必须剥掉 [...] 才能正确判等价.
+#
+# 设计边界:
+#   - 只剥半角 []. 全角 【】保留 (常出现于规格描述, 如 "【适用于0.6~0.8米方桌】", 两边都有, 不能误删)
+#   - 长度 1-40, 不含嵌套 []. 避免误剥极端长串注释.
+#   - 不剥圆括号 () / （）, 因为可能是材质组合 (如 "(1542)+(8222黑)") 这种语义性内容.
+# 风险:
+#   - 极端情况 "KB8[001]" 这种款号会被剥成 "KB8". 但实际款号编号都用 "-" 分隔
+#     (KB8-001 / OZU-002), 没人用 [001] 这种写法. 风险可控.
+BRACKET_ANNOTATION_PATTERN = re.compile(r"\[[^\[\]\n]{1,40}\]")
+
 # Common, business-meaningful phrases that should be emitted as standalone tokens
 # when present in the ERP “交易规格（spec_text）”. Keep this list conservative to
 # avoid token explosion and accidental over-matching.
@@ -128,6 +140,7 @@ def normalize_tx_spec_text(spec_text: str) -> str:
     Normalize transaction spec_text for parsing & hashing:
     - unify punctuation (fullwidth → ascii)
     - strip Chinese attribute label prefixes like "颜色分类:" / "尺寸:" / "组合形式:"
+    - strip half-width bracket annotations like "[夏野漫花]" (天猫颜色名注释)
     - normalize delimiters to ';' and collapse whitespace
     """
     t = str(spec_text or "").strip()
@@ -136,6 +149,8 @@ def normalize_tx_spec_text(spec_text: str) -> str:
     t = t.replace("；", ";").replace("：", ":").replace("，", ",").replace("（", "(").replace("）", ")")
     # strip Chinese attribute labels, keep separators
     t = ATTR_LABEL_PREFIX_PATTERN.sub(r"\1", t)
+    # strip half-width bracket annotations (颜色名等天猫附加注释)
+    t = BRACKET_ANNOTATION_PATTERN.sub("", t)
     # normalize delimiters to ';' for stable hashing
     t = TOKEN_SPLIT_PATTERN.sub(";", t)
     t = re.sub(r";{2,}", ";", t)

@@ -1,6 +1,5 @@
 import { Button, Card, Col, Form, Image, Input, Modal, Radio, Row, Select, Space, Table, Tag, Tooltip, Typography, message } from 'antd'
 import InfoCircleOutlined from '@ant-design/icons/lib/icons/InfoCircleOutlined'
-import ShopOutlined from '@ant-design/icons/lib/icons/ShopOutlined'
 import EditOutlined from '@ant-design/icons/lib/icons/EditOutlined'
 import type { ColumnsType } from 'antd/es/table'
 import { useEffect, useMemo, useState } from 'react'
@@ -55,6 +54,11 @@ export default function ProductInfoPage() {
   })
 
   const [search, setSearch] = useState<string>('')
+  // 跟 sku-master 候选列表对齐: 包含/排除关键词 + 范围 (规格 / 商品名). 用户填了 → 直接落到 list API,
+  // 也会跟着 sessionStorage 同步到 商品关联 (FieldUpdateWorkbenchTab 已支持 include_terms/exclude_terms/match_scope).
+  const [includeTerms, setIncludeTerms] = useState<string>('')
+  const [excludeTerms, setExcludeTerms] = useState<string>('')
+  const [matchScope, setMatchScope] = useState<'spec' | 'name' | 'spec_or_name'>('spec_or_name')
   const [channel, setChannel] = useState<string | undefined>(undefined)
   const [matchStatus, setMatchStatus] = useState<string | undefined>(undefined)
 
@@ -133,6 +137,9 @@ export default function ProductInfoPage() {
       page,
       pageSize,
       search,
+      includeTerms,
+      excludeTerms,
+      matchScope,
       channel,
       matchStatus,
       targetFilters.target_kind,
@@ -147,6 +154,9 @@ export default function ProductInfoPage() {
         page,
         page_size: pageSize,
         search: search || undefined,
+        include_terms: includeTerms || undefined,
+        exclude_terms: excludeTerms || undefined,
+        match_scope: matchScope,
         channel,
         match_status: matchStatus,
         target_kind: targetFilters.target_kind,
@@ -469,16 +479,7 @@ export default function ProductInfoPage() {
           )
         },
       },
-      {
-        title: '分类',
-        key: 'erp_category',
-        width: 130,
-        render: (_v, row: any) => {
-          const erp = (row?.metadata_json as any)?.erp ?? {}
-          const cat = safeString(erp?.category).trim()
-          return cat ? <Tag>{cat}</Tag> : <Text type="secondary">—</Text>
-        },
-      },
+      // 「分类」「店铺数」已移到行抽屉的"基础"区, 列表不再展示.
       {
         title: (
           <Tooltip title="ERP 货品档案里的「规格标记」(skuFlag) — 多值字段, 用于业务标签 / 分组. 来自 metadata.erp.sku_flag_synced">
@@ -511,98 +512,76 @@ export default function ProductInfoPage() {
       },
       {
         title: (
-          <Tooltip title="该商品在 shop_sku_mappings 里的店铺映射数 (一个 ERP 货品可能在多个店铺销售). 0 = 还未在任何店铺发过货. 详细映射见详情抽屉(待开发).">
+          <Tooltip title="档案 = 商品规格(网店) spec_text; 发货 = last_shipment_spec_text. 发货展示时已剥天猫属性标签前缀, hover 可看原文. 两边归一化后仍不同, 显示红色「规格不一致」.">
             <span>
-              店铺数{' '}
+              规格 (档案 / 发货){' '}
               <Text type="secondary" style={{ fontSize: 11 }}>
                 ⓘ
               </Text>
             </span>
           </Tooltip>
         ),
-        key: 'shop_count',
-        width: 90,
-        align: 'center' as const,
+        key: 'spec_combined',
+        width: 560,
         render: (_v, row: any) => {
-          const n = Number(row?.shop_count ?? 0)
-          if (n === 0) return <Text type="secondary">—</Text>
-          return (
-            <Tag icon={<ShopOutlined />} color={n >= 3 ? 'green' : 'blue'}>
-              {n} 店
-            </Tag>
-          )
-        },
-      },
-      {
-        title: '商品规格（网店）',
-        dataIndex: 'spec_text',
-        width: 520,
-        render: (v) => <div style={{ whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.2 }}>{safeString(v) || '-'}</div>,
-      },
-      {
-        title: (
-          <Tooltip title="最近一次发货单里抓的实际规格文本. 如果这条 SKU 从未发过货, 该列留空. 展示时已剥掉天猫订单的属性标签前缀 (颜色分类:/规格:/组合形式: 等), 看起来与「商品规格(网店)」一致; 原文可点击 hover 查看. 当与档案规格归一化后仍不同, 显示红色「规格不一致」.">
-            <span>
-              最后发货规格{' '}
-              <Text type="secondary" style={{ fontSize: 11 }}>
-                ⓘ
-              </Text>
-            </span>
-          </Tooltip>
-        ),
-        dataIndex: 'last_shipment_spec_text',
-        width: 360,
-        render: (v, row: any) => {
-          const ship = safeString(v).trim()
           const shop = safeString(row?.spec_text).trim()
-          // 空就空 — 不再回退到 spec_text, 也不再显示「回退:网店规格」橙色标签.
-          if (!ship) return <Text type="secondary">—</Text>
-          const shipPretty = prettifyDisplaySpec(ship)
-          const beautified = shipPretty !== ship
-          const mismatch = !!shop && normalizeSpecForCompare(ship) !== normalizeSpecForCompare(shop)
-          const textNode = (
-            <div style={{ whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.2 }}>
-              {shipPretty || ship}
-            </div>
-          )
+          const ship = safeString(row?.last_shipment_spec_text).trim()
+          const shipPretty = ship ? prettifyDisplaySpec(ship) : ''
+          const beautified = !!ship && shipPretty !== ship
+          const mismatch = !!shop && !!ship && normalizeSpecForCompare(ship) !== normalizeSpecForCompare(shop)
+          // 两行布局: 档案 / 发货. 任一为空就只显示有的那行.
           return (
-            <Space direction="vertical" size={2}>
-              {beautified ? (
-                <Tooltip
-                  title={
-                    <div style={{ maxWidth: 560, lineHeight: 1.6 }}>
-                      <div style={{ color: '#ccc', fontSize: 12, marginBottom: 4 }}>显示已剥前缀, 原文如下:</div>
-                      <div>{ship}</div>
-                    </div>
-                  }
-                >
-                  <span style={{ cursor: 'help' }}>{textNode}</span>
-                </Tooltip>
-              ) : (
-                textNode
-              )}
-              {mismatch ? (
-                <Tooltip
-                  title={
-                    <div style={{ maxWidth: 560 }}>
-                      <div>
-                        <b>档案规格 (网店)</b>: {shop}
-                      </div>
-                      <div style={{ marginTop: 6 }}>
-                        <b>最后发货规格 (原文)</b>: {ship}
-                      </div>
-                      <div style={{ marginTop: 6, color: '#ccc' }}>
-                        归一化后两边仍不同, 说明档案规格 与实际发货规格 有真实差异 (尺寸/材质/颜色等).
-                        系统会以「最后发货规格」为识别真源. 详见行抽屉的「规格对照」区.
-                      </div>
-                    </div>
-                  }
-                >
-                  <Tag color="red" style={{ cursor: 'help' }}>
-                    规格不一致
-                  </Tag>
-                </Tooltip>
+            <Space direction="vertical" size={2} style={{ width: '100%' }}>
+              {shop ? (
+                <div style={{ display: 'flex', gap: 6, lineHeight: 1.3 }}>
+                  <Text type="secondary" style={{ flexShrink: 0, fontSize: 12 }}>档案:</Text>
+                  <div style={{ whiteSpace: 'normal', wordBreak: 'break-word' }}>{shop}</div>
+                </div>
               ) : null}
+              {ship ? (
+                <div style={{ display: 'flex', gap: 6, lineHeight: 1.3, alignItems: 'flex-start' }}>
+                  <Text type="secondary" style={{ flexShrink: 0, fontSize: 12 }}>发货:</Text>
+                  <div style={{ whiteSpace: 'normal', wordBreak: 'break-word', flex: 1 }}>
+                    {beautified ? (
+                      <Tooltip
+                        title={
+                          <div style={{ maxWidth: 560, lineHeight: 1.6 }}>
+                            <div style={{ color: '#ccc', fontSize: 12, marginBottom: 4 }}>显示已剥前缀, 原文如下:</div>
+                            <div>{ship}</div>
+                          </div>
+                        }
+                      >
+                        <span style={{ cursor: 'help' }}>{shipPretty}</span>
+                      </Tooltip>
+                    ) : (
+                      shipPretty
+                    )}
+                    {mismatch ? (
+                      <Tooltip
+                        title={
+                          <div style={{ maxWidth: 560 }}>
+                            <div>
+                              <b>档案规格 (网店)</b>: {shop}
+                            </div>
+                            <div style={{ marginTop: 6 }}>
+                              <b>最后发货规格 (原文)</b>: {ship}
+                            </div>
+                            <div style={{ marginTop: 6, color: '#ccc' }}>
+                              归一化后两边仍不同, 说明档案规格 与实际发货规格 有真实差异 (尺寸/材质/颜色等).
+                              系统会以「最后发货规格」为识别真源. 详见行抽屉的「规格对照」区.
+                            </div>
+                          </div>
+                        }
+                      >
+                        <Tag color="red" style={{ cursor: 'help', marginLeft: 6 }}>
+                          规格不一致
+                        </Tag>
+                      </Tooltip>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+              {!shop && !ship ? <Text type="secondary">—</Text> : null}
             </Space>
           )
         },
@@ -753,6 +732,49 @@ export default function ProductInfoPage() {
                 onChange={(e) => setSearch(e.target.value)}
                 onSearch={() => setPage(1)}
               />
+            </Col>
+            <Col xs={24} lg={4}>
+              <Tooltip title="包含关键词 (AND, 多词空格分隔). 与「按筛选维护字段」共用一套条件 → 跳转商品关联时一起带过去, 跨页落库.">
+                <Input
+                  allowClear
+                  placeholder="包含关键词 (AND, 多词空格)"
+                  value={includeTerms}
+                  onChange={(e) => {
+                    setIncludeTerms(e.target.value)
+                    setPage(1)
+                  }}
+                />
+              </Tooltip>
+            </Col>
+            <Col xs={24} lg={4}>
+              <Tooltip title="排除关键词 (AND NOT). 命中即排除. 同样会同步到商品关联.">
+                <Input
+                  allowClear
+                  placeholder="排除关键词 (AND NOT)"
+                  value={excludeTerms}
+                  onChange={(e) => {
+                    setExcludeTerms(e.target.value)
+                    setPage(1)
+                  }}
+                />
+              </Tooltip>
+            </Col>
+            <Col xs={24} lg={3}>
+              <Tooltip title="包含/排除关键词的匹配范围: 商品规格 (spec_text) / 商品名称 (product_name) / 两者. 小红书/京东等渠道 spec 常 写到 name 里, 用「两者」覆盖更全.">
+                <Select
+                  value={matchScope}
+                  onChange={(v) => {
+                    setMatchScope(v)
+                    setPage(1)
+                  }}
+                  style={{ width: '100%' }}
+                  options={[
+                    { value: 'spec_or_name', label: '规格 + 商品名' },
+                    { value: 'spec', label: '仅商品规格' },
+                    { value: 'name', label: '仅商品名称' },
+                  ]}
+                />
+              </Tooltip>
             </Col>
             <Col xs={24} lg={3}>
               <Select
@@ -955,8 +977,13 @@ export default function ProductInfoPage() {
             }
             if (batchByFilterMode) {
               // 跨页按筛选: 把当前筛选参数全部带过去
+              // include_terms/exclude_terms/match_scope 是给跨页"按筛选"维护字段用的最强抓手 —
+              // 商品关联那边 FieldUpdateWorkbenchTab 已支持这三个 (buildBaseRequest 会原样转发).
               pending.filters = {
                 search: search || undefined,
+                include_terms: includeTerms || undefined,
+                exclude_terms: excludeTerms || undefined,
+                match_scope: matchScope,
                 channel,
                 match_status: matchStatus,
                 bound_state: targetFilters.bound_state,

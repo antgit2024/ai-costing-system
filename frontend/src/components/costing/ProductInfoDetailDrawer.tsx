@@ -472,6 +472,32 @@ export default function ProductInfoDetailDrawer({ skuId, open, onClose, onUpdate
             <Descriptions.Item label="主渠道">{sku.channel || '-'}</Descriptions.Item>
             <Descriptions.Item label="ERP 货品 ID">{sku.erp_goods_id || '-'}</Descriptions.Item>
             <Descriptions.Item label="ERP 规格 ID">{sku.erp_sku_id || '-'}</Descriptions.Item>
+            <Descriptions.Item
+              label={
+                <Tooltip title="ERP 货品档案的「分类」(category). 用于业务/财务的分组与统计.">
+                  <span>分类</span>
+                </Tooltip>
+              }
+            >
+              {(() => {
+                const erp = ((sku.metadata_json ?? {}) as any)?.erp ?? {}
+                const cat = String(erp?.category ?? '').trim()
+                return cat ? <Tag>{cat}</Tag> : <Text type="secondary">—</Text>
+              })()}
+            </Descriptions.Item>
+            <Descriptions.Item
+              label={
+                <Tooltip title="该 ERP 货品在 shop_sku_mappings 里的店铺映射数 (一个 ERP 货品可在多店铺销售). 0 = 未在任何店铺发过货.">
+                  <span>店铺数</span>
+                </Tooltip>
+              }
+            >
+              {(() => {
+                const n = Number((sku as any)?.shop_count ?? 0)
+                if (n === 0) return <Text type="secondary">—</Text>
+                return <Tag color={n >= 3 ? 'green' : 'blue'}>{n} 店</Tag>
+              })()}
+            </Descriptions.Item>
             <Descriptions.Item label="状态" span={2}>
               {sku.is_blocked ? <Tag color="red">停用</Tag> : null}
               {sku.is_deleted_at_source ? <Tag color="default">ERP 已删除</Tag> : null}

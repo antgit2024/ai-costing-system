@@ -2908,7 +2908,7 @@ export const fetchSkuMaster = async (
     data_quality_status?: 'spu_attribute_conflict' | 'ok'
     include_terms?: string
     exclude_terms?: string
-    match_scope?: 'spec' | 'name'
+    match_scope?: 'spec' | 'name' | 'spec_or_name' | 'auto'
     excluded_sku_master_ids?: string[]
     shop_spec_code_kind?: 'structured' | 'platform' | 'malformed' | 'nonstructured' | 'empty' | 'all'
     compute_total?: boolean

@@ -176,6 +176,10 @@ export interface JackyunGoodsImportInspectResponse {
   unmatched_col_idx: number[]
   missing_required: string[]
   candidate_names: Record<string, string[]>
+  /** ``{target_field: 中文首选名}`` — used by UI to render Select labels in CN. */
+  target_labels: Record<string, string>
+  /** Required target fields (e.g. ``["erp_sku_barcode"]``); UI marks them with red ★. */
+  required_targets: string[]
   physical_targets: string[]
   metadata_targets: string[]
   image_targets: string[]

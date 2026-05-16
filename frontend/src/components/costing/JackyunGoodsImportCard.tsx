@@ -17,8 +17,11 @@ import {
   Card,
   Checkbox,
   Modal,
+  Progress,
+  Result,
   Select,
   Space,
+  Statistic,
   Steps,
   Table,
   Tag,
@@ -28,7 +31,10 @@ import {
 import type { ColumnsType } from 'antd/es/table'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
+import CheckCircleOutlined from '@ant-design/icons/lib/icons/CheckCircleOutlined'
+import CloseCircleOutlined from '@ant-design/icons/lib/icons/CloseCircleOutlined'
 import InboxOutlined from '@ant-design/icons/lib/icons/InboxOutlined'
+import LoadingOutlined from '@ant-design/icons/lib/icons/LoadingOutlined'
 import ThunderboltOutlined from '@ant-design/icons/lib/icons/ThunderboltOutlined'
 
 import {
@@ -99,7 +105,11 @@ const JackyunGoodsImportCard = ({ onCommitted }: JackyunGoodsImportCardProps) =>
       }))
       setMappingRows(rows)
       if (data.missing_required.length > 0) {
-        message.warning(`缺少必填字段：${data.missing_required.join(', ')}`)
+        const labels = (data.target_labels ?? {}) as Record<string, string>
+        const pretty = data.missing_required
+          .map((t) => `${labels[t] ?? t}（${t}）`)
+          .join('、')
+        message.warning(`缺少必填字段：${pretty}`)
       } else {
         message.success(
           `识别成功：${data.total_cols} 列，${Object.keys(data.auto_mapping).length} 列自动匹配`,
@@ -191,13 +201,34 @@ const JackyunGoodsImportCard = ({ onCommitted }: JackyunGoodsImportCardProps) =>
 
   const commitReport = commitQuery.data?.run?.result as Record<string, any> | null | undefined
 
+  // 把 onCommitted 放进 ref 避免父组件 inline arrow function 引用变化导致 useEffect 死循环
+  // (React Error #185: bumpRefresh 是父组件每次 render 新建的箭头函数, 旧版把它列入 useEffect 依赖
+  //  导致 status='success' 后无限触发 setRefreshKey → 子组件 props 变 → effect 再触发).
+  const onCommittedRef = useRef(onCommitted)
   useEffect(() => {
-    if (commitQuery.data?.run?.status === 'success' && onCommitted) {
-      onCommitted()
+    onCommittedRef.current = onCommitted
+  }, [onCommitted])
+  const commitNotifiedRef = useRef(false)
+  useEffect(() => {
+    if (
+      commitQuery.data?.run?.status === 'success' &&
+      !commitNotifiedRef.current
+    ) {
+      commitNotifiedRef.current = true
+      onCommittedRef.current?.()
     }
-  }, [commitQuery.data?.run?.status, onCommitted])
+  }, [commitQuery.data?.run?.status])
+
+  // 中文 label / 必填集 (从 inspect 响应拿)
+  const targetLabels = inspect?.target_labels ?? {}
+  const requiredSet = useMemo(
+    () => new Set(inspect?.required_targets ?? []),
+    [inspect?.required_targets],
+  )
+  const labelFor = (target: string): string => targetLabels[target] ?? target
 
   // ---- target field options for the mapping column ----
+  // option label 渲染为 "中文 · english_key"; 必填字段前面加红 ★。
   const targetOptions = useMemo(() => {
     if (!inspect) return []
     const all = [
@@ -207,11 +238,38 @@ const JackyunGoodsImportCard = ({ onCommitted }: JackyunGoodsImportCardProps) =>
       ...inspect.dimension_targets,
     ]
     const opts = Array.from(new Set(all))
-      .sort()
-      .map((t) => ({ value: t, label: t }))
-    opts.unshift({ value: IGNORE_TARGET, label: '— 忽略此列 —' })
+      .sort((a, b) => {
+        const aReq = requiredSet.has(a) ? 0 : 1
+        const bReq = requiredSet.has(b) ? 0 : 1
+        if (aReq !== bReq) return aReq - bReq
+        return labelFor(a).localeCompare(labelFor(b), 'zh-Hans-CN')
+      })
+      .map((t) => {
+        const cn = labelFor(t)
+        const isReq = requiredSet.has(t)
+        return {
+          value: t,
+          // 已选状态的显示值 (Select 默认 fallback)
+          label: (
+            <span>
+              {isReq ? <span style={{ color: '#ff4d4f', marginRight: 4 }}>★</span> : null}
+              <span>{cn}</span>
+              <Text type="secondary" style={{ marginLeft: 6, fontFamily: 'monospace', fontSize: 11 }}>
+                {t}
+              </Text>
+            </span>
+          ),
+          // 用于 Select 的过滤搜索
+          searchText: `${cn} ${t}`,
+        }
+      })
+    opts.unshift({
+      value: IGNORE_TARGET,
+      label: <Text type="secondary">— 忽略此列 —</Text>,
+      searchText: '忽略 ignore',
+    })
     return opts
-  }, [inspect])
+  }, [inspect, requiredSet])
 
   const usedTargets = useMemo(
     () => new Set(mappingRows.map((r) => r.target_field).filter((t) => t !== IGNORE_TARGET)),
@@ -223,18 +281,26 @@ const JackyunGoodsImportCard = ({ onCommitted }: JackyunGoodsImportCardProps) =>
     {
       title: 'Excel 表头',
       dataIndex: 'header',
+      width: 160,
       ellipsis: true,
       render: (h: string) => h || <Text type="secondary">(空)</Text>,
     },
     {
       title: '映射到系统字段',
       dataIndex: 'target_field',
-      width: 300,
+      width: 360,
       render: (_: unknown, row) => (
         <Select
           size="small"
           style={{ width: '100%' }}
           value={row.target_field}
+          showSearch
+          optionFilterProp="searchText"
+          filterOption={(input, opt) =>
+            ((opt as { searchText?: string })?.searchText ?? '')
+              .toLowerCase()
+              .includes(input.toLowerCase())
+          }
           options={targetOptions.map((o) => ({
             ...o,
             disabled:
@@ -251,6 +317,27 @@ const JackyunGoodsImportCard = ({ onCommitted }: JackyunGoodsImportCardProps) =>
       ),
     },
     {
+      title: '映射含义',
+      width: 180,
+      render: (_: unknown, row) => {
+        if (row.target_field === IGNORE_TARGET) {
+          return <Text type="secondary">—</Text>
+        }
+        const cn = labelFor(row.target_field)
+        const isReq = requiredSet.has(row.target_field)
+        return (
+          <span>
+            {isReq ? (
+              <span style={{ color: '#ff4d4f', marginRight: 4 }} title="必填字段">
+                ★
+              </span>
+            ) : null}
+            <Text>{cn}</Text>
+          </span>
+        )
+      },
+    },
+    {
       title: '识别状态',
       width: 110,
       render: (_: unknown, row) => {
@@ -258,7 +345,13 @@ const JackyunGoodsImportCard = ({ onCommitted }: JackyunGoodsImportCardProps) =>
           return <Tag>忽略</Tag>
         }
         const wasAuto = inspect?.auto_mapping[String(row.col_idx)] === row.target_field
-        return wasAuto ? <Tag color="green">自动</Tag> : <Tag color="orange">手动</Tag>
+        const isReq = requiredSet.has(row.target_field)
+        return (
+          <Space size={4}>
+            {isReq ? <Tag color="red">必填</Tag> : null}
+            {wasAuto ? <Tag color="green">自动</Tag> : <Tag color="orange">手动</Tag>}
+          </Space>
+        )
       },
     },
   ]
@@ -315,7 +408,15 @@ const JackyunGoodsImportCard = ({ onCommitted }: JackyunGoodsImportCardProps) =>
               type="info"
               showIcon
               message="第一步：上传文件，系统会自动识别列名并映射到 sku_master 字段"
-              description="如有未识别列（橙色标识），可手动从下拉选择目标字段，或选「忽略」跳过。映射方案需保留缺一不可的 erp_sku_barcode。"
+              description={
+                <span>
+                  如有未识别列（橙色「手动」标识），可手动从下拉选择目标字段，或选「忽略」跳过。
+                  下拉选项格式：<Text strong>中文名</Text>
+                  <Text type="secondary" style={{ fontFamily: 'monospace', marginLeft: 4 }}>english_key</Text>
+                  ，前缀 <span style={{ color: '#ff4d4f' }}>★</span> 表示必填。
+                  映射方案需保留缺一不可的 <span style={{ color: '#ff4d4f' }}>★</span>条码（erp_sku_barcode）。
+                </span>
+              }
             />
             <Card size="small" title="① 选择文件">
               <input
@@ -341,7 +442,21 @@ const JackyunGoodsImportCard = ({ onCommitted }: JackyunGoodsImportCardProps) =>
                   <Alert
                     type="error"
                     showIcon
-                    message={`缺少必填字段：${inspect.missing_required.join(', ')}`}
+                    message={
+                      <span>
+                        缺少必填字段：
+                        {inspect.missing_required.map((t, i) => (
+                          <span key={t}>
+                            {i > 0 ? '、' : null}
+                            <span style={{ color: '#ff4d4f', marginRight: 2 }}>★</span>
+                            {labelFor(t)}
+                            <Text type="secondary" style={{ fontFamily: 'monospace', fontSize: 11, marginLeft: 4 }}>
+                              ({t})
+                            </Text>
+                          </span>
+                        ))}
+                      </span>
+                    }
                     description="请检查 Excel 是否包含「条码」列（候选名：条码 / 货品条码 / SKU条码 / barcode）"
                     style={{ marginBottom: 12 }}
                   />
@@ -384,9 +499,11 @@ const JackyunGoodsImportCard = ({ onCommitted }: JackyunGoodsImportCardProps) =>
             />
             <Card size="small" title="① Dry-run 运行状态">
               <DryRunReportPanel
+                mode="dry_run"
                 status={dryRunQuery.data?.run?.status ?? 'pending'}
                 report={dryRunReport ?? null}
                 errorMessage={dryRunQuery.data?.run?.error_message ?? null}
+                startedAt={dryRunQuery.data?.run?.started_at ?? null}
               />
             </Card>
             <div style={{ textAlign: 'right' }}>
@@ -425,9 +542,11 @@ const JackyunGoodsImportCard = ({ onCommitted }: JackyunGoodsImportCardProps) =>
             />
             <Card size="small" title="导入运行状态">
               <DryRunReportPanel
+                mode="commit"
                 status={commitQuery.data?.run?.status ?? 'pending'}
                 report={commitReport ?? null}
                 errorMessage={commitQuery.data?.run?.error_message ?? null}
+                startedAt={commitQuery.data?.run?.started_at ?? null}
               />
             </Card>
             <div style={{ textAlign: 'right' }}>
@@ -443,48 +562,170 @@ const JackyunGoodsImportCard = ({ onCommitted }: JackyunGoodsImportCardProps) =>
 }
 
 // ---------------------------------------------------------------------------
-// Dry-run / commit 报告统一渲染
+// 工具：秒数 → "Xm Ys" 字符串
 // ---------------------------------------------------------------------------
+const formatDuration = (seconds: number): string => {
+  const s = Math.max(0, Math.round(seconds))
+  if (s < 60) return `${s} 秒`
+  const m = Math.floor(s / 60)
+  const r = s % 60
+  return r === 0 ? `${m} 分` : `${m} 分 ${r} 秒`
+}
 
+// 实时计时 hook：从 startedAt 开始计已用秒数（每 1s 触发 re-render）
+const useElapsedSeconds = (startedAt: string | null | undefined, active: boolean): number => {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!active || !startedAt) return
+    const iv = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(iv)
+  }, [active, startedAt])
+  if (!startedAt) return 0
+  return Math.max(0, (now - new Date(startedAt).getTime()) / 1000)
+}
+
+// ---------------------------------------------------------------------------
+// Dry-run / commit 报告统一渲染（重写：状态徽章 + Statistic + 进度条）
+// ---------------------------------------------------------------------------
 interface DryRunReportPanelProps {
   status: string
   report: Record<string, any> | null
   errorMessage: string | null
+  startedAt?: string | null
+  mode: 'dry_run' | 'commit'
 }
 
-const DryRunReportPanel = ({ status, report, errorMessage }: DryRunReportPanelProps) => {
-  if (status === 'pending' || status === 'running') {
+// commit / dry_run 估算完成时长（秒）— 用于运行中进度条
+const ESTIMATED_TOTAL_S = { dry_run: 380, commit: 480 }
+
+const DryRunReportPanel = ({ status, report, errorMessage, startedAt, mode }: DryRunReportPanelProps) => {
+  const isRunning = status === 'pending' || status === 'running'
+  const elapsedLive = useElapsedSeconds(startedAt ?? null, isRunning)
+  const total = ESTIMATED_TOTAL_S[mode] || 480
+  // 运行中进度条：按 elapsed/estimated 估算，封顶 95% 避免假装完成
+  const progressPct = Math.min(95, Math.round((elapsedLive / total) * 100))
+
+  // ---- 运行中 ----
+  if (isRunning) {
     return (
-      <Space direction="vertical" style={{ width: '100%' }}>
-        <Text type="secondary">运行中…{report?.parsed_rows ? `（已解析 ${report.parsed_rows} 行）` : ''}</Text>
-        {report?.total_rows ? (
-          <Text type="secondary">本次共 {report.total_rows} 行，预计 {report.mode === 'dry_run' ? '60-120s' : '5-30 分钟'} 完成</Text>
-        ) : null}
+      <Space direction="vertical" size={16} style={{ width: '100%' }}>
+        <Space align="center" size={12}>
+          <LoadingOutlined style={{ fontSize: 24, color: '#1677ff' }} spin />
+          <Text strong style={{ fontSize: 16 }}>
+            {mode === 'dry_run' ? 'Dry-run 预演中…' : '导入进行中…'}
+          </Text>
+          <Tag color="processing">running</Tag>
+        </Space>
+        <Progress
+          percent={progressPct}
+          status="active"
+          strokeColor={{ from: '#108ee9', to: '#87d068' }}
+        />
+        <Space size={32} wrap>
+          <Statistic title="已用时长" value={formatDuration(elapsedLive)} />
+          <Statistic
+            title="预估总时长"
+            value={formatDuration(total)}
+            valueStyle={{ color: '#888' }}
+          />
+          <Statistic
+            title="预估剩余"
+            value={formatDuration(Math.max(0, total - elapsedLive))}
+            valueStyle={{ color: '#888' }}
+          />
+        </Space>
+        <Alert
+          type="info"
+          showIcon
+          message="任务在后端独立进程中运行"
+          description="可以安全关闭浏览器或断网；任务完成后可在「运行历史」标签查看结果。窗口下次打开会显示最终报告。"
+        />
       </Space>
     )
   }
+
+  // ---- 失败 ----
   if (status === 'failed') {
-    return <Alert type="error" message="任务失败" description={errorMessage ?? '未知错误'} showIcon />
+    return (
+      <Result
+        status="error"
+        icon={<CloseCircleOutlined />}
+        title="任务失败"
+        subTitle={errorMessage ?? '未知错误'}
+      />
+    )
   }
+
+  // ---- 等待 / 无数据 ----
   if (status !== 'success' || !report) {
     return <Text type="secondary">等待结果…</Text>
   }
 
+  // ---- 成功 ----
+  const totalRows = report.total_rows ?? 0
+  const newRows = report.new_rows ?? 0
+  const updatedRows = report.updated_rows ?? 0
+  const fieldsChanged = report.fields_changed ?? 0
+  const skipped = report.skipped_no_barcode ?? 0
+  const duplicates = report.duplicate_in_file ?? 0
+  const errorsLen = report.errors?.length ?? 0
+  const elapsedActual = report.elapsed_seconds ?? 0
+
   return (
-    <Space direction="vertical" size={12} style={{ width: '100%' }}>
-      <Space wrap>
-        <Tag>总行数 {report.total_rows ?? 0}</Tag>
-        <Tag color="green">新增 {report.new_rows ?? 0}</Tag>
-        <Tag color="blue">更新 {report.updated_rows ?? 0}</Tag>
-        <Tag>实际字段变更 {report.fields_changed ?? 0}</Tag>
-        <Tag>无条码跳过 {report.skipped_no_barcode ?? 0}</Tag>
-        <Tag>文件内重复 {report.duplicate_in_file ?? 0}</Tag>
-        <Tag color={(report.errors?.length ?? 0) > 0 ? 'red' : 'default'}>错误 {report.errors?.length ?? 0}</Tag>
-        <Tag color="purple">耗时 {report.elapsed_seconds ?? 0}s</Tag>
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      {/* 状态横幅 */}
+      <Space align="center" size={12}>
+        <CheckCircleOutlined style={{ fontSize: 24, color: '#52c41a' }} />
+        <Text strong style={{ fontSize: 16 }}>
+          {mode === 'dry_run' ? 'Dry-run 预演完成' : '正式导入完成'}
+        </Text>
+        <Tag color="success">success</Tag>
+        <Text type="secondary">耗时 {formatDuration(elapsedActual)}</Text>
       </Space>
 
+      {/* 4 大统计 */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(4, 1fr)',
+          gap: 12,
+          padding: 16,
+          background: 'rgba(24,144,255,0.04)',
+          borderRadius: 8,
+        }}
+      >
+        <Statistic title="解析总行数" value={totalRows} groupSeparator="," />
+        <Statistic
+          title="新增 SKU"
+          value={newRows}
+          groupSeparator=","
+          valueStyle={{ color: '#52c41a' }}
+        />
+        <Statistic
+          title="更新 SKU"
+          value={updatedRows}
+          groupSeparator=","
+          valueStyle={{ color: '#1677ff' }}
+        />
+        <Statistic
+          title="字段变更"
+          value={fieldsChanged}
+          groupSeparator=","
+          suffix="处"
+          valueStyle={{ color: '#faad14' }}
+        />
+      </div>
+
+      {/* 次要指标 */}
+      <Space wrap size={12}>
+        <Tag color={skipped > 0 ? 'warning' : 'default'}>无条码跳过 {skipped}</Tag>
+        <Tag color={duplicates > 0 ? 'warning' : 'default'}>文件内重复 {duplicates}</Tag>
+        <Tag color={errorsLen > 0 ? 'error' : 'default'}>错误 {errorsLen}</Tag>
+      </Space>
+
+      {/* 抽样变更 */}
       {report.sample_changes?.length ? (
-        <Card size="small" title="抽样变更（前 5 行）">
+        <Card size="small" title={`抽样变更（前 ${report.sample_changes.length} 行）`}>
           <Table
             rowKey={(_r, i) => String(i)}
             size="small"
@@ -496,31 +737,37 @@ const DryRunReportPanel = ({ status, report, errorMessage }: DryRunReportPanelPr
               {
                 title: '操作',
                 dataIndex: 'action',
-                width: 90,
-                render: (a: string) => (
-                  <Tag color={a === 'new' ? 'green' : 'blue'}>{a}</Tag>
-                ),
+                width: 80,
+                render: (a: string) =>
+                  a === 'new' ? (
+                    <Tag color="green">新增</Tag>
+                  ) : (
+                    <Tag color="blue">更新</Tag>
+                  ),
               },
               {
-                title: '变更字段',
+                title: '变更字段数',
                 dataIndex: 'fields_changed',
                 width: 100,
-                render: (n: number | undefined) => (n !== undefined ? n : '-'),
+                align: 'right' as const,
+                render: (n: number | undefined) =>
+                  n !== undefined ? n : <Text type="secondary">—</Text>,
               },
               {
-                title: '物理列',
+                title: '物理列写入',
                 dataIndex: 'physical',
                 render: (p: Record<string, string> | undefined) =>
-                  p ? (
-                    <Space wrap size={4}>
+                  p && Object.keys(p).length ? (
+                    <Space wrap size={[4, 4]}>
                       {Object.entries(p).map(([k, v]) => (
-                        <Tag key={k} style={{ fontFamily: 'monospace', fontSize: 11 }}>
-                          {k}={v}
+                        <Tag key={k} style={{ fontFamily: 'monospace', fontSize: 11, margin: 0 }}>
+                          <Text type="secondary">{k}=</Text>
+                          {String(v).length > 40 ? String(v).slice(0, 38) + '…' : v}
                         </Tag>
                       ))}
                     </Space>
                   ) : (
-                    '-'
+                    <Text type="secondary">—</Text>
                   ),
               },
             ]}
@@ -528,8 +775,9 @@ const DryRunReportPanel = ({ status, report, errorMessage }: DryRunReportPanelPr
         </Card>
       ) : null}
 
-      {report.errors?.length ? (
-        <Card size="small" title={`错误明细（前 ${Math.min(report.errors.length, 50)} 条）`}>
+      {/* 错误明细 */}
+      {errorsLen > 0 ? (
+        <Card size="small" title={`错误明细（前 ${Math.min(errorsLen, 50)} 条）`}>
           <Table
             rowKey={(_r, i) => String(i)}
             size="small"

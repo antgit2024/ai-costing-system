@@ -357,7 +357,11 @@ class InspectResult:
     error: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        # auto_mapping uses int keys; JSON-safe stringify
+        # 首选中文名 = CANDIDATE_NAMES[target][0]; 让前端 Select 显示 "中文 · english_key"
+        target_labels = {
+            target: (names[0] if names else target)
+            for target, names in CANDIDATE_NAMES.items()
+        }
         return {
             "sheet_name": self.sheet_name,
             "total_cols": self.total_cols,
@@ -366,6 +370,8 @@ class InspectResult:
             "unmatched_col_idx": self.unmatched_col_idx,
             "missing_required": self.missing_required,
             "candidate_names": CANDIDATE_NAMES,
+            "target_labels": target_labels,
+            "required_targets": sorted(REQUIRED_TARGETS),
             "physical_targets": sorted(PHYSICAL_COLUMN_TARGETS),
             "metadata_targets": sorted(METADATA_ERP_FIELDS),
             "image_targets": sorted(IMAGE_FIELDS),

@@ -62,6 +62,7 @@ import {
 } from '@/components/common/TargetPicker'
 import type { TargetSelection } from '@/components/common/TargetPicker'
 import { ShopSpecCodeCell, ShopSpecCodeSummaryStrip } from '@/components/common/ShopSpecCodeCell'
+import FieldUpdateWorkbenchTab from '@/components/sku-master/FieldUpdateWorkbenchTab'
 
 const { Title, Text } = Typography
 
@@ -166,9 +167,10 @@ const SkuMasterWorkspacePage = () => {
       return {
         search: String(p.get('search') ?? '').trim(),
         tab: String(p.get('tab') ?? '').trim(),
+        workbenchTab: String(p.get('workbenchTab') ?? '').trim(),
       }
     } catch {
-      return { search: '', tab: '' }
+      return { search: '', tab: '', workbenchTab: '' }
     }
   }, [])
 
@@ -220,7 +222,11 @@ const SkuMasterWorkspacePage = () => {
   const [activeId, setActiveId] = useState<string | null>(null)
 
   // left workbench（映射工作台）
-  const [workbenchTab, setWorkbenchTab] = useState<'auto' | 'manual'>('manual')
+  const [workbenchTab, setWorkbenchTab] = useState<'auto' | 'manual' | 'field_update'>(
+    (initialUrl.workbenchTab === 'auto' || initialUrl.workbenchTab === 'field_update')
+      ? (initialUrl.workbenchTab as 'auto' | 'field_update')
+      : 'manual',
+  )
   const [selectedModelId, setSelectedModelId] = useState<string | undefined>(undefined)
   const [targetKind, setTargetKind] = useState<'model' | 'bundle'>('model')
   const [selectedBundleTemplateId, setSelectedBundleTemplateId] = useState<string | undefined>(undefined)
@@ -2211,6 +2217,11 @@ const SkuMasterWorkspacePage = () => {
                         ) : null}
                       </Space>
                     ),
+                  },
+                  {
+                    key: 'field_update',
+                    label: '字段维护',
+                    children: <FieldUpdateWorkbenchTab />,
                   },
                 ]}
               />

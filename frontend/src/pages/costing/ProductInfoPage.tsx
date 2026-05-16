@@ -1,9 +1,11 @@
-import { Card, Col, Image, Input, Row, Select, Space, Table, Tag, Tooltip, Typography } from 'antd'
+import { Button, Card, Col, Form, Image, Input, Modal, Radio, Row, Select, Space, Table, Tag, Tooltip, Typography, message } from 'antd'
 import InfoCircleOutlined from '@ant-design/icons/lib/icons/InfoCircleOutlined'
 import ShopOutlined from '@ant-design/icons/lib/icons/ShopOutlined'
+import EditOutlined from '@ant-design/icons/lib/icons/EditOutlined'
 import type { ColumnsType } from 'antd/es/table'
 import { useEffect, useMemo, useState } from 'react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
 
 import { fetchSkuMaster } from '@/services/planner'
 import type { SkuMaster } from '@/types/planner'
@@ -14,6 +16,8 @@ import {
   renderTargetSelectionTags,
 } from '@/components/common/TargetPicker'
 import type { TargetSelection } from '@/components/common/TargetPicker'
+import ProductInfoDetailDrawer from '@/components/costing/ProductInfoDetailDrawer'
+import { PENDING_FIELD_UPDATE_SESSION_KEY, type PendingFieldUpdate } from '@/components/sku-master/FieldUpdateWorkbenchTab'
 
 const { Text, Title } = Typography
 
@@ -88,6 +92,22 @@ export default function ProductInfoPage() {
       // ignore
     }
   }, [pageSize])
+
+  const navigate = useNavigate()
+
+  const [detailOpenId, setDetailOpenId] = useState<string | null>(null)
+
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
+
+  // 跨页"按筛选执行"模式: false=仅勾选的; true=按当前筛选所有匹配 (跳过去 sku-master 一键跑完)
+  const [batchByFilterMode, setBatchByFilterMode] = useState<boolean>(false)
+
+  const [batchModalOpen, setBatchModalOpen] = useState<boolean>(false)
+  const [batchForm] = Form.useForm<{
+    field_name: 'production_process' | 'metadata.erp.sku_flag'
+    mode: 'set' | 'append_unique' | 'remove'
+    value_text: string
+  }>()
 
   // 派生后端筛选参数：把统一 TargetSelection 转成 list_sku_master 接受的扁平参数
   const targetFilters = useMemo(() => {
@@ -559,13 +579,44 @@ export default function ProductInfoPage() {
           </Row>
         </Card>
 
-        <div style={{ marginTop: 4, marginBottom: 4 }}>
-          <Space size={8} align="center">
+        <div style={{ marginTop: 4, marginBottom: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+          <Space size={8} align="center" wrap>
             <Text type="secondary">
               当前页：{items.length} 条{total >= 0 ? `，全库共 ${total.toLocaleString()} 条` : ''}
             </Text>
             <Tooltip title="开启精确总数（compute_total=true）。商品档案是生产维护主战场，需要明确的『还有多少待维护』感知。如后续超过 100 万行性能下降，会切换到 pg_class.reltuples 近似估算。">
               <InfoCircleOutlined style={{ color: '#999' }} />
+            </Tooltip>
+            {selectedRowKeys.length > 0 ? (
+              <Tag color="blue">已勾选 {selectedRowKeys.length} 条</Tag>
+            ) : null}
+          </Space>
+          <Space size={6} wrap>
+            <Tooltip title="勾选模式：勾选行 → 点'批量改' 只对勾选行生效；按筛选模式 → 跳到商品关联用'一键跑完'对当前筛选所有匹配（含未在本页的）执行">
+              <Tag.CheckableTag
+                checked={batchByFilterMode}
+                onChange={(c) => setBatchByFilterMode(c)}
+                style={{ fontSize: 12 }}
+              >
+                {batchByFilterMode ? '按筛选模式 (跨页)' : '勾选模式 (仅本页)'}
+              </Tag.CheckableTag>
+            </Tooltip>
+            <Button
+              icon={<EditOutlined />}
+              type="primary"
+              size="small"
+              disabled={!batchByFilterMode && selectedRowKeys.length === 0}
+              onClick={() => {
+                batchForm.resetFields()
+                setBatchModalOpen(true)
+              }}
+            >
+              批量改字段
+            </Button>
+            <Tooltip title="清除勾选">
+              {selectedRowKeys.length > 0 ? (
+                <Button size="small" onClick={() => setSelectedRowKeys([])}>清除</Button>
+              ) : null}
             </Tooltip>
           </Space>
         </div>
@@ -578,6 +629,20 @@ export default function ProductInfoPage() {
           loading={listQuery.isFetching}
           columns={columns}
           dataSource={items}
+          rowSelection={{
+            selectedRowKeys,
+            onChange: (keys) => setSelectedRowKeys(keys),
+            preserveSelectedRowKeys: true,
+          }}
+          onRow={(row) => ({
+            onClick: (e) => {
+              // 避免点 checkbox 触发打开抽屉
+              const target = e.target as HTMLElement
+              if (target.closest('.ant-checkbox-wrapper, .ant-table-selection-column')) return
+              setDetailOpenId(String(row.id))
+            },
+            style: { cursor: 'pointer' },
+          })}
           pagination={{
             current: page,
             pageSize,
@@ -595,6 +660,159 @@ export default function ProductInfoPage() {
           locale={{ emptyText: '暂无数据（先调整筛选条件）' }}
         />
       </Space>
+
+      <ProductInfoDetailDrawer
+        skuId={detailOpenId}
+        open={!!detailOpenId}
+        onClose={() => setDetailOpenId(null)}
+        onUpdated={() => listQuery.refetch()}
+      />
+
+      <Modal
+        title={
+          <span>
+            批量改字段{' '}
+            <Text type="secondary" style={{ fontSize: 12, fontWeight: 'normal' }}>
+              将跳到「商品关联 / 字段维护」 Tab 执行
+            </Text>
+          </span>
+        }
+        open={batchModalOpen}
+        onCancel={() => setBatchModalOpen(false)}
+        okText="确认并跳转执行"
+        cancelText="取消"
+        onOk={async () => {
+          try {
+            const v = await batchForm.validateFields()
+            const fieldName = v.field_name
+            const mode = v.mode
+            const raw = v.value_text ?? ''
+            let newValue: unknown
+            if (fieldName === 'production_process') {
+              newValue = raw.trim() || null
+            } else {
+              // metadata.erp.sku_flag — 多值, 支持逗号/分号/换行/空格分隔
+              const arr = raw
+                .split(/[,;，；\n\t]+/)
+                .map((s) => s.trim())
+                .filter(Boolean)
+              newValue = arr
+              if (mode !== 'set' && arr.length === 0) {
+                message.error('append_unique / remove 模式至少需要 1 个标签')
+                return
+              }
+            }
+
+            const pending: PendingFieldUpdate = {
+              field_name: fieldName,
+              new_value: newValue,
+              mode,
+              requested_by: 'products-info-batch',
+              source: 'products-info',
+              display_label: fieldName === 'production_process' ? '工艺说明' : '规格标记',
+              timestamp: new Date().toLocaleString('zh-CN'),
+            }
+            if (batchByFilterMode) {
+              // 跨页按筛选: 把当前筛选参数全部带过去
+              pending.filters = {
+                search: search || undefined,
+                channel,
+                match_status: matchStatus,
+                bound_state: targetFilters.bound_state,
+                bound_model_id: targetFilters.bound_model_id,
+                bundle_bound_state: targetFilters.bundle_bound_state,
+                bundle_template_id: targetFilters.bundle_template_id,
+                bundle_preset_selector: targetFilters.bundle_preset_selector,
+              }
+            } else {
+              // 勾选模式: 显式 ID
+              pending.sku_master_ids = selectedRowKeys.map((k) => String(k))
+            }
+
+            try {
+              sessionStorage.setItem(PENDING_FIELD_UPDATE_SESSION_KEY, JSON.stringify(pending))
+            } catch (e) {
+              message.error('浏览器 sessionStorage 不可用, 无法跳转')
+              return
+            }
+
+            setBatchModalOpen(false)
+            message.success('参数已准备, 正在跳转到商品关联...')
+            navigate('/costing/sku-master?workbenchTab=field_update&from=products-info')
+          } catch {
+            // form validation error
+          }
+        }}
+        width={580}
+      >
+        <Form form={batchForm} layout="vertical" initialValues={{ field_name: 'production_process', mode: 'set' }}>
+          <Form.Item label="目标范围">
+            {batchByFilterMode ? (
+              <Tag color="orange" style={{ fontSize: 13, padding: '4px 12px' }}>
+                按当前筛选条件 (跨页, 所有匹配行)
+              </Tag>
+            ) : (
+              <Tag color="blue" style={{ fontSize: 13, padding: '4px 12px' }}>
+                已勾选 {selectedRowKeys.length} 条 (仅本页)
+              </Tag>
+            )}
+          </Form.Item>
+          <Form.Item name="field_name" label="要修改的字段" rules={[{ required: true }]}>
+            <Radio.Group
+              onChange={() => {
+                // 切字段时重置模式 (production_process 只支持 set)
+                batchForm.setFieldsValue({ mode: 'set' })
+              }}
+            >
+              <Space direction="vertical">
+                <Radio value="production_process">
+                  <b>工艺说明</b> (production_process, 物理列, 仅 set 模式)
+                </Radio>
+                <Radio value="metadata.erp.sku_flag">
+                  <b>规格标记</b> (metadata.erp.sku_flag, JSON 数组, 支持 set / append_unique / remove)
+                </Radio>
+              </Space>
+            </Radio.Group>
+          </Form.Item>
+          <Form.Item dependencies={['field_name']} noStyle>
+            {({ getFieldValue }) => {
+              const fn = getFieldValue('field_name')
+              if (fn === 'production_process') return null
+              return (
+                <Form.Item name="mode" label="操作模式" rules={[{ required: true }]}>
+                  <Radio.Group>
+                    <Radio value="set">set (整组覆盖)</Radio>
+                    <Radio value="append_unique">append_unique (追加去重)</Radio>
+                    <Radio value="remove">remove (移除指定项)</Radio>
+                  </Radio.Group>
+                </Form.Item>
+              )
+            }}
+          </Form.Item>
+          <Form.Item dependencies={['field_name', 'mode']} noStyle>
+            {({ getFieldValue }) => {
+              const fn = getFieldValue('field_name')
+              if (fn === 'production_process') {
+                return (
+                  <Form.Item name="value_text" label="新工艺说明" rules={[{ required: false }]}>
+                    <Input.TextArea rows={4} placeholder="留空 = 清空; 例: 高频热压 / 数码印 / 双面贴合" />
+                  </Form.Item>
+                )
+              }
+              const mode = getFieldValue('mode')
+              return (
+                <Form.Item
+                  name="value_text"
+                  label={`${mode === 'set' ? '替换为' : mode === 'append_unique' ? '追加这些标签' : '移除这些标签'} (多个用逗号 / 分号 / 换行分隔)`}
+                  rules={[{ required: mode !== 'set' }]}
+                >
+                  <Input.TextArea rows={3} placeholder="例: 爆款, 新品, 春季" />
+                </Form.Item>
+              )
+            }}
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   )
 }

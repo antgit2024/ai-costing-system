@@ -2000,6 +2000,12 @@ export interface ModelInsightsSummaryItem {
   net_profit: string
   net_margin?: string | null
 
+  refund_amount_loose?: string | null
+  returned_qty_loose?: string | null
+  net_revenue_loose?: string | null
+  net_profit_loose?: string | null
+  net_margin_loose?: string | null
+
   line_count?: number
   costed_line_count?: number
   missing_costing_line_count?: number
@@ -2041,6 +2047,8 @@ export interface ModelInsightsSummaryResponse {
   costed_lines: number
   lines_missing_costing: number
   items: ModelInsightsSummaryItem[]
+  /** 后端实际采用的"仅商家编码"模式标志，前端用于显示状态徽标 */
+  merchant_sku_only?: boolean
   note?: string | null
 }
 
@@ -2245,6 +2253,8 @@ export interface SalesLineItem {
   revenue_amount?: string | null
   cost_unit_price?: string | null
   cost_amount?: string | null
+  // 物料成本（PnL 用，仅 BOM 物料部分，不含工序/制造费）
+  cost_material_amount?: string | null
   order_no?: string | null
   product_link_id?: string | null
   logistics_company?: string | null
@@ -2273,6 +2283,7 @@ export interface SalesLinesResponse {
   lines_with_bom_snapshots: number
   lines_missing_costing: number
   items: SalesLineItem[]
+  merchant_sku_only?: boolean
   note?: string | null
 }
 
@@ -2307,12 +2318,16 @@ export interface SalesProfitDashboardTopSkuItem {
   spec_text?: string | null
   bound_model_code?: string | null
   bound_model_name?: string | null
+  /** 变体编码（如 KB8-001）。merchant_sku_only=True 时来自商家编码抽出；否则为 null */
+  bound_variant_code?: string | null
   bundle_template_code?: string | null
   bundle_preset_selector?: string | null
   bundle_preset_phrase?: string | null
   shipped_qty: string
   revenue_amount: string
   cost_amount: string
+  // 物料成本（PnL 用，仅 BOM 物料部分，不含工序/制造费）
+  cost_material_amount?: string | null
   gross_profit: string
   gross_margin?: string | null
   shipment_lines_total: number
@@ -2346,6 +2361,7 @@ export interface SalesProfitDashboardResponse {
   top_skus_loss: SalesProfitDashboardTopSkuItem[]
   top_models_profit: SalesProfitDashboardTopModelItem[]
   top_models_loss: SalesProfitDashboardTopModelItem[]
+  merchant_sku_only?: boolean
   note?: string | null
 }
 
@@ -2525,7 +2541,19 @@ export interface SkuMaster {
   erp_sku_barcode: string
   platform_product_id?: string | null
   platform_sku_id?: string | null
+  /** ERP 外部编码 / 反写匹配键（migration 0045 物理列） */
+  out_sku_code?: string | null
+  /** ERP 货品 ID（API 反查 / maxGoodsId 锚点；migration 0045 物理列） */
+  erp_goods_id?: string | null
+  /** ERP 规格 ID（API maxSkuId 游标必备；migration 0045 物理列） */
+  erp_sku_id?: string | null
+  /** ERP 是否停用（migration 0045 物理列） */
+  is_blocked?: boolean
+  /** ERP 是否已删除（migration 0045 物理列） */
+  is_deleted_at_source?: boolean
   shop_spec_code?: string | null
+  /** 生产工艺：系统计算/人工录入，反写 ERP "工艺说明(规)"（migration 0045 升列） */
+  production_process?: string | null
   bundle_template_id?: string | null
   bundle_template_code?: string | null
   bundle_preset_selector?: string | null

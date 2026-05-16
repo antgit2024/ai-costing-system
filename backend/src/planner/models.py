@@ -11,6 +11,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -18,6 +19,7 @@ from sqlalchemy import (
     UniqueConstraint,
     and_,
     false,
+    text,
 )
 from sqlalchemy.orm import Mapped, relationship
 
@@ -1466,6 +1468,25 @@ class AfterSalesExceptionQueue(Base, TimestampMixin):
 
 
 class SkuMaster(Base, TimestampMixin, SoftDeleteMixin):
+    """ERP SKU master (Single Source of Truth for costing).
+
+    Unique on ``erp_sku_barcode``.
+
+    L2 physical columns added in migration 0xxx (2026-05-16) for the
+    Jackyun ERP goods master sync line (blueprint
+    ``DOC/costing/blueprints/jackyun_erp_goods_master_sync_backlog.md``):
+
+    - ``out_sku_code``           — ERP 外部编码 / 反写匹配键（唯一 where not null）
+    - ``erp_goods_id``           — ERP 货品 ID（API 反查/反写锚点）
+    - ``erp_sku_id``             — ERP 规格 ID（API ``maxSkuId`` 游标必备）
+    - ``is_blocked``             — ERP 是否停用
+    - ``is_deleted_at_source``   — ERP 是否已删除
+    - ``shop_spec_code``         — 从 ``metadata_json['shop_spec_code']`` 升列；
+      读取路径暂保留 metadata fallback（见 ``sku_master_service.list_sku_master``），
+      Stage D 切换前端列后再下线 fallback。
+    - ``production_process``     — 从 ``metadata_json['production_process']`` 升列；同上 fallback 策略。
+    """
+
     __tablename__ = "sku_master"
 
     id: Mapped[str] = Column(String(36), primary_key=True, default=_uuid)
@@ -1484,7 +1505,36 @@ class SkuMaster(Base, TimestampMixin, SoftDeleteMixin):
     source_payload_id: Mapped[str | None] = Column(
         String(36), ForeignKey("integration_api_records.id", ondelete="SET NULL"), nullable=True, index=True
     )
+
+    # L2 physical columns (2026-05-16, Jackyun ERP goods master sync)
+    out_sku_code: Mapped[str | None] = Column(String(128))
+    erp_goods_id: Mapped[str | None] = Column(String(64), index=True)
+    erp_sku_id: Mapped[str | None] = Column(String(64), index=True)
+    is_blocked: Mapped[bool] = Column(Boolean, nullable=False, default=False, server_default="false")
+    is_deleted_at_source: Mapped[bool] = Column(Boolean, nullable=False, default=False, server_default="false")
+    shop_spec_code: Mapped[str | None] = Column(String(128))
+    production_process: Mapped[str | None] = Column(Text)
+
     metadata_json: Mapped[Dict[str, Any]] = Column("metadata", JSON, default=dict)
+
+    __table_args__ = (
+        Index(
+            "ux_sku_master_out_sku_code",
+            "out_sku_code",
+            unique=True,
+            postgresql_where=text("out_sku_code IS NOT NULL"),
+        ),
+        Index(
+            "ix_sku_master_blocked_active",
+            "is_blocked",
+            postgresql_where=text("is_blocked = true"),
+        ),
+        Index(
+            "ix_sku_master_deleted_active",
+            "is_deleted_at_source",
+            postgresql_where=text("is_deleted_at_source = true"),
+        ),
+    )
 
 
 class ShopSkuMapping(Base, TimestampMixin, SoftDeleteMixin):

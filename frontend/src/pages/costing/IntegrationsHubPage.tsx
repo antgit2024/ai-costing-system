@@ -56,6 +56,7 @@ import {
   triggerJackyunRefundSync,
   triggerJackyunShipmentSync,
 } from '@/services/integrations'
+import JackyunGoodsImportCard from '@/components/costing/JackyunGoodsImportCard'
 import { beijingTime, formatBeijingTime, nowBeijing } from '@/utils/beijingTime'
 
 const { Title, Text, Paragraph } = Typography
@@ -862,6 +863,7 @@ const IntegrationsHubPage = () => {
 
       <TriggerJackyunCard onTriggered={bumpRefresh} />
       <TriggerJackyunRefundCard onTriggered={bumpRefresh} />
+      <JackyunGoodsImportCard onCommitted={bumpRefresh} />
 
       <Card size="small">
         <Tabs items={tabItems} />

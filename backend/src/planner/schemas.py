@@ -3331,6 +3331,14 @@ class ModelInsightsSummaryItem(BaseModel):
     net_profit: Decimal
     net_margin: Optional[Decimal] = None
 
+    # 宽广口径退款（按 sku→模型聚合 applied_at 在窗口内的退款；反映"模型当期售后"）
+    # 与上面 refund_amount/returned_qty（精细：订单+链接+条码三字段强匹配，反映"同批已退"）并存
+    refund_amount_loose: Optional[Decimal] = None
+    returned_qty_loose: Optional[Decimal] = None
+    net_revenue_loose: Optional[Decimal] = None
+    net_profit_loose: Optional[Decimal] = None
+    net_margin_loose: Optional[Decimal] = None
+
     line_count: int = 0
     costed_line_count: int = 0
     missing_costing_line_count: int = 0
@@ -3357,6 +3365,7 @@ class ModelInsightsSummaryResponse(BaseModel):
     costed_lines: int = 0
     lines_missing_costing: int = 0
     items: List[ModelInsightsSummaryItem] = Field(default_factory=list)
+    merchant_sku_only: bool = False
     note: Optional[str] = None
 
 
@@ -3636,6 +3645,8 @@ class SalesLineItem(BaseModel):
     revenue_amount: Optional[Decimal] = None
     cost_unit_price: Optional[Decimal] = None
     cost_amount: Optional[Decimal] = None
+    # 物料成本（PnL 用：仅 BOM 物料部分，不含工序/制造费）。来自 shipment_costing_results.cost_material_total。
+    cost_material_amount: Optional[Decimal] = None
     order_no: Optional[str] = None
     product_link_id: Optional[str] = None
     logistics_company: Optional[str] = None
@@ -3674,6 +3685,7 @@ class SalesLinesResponse(BaseModel):
     lines_with_bom_snapshots: int = 0
     lines_missing_costing: int = 0
     items: List[SalesLineItem] = Field(default_factory=list)
+    merchant_sku_only: bool = False
     note: Optional[str] = None
 
     class Config:
@@ -3721,6 +3733,8 @@ class SalesProfitDashboardTopSkuItem(BaseModel):
     # 绑定/归属（运营视角：该 SKU 当前对应的模型/套装）
     bound_model_code: Optional[str] = None
     bound_model_name: Optional[str] = None
+    # 变体编码（如 KB8-001）。merchant_sku_only=True 时来自商家编码抽出；否则为 None。
+    bound_variant_code: Optional[str] = None
     # Optional bundle (BundleAsModel) display helpers
     bundle_template_code: Optional[str] = None
     bundle_preset_selector: Optional[str] = None
@@ -3728,6 +3742,8 @@ class SalesProfitDashboardTopSkuItem(BaseModel):
     shipped_qty: Decimal
     revenue_amount: Decimal
     cost_amount: Decimal
+    # 物料成本（PnL 用：仅 BOM 物料部分，不含工序/制造费）。来自 shipment_costing_results.cost_material_total。
+    cost_material_amount: Decimal = Decimal("0")
     gross_profit: Decimal
     gross_margin: Optional[Decimal] = None
     shipment_lines_total: int = 0
@@ -3768,6 +3784,7 @@ class SalesProfitDashboardResponse(BaseModel):
     top_skus_loss: List[SalesProfitDashboardTopSkuItem] = Field(default_factory=list)
     top_models_profit: List[SalesProfitDashboardTopModelItem] = Field(default_factory=list)
     top_models_loss: List[SalesProfitDashboardTopModelItem] = Field(default_factory=list)
+    merchant_sku_only: bool = False
     note: Optional[str] = None
 
 
@@ -3776,8 +3793,19 @@ class SkuMasterRead(BaseModel):
     erp_sku_barcode: str
     platform_product_id: Optional[str] = None
     platform_sku_id: Optional[str] = None
+    # Jackyun ERP 货品主档物理列（migration 0045 升列；详见
+    # ``DOC/costing/blueprints/jackyun_erp_goods_master_sync_backlog.md`` §3）
+    out_sku_code: Optional[str] = None
+    erp_goods_id: Optional[str] = None
+    erp_sku_id: Optional[str] = None
+    is_blocked: bool = False
+    is_deleted_at_source: bool = False
     # 商家编码 / 网店规格编码：2026 新规则的“预置锚点”（模型码/套装码等）
+    # 物理列（migration 0045）；老数据仍可由 metadata.shop_spec_code fallback（_attach_parsed_fields）
     shop_spec_code: Optional[str] = None
+    # 生产工艺：系统计算/人工录入；反写 ERP 货品档案的"工艺说明(规)"
+    # 物理列（migration 0045）；老数据 fallback 自 metadata.production_process
+    production_process: Optional[str] = None
     # 套装模板绑定（Phase0：存储在 sku_master.metadata_json，作为“商家编码锚点”的人工兜底入口）
     bundle_template_id: Optional[str] = None
     bundle_template_code: Optional[str] = None

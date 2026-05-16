@@ -23,7 +23,7 @@ from __future__ import annotations
 from datetime import datetime, time, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -36,6 +36,7 @@ from ...integrations.base import (
 from ...integrations.jackyun import sync_jobs as jackyun_sync_jobs
 from .. import models
 from ..dependencies import get_db_session
+from ..services import jackyun_goods_import_service
 
 router = APIRouter(prefix="/integrations", tags=["Integrations"])
 
@@ -632,3 +633,238 @@ def resolve_dead_letter_endpoint(
         raise HTTPException(status_code=404, detail="dead_letter_not_found")
     db.commit()
     return {"resolved": True, "dead_letter_id": dead_letter_id}
+
+
+# ---------------------------------------------------------------------------
+# Jackyun ERP goods master — Excel import (3-step wizard)
+#
+# Blueprint:  DOC/costing/blueprints/jackyun_erp_goods_master_sync_backlog.md §10.2 (C)
+# Service:    src/planner/services/jackyun_goods_import_service.py
+#
+# Flow:
+#   1. POST .../goods/import-xlsx/inspect    [sync, ~100ms]     → column mapping preview
+#   2. POST .../goods/import-xlsx/dry-run    [BG, ~60-120s]     → diff report (no DB write)
+#   3. POST .../goods/import-xlsx/commit     [BG, ~5-30min]     → real upsert in 5000-row batches
+#
+# Long-running 2/3 use BackgroundTasks + IntegrationSyncRun for progress polling
+# via the existing GET /integrations/sync-runs/{id} endpoint.
+# ---------------------------------------------------------------------------
+
+
+def _parse_mapping_form_field(raw: Optional[str]) -> Dict[int, str]:
+    """Parse the ``mapping`` form field (JSON-encoded ``{col_idx_str: target_field}``)."""
+    if not raw:
+        return {}
+    import json
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid mapping JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="mapping must be a JSON object")
+    out: Dict[int, str] = {}
+    for k, v in data.items():
+        try:
+            ki = int(k)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(v, str) and v:
+            out[ki] = v
+    return out
+
+
+@router.post(
+    "/jackyun/goods/import-xlsx/inspect",
+    summary="吉客云货品档案导入 - Step 1: 读表头返回列识别",
+)
+async def jackyun_goods_import_inspect(
+    file: UploadFile = File(...),
+) -> Dict[str, Any]:
+    contents = await file.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail="empty_file")
+    result = jackyun_goods_import_service.inspect_xlsx(contents)
+    if result.error:
+        raise HTTPException(status_code=400, detail=result.error)
+    return result.to_dict()
+
+
+def _run_goods_import_job(
+    *,
+    sync_run_id: str,
+    file_bytes: bytes,
+    mapping: Dict[int, str],
+    requested_by: Optional[str],
+    commit: bool,
+    batch_size: int = 5000,
+) -> None:
+    """Background job: open a fresh DB session, run dry_run / commit, update IntegrationSyncRun."""
+    if planner_db.SessionLocal is None:
+        raise RuntimeError("SessionLocal not initialized")
+    db: Session = planner_db.SessionLocal()  # type: ignore[misc]
+    try:
+        run = db.query(models.IntegrationSyncRun).filter(models.IntegrationSyncRun.id == sync_run_id).one()
+        run.status = "running"
+        run.started_at = datetime.now(timezone.utc)
+        db.commit()
+
+        report = jackyun_goods_import_service._execute(
+            db,
+            file_bytes=file_bytes,
+            mapping=mapping,
+            requested_by=requested_by,
+            commit=commit,
+            batch_size=batch_size,
+        )
+
+        run.status = "success"
+        run.finished_at = datetime.now(timezone.utc)
+        run.total_rows = report.total_rows
+        run.inserted_rows = report.new_rows
+        run.updated_rows = report.updated_rows
+        run.skipped_rows = report.skipped_no_barcode + report.duplicate_in_file
+        run.error_rows = len(report.errors)
+        run.result_json = report.to_dict()
+        db.commit()
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        run = db.query(models.IntegrationSyncRun).filter(models.IntegrationSyncRun.id == sync_run_id).one_or_none()
+        if run is not None:
+            run.status = "failed"
+            run.finished_at = datetime.now(timezone.utc)
+            run.error_message = f"{type(exc).__name__}: {exc}"
+            db.commit()
+    finally:
+        db.close()
+
+
+def _create_goods_import_run(
+    db: Session,
+    *,
+    sync_type: str,
+    request_params: Dict[str, Any],
+    triggered_by: Optional[str],
+) -> models.IntegrationSyncRun:
+    run = models.IntegrationSyncRun(
+        source_system="jackyun",
+        sync_type=sync_type,
+        api_method="xlsx.import.goods_master",
+        direction="pull",
+        status="pending",
+        request_params_json=request_params,
+        triggered_by=triggered_by,
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+    return run
+
+
+@router.post(
+    "/jackyun/goods/import-xlsx/dry-run",
+    summary="吉客云货品档案导入 - Step 2: Dry-run 预演（不写库）",
+)
+async def jackyun_goods_import_dry_run(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    mapping: Optional[str] = Form(None, description="JSON {col_idx: target_field}; 空则用 auto_mapping"),
+    requested_by: Optional[str] = Form(None),
+    db: Session = Depends(get_db_session),
+) -> Dict[str, Any]:
+    contents = await file.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail="empty_file")
+    mapping_dict = _parse_mapping_form_field(mapping)
+    if not mapping_dict:
+        inspect = jackyun_goods_import_service.inspect_xlsx(contents)
+        if inspect.error:
+            raise HTTPException(status_code=400, detail=inspect.error)
+        if inspect.missing_required:
+            raise HTTPException(
+                status_code=400,
+                detail=f"missing_required_fields: {inspect.missing_required}",
+            )
+        mapping_dict = inspect.auto_mapping
+
+    run = _create_goods_import_run(
+        db,
+        sync_type="goods_import_xlsx_dry_run",
+        request_params={
+            "filename": file.filename,
+            "size_bytes": len(contents),
+            "mapping_size": len(mapping_dict),
+            "mode": "dry_run",
+        },
+        triggered_by=requested_by,
+    )
+    background_tasks.add_task(
+        _run_goods_import_job,
+        sync_run_id=run.id,
+        file_bytes=contents,
+        mapping=mapping_dict,
+        requested_by=requested_by,
+        commit=False,
+    )
+    return {
+        "sync_run_id": run.id,
+        "status": run.status,
+        "mode": "dry_run",
+        "poll_url": f"/integrations/sync-runs/{run.id}",
+    }
+
+
+@router.post(
+    "/jackyun/goods/import-xlsx/commit",
+    summary="吉客云货品档案导入 - Step 3: 正式导入（5000 行/批）",
+)
+async def jackyun_goods_import_commit(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    mapping: Optional[str] = Form(None),
+    requested_by: Optional[str] = Form(None),
+    batch_size: int = Form(5000, ge=100, le=20000),
+    db: Session = Depends(get_db_session),
+) -> Dict[str, Any]:
+    contents = await file.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail="empty_file")
+    mapping_dict = _parse_mapping_form_field(mapping)
+    if not mapping_dict:
+        inspect = jackyun_goods_import_service.inspect_xlsx(contents)
+        if inspect.error:
+            raise HTTPException(status_code=400, detail=inspect.error)
+        if inspect.missing_required:
+            raise HTTPException(
+                status_code=400,
+                detail=f"missing_required_fields: {inspect.missing_required}",
+            )
+        mapping_dict = inspect.auto_mapping
+
+    run = _create_goods_import_run(
+        db,
+        sync_type="goods_import_xlsx_commit",
+        request_params={
+            "filename": file.filename,
+            "size_bytes": len(contents),
+            "mapping_size": len(mapping_dict),
+            "batch_size": batch_size,
+            "mode": "commit",
+        },
+        triggered_by=requested_by,
+    )
+    background_tasks.add_task(
+        _run_goods_import_job,
+        sync_run_id=run.id,
+        file_bytes=contents,
+        mapping=mapping_dict,
+        requested_by=requested_by,
+        commit=True,
+        batch_size=batch_size,
+    )
+    return {
+        "sync_run_id": run.id,
+        "status": run.status,
+        "mode": "commit",
+        "poll_url": f"/integrations/sync-runs/{run.id}",
+    }

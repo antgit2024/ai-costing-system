@@ -161,3 +161,76 @@ export const resolveDeadLetter = async (
   )
   return data
 }
+
+// ---------------------------------------------------------------------------
+// Jackyun ERP goods master — Excel import (3-step wizard)
+// See blueprint: DOC/costing/blueprints/jackyun_erp_goods_master_sync_backlog.md §10.2
+// ---------------------------------------------------------------------------
+
+export interface JackyunGoodsImportInspectResponse {
+  sheet_name: string
+  total_cols: number
+  headers: string[]
+  /** ``{col_idx_str: target_field}`` — auto-recognized mapping */
+  auto_mapping: Record<string, string>
+  unmatched_col_idx: number[]
+  missing_required: string[]
+  candidate_names: Record<string, string[]>
+  physical_targets: string[]
+  metadata_targets: string[]
+  image_targets: string[]
+  dimension_targets: string[]
+  error: string | null
+}
+
+export interface JackyunGoodsImportTriggerResponse {
+  sync_run_id: string
+  status: string
+  mode: 'dry_run' | 'commit'
+  poll_url: string
+}
+
+export const inspectJackyunGoodsXlsx = async (
+  file: File,
+): Promise<JackyunGoodsImportInspectResponse> => {
+  const form = new FormData()
+  form.append('file', file)
+  const { data } = await plannerClient.post<JackyunGoodsImportInspectResponse>(
+    '/integrations/jackyun/goods/import-xlsx/inspect',
+    form,
+  )
+  return data
+}
+
+export const dryRunJackyunGoodsXlsx = async (
+  file: File,
+  mapping: Record<string, string>,
+  options: { requested_by?: string | null } = {},
+): Promise<JackyunGoodsImportTriggerResponse> => {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('mapping', JSON.stringify(mapping))
+  if (options.requested_by) form.append('requested_by', options.requested_by)
+  const { data } = await plannerClient.post<JackyunGoodsImportTriggerResponse>(
+    '/integrations/jackyun/goods/import-xlsx/dry-run',
+    form,
+  )
+  return data
+}
+
+export const commitJackyunGoodsXlsx = async (
+  file: File,
+  mapping: Record<string, string>,
+  options: { requested_by?: string | null; batch_size?: number } = {},
+): Promise<JackyunGoodsImportTriggerResponse> => {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('mapping', JSON.stringify(mapping))
+  if (options.requested_by) form.append('requested_by', options.requested_by)
+  if (options.batch_size) form.append('batch_size', String(options.batch_size))
+  const { data } = await plannerClient.post<JackyunGoodsImportTriggerResponse>(
+    '/integrations/jackyun/goods/import-xlsx/commit',
+    form,
+  )
+  return data
+}

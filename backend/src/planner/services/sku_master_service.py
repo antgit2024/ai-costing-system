@@ -1668,6 +1668,8 @@ def _update_shipment_seen(
             meta["shop_spec_code"] = new_shop
             meta["shop_spec_code_source"] = "shipment"
             meta["shop_spec_code_seen_at"] = _utcnow().isoformat()
+            # migration 0045 后：物理列同步双写（前端 D 阶段切到物理列后这里就是唯一源）
+            row.shop_spec_code = new_shop
     row.metadata_json = meta
 
 
@@ -1678,8 +1680,13 @@ def _attach_parsed_fields(rows: List[models.SkuMaster]) -> None:
     for r in rows:
         meta = dict(getattr(r, "metadata_json", None) or {})
         # 商家编码 / 网店规格编码（用于 2026 新规则：渠道侧携带的预置编码，包含模型码/套装码等锚点）
-        # 目前来源：ERP SKU 主档导入时写入 metadata_json.shop_spec_code（同时也会写 shop_sku_mappings.shop_spec_code）
-        r.shop_spec_code = meta.get("shop_spec_code")
+        # 升列后（migration 0045）：物理列 r.shop_spec_code 优先；老数据 fallback metadata。
+        # Stage D（前端 ProductInfoPage 切换列）后再下线这个 fallback。
+        _phys_shop = getattr(r, "shop_spec_code", None)
+        r.shop_spec_code = _phys_shop if _phys_shop else meta.get("shop_spec_code")
+        # 生产工艺：同样的物理列优先 / metadata fallback 策略
+        _phys_proc = getattr(r, "production_process", None)
+        r.production_process = _phys_proc if _phys_proc else meta.get("production_process")
         # 套装模板绑定（Phase0：存 metadata_json；用于 sku-master 人工兜底/前置校验）
         r.bundle_template_id = meta.get("bundle_template_id")
         r.bundle_template_code = meta.get("bundle_template_code")

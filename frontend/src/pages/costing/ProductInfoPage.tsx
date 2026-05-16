@@ -18,7 +18,8 @@ import {
 import type { TargetSelection } from '@/components/common/TargetPicker'
 import ProductInfoDetailDrawer from '@/components/costing/ProductInfoDetailDrawer'
 import { PENDING_FIELD_UPDATE_SESSION_KEY, type PendingFieldUpdate } from '@/components/sku-master/FieldUpdateWorkbenchTab'
-import { computeTripleTagState, TAG_COLORS } from '@/utils/skuMasterTagState'
+import { computeTripleTagState, describeConflict, TAG_COLORS } from '@/utils/skuMasterTagState'
+import { normalizeSpecText } from '@/utils/specNormalize'
 
 const { Text, Title } = Typography
 
@@ -36,32 +37,9 @@ const safeString = (v: unknown): string => {
 
 const isFilled = (v: unknown): boolean => !!safeString(v).trim()
 
-const normalizeSpecForCompare = (v: unknown): string => {
-  const s = safeString(v).trim()
-  if (!s) return ''
-  return (
-    s
-      // unify whitespace
-      .replace(/\s+/g, ' ')
-      // unify common punctuation variants
-      .replace(/；/g, ';')
-      .replace(/：/g, ':')
-      .replace(/，/g, ',')
-      .replace(/（/g, '(')
-      .replace(/）/g, ')')
-      .trim()
-  )
-}
-
-const tokensPreview = (tokens: any): string => {
-  if (!Array.isArray(tokens) || tokens.length === 0) return '-'
-  const parts = tokens
-    .slice(0, 4)
-    .map((t) => String(t ?? '').trim())
-    .filter(Boolean)
-  const more = tokens.length > 4 ? '…' : ''
-  return parts.length ? `${parts.join(' / ')}${more}` : '-'
-}
+// 规格归一化已抽到 utils/specNormalize.ts, 与后端 normalize_tx_spec_text 保持同语义.
+// 这里只保留一个薄包装, 便于在 JSX 内点出 normalizeSpecText 时短一点.
+const normalizeSpecForCompare = (v: unknown): string => normalizeSpecText(v)
 
 export default function ProductInfoPage() {
   const [page, setPage] = useState(1)
@@ -350,12 +328,144 @@ export default function ProductInfoPage() {
             )
           })()
 
+          const conflictDesc = describeConflict(s.conflict)
+          const conflictColor =
+            s.conflict.kind === 'shop_model_diff'
+              ? '#cf1322' // 深红, 高风险
+              : s.conflict.kind === 'shop_variant_diff'
+                ? '#fa541c' // 橙红, 中风险
+                : s.conflict.kind === 'erp_diff'
+                  ? '#d4380d' // 红, ERP 端值偏离
+                  : null
+
           return (
-            <Space wrap size={4}>
+            <Space wrap size={4} align="center">
               {sysTag}
               {shopTag}
               {erpTag}
+              {conflictDesc ? (
+                <Tooltip
+                  title={(
+                    <div style={{ lineHeight: 1.7, maxWidth: 360 }}>
+                      <div style={{ fontWeight: 600, marginBottom: 4 }}>{conflictDesc.title}</div>
+                      <div>{conflictDesc.detail}</div>
+                      <div style={{ marginTop: 6, color: '#ccc', fontSize: 12 }}>点击行打开抽屉, 在「三标签对账」面板里核对处理</div>
+                    </div>
+                  )}
+                >
+                  <span
+                    style={{
+                      color: conflictColor!,
+                      fontWeight: 700,
+                      fontSize: 14,
+                      cursor: 'help',
+                      marginLeft: 2,
+                    }}
+                  >
+                    ⚠
+                  </span>
+                </Tooltip>
+              ) : null}
             </Space>
+          )
+        },
+      },
+      {
+        title: (
+          <Tooltip title="系统标签 (左侧蓝色) 是怎么得出来的 — 5 种识别依据按优先级排:&#10;1) 商家编码直锁 (P0, 最可靠) - shop_spec_code 抽出 KB8-001 → 100% 锁定&#10;2) 关键词 命中变体 (P1) - 规格命中 recognition_keywords + 变体级 conditions 推 variant&#10;3) 关键词 仅锁模型 (P1') - 只到 KB8, 变体待定&#10;4) 套装模板 (P2) - bundle_template_id 强绑, 独立通道&#10;5) 未识别 - 都没命中, 需要去「商品关联」做绑定">
+            <span>
+              识别依据{' '}
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                ⓘ
+              </Text>
+            </span>
+          </Tooltip>
+        ),
+        key: 'recognition_source',
+        width: 200,
+        render: (_v, row: any) => {
+          const src = (row?.recognition_source ?? 'none') as
+            | 'merchant_code'
+            | 'keyword_variant'
+            | 'keyword_model_only'
+            | 'bundle'
+            | 'none'
+          const inputSrc = row?.recognition_input_source as 'shipment' | 'archive' | null | undefined
+          const variant = safeString(row?.bound_variant_code).trim().toUpperCase()
+          const modelCode = safeString(row?.bound_model_code).trim().toUpperCase()
+          const bundleCode = safeString(row?.bundle_template_code).trim().toUpperCase()
+
+          const defs = {
+            merchant_code: {
+              color: 'green',
+              icon: '🟢',
+              text: '商家编码',
+              value: variant || modelCode,
+              hint: '从 ERP 网店规格编码字段抽出 → 直接锁定',
+            },
+            keyword_variant: {
+              color: 'blue',
+              icon: '🔵',
+              text: '关键词',
+              value: variant || modelCode,
+              hint: '命中标准模型识别关键词 + 变体级条件',
+            },
+            keyword_model_only: {
+              color: 'cyan',
+              icon: '🔷',
+              text: '关键词',
+              value: `${modelCode} (变体待定)`,
+              hint: '只锁到模型, 未识别到具体变体',
+            },
+            bundle: {
+              color: 'purple',
+              icon: '🟣',
+              text: '套装',
+              value: bundleCode || '—',
+              hint: '套装模板强绑, 独立通道',
+            },
+            none: {
+              color: 'default',
+              icon: '⚪',
+              text: '未识别',
+              value: '',
+              hint: '请到「商品关联」做绑定',
+            },
+          }
+          const def = defs[src] || defs.none
+          const inputLabel =
+            inputSrc === 'shipment'
+              ? '基于最后发货规格'
+              : inputSrc === 'archive'
+                ? '基于档案规格 (未发过货)'
+                : null
+          return (
+            <Tooltip
+              title={
+                <div style={{ maxWidth: 360, lineHeight: 1.7 }}>
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                    {def.icon} {def.text}
+                    {def.value ? ` ${def.value}` : ''}
+                  </div>
+                  <div>{def.hint}</div>
+                  {inputLabel ? (
+                    <div style={{ marginTop: 6, color: '#ccc', fontSize: 12 }}>{inputLabel}</div>
+                  ) : null}
+                </div>
+              }
+            >
+              <Space direction="vertical" size={0} style={{ cursor: 'help' }}>
+                <Tag color={def.color} style={{ margin: 0 }}>
+                  {def.icon} {def.text}
+                  {def.value ? ` ${def.value}` : ''}
+                </Tag>
+                {inputLabel ? (
+                  <Text type="secondary" style={{ fontSize: 10, marginTop: 2 }}>
+                    {inputSrc === 'archive' ? '⚠ 未发过货' : '✓ 来自发货'}
+                  </Text>
+                ) : null}
+              </Space>
+            </Tooltip>
           )
         },
       },
@@ -430,31 +540,40 @@ export default function ProductInfoPage() {
         render: (v) => <div style={{ whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.2 }}>{safeString(v) || '-'}</div>,
       },
       {
-        title: '用于解析的规格',
+        title: (
+          <Tooltip title="最近一次发货单里抓的实际规格文本. 如果这条 SKU 从未发过货, 该列留空 (规格识别会退回到「商品规格(网店)」). 当该值与档案规格归一化后仍不同, 显示红色「规格不一致」.">
+            <span>
+              最后发货规格{' '}
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                ⓘ
+              </Text>
+            </span>
+          </Tooltip>
+        ),
         dataIndex: 'last_shipment_spec_text',
         width: 360,
         render: (v, row: any) => {
           const ship = safeString(v).trim()
           const shop = safeString(row?.spec_text).trim()
-          const text = ship || shop
-          const fromFallback = !ship && !!shop
-          const mismatch = !!ship && !!shop && normalizeSpecForCompare(ship) !== normalizeSpecForCompare(shop)
+          // 空就空 — 不再回退到 spec_text, 也不再显示「回退:网店规格」橙色标签.
+          if (!ship) return <Text type="secondary">—</Text>
+          const mismatch = !!shop && normalizeSpecForCompare(ship) !== normalizeSpecForCompare(shop)
           return (
             <Space direction="vertical" size={2}>
-              <div style={{ whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.2 }}>{text || '-'}</div>
-              {fromFallback ? <Tag color="orange">回退：网店规格</Tag> : null}
+              <div style={{ whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.2 }}>{ship}</div>
               {mismatch ? (
                 <Tooltip
                   title={
                     <div style={{ maxWidth: 560 }}>
                       <div>
-                        <b>发货规格（用于解析）</b>：{ship}
+                        <b>档案规格 (网店)</b>: {shop}
                       </div>
                       <div style={{ marginTop: 6 }}>
-                        <b>网店规格</b>：{shop}
+                        <b>最后发货规格</b>: {ship}
                       </div>
-                      <div style={{ marginTop: 6, color: 'var(--ant-color-text-secondary)' }}>
-                        建议以“发货规格”为准；如网店规格长期不可信，可通过自动化/作业中心做批量修正或建立更稳定的模型编码锚点。
+                      <div style={{ marginTop: 6, color: '#ccc' }}>
+                        归一化后两边仍不同, 说明档案规格 与实际发货规格 有真实差异 (尺寸/材质/颜色等).
+                        系统会以「最后发货规格」为识别真源. 详见行抽屉的「规格对照」区.
                       </div>
                     </div>
                   }
@@ -469,7 +588,16 @@ export default function ProductInfoPage() {
         },
       },
       {
-        title: '预解析尺寸',
+        title: (
+          <Tooltip title="把「最后发货规格」(优先) 或「商品规格(网店)」(回退) 喂给规格解析器后, 抽出的结构化宽×高. 解析不出时显示「未解析」(如定制尺寸 / 联系客服).">
+            <span>
+              解析尺寸{' '}
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                ⓘ
+              </Text>
+            </span>
+          </Tooltip>
+        ),
         dataIndex: 'preparse_dimensions',
         width: 160,
         render: (_v, row: any) => {
@@ -481,16 +609,7 @@ export default function ProductInfoPage() {
           return <Tag color="green">宽{String(w)}×高{String(h)}cm</Tag>
         },
       },
-      {
-        title: '预解析TOKEN',
-        dataIndex: 'preparse_tokens',
-        width: 240,
-        render: (_v, row: any) => {
-          const meta = row?.metadata_json ?? {}
-          const tokens = row?.preparse_tokens ?? meta?.preparse_tokens
-          return <Text>{tokensPreview(tokens)}</Text>
-        },
-      },
+      // 「预解析TOKEN」已从列表移除, 详情见行抽屉的「规格解析」区 (debug 用途, 运营无需常看).
       {
         title: '状态',
         key: 'status',

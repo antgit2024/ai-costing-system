@@ -1861,6 +1861,51 @@ def _attach_parsed_fields(rows: List[models.SkuMaster]) -> None:
         r.data_quality_status = meta.get("data_quality_status")
         r.data_quality_evidence = meta.get("data_quality_evidence")
         r.data_quality_evaluated_at = meta.get("data_quality_evaluated_at")
+        # 识别依据 + 识别用的输入源 (前端「识别依据」列直接读这两个字段, 见 SkuMasterRead schema)
+        rec_src, rec_input = _compute_recognition_source(r, meta)
+        r.recognition_source = rec_src
+        r.recognition_input_source = rec_input
+
+
+def _compute_recognition_source(
+    row: models.SkuMaster, meta: Dict[str, Any]
+) -> tuple[Optional[str], Optional[str]]:
+    """
+    回放 ``auto_bind_preview/_execute`` 的优先级, 还原"这条 SKU 的系统标签是怎么得出来的".
+
+    返回 (recognition_source, recognition_input_source).
+
+    优先级与字段含义见 ``SkuMasterRead`` schema 的注释.
+    设计原则: 只读已落库的事实 (bound_*/shop_spec_code/metadata.bundle_template_id/
+    metadata.last_shipment_spec_text), 不再次扫规格不命中, 因为列表场景对延时极敏感.
+    """
+    bound_model_code = (getattr(row, "bound_model_code", None) or "").strip()
+    bound_variant = (meta.get("bound_variant_code") or "").strip().upper()
+    bundle_id = (meta.get("bundle_template_id") or "").strip()
+    shop_code = (getattr(row, "shop_spec_code", None) or meta.get("shop_spec_code") or "").strip()
+    variant_hint = _extract_variant_code_hint(shop_code) if shop_code else None
+    variant_hint = (variant_hint or "").upper()
+
+    # 没绑定 → 未识别
+    if not bound_model_code and not bundle_id:
+        return "none", None
+
+    # P2 套装模板强绑 (独立通道)
+    if bundle_id:
+        return "bundle", None
+
+    # P0 商家编码直锁: 商家编码抽出的 variant hint 与 bound_variant_code 一致
+    # → 说明系统就是按商家编码锁定的 (而不是再回头跑了关键词匹配后碰巧一致)
+    if variant_hint and bound_variant and variant_hint == bound_variant:
+        return "merchant_code", None
+
+    # P1 / P1' 规格类识别 — 看是否锁到变体
+    # 用了哪个 spec 作为输入: 优先 last_shipment_spec_text (发过货), 回退 spec_text (档案)
+    last_ship = (meta.get("last_shipment_spec_text") or "").strip()
+    input_src = "shipment" if last_ship else "archive"
+    if bound_variant:
+        return "keyword_variant", input_src
+    return "keyword_model_only", input_src
 
 
 def save_spec_preparse(

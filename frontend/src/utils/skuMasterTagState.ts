@@ -35,10 +35,32 @@ export type ErpTagState =
   | { kind: 'mismatch'; erpValue: string; sysExpected: string } // ERP 有值但跟系统不一致
   | { kind: 'waiting' } // 待反写 (ERP 端为空)
 
+/**
+ * 三个标签之间的"冲突"检测.
+ *
+ * 场景: 系统识别为 KB8-003, 商家编码 (干净) 是 KB8-001 → 必然有一边错了.
+ * 同样: ERP 反写后的值 跟 系统真源 不一致也是危险信号.
+ *
+ * - none: 没有冲突 (或没法比较, 如某边为空)
+ * - shop_variant_diff: 系统 vs 商家 同 model_code 但 variant 不同 (KB8-003 vs KB8-001), 中风险
+ * - shop_model_diff: 系统 vs 商家 model_code 都不同 (KB8 vs OZU), 高风险 (大概率绑错了)
+ * - erp_diff: ERP 端值 跟 系统真源不一致 (可能 ERP 端被人手改, 或反写后系统又重绑了)
+ *
+ * UI 处理: list 列里加 ⚠ 图标; 抽屉里加 Alert.
+ */
+export type TripleTagConflict =
+  | { kind: 'none' }
+  | { kind: 'shop_variant_diff'; sysValue: string; shopValue: string; modelCode: string }
+  | { kind: 'shop_model_diff'; sysValue: string; shopValue: string }
+  | { kind: 'erp_diff'; sysValue: string; erpValue: string }
+
 export interface TripleTagState {
   sys: SysTagState
   shop: ShopTagState
   erp: ErpTagState
+  // 跨标签冲突 (按严重度倒序: shop_model_diff > shop_variant_diff > erp_diff > none)
+  // 一行可能同时存在多种冲突, 只返回最严重的一种 (UI 简洁)
+  conflict: TripleTagConflict
   // 行总体状态: 用于行底色 / 排序 / 一眼概览
   // - closed: 三标签全绿 (闭环完成)
   // - ready_to_writeback: 系统标签已识别, 但 ERP 还没反写
@@ -131,6 +153,41 @@ export const computeTripleTagState = (sku: SkuMaster | Record<string, any>): Tri
     erp = { kind: 'synced', value: outSkuCode }
   }
 
+  // ---- 跨标签冲突检测 ----
+  // 优先级: shop_model_diff > shop_variant_diff > erp_diff > none
+  // (model_diff 是高风险, 大概率绑错或商家填错完全不同的模型; variant_diff 是同模型不同变体, 中风险)
+  let conflict: TripleTagConflict = { kind: 'none' }
+
+  // 抽出 系统 / 商家 对比所需的"标准变体码" (KB8-001 形式)
+  const sysCmp =
+    sys.kind === 'matched'
+      ? (sys.variantCode || sys.modelCode).toUpperCase()
+      : ''
+  const sysModel = sys.kind === 'matched' ? sys.modelCode.toUpperCase() : ''
+  const shopCmp = shop.kind === 'clean' ? shop.value.toUpperCase() : ''
+  // 从商家干净值抽 model_code: KB8-001 → KB8
+  const shopModelMatch = shopCmp.match(/^([A-Z0-9]{3})-/)
+  const shopModel = shopModelMatch ? shopModelMatch[1] : ''
+
+  // 1. 系统 vs 商家
+  if (sysCmp && shopCmp && sysCmp !== shopCmp) {
+    if (sysModel && shopModel && sysModel !== shopModel) {
+      conflict = { kind: 'shop_model_diff', sysValue: sysCmp, shopValue: shopCmp }
+    } else {
+      conflict = {
+        kind: 'shop_variant_diff',
+        sysValue: sysCmp,
+        shopValue: shopCmp,
+        modelCode: sysModel || shopModel,
+      }
+    }
+  }
+
+  // 2. ERP vs 系统 (只在没有更严重冲突时报)
+  if (conflict.kind === 'none' && erp.kind === 'mismatch') {
+    conflict = { kind: 'erp_diff', sysValue: erp.sysExpected, erpValue: erp.erpValue }
+  }
+
   // ---- 行总体状态 ----
   let overall: TripleTagState['overall']
   const sysOk = sys.kind === 'matched' || sys.kind === 'bundle'
@@ -143,7 +200,31 @@ export const computeTripleTagState = (sku: SkuMaster | Record<string, any>): Tri
   else if (!sysOk && shop.kind === 'dirty') overall = 'shop_dirty_only'
   else overall = 'empty'
 
-  return { sys, shop, erp, overall }
+  return { sys, shop, erp, conflict, overall }
+}
+
+/** 把 conflict 翻译成 UI 文案 (列表 ⚠ tooltip / 抽屉 Alert 都用). */
+export const describeConflict = (conflict: TripleTagConflict): { title: string; detail: string } | null => {
+  if (conflict.kind === 'none') return null
+  if (conflict.kind === 'shop_model_diff') {
+    return {
+      title: '⚠ 模型不一致 (高风险)',
+      detail: `系统识别为 ${conflict.sysValue}, 商家编码却是 ${conflict.shopValue} — 完全不同的模型. 大概率绑错了标准模型, 或商家把别人的款号填到了这条 SKU 上. 请人工核对再决定哪边是对的.`,
+    }
+  }
+  if (conflict.kind === 'shop_variant_diff') {
+    return {
+      title: '⚠ 变体不一致 (中风险)',
+      detail: `系统识别为 ${conflict.sysValue}, 商家编码是 ${conflict.shopValue} — 同模型 ${conflict.modelCode} 但变体不同. 可能是系统绑到了错误的变体, 或商家录入时填错了变体后缀. 请人工核对.`,
+    }
+  }
+  if (conflict.kind === 'erp_diff') {
+    return {
+      title: '⚠ ERP 端值与系统真源不一致',
+      detail: `ERP 端 outSkuCode = ${conflict.erpValue}, 但系统期望反写值是 ${conflict.sysValue}. 可能 ERP 端有人手改了, 或本次重新绑定后未触发反写. 建议: 重新反写以覆盖 ERP 端值.`,
+    }
+  }
+  return null
 }
 
 // ============================================================================

@@ -34,6 +34,7 @@ import {
 } from '@/services/planner'
 import type { SkuMaster, SpecParseResponse } from '@/types/planner'
 import { formatBeijingTime } from '@/utils/beijingTime'
+import { normalizeSpecText } from '@/utils/specNormalize'
 
 const { Title, Text } = Typography
 
@@ -51,39 +52,10 @@ const safeString = (v: unknown): string => {
 
 const isFilled = (v: unknown): boolean => !!safeString(v).trim()
 
-const stripCnAttrLabels = (input: unknown): string => {
-  const raw = safeString(input).trim()
-  if (!raw) return ''
-  // unify punctuation first
-  let t = raw.replace(/；/g, ';').replace(/：/g, ':').replace(/，/g, ',')
-  // Strip Chinese attribute label prefixes like "颜色分类:" / "尺寸:" / "组合形式:".
-  // Only labels containing Chinese chars are removed to avoid breaking internal tokens like "BUNDLE:XXXX".
-  t = t.replace(
-    /(^|[;\n\r,，/\\+|、])\s*([^;\n\r,，/\\+|、:]{1,40}[\u4e00-\u9fff][^;\n\r,，/\\+|、:]{0,40})\s*:\s*/g,
-    '$1',
-  )
-  // normalize delimiters for stable compare/display
-  t = t.replace(/[;\n\r,，/\\+|、]+/g, ';')
-  t = t.replace(/;{2,}/g, ';')
-  t = t.replace(/\s+/g, ' ').trim()
-  t = t.replace(/^[;\s]+|[;\s]+$/g, '')
-  return t
-}
-
-const normalizeSpecForCompare = (v: unknown): string => {
-  const s = stripCnAttrLabels(v)
-  if (!s) return ''
-  return (
-    s
-      .replace(/\s+/g, ' ')
-      .replace(/；/g, ';')
-      .replace(/：/g, ':')
-      .replace(/，/g, ',')
-      .replace(/（/g, '(')
-      .replace(/）/g, ')')
-      .trim()
-  )
-}
+// 规格归一化已抽到 utils/specNormalize.ts (与后端 normalize_tx_spec_text 对齐).
+// 早期这里有两份本地实现 (stripCnAttrLabels / normalizeSpecForCompare), 现统一为 normalizeSpecText.
+const stripCnAttrLabels = (input: unknown): string => normalizeSpecText(input)
+const normalizeSpecForCompare = (v: unknown): string => normalizeSpecText(v)
 
 const dimGet = (dims: any, key: string): string => {
   const v = dims?.[key]

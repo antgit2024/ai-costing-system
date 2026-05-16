@@ -2594,6 +2594,21 @@ export interface SkuMaster {
   preparse_saved_by?: string | null
   spec_mismatch?: boolean
   spec_mismatch_at?: string | null
+  /**
+   * 识别依据 — 告诉运营这条 SKU 的"系统标签"是怎么得出来的:
+   *   - "merchant_code"      : P0 商家编码直锁
+   *   - "keyword_variant"    : P1 关键词命中模型 + 变体级 conditions 推出 variant
+   *   - "keyword_model_only" : P1' 关键词只锁到模型 (变体未定)
+   *   - "bundle"             : P2 套装模板强绑
+   *   - "none"               : 未识别 / 未绑定
+   */
+  recognition_source?: 'merchant_code' | 'keyword_variant' | 'keyword_model_only' | 'bundle' | 'none' | null
+  /**
+   * 识别用的原料来自哪里 — 只对 keyword_* 有意义:
+   *   - "shipment" : 用了 last_shipment_spec_text (发过货)
+   *   - "archive"  : 用了 spec_text (未发过货, 仅基于档案文本预测)
+   */
+  recognition_input_source?: 'shipment' | 'archive' | null
   /** "spu_attribute_conflict" 或 null/undefined。由 data_quality_service nightly 重算。 */
   data_quality_status?: string | null
   data_quality_evidence?: SkuDataQualityEvidence | null

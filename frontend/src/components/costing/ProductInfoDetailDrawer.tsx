@@ -52,10 +52,12 @@ import { formatBeijingTime } from '@/utils/beijingTime'
 import { IMAGE_FALLBACK_SVG, pickRowImageUrl } from '@/utils/imageUrl'
 import {
   computeTripleTagState,
+  describeConflict,
   isShopSpecCodeClean,
   OVERALL_LABEL,
   TAG_COLORS,
 } from '@/utils/skuMasterTagState'
+import { normalizeSpecText } from '@/utils/specNormalize'
 
 const { Text, Paragraph } = Typography
 const { TextArea } = Input
@@ -278,6 +280,38 @@ export default function ProductInfoDetailDrawer({ skuId, open, onClose, onUpdate
               {OVERALL_LABEL[tagState.overall].text}
             </Tag>
           </div>
+          {(() => {
+            const cd = describeConflict(tagState.conflict)
+            if (!cd) return null
+            const sev = tagState.conflict.kind
+            // 高风险用 error, 中风险用 warning
+            const alertType: 'error' | 'warning' =
+              sev === 'shop_model_diff' ? 'error' : 'warning'
+            return (
+              <Alert
+                type={alertType}
+                showIcon
+                style={{ marginBottom: 12 }}
+                message={cd.title}
+                description={
+                  <div style={{ lineHeight: 1.7 }}>
+                    <div>{cd.detail}</div>
+                    <div style={{ marginTop: 6, color: '#888', fontSize: 12 }}>
+                      处理建议: 先确认哪一边是对的 →
+                      {sev === 'shop_model_diff' || sev === 'shop_variant_diff' ? (
+                        <span>
+                          {' '}如果<b>系统识别错了</b>, 到「商品关联」重新绑定;
+                          如果<b>商家编码填错了</b>, 在下面的「商家标签」输入框里直接改成正确值并保存
+                        </span>
+                      ) : (
+                        <span> ERP 端值偏离, 点击下方的「立即反写」按钮重新覆盖 ERP</span>
+                      )}
+                    </div>
+                  </div>
+                }
+              />
+            )
+          })()}
           <Descriptions size="small" column={1} bordered>
             <Descriptions.Item
               label={
@@ -450,37 +484,106 @@ export default function ProductInfoDetailDrawer({ skuId, open, onClose, onUpdate
         </div>
       </div>
 
-      <Card size="small" title="规格信息">
-        <Descriptions size="small" column={1}>
-          <Descriptions.Item label="商品规格 (网店)">
-            <div style={{ whiteSpace: 'normal' }}>{sku.spec_text || '-'}</div>
-          </Descriptions.Item>
-          <Descriptions.Item label="发货规格 (用于解析)">
-            <div style={{ whiteSpace: 'normal' }}>{sku.last_shipment_spec_text || '-'}</div>
-          </Descriptions.Item>
-          <Descriptions.Item label="预解析尺寸">
-            {(() => {
-              const dims = (sku.preparse_dimensions ?? {}) as Record<string, unknown>
-              const w = dims?.width_cm ?? dims?.width
-              const h = dims?.height_cm ?? dims?.height
-              if (!w || !h) return <Tag>未解析</Tag>
-              return <Tag color="green">宽{String(w)}×高{String(h)}cm</Tag>
-            })()}
-          </Descriptions.Item>
-          <Descriptions.Item label="已绑定">
-            {sku.bound_model_code ? (
-              <Space wrap>
-                <Tag color="blue">{sku.bound_model_code}</Tag>
-                {sku.bound_model_name ? <Text type="secondary">{sku.bound_model_name}</Text> : null}
-                {sku.bound_variant_label ? <Tag color="purple">{sku.bound_variant_label}</Tag> : null}
-              </Space>
-            ) : sku.bundle_template_code ? (
-              <Tag color="purple">B-{sku.bundle_template_code}{sku.bundle_preset_selector || ''}</Tag>
-            ) : (
-              <Tag>未关联</Tag>
-            )}
-          </Descriptions.Item>
-        </Descriptions>
+      <Card
+        size="small"
+        title={
+          <span>
+            规格对照{' '}
+            <Text type="secondary" style={{ fontSize: 12, fontWeight: 'normal' }}>
+              — 档案 vs 发货 vs 归一化后, 看穿"看着不一样实际一样"
+            </Text>
+          </span>
+        }
+      >
+        {(() => {
+          const archive = (sku.spec_text || '').trim()
+          const shipment = (sku.last_shipment_spec_text || '').trim()
+          const archiveNorm = normalizeSpecText(archive)
+          const shipmentNorm = normalizeSpecText(shipment)
+          const hasBoth = !!archive && !!shipment
+          const normEqual = hasBoth && archiveNorm === shipmentNorm
+          const lookDiff = hasBoth && archive !== shipment
+          return (
+            <Descriptions size="small" column={1} bordered>
+              <Descriptions.Item label="档案规格 (网店)">
+                <div style={{ whiteSpace: 'normal', wordBreak: 'break-word' }}>{archive || <Text type="secondary">—</Text>}</div>
+              </Descriptions.Item>
+              <Descriptions.Item label="最后发货规格">
+                {shipment ? (
+                  <div style={{ whiteSpace: 'normal', wordBreak: 'break-word' }}>{shipment}</div>
+                ) : (
+                  <Text type="secondary">— (这条 SKU 还未发过货, 识别会退回到档案规格)</Text>
+                )}
+              </Descriptions.Item>
+              {hasBoth ? (
+                <Descriptions.Item
+                  label={
+                    <Tooltip title="把档案规格 / 发货规格 都按规则归一化 (统一全角半角标点, 剥掉「颜色分类:」「规格:」「组合形式:」等中文属性标签前缀), 再字面比较. 与后端 spec_parser_service.normalize_tx_spec_text 保持同语义.">
+                      <span>归一化后比对</span>
+                    </Tooltip>
+                  }
+                >
+                  <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                    <div>
+                      <Tag color="default">档案 →</Tag>
+                      <Text code style={{ fontSize: 12 }}>{archiveNorm || '—'}</Text>
+                    </div>
+                    <div>
+                      <Tag color="default">发货 →</Tag>
+                      <Text code style={{ fontSize: 12 }}>{shipmentNorm || '—'}</Text>
+                    </div>
+                    {normEqual ? (
+                      <Tag color="green">✓ 归一化后完全一致 {lookDiff ? '(原始文本看着不同, 仅属性标签/标点差异)' : ''}</Tag>
+                    ) : (
+                      <Tag color="red">✗ 真实差异 (尺寸/材质/颜色)</Tag>
+                    )}
+                  </Space>
+                </Descriptions.Item>
+              ) : null}
+              <Descriptions.Item label="解析尺寸">
+                {(() => {
+                  const dims = (sku.preparse_dimensions ?? {}) as Record<string, unknown>
+                  const w = dims?.width_cm ?? dims?.width
+                  const h = dims?.height_cm ?? dims?.height
+                  if (!w || !h) return <Tag>未解析</Tag>
+                  return <Tag color="green">宽{String(w)}×高{String(h)}cm</Tag>
+                })()}
+              </Descriptions.Item>
+              <Descriptions.Item
+                label={
+                  <Tooltip title="规格文本被解析器切成的语义片段 (token), 用于关键词匹配 / 去重 / 审计.">
+                    <span>解析 TOKEN</span>
+                  </Tooltip>
+                }
+              >
+                {(() => {
+                  const tokens = (sku.preparse_tokens ?? []) as string[]
+                  if (!Array.isArray(tokens) || tokens.length === 0) return <Text type="secondary">—</Text>
+                  return (
+                    <Space wrap size={4}>
+                      {tokens.map((t, i) => (
+                        <Tag key={i} style={{ margin: 0 }}>{String(t)}</Tag>
+                      ))}
+                    </Space>
+                  )
+                })()}
+              </Descriptions.Item>
+              <Descriptions.Item label="已绑定">
+                {sku.bound_model_code ? (
+                  <Space wrap>
+                    <Tag color="blue">{sku.bound_model_code}</Tag>
+                    {sku.bound_model_name ? <Text type="secondary">{sku.bound_model_name}</Text> : null}
+                    {sku.bound_variant_label ? <Tag color="purple">{sku.bound_variant_label}</Tag> : null}
+                  </Space>
+                ) : sku.bundle_template_code ? (
+                  <Tag color="purple">B-{sku.bundle_template_code}{sku.bundle_preset_selector || ''}</Tag>
+                ) : (
+                  <Tag>未关联</Tag>
+                )}
+              </Descriptions.Item>
+            </Descriptions>
+          )
+        })()}
       </Card>
     </Space>
   ) : null

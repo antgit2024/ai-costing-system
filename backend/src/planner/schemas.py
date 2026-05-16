@@ -3858,6 +3858,19 @@ class SkuMasterRead(BaseModel):
     preparse_saved_by: Optional[str] = None
     spec_mismatch: bool = False
     spec_mismatch_at: Optional[str] = None
+    # ---- 识别依据 (computed; 见 sku_master_service._compute_recognition_source) ----
+    # 告诉运营这条 SKU 的"系统标签"是怎么得出来的, 与 bound_model_code/bound_variant_code 配套展示:
+    #   - "merchant_code"      : P0 商家编码直锁 (shop_spec_code 抽出 KB8-001)
+    #   - "keyword_variant"    : P1 关键词命中模型 + 变体级 conditions 推出 variant
+    #   - "keyword_model_only" : P1' 关键词只锁到模型 (变体未定)
+    #   - "bundle"             : P2 套装模板强绑 (bundle_template_id)
+    #   - "none"               : 未识别 / 未绑定
+    recognition_source: Optional[str] = None
+    # 识别用的"原料"来自哪里 — 只对 keyword_* 有意义:
+    #   - "shipment"           : 用了 last_shipment_spec_text (发过货, 更可靠)
+    #   - "archive"            : 用了 spec_text (未发过货, 仅基于档案文本预测)
+    #   - None                 : merchant_code / bundle / none 不需要这个维度
+    recognition_input_source: Optional[str] = None
     # 数据质量标签（来自 sku_master.metadata.data_quality_*，由 data_quality_service 写入）
     # status="spu_attribute_conflict" 表示该 SKU 历史发货跨多个不相关品类，
     # 属于"SPU 错配 SKU"，UI 应该红 Tag 隔离标识。

@@ -74,6 +74,33 @@ const RUN_STATUS_COLOR: Record<string, string> = {
   pending: 'default',
 }
 
+// 同步类型 -> 中文短名 (UI 展示用)
+// 同步类型对应的接口/语义见: DOC/costing/blueprints/jackyun_erp_goods_master_sync_backlog.md §10.1
+const SYNC_TYPE_LABEL: Record<string, string> = {
+  shipment_pull: '发货明细',
+  refund_pull: '售后退款',
+  goods_pull: '货品档案',
+  goods_import_xlsx: '货品 Excel 导入',
+  goods_writeback_xlsx: '货品 Excel 反写候选',
+  goods_writeback_api: '货品 API 反写',
+}
+
+const renderSyncType = (value: string | null | undefined): string => {
+  if (!value) return '-'
+  const cn = SYNC_TYPE_LABEL[value]
+  return cn ? `${cn} (${value})` : value
+}
+
+const SOURCE_SYSTEM_LABEL: Record<string, string> = {
+  jackyun: '吉客云',
+}
+
+const renderSourceSystem = (value: string | null | undefined): string => {
+  if (!value) return '-'
+  const cn = SOURCE_SYSTEM_LABEL[value]
+  return cn ? `${cn} (${value})` : value
+}
+
 const formatDateTime = (value: string | null | undefined): string => {
   return formatBeijingTime(value, 'YYYY-MM-DD HH:mm:ss')
 }
@@ -643,8 +670,8 @@ const RunDetailDrawer = ({ runId, onClose }: RunDetailDrawerProps) => {
               <Descriptions.Item label="状态">
                 <Tag color={RUN_STATUS_COLOR[run.status] ?? 'default'}>{run.status}</Tag>
               </Descriptions.Item>
-              <Descriptions.Item label="source / sync_type">
-                {run.source_system} / {run.sync_type}
+              <Descriptions.Item label="来源 / 同步类型">
+                {renderSourceSystem(run.source_system)} / {renderSyncType(run.sync_type)}
               </Descriptions.Item>
               <Descriptions.Item label="api_method">{run.api_method}</Descriptions.Item>
               <Descriptions.Item label="触发人">{run.triggered_by ?? '-'}</Descriptions.Item>
@@ -776,8 +803,18 @@ const SyncRunsTab = ({ refreshKey }: { refreshKey: number }) => {
       width: 170,
       render: (v: string | null) => formatDateTime(v),
     },
-    { title: 'source', dataIndex: 'source_system', width: 90 },
-    { title: 'sync_type', dataIndex: 'sync_type', width: 130 },
+    {
+      title: '来源',
+      dataIndex: 'source_system',
+      width: 110,
+      render: (v: string) => renderSourceSystem(v),
+    },
+    {
+      title: '同步类型',
+      dataIndex: 'sync_type',
+      width: 180,
+      render: (v: string) => renderSyncType(v),
+    },
     {
       title: '状态',
       dataIndex: 'status',
@@ -832,21 +869,22 @@ const SyncRunsTab = ({ refreshKey }: { refreshKey: number }) => {
       <Space style={{ marginBottom: 12 }} wrap>
         <Select
           allowClear
-          placeholder="source_system"
-          style={{ width: 160 }}
+          placeholder="来源系统"
+          style={{ width: 180 }}
           value={filterSource}
           onChange={setFilterSource}
-          options={[{ value: 'jackyun', label: 'jackyun (吉客云)' }]}
+          options={[{ value: 'jackyun', label: '吉客云 (jackyun)' }]}
         />
         <Select
           allowClear
           placeholder="同步类型"
-          style={{ width: 180 }}
+          style={{ width: 220 }}
           value={filterSyncType}
           onChange={setFilterSyncType}
           options={[
-            { value: 'shipment_pull', label: 'shipment_pull (发货)' },
-            { value: 'refund_pull', label: 'refund_pull (售后)' },
+            { value: 'shipment_pull', label: '发货明细 (shipment_pull)' },
+            { value: 'refund_pull', label: '售后退款 (refund_pull)' },
+            { value: 'goods_pull', label: '货品档案 (goods_pull)' },
           ]}
         />
         <Select

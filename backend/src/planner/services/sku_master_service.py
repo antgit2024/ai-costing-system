@@ -3894,6 +3894,444 @@ def bind_sku_master_by_model_bulk(
     }
 
 
+# ============================================================================
+# update_sku_master_field_bulk — 通用字段批量更新 (商品档案 / 商品关联 共用入口)
+# ============================================================================
+#
+# 设计 (2026-05-16 与用户对齐, 见 jackyun_erp_goods_master_sync_backlog.md §17)
+# - 商品档案是【运营做字段维护的 UI】(改工艺 / 打标签)
+# - 商品关联是【本系统侧的批量落库引擎】("一键跑完"那一套筛-分批-写库框架)
+# - 当用户在商品档案上批量改字段, 不重新造写库轮子, 直接复用本函数 —
+#   它跟 bind_sku_master_by_model_bulk 是平级动作, 共用同一套范式
+#   (筛选 / excluded_ids / limit+1+has_more / 进度 / 错误)
+#
+# 安全策略 — ALLOWED_FIELDS 白名单
+# - 只允许编辑业务字段 (production_process, metadata.erp.sku_flag)
+# - 严禁碰 binding 字段 (active_model_version_id / bound_variant_code / bundle_*)
+#   ↑ 这些字段必须走 bind_*_bulk / unbind, 它们有 BOM 试算 / 版本校验等业务规则
+#
+# ERP 反写
+# - 本函数只管"本系统落库". 反写 ERP 是【独立模块】(erp_writeback_service),
+#   由 mutation callback 触发 enqueue 即可, 不在本函数内部做 ERP 通信
+# ----------------------------------------------------------------------------
+
+# 字段白名单 — 只列出本系统允许"批量改字段"的字段
+# kind:
+#   - "physical"        : 直接写 SkuMaster 物理列
+#   - "metadata_array"  : 写 metadata_json 嵌套路径下的 JSON 数组
+# modes:
+#   - "set"             : 完全替换 (字符串字段 / 数组整体替换)
+#   - "append_unique"   : 数组追加 (去重, 仅 metadata_array 支持)
+#   - "remove"          : 数组移除 (仅 metadata_array 支持)
+_UPDATE_BULK_ALLOWED_FIELDS: Dict[str, Dict[str, Any]] = {
+    "production_process": {
+        "kind": "physical",
+        "column": "production_process",
+        "modes": {"set"},
+        "value_type": "string_or_null",
+    },
+    "metadata.erp.sku_flag": {
+        "kind": "metadata_array",
+        "json_path": ("erp", "sku_flag"),
+        "modes": {"set", "append_unique", "remove"},
+        "value_type": "string_array",
+    },
+}
+
+
+def _coerce_update_bulk_value(field_name: str, raw: Any, spec: Dict[str, Any]) -> Tuple[bool, Any, Optional[str]]:
+    """Normalize incoming value per ALLOWED_FIELDS spec.
+
+    Returns ``(ok, normalized_value, error_message)``.
+    """
+    vtype = spec.get("value_type")
+    if vtype == "string_or_null":
+        if raw in (None, ""):
+            return True, None, None
+        s = str(raw).strip()
+        return True, (s if s else None), None
+    if vtype == "string_array":
+        if raw is None:
+            return True, [], None
+        if isinstance(raw, str):
+            # accept comma/semicolon-separated input as convenience
+            parts = [p.strip() for p in re.split(r"[,;，；\n\t]+", raw) if p.strip()]
+            return True, parts, None
+        if isinstance(raw, (list, tuple)):
+            out: List[str] = []
+            seen: set[str] = set()
+            for x in raw:
+                if x in (None, ""):
+                    continue
+                s = str(x).strip()
+                if not s or s in seen:
+                    continue
+                seen.add(s)
+                out.append(s)
+            return True, out, None
+        return False, None, f"字段 {field_name} 需要字符串数组, 收到 {type(raw).__name__}"
+    return False, None, f"字段 {field_name} 缺少 value_type 配置, 联系开发"
+
+
+def _apply_update_bulk_mutation(
+    row: "models.SkuMaster",
+    *,
+    field_name: str,
+    spec: Dict[str, Any],
+    mode: str,
+    new_value: Any,
+    now_iso: str,
+    requested_by: Optional[str],
+) -> Tuple[str, Optional[Dict[str, Any]]]:
+    """Apply one row's mutation. Returns ``(status, audit_entry)``.
+
+    status: "updated" | "no_change" | "error:<msg>"
+    audit_entry: dict to be merged into metadata_json.field_writeback (optional)
+    """
+    kind = spec.get("kind")
+    if kind == "physical":
+        col = spec["column"]
+        current = getattr(row, col, None)
+        if mode != "set":
+            return f"error:物理列 {col} 仅支持 set 模式", None
+        if (current or None) == (new_value or None):
+            return "no_change", None
+        setattr(row, col, new_value)
+        return "updated", {
+            "field": field_name,
+            "mode": mode,
+            "old": current,
+            "new": new_value,
+            "at": now_iso,
+            "by": requested_by,
+        }
+
+    if kind == "metadata_array":
+        path = spec["json_path"]  # e.g. ("erp", "sku_flag")
+        meta = dict(getattr(row, "metadata_json", None) or {})
+        # walk to parent of last key, creating intermediate dicts
+        cursor = meta
+        for k in path[:-1]:
+            if not isinstance(cursor.get(k), dict):
+                cursor[k] = {}
+            cursor = cursor[k]
+        leaf_key = path[-1]
+        current_list = cursor.get(leaf_key)
+        if not isinstance(current_list, list):
+            current_list = []
+
+        if mode == "set":
+            next_list = list(new_value or [])
+        elif mode == "append_unique":
+            seen = set(str(x) for x in current_list)
+            next_list = list(current_list)
+            for x in (new_value or []):
+                if str(x) not in seen:
+                    next_list.append(x)
+                    seen.add(str(x))
+        elif mode == "remove":
+            drop = set(str(x) for x in (new_value or []))
+            next_list = [x for x in current_list if str(x) not in drop]
+        else:
+            return f"error:metadata 字段不支持 mode={mode}", None
+
+        # dedupe + stable-stringify for comparison
+        if [str(x) for x in current_list] == [str(x) for x in next_list]:
+            return "no_change", None
+        cursor[leaf_key] = next_list
+        row.metadata_json = meta
+        try:
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(row, "metadata_json")
+        except Exception:
+            pass
+        return "updated", {
+            "field": field_name,
+            "mode": mode,
+            "old": current_list,
+            "new": next_list,
+            "at": now_iso,
+            "by": requested_by,
+        }
+
+    return f"error:未知 kind={kind}", None
+
+
+def update_sku_master_field_bulk(
+    db: Session,
+    *,
+    field_name: str,
+    new_value: Any,
+    mode: str = "set",
+    requested_by: Optional[str],
+    dry_run: bool = False,
+    # 显式 ID 列表 (混合模式: 如提供则跳过 filter, 直接按 ID 操作)
+    sku_master_ids: Optional[List[str]] = None,
+    # 筛选参数 (与 bind_sku_master_by_model_bulk 同型, 缺失时不过滤)
+    limit: int = 200,
+    search: Optional[str] = None,
+    channel: Optional[str] = None,
+    match_status: Optional[str] = None,
+    spec_mismatch: Optional[bool] = None,
+    preparse_state: Optional[str] = None,
+    include_terms: Optional[str] = None,
+    exclude_terms: Optional[str] = None,
+    match_scope: Optional[str] = None,
+    bound_state: Optional[str] = None,
+    bound_model_id: Optional[str] = None,
+    bound_model_code: Optional[str] = None,
+    bound_version_id: Optional[str] = None,
+    bundle_bound_state: Optional[str] = None,
+    bundle_template_id: Optional[str] = None,
+    bundle_preset_selector: Optional[str] = None,
+    excluded_sku_master_ids: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """通用字段批量更新 — 商品档案 / 商品关联 共用入口.
+
+    工作流:
+    1. 白名单校验 field_name → 必须在 _UPDATE_BULK_ALLOWED_FIELDS 内
+    2. mode 校验 → 必须在该字段允许的 modes 内
+    3. value 归一化 → 按 value_type coerce
+    4. 候选行获取:
+       - 如 sku_master_ids 非空: 按 ID 列表精确取 (不走筛选, 不限 limit)
+       - 否则按筛选 query (limit+1 + has_more)
+    5. 逐行应用 mutation, 收集 updated/no_change/errors
+    6. dry_run=True 时不 commit (仅返回预演结果)
+    7. 返回与 bind_*_bulk 同结构的统计
+
+    Returns dict:
+      - batch_candidates: int
+      - updated_count: int
+      - skipped_no_change: int
+      - skipped_excluded: int
+      - errors: List[{sku_master_id, sku_code, error}]
+      - has_more: bool (仅筛选模式有意义)
+      - dry_run: bool
+      - field_name / mode / new_value (echo for caller audit)
+    """
+    # ---- 1. 白名单校验 ----
+    spec = _UPDATE_BULK_ALLOWED_FIELDS.get(field_name)
+    if spec is None:
+        allowed = sorted(_UPDATE_BULK_ALLOWED_FIELDS.keys())
+        raise ValueError(f"不允许批量改字段: {field_name}. 允许字段: {allowed}")
+    mode_norm = str(mode or "set").strip().lower()
+    if mode_norm not in spec["modes"]:
+        raise ValueError(
+            f"字段 {field_name} 不支持 mode={mode_norm}, 允许: {sorted(spec['modes'])}"
+        )
+
+    # ---- 2. 值归一化 ----
+    ok, normalized_value, err = _coerce_update_bulk_value(field_name, new_value, spec)
+    if not ok:
+        raise ValueError(err or "value 校验失败")
+
+    # ---- 3. 候选行 ----
+    limit2 = max(min(int(limit or 200), 2000), 1)
+    excluded_list = list(set([str(x) for x in (excluded_sku_master_ids or []) if str(x).strip()]))
+    skipped_excluded = len(excluded_list)
+    has_more = False
+
+    if sku_master_ids:
+        # 显式 ID 模式 (单条编辑 / 精确多选): 不走筛选, 不限 limit
+        id_list = list(dict.fromkeys([str(x).strip() for x in sku_master_ids if str(x).strip()]))
+        if excluded_list:
+            id_list = [x for x in id_list if x not in set(excluded_list)]
+        if not id_list:
+            return {
+                "batch_candidates": 0, "updated_count": 0, "skipped_no_change": 0,
+                "skipped_excluded": skipped_excluded, "errors": [], "has_more": False,
+                "dry_run": bool(dry_run), "field_name": field_name, "mode": mode_norm,
+                "new_value": normalized_value,
+            }
+        batch_rows = (
+            db.query(models.SkuMaster)
+            .filter(models.SkuMaster.id.in_(id_list))
+            .filter(models.SkuMaster.is_archived.is_(False))
+            .all()
+        )
+    else:
+        # 筛选模式 (跨页隐式全选): 沿用 bind_*_bulk 范式
+        q = db.query(models.SkuMaster).filter(models.SkuMaster.is_archived.is_(False))
+
+        if search:
+            s = f"%{search.strip()}%"
+            q = q.filter(
+                (models.SkuMaster.erp_sku_barcode.ilike(s))
+                | (models.SkuMaster.product_name.ilike(s))
+                | (models.SkuMaster.product_code.ilike(s))
+            )
+        if channel:
+            q = q.filter(models.SkuMaster.channel == channel)
+        if match_status:
+            q = q.filter(models.SkuMaster.match_status == match_status)
+
+        if bound_model_id or bound_model_code or bound_version_id:
+            subq = (
+                db.query(models.SkuModelVersionMapping.id)
+                .join(models.ProductModelVersion, models.ProductModelVersion.id == models.SkuModelVersionMapping.model_version_id)
+                .join(models.ProductModel, models.ProductModel.id == models.ProductModelVersion.model_id)
+                .filter(
+                    models.SkuModelVersionMapping.sku_code == models.SkuMaster.erp_sku_barcode,
+                    models.SkuModelVersionMapping.is_active.is_(True),
+                    models.SkuModelVersionMapping.is_archived.is_(False),
+                    models.ProductModelVersion.is_archived.is_(False),
+                    models.ProductModel.is_archived.is_(False),
+                )
+            )
+            if bound_version_id:
+                subq = subq.filter(models.SkuModelVersionMapping.model_version_id == str(bound_version_id).strip())
+            if bound_model_id:
+                subq = subq.filter(models.ProductModelVersion.model_id == str(bound_model_id).strip())
+            if bound_model_code:
+                subq = subq.filter(models.ProductModel.model_code == str(bound_model_code).strip())
+        else:
+            subq = (
+                db.query(models.SkuModelVersionMapping.id)
+                .filter(
+                    models.SkuModelVersionMapping.sku_code == models.SkuMaster.erp_sku_barcode,
+                    models.SkuModelVersionMapping.is_active.is_(True),
+                    models.SkuModelVersionMapping.is_archived.is_(False),
+                )
+            )
+        bstate = str(bound_state or "all").strip().lower()
+        if bstate == "unbound":
+            q = q.filter(~subq.exists())
+        elif bstate == "bound":
+            q = q.filter(subq.exists())
+
+        # bundle filter (同 list_sku_master 范式)
+        bt_id_expr = func.coalesce(models.SkuMaster.metadata_json["bundle_template_id"].as_string(), "")
+        bp_sel_expr = func.coalesce(models.SkuMaster.metadata_json["bundle_preset_selector"].as_string(), "")
+        if bundle_bound_state:
+            bbs = str(bundle_bound_state).strip().lower()
+            if bbs in ("bound", "yes", "1", "true"):
+                q = q.filter(bt_id_expr != "")
+            elif bbs in ("unbound", "none", "no", "0", "false"):
+                q = q.filter(bt_id_expr == "")
+        if bundle_template_id:
+            q = q.filter(bt_id_expr == str(bundle_template_id).strip())
+        if bundle_preset_selector:
+            q = q.filter(func.upper(bp_sel_expr) == str(bundle_preset_selector).strip().upper())
+
+        if spec_mismatch is True:
+            q = q.filter(models.SkuMaster.metadata_json["spec_mismatch"].as_boolean() == True)  # noqa: E712
+
+        if preparse_state:
+            pstate = str(preparse_state).strip().lower()
+            ph = models.SkuMaster.metadata_json["preparse_spec_hash"].as_string()
+            if pstate in ("parsed", "done", "yes", "1", "true"):
+                q = q.filter(func.coalesce(ph, "") != "")
+            elif pstate in ("unparsed", "none", "no", "0", "false"):
+                q = q.filter(func.coalesce(ph, "") == "")
+
+        def _parse_terms(raw: Optional[str]) -> List[str]:
+            if not raw:
+                return []
+            s2 = str(raw)
+            for ch in ("，", ";", "；", "\n", "\t"):
+                s2 = s2.replace(ch, " ")
+            parts = [p.strip() for p in s2.split(" ") if p.strip()]
+            out: List[str] = []
+            seen: set[str] = set()
+            for p in parts:
+                if p in seen:
+                    continue
+                seen.add(p)
+                out.append(p)
+            return out
+
+        include_list = _parse_terms(include_terms)
+        exclude_list = _parse_terms(exclude_terms)
+        scope = (match_scope or "auto").strip()
+        if scope not in ("auto", "spec", "name", "spec_or_name"):
+            scope = "auto"
+        name_channels = ["小红书", "京东"]
+
+        def _field_expr_for_scope(term: str):
+            pattern = f"%{term}%"
+            spec_hit = models.SkuMaster.spec_text.ilike(pattern)
+            name_hit = models.SkuMaster.product_name.ilike(pattern)
+            if scope == "spec":
+                return spec_hit
+            if scope == "name":
+                return name_hit
+            if scope == "spec_or_name":
+                return spec_hit | name_hit
+            return (models.SkuMaster.channel.in_(name_channels) & name_hit) | (
+                ~models.SkuMaster.channel.in_(name_channels) & spec_hit
+            )
+
+        for t in include_list:
+            q = q.filter(_field_expr_for_scope(t))
+        for t in exclude_list:
+            q = q.filter(~_field_expr_for_scope(t))
+
+        if excluded_list:
+            q = q.filter(~models.SkuMaster.id.in_(excluded_list))
+
+        rows_all = (
+            q.order_by(models.SkuMaster.updated_at.desc())
+            .limit(limit2 + 1)
+            .all()
+        )
+        has_more = len(rows_all) > limit2
+        batch_rows = rows_all[:limit2]
+
+    # ---- 4. 应用 mutation ----
+    updated_count = 0
+    skipped_no_change = 0
+    errors: List[Dict[str, Any]] = []
+    now_iso = _utcnow().isoformat()
+
+    for row in batch_rows:
+        try:
+            status, _audit = _apply_update_bulk_mutation(
+                row,
+                field_name=field_name,
+                spec=spec,
+                mode=mode_norm,
+                new_value=normalized_value,
+                now_iso=now_iso,
+                requested_by=requested_by,
+            )
+            if status == "updated":
+                updated_count += 1
+            elif status == "no_change":
+                skipped_no_change += 1
+            elif status.startswith("error:"):
+                errors.append({
+                    "sku_master_id": row.id,
+                    "sku_code": (row.erp_sku_barcode or ""),
+                    "error": status[len("error:"):],
+                })
+        except Exception as exc:  # noqa: BLE001
+            errors.append({
+                "sku_master_id": row.id,
+                "sku_code": (row.erp_sku_barcode or ""),
+                "error": str(exc),
+            })
+
+    # ---- 5. commit (dry_run 时 rollback) ----
+    if dry_run:
+        db.rollback()
+    else:
+        db.commit()
+
+    return {
+        "batch_candidates": len(batch_rows),
+        "updated_count": updated_count,
+        "skipped_no_change": skipped_no_change,
+        "skipped_excluded": skipped_excluded,
+        "errors": errors,
+        "has_more": has_more,
+        "dry_run": bool(dry_run),
+        "field_name": field_name,
+        "mode": mode_norm,
+        "new_value": normalized_value,
+        "requested_by": requested_by,
+    }
+
+
 def preview_bind_by_model_bulk(
     db: Session,
     *,

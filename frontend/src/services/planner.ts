@@ -3212,6 +3212,93 @@ export const previewBindSkuMastersByModelBulk = async (
   return response.data
 }
 
+// ============================================================================
+// updateSkuMasterFieldBulk — 通用字段批量更新 (商品档案 / 商品关联 共用入口)
+// ============================================================================
+//
+// 后端服务: sku_master_service.update_sku_master_field_bulk
+// 路由: POST /sku-master/update-field-bulk  (+ /preview)
+//
+// 字段白名单 (服务端 _UPDATE_BULK_ALLOWED_FIELDS):
+// - "production_process": 物理列, 仅 mode="set"
+// - "metadata.erp.sku_flag": JSON 数组, mode ∈ {set, append_unique, remove}
+//
+// 调用方式
+// - 显式 ID 模式: 传 sku_master_ids (单条编辑 / 精确多选), 忽略筛选
+// - 跨页隐式全选: 不传 sku_master_ids, 用 search/channel/... 筛选 + limit
+//   "一键跑完"在前端循环调用直到 has_more=false
+// ----------------------------------------------------------------------------
+
+export type SkuMasterUpdateFieldName = 'production_process' | 'metadata.erp.sku_flag'
+
+export type SkuMasterUpdateFieldMode = 'set' | 'append_unique' | 'remove'
+
+export interface SkuMasterUpdateFieldBulkRequest {
+  field_name: SkuMasterUpdateFieldName | string
+  new_value: unknown
+  mode?: SkuMasterUpdateFieldMode
+  requested_by?: string
+  dry_run?: boolean
+
+  sku_master_ids?: string[]
+
+  limit?: number
+  search?: string
+  channel?: string
+  match_status?: string
+  spec_mismatch?: boolean
+  preparse_state?: string
+  include_terms?: string
+  exclude_terms?: string
+  match_scope?: 'spec' | 'name' | 'auto' | 'spec_or_name'
+  bound_state?: 'bound' | 'unbound' | 'all'
+  bound_model_id?: string
+  bound_model_code?: string
+  bound_version_id?: string
+  bundle_bound_state?: 'bound' | 'unbound' | 'all'
+  bundle_template_id?: string
+  bundle_preset_selector?: string
+
+  excluded_sku_master_ids?: string[]
+}
+
+export interface SkuMasterUpdateFieldBulkResponse {
+  batch_candidates: number
+  updated_count: number
+  skipped_no_change: number
+  skipped_excluded: number
+  errors: Array<{ sku_master_id?: string; sku_code?: string; error?: string }>
+  has_more: boolean
+  dry_run: boolean
+  field_name: string
+  mode: string
+  new_value: unknown
+  requested_by?: string | null
+}
+
+export const updateSkuMasterFieldBulk = async (
+  payload: SkuMasterUpdateFieldBulkRequest,
+  opts: PlannerRequestOptions = {},
+): Promise<SkuMasterUpdateFieldBulkResponse> => {
+  const response = await plannerClient.post('/sku-master/update-field-bulk', payload, {
+    timeout: opts.timeoutMs,
+    signal: opts.signal,
+  })
+  return response.data
+}
+
+export const previewUpdateSkuMasterFieldBulk = async (
+  payload: SkuMasterUpdateFieldBulkRequest,
+  opts: PlannerRequestOptions = {},
+): Promise<SkuMasterUpdateFieldBulkResponse> => {
+  const response = await plannerClient.post(
+    '/sku-master/update-field-bulk/preview',
+    { ...payload, dry_run: true },
+    { timeout: opts.timeoutMs, signal: opts.signal },
+  )
+  return response.data
+}
+
 export const bindSkuMastersByBundleTemplate = async (
   payload: {
     template_id: string

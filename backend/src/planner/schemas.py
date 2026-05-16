@@ -4327,6 +4327,60 @@ class SkuMasterBindPreviewBulkResponse(BaseModel):
     items: List[SkuMasterBindPreviewItem] = Field(default_factory=list)
 
 
+class SkuMasterUpdateFieldBulkRequest(BaseModel):
+    """通用字段批量更新 — 商品档案 / 商品关联 共用入口.
+
+    - 显式 ID 模式: 传 sku_master_ids (适合单条编辑 / 精确多选, 忽略筛选)
+    - 筛选模式: 传 search/channel/match_status 等 (跨页隐式全选), 服务端按 limit 分批
+    - dry_run=true: 预演不写库 (用于"批改前看影响多少条")
+
+    白名单字段 (服务端 _UPDATE_BULK_ALLOWED_FIELDS):
+    - production_process (set)
+    - metadata.erp.sku_flag (set / append_unique / remove)
+    """
+
+    field_name: str
+    new_value: Any = None
+    mode: Literal["set", "append_unique", "remove"] = "set"
+    requested_by: Optional[str] = None
+    dry_run: bool = False
+
+    sku_master_ids: List[str] = Field(default_factory=list)
+
+    limit: int = Field(200, ge=1, le=2000)
+    search: Optional[str] = None
+    channel: Optional[str] = None
+    match_status: Optional[str] = None
+    spec_mismatch: Optional[bool] = None
+    preparse_state: Optional[str] = None
+    include_terms: Optional[str] = None
+    exclude_terms: Optional[str] = None
+    match_scope: Optional[str] = None
+    bound_state: Optional[Literal["bound", "unbound", "all"]] = None
+    bound_model_id: Optional[str] = None
+    bound_model_code: Optional[str] = None
+    bound_version_id: Optional[str] = None
+    bundle_bound_state: Optional[Literal["bound", "unbound", "all"]] = None
+    bundle_template_id: Optional[str] = None
+    bundle_preset_selector: Optional[str] = None
+
+    excluded_sku_master_ids: List[str] = Field(default_factory=list)
+
+
+class SkuMasterUpdateFieldBulkResponse(BaseModel):
+    batch_candidates: int
+    updated_count: int
+    skipped_no_change: int
+    skipped_excluded: int
+    errors: List[Dict[str, Any]] = Field(default_factory=list)
+    has_more: bool
+    dry_run: bool
+    field_name: str
+    mode: str
+    new_value: Any = None
+    requested_by: Optional[str] = None
+
+
 class SkuMasterAutoBindPreviewRequest(BaseModel):
     limit: int = Field(200, ge=1, le=2000)
     # max rows to scan among unbound sku masters (server-side filter) to find candidates

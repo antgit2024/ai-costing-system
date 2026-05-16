@@ -296,6 +296,92 @@ def bind_by_model_bulk(payload: schemas.SkuMasterBindByModelBulkRequest, db: Ses
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+@router.post("/update-field-bulk/preview", response_model=schemas.SkuMasterUpdateFieldBulkResponse)
+def preview_update_field_bulk(
+    payload: schemas.SkuMasterUpdateFieldBulkRequest,
+    db: Session = Depends(get_db_session),
+):
+    """预演通用字段批量更新 — dry_run=true, 不写库, 仅返回影响行数 / 错误.
+
+    用于商品档案"批改前看影响多少条"的预览面板.
+    """
+    try:
+        return sku_master_service.update_sku_master_field_bulk(
+            db,
+            field_name=payload.field_name,
+            new_value=payload.new_value,
+            mode=payload.mode,
+            requested_by=payload.requested_by,
+            dry_run=True,
+            sku_master_ids=list(payload.sku_master_ids or []),
+            limit=payload.limit,
+            search=payload.search,
+            channel=payload.channel,
+            match_status=payload.match_status,
+            spec_mismatch=payload.spec_mismatch,
+            preparse_state=payload.preparse_state,
+            include_terms=payload.include_terms,
+            exclude_terms=payload.exclude_terms,
+            match_scope=payload.match_scope,
+            bound_state=payload.bound_state,
+            bound_model_id=payload.bound_model_id,
+            bound_model_code=payload.bound_model_code,
+            bound_version_id=payload.bound_version_id,
+            bundle_bound_state=payload.bundle_bound_state,
+            bundle_template_id=payload.bundle_template_id,
+            bundle_preset_selector=payload.bundle_preset_selector,
+            excluded_sku_master_ids=list(payload.excluded_sku_master_ids or []),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/update-field-bulk", response_model=schemas.SkuMasterUpdateFieldBulkResponse)
+def update_field_bulk(
+    payload: schemas.SkuMasterUpdateFieldBulkRequest,
+    db: Session = Depends(get_db_session),
+):
+    """通用字段批量更新 — 商品档案 / 商品关联 共用入口.
+
+    安全策略: 服务端 _UPDATE_BULK_ALLOWED_FIELDS 白名单, 仅允许业务字段
+    (production_process / metadata.erp.sku_flag). 严禁碰 binding 字段.
+
+    两种调用方式:
+    1. 单条/精确多选: 传 sku_master_ids, 忽略筛选
+    2. 跨页隐式全选: 不传 sku_master_ids, 用 search/channel/... 筛选 + limit 分批
+       前端"一键跑完"按 200/批循环调用直到 has_more=false
+    """
+    try:
+        return sku_master_service.update_sku_master_field_bulk(
+            db,
+            field_name=payload.field_name,
+            new_value=payload.new_value,
+            mode=payload.mode,
+            requested_by=payload.requested_by,
+            dry_run=bool(payload.dry_run),
+            sku_master_ids=list(payload.sku_master_ids or []),
+            limit=payload.limit,
+            search=payload.search,
+            channel=payload.channel,
+            match_status=payload.match_status,
+            spec_mismatch=payload.spec_mismatch,
+            preparse_state=payload.preparse_state,
+            include_terms=payload.include_terms,
+            exclude_terms=payload.exclude_terms,
+            match_scope=payload.match_scope,
+            bound_state=payload.bound_state,
+            bound_model_id=payload.bound_model_id,
+            bound_model_code=payload.bound_model_code,
+            bound_version_id=payload.bound_version_id,
+            bundle_bound_state=payload.bundle_bound_state,
+            bundle_template_id=payload.bundle_template_id,
+            bundle_preset_selector=payload.bundle_preset_selector,
+            excluded_sku_master_ids=list(payload.excluded_sku_master_ids or []),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @router.post("/bind-by-bundle", response_model=schemas.SkuMasterBindByBundleTemplateResponse)
 def bind_by_bundle(payload: schemas.SkuMasterBindByBundleTemplateRequest, db: Session = Depends(get_db_session)):
     try:

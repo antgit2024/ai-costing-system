@@ -1,5 +1,14 @@
 # ERP 回传（Write-back）MVP：把“可生产的工艺/规格”回写到 ERP
 
+## 0A. 与 2026-05-16 v3 口径对齐
+
+本文件是早期反写蓝图，字段名需要按当前 `jackyun_erp_goods_master_sync_backlog.md` §15 解释：
+
+- 系统侧可执行工艺说明统一叫 `production_process`（Phase0 / 代码侧沿用）。本文历史名 `process_instructions_text` 只作语义别名。
+- 吉客云 ERP 货品档案反写目标是 `工艺说明(规)`，同步镜像落 `metadata.erp.process_instructions_reg`。
+- 禁止把 ERP 同步下来的 `工艺说明(规)` 反灌覆盖 `production_process`；`production_process` 是我方源，`process_instructions_reg` 是 ERP 端镜像。
+- 网店商家编码 / 模型编码统一叫 `shop_spec_code`，反写到 ERP `outSkuCode`，同步镜像落 `out_sku_code`。
+
 ## 0. 背景（为什么必须回传）
 
 - ERP 的“交易规格/商品规格”是面向交易展示的文本，**不等于可生产的工艺单**（对工人不可直接执行）。

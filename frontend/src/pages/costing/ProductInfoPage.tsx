@@ -10,6 +10,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   downloadErpWritebackExcel,
   enqueueErpWriteback,
+  downloadOutSkuCodeFillExcel,
   fetchSkuMaster,
   fetchTripleTagOverview,
   listErpWritebackJobs,
@@ -1304,6 +1305,7 @@ const STATUS_COLOR: Record<string, string> = {
   succeeded: 'green',
   failed: 'red',
   superseded: 'default',
+  needs_outsku_code: 'gold',
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -1312,6 +1314,18 @@ const STATUS_LABEL: Record<string, string> = {
   succeeded: '已成功',
   failed: '失败',
   superseded: '已被新任务覆盖',
+  needs_outsku_code: '需补外部编码',
+}
+
+const STEP_LABEL: Record<string, string> = {
+  flag: '规格标记',
+  skuimport: '其他字段',
+}
+const STEP_STATUS_COLOR: Record<string, string> = {
+  succeeded: 'green',
+  failed: 'red',
+  retry: 'orange',
+  needs_outsku_code: 'gold',
 }
 
 interface WritebackQueueDrawerProps {
@@ -1426,22 +1440,86 @@ function WritebackQueueDrawer(props: WritebackQueueDrawerProps) {
     },
     onSuccess: (res: ErpWritebackPushResult) => {
       const ok = res.status === 'succeeded'
-      Modal[ok ? 'success' : 'info']({
-        title: ok ? '推送成功' : `推送结果：${res.status}`,
-        width: 600,
+      const needsCode = res.status === 'needs_outsku_code'
+      const titleByStatus: Record<string, string> = {
+        succeeded: '推送成功',
+        needs_outsku_code: '需要先补 outSkuCode',
+        retrying: '稍后会重试',
+        failed: '推送失败',
+      }
+      Modal[ok ? 'success' : needsCode ? 'warning' : 'info']({
+        title: titleByStatus[res.status] || `推送结果：${res.status}`,
+        width: 720,
         content: (
           <div>
-            <div style={{ marginBottom: 8 }}>
-              <Tag color={ok ? 'green' : res.status === 'retrying' ? 'orange' : 'red'}>
-                {res.status}
+            <Space wrap style={{ marginBottom: 12 }}>
+              <Tag color={STATUS_COLOR[res.status] || 'default'}>
+                {STATUS_LABEL[res.status] || res.status}
               </Tag>
+              {res.summary ? (
+                <Text type="secondary" style={{ fontSize: 12 }}>{res.summary}</Text>
+              ) : null}
               {res.biz_sub_code ? (
-                <Text type="secondary" style={{ marginLeft: 8 }}>
+                <Text type="secondary" style={{ fontSize: 12 }}>
                   subCode: <Text code>{res.biz_sub_code}</Text>
                 </Text>
               ) : null}
-            </div>
-            {res.error ? (
+            </Space>
+
+            {needsCode ? (
+              <Alert
+                type="warning"
+                showIcon
+                message="规格/模型编码/工艺说明 三字段需要先在吉客云补 outSkuCode 才能 API 反写"
+                description={
+                  <span style={{ fontSize: 12 }}>
+                    吉客云 erp.goods.skuimportbatch 接口用 outSkuCode 当唯一匹配键。
+                    当前 sku 在吉客云那侧的「外部编码」为空，因此 API 无法 update。
+                    在「反写队列」顶部点击「下载补码 Excel」→ 拿到吉客云后台「货品资料 → 导入 → 更新已有货品」一次性补完即可。
+                    完成后系统下次同步会自动把 outSkuCode 同步进来，之后所有 sku 字段反写都能直推。
+                  </span>
+                }
+                style={{ marginBottom: 8 }}
+              />
+            ) : null}
+
+            {res.steps && res.steps.length > 0 ? (
+              <Table
+                size="small"
+                pagination={false}
+                rowKey={(r: any) => r.step}
+                dataSource={res.steps}
+                columns={[
+                  {
+                    title: '步骤',
+                    dataIndex: 'step',
+                    width: 110,
+                    render: (s: string) => (
+                      <Tag color="blue">{STEP_LABEL[s] || s}</Tag>
+                    ),
+                  },
+                  {
+                    title: '状态',
+                    dataIndex: 'status',
+                    width: 130,
+                    render: (st: string) => (
+                      <Tag color={STEP_STATUS_COLOR[st] || 'default'}>{st}</Tag>
+                    ),
+                  },
+                  { title: 'API', dataIndex: 'api', ellipsis: true,
+                    render: (a: string) => <Text code style={{ fontSize: 11 }}>{a}</Text> },
+                  {
+                    title: '结果',
+                    dataIndex: 'error',
+                    ellipsis: true,
+                    render: (e?: string, r?: any) =>
+                      e ? <Tooltip title={e}><Text style={{ fontSize: 11 }}>{e.length > 60 ? e.slice(0, 60) + '…' : e}</Text></Tooltip>
+                        : <Text type="secondary" style={{ fontSize: 11 }}>{r?.biz_sub_code || 'ok'}</Text>,
+                  },
+                ]}
+                style={{ marginBottom: 8 }}
+              />
+            ) : res.error ? (
               <Alert
                 type={ok ? 'success' : 'error'}
                 showIcon
@@ -1450,20 +1528,28 @@ function WritebackQueueDrawer(props: WritebackQueueDrawerProps) {
                 style={{ marginBottom: 8 }}
               />
             ) : null}
-            {res.biz ? (
+
+            {res.steps && res.steps.length > 0 ? (
               <details style={{ marginTop: 8 }}>
-                <summary style={{ cursor: 'pointer', color: '#666' }}>
-                  推送的 biz payload (展开)
+                <summary style={{ cursor: 'pointer', color: '#666', fontSize: 12 }}>
+                  各步 biz payload (展开)
                 </summary>
                 <pre
                   style={{
-                    background: '#f5f5f5',
-                    padding: 8,
-                    marginTop: 4,
-                    fontSize: 11,
-                    whiteSpace: 'pre-wrap',
-                    maxHeight: 240,
-                    overflow: 'auto',
+                    background: '#f5f5f5', padding: 8, marginTop: 4, fontSize: 11,
+                    whiteSpace: 'pre-wrap', maxHeight: 320, overflow: 'auto',
+                  }}
+                >
+                  {JSON.stringify(res.steps.map((s: any) => ({ step: s.step, api: s.api, biz: s.biz })), null, 2)}
+                </pre>
+              </details>
+            ) : res.biz ? (
+              <details style={{ marginTop: 8 }}>
+                <summary style={{ cursor: 'pointer', color: '#666' }}>biz payload (展开)</summary>
+                <pre
+                  style={{
+                    background: '#f5f5f5', padding: 8, marginTop: 4, fontSize: 11,
+                    whiteSpace: 'pre-wrap', maxHeight: 240, overflow: 'auto',
                   }}
                 >
                   {JSON.stringify(res.biz, null, 2)}
@@ -1667,13 +1753,14 @@ function WritebackQueueDrawer(props: WritebackQueueDrawerProps) {
         <Alert
           type="info"
           showIcon
-          message="当前 worker 未上线 — 任务停在 pending 状态等待真实推送 ERP"
+          message="反写分流: 规格标记 → batchupdateflagbyskubarcode; 规格/模型编码/工艺说明 → skuimportbatch (UPSERT)"
           description={
             <span style={{ fontSize: 12 }}>
-              这里展示所有进入反写队列的任务（包括抽屉「反写历史」Tab 看不到的全局视图）。
-              入队 → pending → 后续 worker 自动调吉客云「编辑货品」接口 → succeeded / failed。
-              同一 SKU 重复入队时，旧的 pending 任务会被自动标记为「已覆盖」（superseded）。
-              数据每 15 秒自动刷新。
+              skuimportbatch 用 <Text code>outSkuCode</Text> 作为唯一匹配键。
+              当前商家大多数 sku 在吉客云的「外部编码」为空，必须先一次性补码才能反写这 3 个字段。
+              <br />
+              点击「下载补码 Excel」→ 拿到吉客云后台「货品资料 → 导入 → 更新已有货品」一次性补完即可。
+              系统会自动同步回 sku_master.out_sku_code，之后所有 sku 字段反写都能 API 直推。
             </span>
           }
         />
@@ -1708,7 +1795,7 @@ function WritebackQueueDrawer(props: WritebackQueueDrawerProps) {
           <Button onClick={() => queueQuery.refetch()} loading={queueQuery.isFetching}>
             刷新
           </Button>
-          <Tooltip title="串行扫一批 (最多 20 条) 待推送任务, 逐条调吉客云「编辑货品」接口. 等吉客云后台开通对应 API 订阅后, 这就是真实推送的入口.">
+          <Tooltip title="串行扫一批 (最多 20 条) 待推送任务, 逐条调吉客云接口推送. 规格标记会调 batchupdateflagbyskubarcode; 其他字段需要 outSkuCode 已补.">
             <Button
               type="primary"
               loading={workerMutation.isPending}
@@ -1716,6 +1803,24 @@ function WritebackQueueDrawer(props: WritebackQueueDrawerProps) {
               disabled={!(counts.pending || counts.retrying)}
             >
               批扫一次 (≤20)
+            </Button>
+          </Tooltip>
+          <Tooltip title="一次性导出所有 out_sku_code 为空的 sku, 用于吉客云后台「货品资料 → 导入」批量补外部编码. 这是 sku 自定义字段 API 反写的前置条件.">
+            <Button
+              onClick={async () => {
+                try {
+                  const res = await downloadOutSkuCodeFillExcel({ only_empty: true })
+                  triggerBrowserDownload(res.blob, res.filename)
+                  message.success(`已生成 ${res.totalRows} 行补码 Excel`)
+                } catch (e: any) {
+                  Modal.error({
+                    title: '生成补码 Excel 失败',
+                    content: e?.response?.data?.detail || e?.message || '未知错误',
+                  })
+                }
+              }}
+            >
+              下载补码 Excel
             </Button>
           </Tooltip>
           <Text type="secondary" style={{ fontSize: 12 }}>

@@ -45,7 +45,17 @@ from .. import models
 
 SOURCE_SYSTEM = "jackyun"
 TARGET_TYPE = "sku_master"
-DEFAULT_API_METHOD = "erp.storage.goods.update"  # 占位 (worker 尚未上线)
+
+# 吉客云反写接口分流 (2026-05-17 经官方 schema dump + 实测确认):
+# - "规格标记" 走 batchupdateflagbyskubarcode (轻量, biz=[{skuBarcode,flagDataName}])
+# - "规格/模型编码/工艺说明" 走 skuimportbatch (UPSERT, 必须先有 outSkuCode 锚定)
+#
+# 早期版本默认走 erp.goods.update, 但官方 schema 103 字段里没有任何 skuList/skuField*,
+# 它是 goods 维度接口, 对 sku 字段会静默忽略 (返回"成功"但实际没改). 不再使用.
+# 详见 backend/scripts/probe_erp_goods_update.py + NOTES_jackyun_writeback.md
+API_BATCH_UPDATE_FLAG = "erp-goods.goods.batchupdateflagbyskubarcode"
+API_SKU_IMPORT_BATCH = "erp.goods.skuimportbatch"
+DEFAULT_API_METHOD = API_SKU_IMPORT_BATCH  # job.api_method 默认值, 实际推送时按字段分流
 
 
 # ---------------------------------------------------------------------------
@@ -77,11 +87,12 @@ def _extract_process_instructions(row: "models.SkuMaster") -> Optional[str]:
     return s.strip() if isinstance(s, str) and s.strip() else None
 
 
-def _extract_sku_flag(row: "models.SkuMaster") -> Optional[str]:
+def _extract_sku_flag(row: "models.SkuMaster") -> Any:
     """规格标记: 本地真源是 metadata.erp.sku_flag (list[str]).
 
-    吉客云后台「规格标记」单元格用中文逗号分隔多值, 这里直接拼成 string,
-    让运营能直接复制到吉客云后台.
+    - Excel 反写: 用中文逗号 join 成 string (运营能直接复制到吉客云后台单元格)
+    - API 反写 (erp.goods.update): 走 _extract_sku_flag_for_api, 见下方
+    本函数保留 string 输出, 是为了向后兼容 Excel 路径; API 路径独立的抽取器.
     """
     meta = getattr(row, "metadata_json", None) or {}
     if not isinstance(meta, dict):
@@ -94,11 +105,32 @@ def _extract_sku_flag(row: "models.SkuMaster") -> Optional[str]:
     return "，".join(flat) if flat else None
 
 
+# ---------- 吉客云自定义字段字典 (2026-05-17 经 erp.goods.customfield 实测拿到) ----------
+# fieldName → fieldCaption (visible=1 的 8 个 sku 自定义字段)
+# 用户后台没有"规格标记"自定义字段 — 规格标记走 flagData 标准字段 (list[str])
+# 改这个字典或重新跑 erp.goods.customfield 即可同步最新映射.
+JACKYUN_SKU_CUSTOM_FIELD_DICT: Dict[str, str] = {
+    "skuField1": "模型编码",
+    "skuField2": "工艺编码",
+    "skuField3": "适用模型",
+    "skuField4": "排版损耗",
+    "skuField5": "生产损耗",
+    "skuField6": "入库换算",
+    "skuField7": "进货价格",
+    "skuField8": "工艺说明",
+}
+
 # 内部 key → (Excel 中文表头, 吉客云 API 字段名, 抽取器)
+# - "模型编码(规)" 反写到 sku 自定义字段 skuField1 (= 模型编码)
+# - "工艺说明(规)" 反写到 sku 自定义字段 skuField8 (= 工艺说明)
+# - "规格"      反写到标准字段 skuName
+# - "规格标记"  反写到标准字段 flagData
+# API 字段名前都没有 reg 后缀, 因为 ERP 那边字段名就叫"模型编码 / 工艺说明",
+# 我们内部加的 "(规)" 后缀只是区分这是 sku 规格级而不是 goods 货品级.
 WRITEBACK_FIELD_MAP: Dict[str, Tuple[str, str, Callable[["models.SkuMaster"], Any]]] = {
     "spec_text": ("规格", "skuName", _extract_spec_text),
-    "model_code_reg": ("模型编码(规)", "model_code", _extract_model_code_reg),
-    "process_instructions_reg": ("工艺说明(规)", "process_instructions", _extract_process_instructions),
+    "model_code_reg": ("模型编码(规)", "skuField1", _extract_model_code_reg),
+    "process_instructions_reg": ("工艺说明(规)", "skuField8", _extract_process_instructions),
     "sku_flag": ("规格标记", "flagData", _extract_sku_flag),
 }
 
@@ -237,6 +269,91 @@ def build_writeback_excel(
         "filename": filename,
     }
     return bio.getvalue(), summary
+
+
+# ---------------------------------------------------------------------------
+# Cold-start 工具: 生成「补 outSkuCode」Excel
+# ---------------------------------------------------------------------------
+#
+# 背景: erp.goods.skuimportbatch 是 UPSERT 接口, 但匹配键必须是 outSkuCode.
+# 当前商家的 sku 大多数 out_sku_code 为 null (吉客云后台没填), 因此 API
+# 反写整条路径走不通. 一次性解决方案: 用这个工具导出"补码 Excel", 运营拿到
+# 吉客云后台「货品资料 → 导入」即可批量给所有 sku 锚定 outSkuCode = skuBarcode,
+# 之后 API 反写就能跑了.
+
+
+def build_outsku_code_fill_excel(
+    db: Session,
+    *,
+    sku_master_ids: Optional[List[str]] = None,
+    only_empty: bool = True,
+) -> Tuple[bytes, Dict[str, Any]]:
+    """生成「批量补 outSkuCode」Excel (吉客云后台导入用).
+
+    - 默认只导出 out_sku_code 为空的 sku (only_empty=True)
+    - sku_master_ids 为空时导出全量 (受 only_empty 过滤)
+    - 用 skuBarcode 当 outSkuCode (一一对应, 无脑稳定)
+
+    Excel 列:
+      条码 / 货品编号 / 货品名称 / 规格名称 / 外部编码(=条码, 待补)
+    运营在吉客云「货品资料 → Excel 导入 → 更新已有货品」一次跑完即可.
+    """
+    from openpyxl import Workbook
+
+    q = db.query(models.SkuMaster)
+    if sku_master_ids:
+        q = q.filter(models.SkuMaster.id.in_(sku_master_ids))
+    if only_empty:
+        q = q.filter(
+            (models.SkuMaster.out_sku_code.is_(None))
+            | (func.length(func.trim(models.SkuMaster.out_sku_code)) == 0)
+        )
+    q = q.filter(
+        models.SkuMaster.erp_sku_barcode.isnot(None),
+        func.length(func.trim(models.SkuMaster.erp_sku_barcode)) > 0,
+    ).order_by(models.SkuMaster.product_code, models.SkuMaster.erp_sku_barcode)
+
+    wb = Workbook(write_only=True)
+    ws = wb.create_sheet("补外部编码")
+    ws.append(["条码", "货品编号", "货品名称", "规格名称", "外部编码"])
+
+    written = 0
+    for r in q.all():
+        barcode = (getattr(r, "erp_sku_barcode", None) or "").strip()
+        if not barcode:
+            continue
+        ws.append([
+            barcode,
+            getattr(r, "product_code", None) or "",
+            getattr(r, "product_name", None) or "",
+            getattr(r, "spec_text", None) or "",
+            barcode,  # 外部编码 = 条码 (推荐, 一一对应)
+        ])
+        written += 1
+
+    # Sheet2: 操作指引
+    ws2 = wb.create_sheet("使用说明")
+    ws2.append(["步骤", "说明"])
+    for i, txt in enumerate([
+        "本表用于一次性给吉客云所有 sku 锚定「外部编码 (outSkuCode)」",
+        "锚定后 ERP 反写接口 (erp.goods.skuimportbatch) 才能 UPDATE 现有 sku",
+        "操作: 吉客云后台 → 货品资料 → Excel 导入 → 选「更新已有货品」 → 上传本文件",
+        "外部编码 = 条码 (推荐, 一一对应, 后续我方系统能自动同步回来)",
+        "完成后通知技术: 系统下次同步会自动把 outSkuCode 同步到本地 sku_master",
+        "之后所有反写任务 (规格 / 模型编码 / 工艺说明) 都能 API 直推",
+    ], 1):
+        ws2.append([str(i), txt])
+
+    bio = io.BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return bio.getvalue(), {
+        "total_rows": written,
+        "filename": f"jackyun_fill_outsku_code_{ts}.xlsx",
+        "only_empty": bool(only_empty),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -504,27 +621,139 @@ def list_writeback_jobs(
 # ---------------------------------------------------------------------------
 
 
-def _build_jackyun_biz_from_job(job: "models.IntegrationWritebackJob") -> Dict[str, Any]:
-    """根据 job.payload_json 构造调吉客云「修改货品」接口的 biz dict.
+def _normalize_flag_data_name(v: Any) -> Optional[str]:
+    """flagData 值规范化: list/string 都接受, 输出 batchupdateflagbyskubarcode
+    要求的 ``flagDataName`` (英文逗号分隔的 string, 例: "红冲,被冲").
 
-    payload_json 形如 {"sku_master_id": "...", "fields": [...], "values": {...}}
-    其中 values 的 key 已经是吉客云 API 字段名 (skuName / model_code /
-    process_instructions / flagData), 见 WRITEBACK_FIELD_MAP.
-
-    主键: skuBarcode = job.target_id (= erp_sku_barcode), 这是吉客云用来定位货品的字段.
-    若以后接口要求改用 skuCode / goodsNo / outerCode, 调整这里即可.
+    吉客云会再用英文逗号 split. 上游 _extract_sku_flag 输出的是 *中文* 逗号
+    分隔的 string (为兼容 Excel), 这里统一转半角.
     """
-    payload = job.payload_json or {}
-    values = dict(payload.get("values") or {})
-    biz: Dict[str, Any] = {"skuBarcode": str(job.target_id or "").strip()}
-    # 把 values 里非 None / 非空字符串的字段挂上去
-    for k, v in values.items():
+    if v is None:
+        return None
+    if isinstance(v, str):
+        parts = [p.strip() for p in v.replace("，", ",").split(",") if p.strip()]
+    elif isinstance(v, (list, tuple)):
+        parts = [str(p).strip() for p in v if str(p).strip()]
+    else:
+        parts = [str(v).strip()] if str(v).strip() else []
+    return ",".join(parts) if parts else None
+
+
+def _build_flag_biz(barcode: str, flag_value: Any) -> Optional[List[Dict[str, Any]]]:
+    """erp-goods.goods.batchupdateflagbyskubarcode 的 biz 构造.
+
+    官方 schema (2026-05-17 dump):
+      [{"skuBarcode": "A0001", "flagDataName": "红冲,被冲"}]
+    顶层 array; flagDataName 必须是吉客云后台已存在的标记名称.
+    """
+    flag = _normalize_flag_data_name(flag_value)
+    if not barcode or not flag:
+        return None
+    return [{"skuBarcode": str(barcode).strip(), "flagDataName": flag}]
+
+
+def _build_skuimport_biz(
+    *,
+    out_sku_code: str,
+    goods_no: str,
+    goods_name: Optional[str],
+    sku_values: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """erp.goods.skuimportbatch 的 biz 构造 (UPSERT 路径).
+
+    匹配键 = ``outSkuCode`` (官方文档 2026-05-11 明确: 这是两个系统间的唯一锚).
+    若 sku 在吉客云那边 outSkuCode 为空, **本接口无法 update**, 会走 INSERT
+    并撞到现有 (goodsNo + skuName) 拒绝. 调用方必须先确保 out_sku_code 不为空.
+
+    必填字段 (官方 schema): goodsName / goodsNo / unitName / outSkuCode
+    可选传字段: skuName / skuField1..30 / goodsField1..50 / flagData / ...
+
+    sku_values 已经按 WRITEBACK_FIELD_MAP 对齐到吉客云字段名 (skuName /
+    skuField1 / skuField8 / flagData 等), 直接 spread 即可.
+    """
+    item: Dict[str, Any] = {
+        "goodsNo": str(goods_no).strip(),
+        "goodsName": str(goods_name or goods_no).strip(),
+        "unitName": "件",  # 大部分商家用件; 后续如有需要可从 sku_master 取
+        "outSkuCode": str(out_sku_code).strip(),
+    }
+    for k, v in sku_values.items():
         if v is None:
             continue
         if isinstance(v, str) and not v.strip():
             continue
-        biz[k] = v
-    return biz
+        item[k] = v
+    return [item]
+
+
+def _row_success_check(resp_data: Any) -> Tuple[bool, Optional[str], Optional[str]]:
+    """解析 jackyun response.data 数组的行级状态.
+
+    skuimportbatch / batchupdateflagbyskubarcode 都返回:
+      result.data: [{success: bool, errorMessage: str, subCode: str, outSkuCode/skuBarcode}]
+
+    框架 sub_code 是 0030000004 "操作成功" (在 _BUSINESS_OK_SUB_CODES 白名单里), 但
+    行级 success=false 时实际推送失败, 必须在这里二次校验, 否则会把失败 mark_done.
+
+    返回: (ok, sub_code, err_msg)
+    """
+    if not isinstance(resp_data, list) or not resp_data:
+        # data 是空 list 也算成功 (有的接口成功时返回空)
+        return True, None, None
+    first = resp_data[0] if isinstance(resp_data[0], dict) else {}
+    ok = bool(first.get("success"))
+    return ok, first.get("subCode"), first.get("errorMessage")
+
+
+def _call_one_step(
+    client: Any,
+    *,
+    api_method: str,
+    biz: Any,
+    db: Session,
+) -> Dict[str, Any]:
+    """单步调用 + 把行级 success 一并解析进来, 返回扁平 dict.
+
+    设计目的: push_one_job 里可能要连调 2 个接口 (规格标记 + 其他字段), 每步
+    结果要独立汇总. 把 IntegrationError 也内化为 dict, 调用方不再 try/except.
+    """
+    from src.integrations.base.errors import (
+        IntegrationAuthError,
+        IntegrationBusinessError,
+        IntegrationTransportError,
+    )
+
+    out: Dict[str, Any] = {"api": api_method, "biz": biz}
+    try:
+        resp = client.call(api_method, biz, db=db)
+    except IntegrationAuthError as exc:
+        out.update(status="failed", retry=False, error=f"AUTH: {exc.message}",
+                   biz_sub_code=exc.biz_sub_code, biz_code=exc.biz_code)
+        return out
+    except IntegrationBusinessError as exc:
+        out.update(status="failed", retry=False, error=f"BIZ: {exc.message}",
+                   biz_sub_code=exc.biz_sub_code, biz_code=exc.biz_code)
+        return out
+    except IntegrationTransportError as exc:
+        out.update(status="retry", retry=True, error=f"NET: {exc.message}")
+        return out
+    except Exception as exc:  # noqa: BLE001
+        out.update(status="retry", retry=True,
+                   error=f"UNEXPECTED: {type(exc).__name__}: {exc}")
+        return out
+
+    # 行级二次校验 (data[0].success 决定真实成败, 框架成功 ≠ 业务成功)
+    row_ok, row_sub, row_err = _row_success_check(resp.data)
+    if not row_ok:
+        out.update(status="failed", retry=False,
+                   error=f"ROW: {row_err}" if row_err else "ROW: success=false",
+                   biz_sub_code=row_sub or resp.biz_sub_code,
+                   biz_code=resp.biz_code)
+        return out
+
+    out.update(status="succeeded",
+               biz_sub_code=resp.biz_sub_code, biz_code=resp.biz_code)
+    return out
 
 
 def push_one_job(
@@ -534,30 +763,23 @@ def push_one_job(
     requested_by: Optional[str] = None,
     force: bool = False,
 ) -> Dict[str, Any]:
-    """同步推送单条 job 到吉客云.
+    """同步推送单条 job 到吉客云 (分流到 2 个接口).
 
-    步骤:
-    1. 取出 job, 校验 status 是否可推 (pending / retrying; force=True 时也允许其他)
-    2. 构造 biz dict (用 job.payload_json["values"] + 主键 skuBarcode)
-    3. 调 JackyunClient.call(job.api_method, biz, db=db) — 会自动签名 + 记 api 日志
-    4. 成功 → mark_job_done; 业务/认证错 → mark_job_failed(retry=False); 网络错 → retry=True
+    分流规则:
+      - "规格标记" (flagData) → erp-goods.goods.batchupdateflagbyskubarcode
+        biz=[{skuBarcode, flagDataName}], 不依赖 outSkuCode
+      - "规格 / 模型编码(规) / 工艺说明(规)" → erp.goods.skuimportbatch
+        biz=[{outSkuCode 锚定, skuName, skuField1, skuField8 ...}]
+        ★ 强制要求 sku.out_sku_code 不为空, 否则跳过此步并提示运营补码
 
-    返回:
-        {"status": "...", "biz_sub_code": "...", "error": "...", "biz": {...}}
-        UI 拿来给运营看完整真实响应.
-
-    注意:
-    - 当前 erp.storage.goods.update 这个 method / biz 字段集**未经实际验证**,
-      第一次跑大概率会有 biz_sub_code 不在 _BUSINESS_OK_SUB_CODES 白名单或
-      字段名不对的报错. 根据真实 last_error 调整本函数即可.
+    汇总规则:
+      - 所有 step succeeded → mark_job_done, return "succeeded"
+      - 任一 step failed 但不可重试 → mark_job_failed(retry=False)
+      - 任一 step retry → mark_job_failed(retry=True), return "retrying"
+      - 全部 step skipped 且原因是 needs_outsku_code → mark_job_failed(retry=False),
+        return "needs_outsku_code" (UI 用这个状态展示补码引导)
     """
-    # 延迟 import 避免循环依赖
     from src.integrations.jackyun import build_default_client
-    from src.integrations.base.errors import (
-        IntegrationAuthError,
-        IntegrationBusinessError,
-        IntegrationTransportError,
-    )
 
     job = db.get(models.IntegrationWritebackJob, job_id)
     if not job:
@@ -569,20 +791,33 @@ def push_one_job(
             "error": f"job 当前状态={job.status}, 不可推 (需 pending / retrying, 或 force=True)",
         }
 
-    # 主键必须有
-    target_id = (job.target_id or "").strip()
-    if not target_id:
+    payload = job.payload_json or {}
+    values: Dict[str, Any] = dict(payload.get("values") or {})
+    barcode = (job.target_id or "").strip()
+    if not barcode:
         mark_job_failed(db, job_id=job_id, error="missing target_id (skuBarcode 为空)", retry=False)
         return {"status": "failed", "error": "missing target_id (skuBarcode)"}
 
-    biz = _build_jackyun_biz_from_job(job)
-    # 至少要有一个待写字段
-    has_writable = any(k for k in biz.keys() if k != "skuBarcode")
-    if not has_writable:
-        mark_job_failed(db, job_id=job_id, error="biz 除主键外没有任何待写字段", retry=False)
-        return {"status": "failed", "error": "no writable field"}
+    if not values:
+        mark_job_failed(db, job_id=job_id, error="job.values 为空, 无字段可推", retry=False)
+        return {"status": "failed", "error": "no values"}
 
-    # 推送前先把 status 置为 retrying / attempt 自增, 防止并发
+    # 实时取 sku_master 以拿最新 out_sku_code / product_code / product_name
+    # (enqueue 时的 metadata 可能已过期, 例如运营刚在吉客云补完外部码)
+    sku_master_id = str(payload.get("sku_master_id") or "").strip()
+    sku = db.get(models.SkuMaster, sku_master_id) if sku_master_id else None
+    if sku is None:
+        # 没拿到 sku, 用 enqueue 时的 metadata 兜底
+        meta = job.metadata_json or {}
+        out_sku_code = (meta.get("out_sku_code") or "").strip() if isinstance(meta.get("out_sku_code"), str) else ""
+        product_code = (meta.get("product_code") or "").strip() if isinstance(meta.get("product_code"), str) else ""
+        product_name = meta.get("product_name") or product_code
+    else:
+        out_sku_code = (getattr(sku, "out_sku_code", None) or "").strip()
+        product_code = (getattr(sku, "product_code", None) or "").strip()
+        product_name = getattr(sku, "product_name", None) or product_code
+
+    # 攻击/并发保护: attempt + 锁状态
     job.attempt = int(job.attempt or 0) + 1
     job.last_attempt_at = _now_naive_utc()
     job.updated_at = _now_naive_utc()
@@ -593,46 +828,98 @@ def push_one_job(
     try:
         client = build_default_client()
     except RuntimeError as exc:
-        # JACKYUN_APP_KEY/SECRET 未配置
         mark_job_failed(db, job_id=job_id, error=f"客户端初始化失败: {exc}", retry=False)
-        return {"status": "failed", "error": str(exc), "biz": biz}
+        return {"status": "failed", "error": str(exc)}
 
-    try:
-        resp = client.call(job.api_method, biz, db=db)
-    except IntegrationAuthError as exc:
-        mark_job_failed(db, job_id=job_id, error=f"AUTH: {exc.message} (sub={exc.biz_sub_code})", retry=False)
-        return {
-            "status": "failed",
-            "error": exc.message,
-            "biz_sub_code": exc.biz_sub_code,
-            "biz_code": exc.biz_code,
-            "biz": biz,
-        }
-    except IntegrationBusinessError as exc:
-        mark_job_failed(db, job_id=job_id, error=f"BIZ: {exc.message} (sub={exc.biz_sub_code})", retry=False)
-        return {
-            "status": "failed",
-            "error": exc.message,
-            "biz_sub_code": exc.biz_sub_code,
-            "biz_code": exc.biz_code,
-            "biz": biz,
-        }
-    except IntegrationTransportError as exc:
-        # 网络层错误, 允许重试
-        mark_job_failed(db, job_id=job_id, error=f"NET: {exc.message}", retry=True)
-        return {"status": "retrying", "error": exc.message, "biz": biz}
-    except Exception as exc:  # noqa: BLE001 — 兜底, 防止 worker 进程挂
-        mark_job_failed(db, job_id=job_id, error=f"UNEXPECTED: {type(exc).__name__}: {exc}", retry=True)
-        return {"status": "retrying", "error": str(exc), "biz": biz}
+    # ---- 分流字段 ----
+    flag_value = values.pop("flagData", None)
+    other_values = {k: v for k, v in values.items() if v not in (None, "")}
 
-    # 成功路径
-    mark_job_done(db, job_id=job_id, requested_by=requested_by)
-    return {
-        "status": "succeeded",
-        "biz_sub_code": resp.biz_sub_code,
-        "biz_code": resp.biz_code,
-        "biz": biz,
-    }
+    steps: List[Dict[str, Any]] = []
+
+    # Step 1: 规格标记 → batchupdateflagbyskubarcode (条件: 有 flag 且 barcode)
+    flag_biz = _build_flag_biz(barcode, flag_value)
+    if flag_biz:
+        steps.append({"step": "flag", **_call_one_step(
+            client, api_method=API_BATCH_UPDATE_FLAG, biz=flag_biz, db=db)})
+
+    # Step 2: 其他字段 → skuimportbatch (条件: 有非 flag 字段)
+    if other_values:
+        if not out_sku_code:
+            # 缺 outSkuCode, 整个 step 跳过, 给清晰错误码引导运营补码
+            steps.append({
+                "step": "skuimport",
+                "status": "needs_outsku_code",
+                "error": "out_sku_code 为空, 请先在吉客云后台批量补外部编码 (吉客云那侧 sku 没补 outSkuCode 时本接口无法 update)",
+                "api": API_SKU_IMPORT_BATCH,
+            })
+        elif not product_code:
+            steps.append({
+                "step": "skuimport",
+                "status": "failed",
+                "retry": False,
+                "error": "product_code (goodsNo) 为空, 无法定位货品",
+                "api": API_SKU_IMPORT_BATCH,
+            })
+        else:
+            sk_biz = _build_skuimport_biz(
+                out_sku_code=out_sku_code,
+                goods_no=product_code,
+                goods_name=product_name,
+                sku_values=other_values,
+            )
+            steps.append({"step": "skuimport", **_call_one_step(
+                client, api_method=API_SKU_IMPORT_BATCH, biz=sk_biz, db=db)})
+
+    if not steps:
+        mark_job_failed(db, job_id=job_id, error="无可推送字段 (flag 为空且 other 为空)", retry=False)
+        return {"status": "failed", "error": "no pushable field"}
+
+    # ---- 汇总 ----
+    n_ok = sum(1 for s in steps if s.get("status") == "succeeded")
+    n_skip_oc = sum(1 for s in steps if s.get("status") == "needs_outsku_code")
+    n_fail = sum(1 for s in steps if s.get("status") == "failed")
+    n_retry = sum(1 for s in steps if s.get("status") == "retry")
+    total = len(steps)
+
+    if n_retry:
+        # 任一网络错: 整体 retrying (用最严的)
+        first_retry = next(s for s in steps if s.get("status") == "retry")
+        mark_job_failed(db, job_id=job_id,
+                        error=f"NET retry: {first_retry.get('error')}", retry=True)
+        return {"status": "retrying", "steps": steps, "summary": f"{n_ok}/{total} ok"}
+
+    if n_fail:
+        first_fail = next(s for s in steps if s.get("status") == "failed")
+        mark_job_failed(db, job_id=job_id,
+                        error=f"step({first_fail.get('step')}) FAIL: {first_fail.get('error')}",
+                        retry=False)
+        return {"status": "failed", "steps": steps, "summary": f"{n_ok}/{total} ok",
+                "error": first_fail.get("error"),
+                "biz_sub_code": first_fail.get("biz_sub_code")}
+
+    if n_ok == total:
+        mark_job_done(db, job_id=job_id, requested_by=requested_by)
+        return {"status": "succeeded", "steps": steps, "summary": f"{n_ok}/{total} ok"}
+
+    # 走到这: 没 fail / retry, 但有 needs_outsku_code (一定有 skip 且 ok+skip=total)
+    if n_skip_oc and n_ok:
+        # 部分成功 (flag 推了, skuimport 跳了): 算"半成功", 标 fail 但等运营补码
+        mark_job_failed(
+            db, job_id=job_id,
+            error=f"PART OK: flag 推送成功, skuimport 跳过 (需补 outSkuCode)",
+            retry=False,
+        )
+        return {"status": "needs_outsku_code", "steps": steps,
+                "summary": f"{n_ok}/{total} ok, {n_skip_oc} 需补码"}
+    # 只剩 needs_outsku_code 全部 skip
+    mark_job_failed(
+        db, job_id=job_id,
+        error="needs_outsku_code: 请先在吉客云后台批量补 outSkuCode",
+        retry=False,
+    )
+    return {"status": "needs_outsku_code", "steps": steps,
+            "summary": f"0/{total} ok"}
 
 
 def run_worker_once(

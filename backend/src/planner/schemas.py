@@ -4474,6 +4474,17 @@ class ErpWritebackEnqueueRequest(BaseModel):
     dry_run: bool = False
 
 
+class ErpWritebackOutSkuCodeFillRequest(BaseModel):
+    """生成「补 outSkuCode」Excel 的请求体 (cold-start 工具).
+
+    - sku_master_ids 为空时: 导全量 sku_master
+    - only_empty=True (默认): 只导 out_sku_code 为空的行
+    """
+
+    sku_master_ids: List[str] = Field(default_factory=list, max_items=20000)
+    only_empty: bool = True
+
+
 class ErpWritebackEnqueueJobOut(BaseModel):
     job_id: str
     sku_master_id: str

@@ -51,7 +51,16 @@ _SHANGHAI_TZ = timezone(timedelta(hours=8))
 # - "0030000004": ERP namespace (e.g. erp.storage.goodslist) returns
 #   subCode="0030000004" with msg="操作成功" on success. Discovered 2026-05-16
 #   while wiring up goods master sync.
-_BUSINESS_OK_SUB_CODES = {"0", "0000000000", "00000000", "200", "0030000004"}
+# - "0031300000": erp.goods.update returns subCode="0031300000" with
+#   msg="批量修改货品成功" on success. Discovered 2026-05-17 by trial-and-error
+#   probe (see scripts/probe_erp_goods_update.py); the same namespace as
+#   0030000004 but a different sub-code per upstream convention.
+# - "0038000010": erp-goods-online.item.batchupdateitem returns "修改商品成功"
+#   on success when updateType=1/2 is set. Discovered 2026-05-17 with same probe.
+_BUSINESS_OK_SUB_CODES = {
+    "0", "0000000000", "00000000", "200",
+    "0030000004", "0031300000", "0038000010",
+}
 
 
 # Sub-codes that indicate the *caller* (key/secret/token/subscription)

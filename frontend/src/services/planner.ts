@@ -3590,12 +3590,84 @@ export const listErpWritebackJobs = async (
   return response.data
 }
 
-export interface ErpWritebackPushResult {
-  status: 'succeeded' | 'failed' | 'retrying' | 'skipped' | 'not_found' | string
+export interface ErpWritebackPushStep {
+  step: 'flag' | 'skuimport' | string
+  api: string
+  status:
+    | 'succeeded'
+    | 'failed'
+    | 'retry'
+    | 'needs_outsku_code'
+    | string
   error?: string | null
   biz_sub_code?: string | null
   biz_code?: string | null
+  biz?: unknown
+  retry?: boolean
+}
+
+export interface ErpWritebackPushResult {
+  // 'needs_outsku_code' 是新加: skuimport step 因 out_sku_code 为空跳过时回这个
+  status:
+    | 'succeeded'
+    | 'failed'
+    | 'retrying'
+    | 'skipped'
+    | 'not_found'
+    | 'needs_outsku_code'
+    | string
+  error?: string | null
+  biz_sub_code?: string | null
+  biz_code?: string | null
+  /** 旧版只返回单 biz (兼容); 新版分流后请看 steps[] */
   biz?: Record<string, unknown> | null
+  /** 多步推送结果数组. 新版返回, 旧 job 没有这个字段. */
+  steps?: ErpWritebackPushStep[]
+  /** 'N/M ok' 之类的人类可读摘要 */
+  summary?: string
+}
+
+/** 下载「补 outSkuCode」Excel — cold-start 工具.
+ *
+ *  没有 sku_master_ids 时导全量 (受 only_empty 过滤). 用法跟反写 Excel 一样,
+ *  blob 返回 + triggerBrowserDownload 弹另存为.
+ */
+export interface OutSkuCodeFillExcelResult {
+  blob: Blob
+  filename: string
+  totalRows: number
+  onlyEmpty: boolean
+}
+
+export const downloadOutSkuCodeFillExcel = async (
+  payload: { sku_master_ids?: string[]; only_empty?: boolean } = {},
+  opts: PlannerRequestOptions = {},
+): Promise<OutSkuCodeFillExcelResult> => {
+  const response = await plannerClient.post(
+    '/sku-master/erp-writeback/outsku-code-fill-excel',
+    {
+      sku_master_ids: payload.sku_master_ids ?? [],
+      only_empty: payload.only_empty ?? true,
+    },
+    {
+      responseType: 'blob',
+      timeout: opts.timeoutMs ?? 60_000,
+      signal: opts.signal,
+    },
+  )
+
+  let filename = 'jackyun_fill_outsku_code.xlsx'
+  const disposition: string | undefined = response.headers?.['content-disposition']
+  if (typeof disposition === 'string') {
+    const m = disposition.match(/filename="?([^";]+)"?/i)
+    if (m && m[1]) filename = m[1]
+  }
+  return {
+    blob: response.data as Blob,
+    filename,
+    totalRows: Number(response.headers?.['x-fill-total-rows'] ?? 0) || 0,
+    onlyEmpty: String(response.headers?.['x-fill-only-empty'] ?? 'true') === 'true',
+  }
 }
 
 export const pushErpWritebackJob = async (

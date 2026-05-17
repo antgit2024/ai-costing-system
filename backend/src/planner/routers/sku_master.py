@@ -468,6 +468,43 @@ def erp_writeback_export_excel(
     )
 
 
+@router.post("/erp-writeback/outsku-code-fill-excel")
+def erp_writeback_outsku_code_fill_excel(
+    payload: schemas.ErpWritebackOutSkuCodeFillRequest,
+    db: Session = Depends(get_db_session),
+):
+    """生成「批量补 outSkuCode」Excel, 二进制下载.
+
+    cold-start 工具: 吉客云 erp.goods.skuimportbatch (UPSERT) 接口要求
+    outSkuCode 当匹配键, 但商家当前 sku 大多 out_sku_code 为空, 走 API
+    反写时会卡在"规格已存在"拒绝. 用本 Excel 在吉客云后台一次性补完,
+    后续 API 反写全部走通.
+
+    - 不传 sku_master_ids: 导全量
+    - only_empty=True (默认): 只导 out_sku_code 为空的行 (一般运营选这个)
+    """
+    try:
+        xlsx_bytes, summary = erp_writeback_service.build_outsku_code_fill_excel(
+            db,
+            sku_master_ids=list(payload.sku_master_ids) if payload.sku_master_ids else None,
+            only_empty=bool(payload.only_empty),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    filename = summary.get("filename") or "jackyun_fill_outsku_code.xlsx"
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "X-Fill-Total-Rows": str(summary.get("total_rows", 0)),
+        "X-Fill-Only-Empty": str(summary.get("only_empty", True)).lower(),
+    }
+    return StreamingResponse(
+        io.BytesIO(xlsx_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers=headers,
+    )
+
+
 @router.post("/erp-writeback/enqueue", response_model=schemas.ErpWritebackEnqueueResponse)
 def erp_writeback_enqueue(
     payload: schemas.ErpWritebackEnqueueRequest,

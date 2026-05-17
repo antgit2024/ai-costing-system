@@ -34,7 +34,7 @@
  * 1. 基础: 三标签对账(只读) + 主图 + 基础信息 + 规格对照
  * 2. 字段编辑: 4 字段统一表单 + 单一保存 + 重识别结果提示
  * 3. 店铺映射: shop_sku_mappings (一个 ERP 货品可在多店铺销售)
- * 4. 反写历史: 从 metadata.erp.*_writeback 读 (M5-3 stub, 真正实现在 M6)
+ * 4. 反写历史: integration_writeback_jobs 表 (按本 SKU 条码筛选, 倒序展示 jobs)
  * 5. 原始 metadata: JSON 折叠 (debug)
  */
 
@@ -60,11 +60,18 @@ import type { ColumnsType } from 'antd/es/table'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import {
+  downloadErpWritebackExcel,
   editSkuForm,
+  enqueueErpWriteback,
+  ERP_WRITEBACK_FIELD_LABELS,
+  fetchErpWritebackHistory,
   fetchSkuMasterByBarcode,
   fetchSkuMasterDetail,
+  triggerBrowserDownload,
 } from '@/services/planner'
 import type {
+  ErpWritebackField,
+  ErpWritebackHistoryItem,
   SkuEditFormField,
   SkuMasterEditFormResponse,
 } from '@/services/planner'
@@ -154,6 +161,13 @@ export default function ProductInfoDetailDrawer({ skuId, open, onClose, onUpdate
     enabled: open && !!barcode,
   })
 
+  // ERP 反写历史 (单条 SKU)
+  const writebackHistoryQuery = useQuery({
+    queryKey: ['product-info', 'erp-writeback-history', sku?.id],
+    queryFn: () => fetchErpWritebackHistory(sku!.id, 50),
+    enabled: open && !!sku?.id,
+  })
+
   // Server 数据回流时, 同步 draft (除非用户有未保存修改)
   useEffect(() => {
     if (sku) {
@@ -234,6 +248,56 @@ export default function ProductInfoDetailDrawer({ skuId, open, onClose, onUpdate
     },
     onError: (e: any) => {
       message.error(e?.response?.data?.detail || e?.message || '保存失败')
+    },
+  })
+
+  // ============================================================
+  // Mutation: M6 ERP 反写 — 单条 Excel 下载 + 单条入队
+  // ============================================================
+
+  const writebackExcelMutation = useMutation({
+    mutationFn: async () => {
+      if (!sku?.id) throw new Error('no sku selected')
+      return downloadErpWritebackExcel(
+        { sku_master_ids: [sku.id] },
+        { timeoutMs: 30_000 },
+      )
+    },
+    onSuccess: (result) => {
+      triggerBrowserDownload(result.blob, result.filename)
+      message.success(`已生成 ${result.totalRows} 行 Excel: ${result.filename}`)
+    },
+    onError: (e: any) => {
+      message.error(e?.response?.data?.detail || e?.message || '导出失败')
+    },
+  })
+
+  const writebackEnqueueMutation = useMutation({
+    mutationFn: async () => {
+      if (!sku?.id) throw new Error('no sku selected')
+      return enqueueErpWriteback(
+        {
+          sku_master_ids: [sku.id],
+          requested_by: requestedBy,
+        },
+        { timeoutMs: 30_000 },
+      )
+    },
+    onSuccess: (resp) => {
+      if (resp.skipped_count > 0 && resp.enqueued_count === 0) {
+        const reason = resp.skipped?.[0]?.reason
+        message.warning(`未入队: ${reason || '无可反写值'}`)
+        return
+      }
+      if (resp.superseded_count > 0) {
+        message.success(`已入队 (合并旧任务 ${resp.superseded_count} 条)`)
+      } else {
+        message.success(`已加入反写队列 (${resp.enqueued_count} 条)`)
+      }
+      writebackHistoryQuery.refetch()
+    },
+    onError: (e: any) => {
+      message.error(e?.response?.data?.detail || e?.message || '入队失败')
     },
   })
 
@@ -322,7 +386,7 @@ export default function ProductInfoDetailDrawer({ skuId, open, onClose, onUpdate
                           如果<b>商家编码填错了</b>, 切到「字段编辑」Tab 把模型编码改成正确值并保存 (会自动重识别)
                         </span>
                       ) : (
-                        <span> ERP 端值偏离, 切到「字段编辑」Tab 保存后点击「反写到 ERP」按钮 (M6 模块)</span>
+                        <span> ERP 端值偏离, 切到「字段编辑」Tab 保存后, 用「下载反写 Excel」或「加入反写队列」推送系统真源.</span>
                       )}
                     </div>
                   </div>
@@ -407,7 +471,7 @@ export default function ProductInfoDetailDrawer({ skuId, open, onClose, onUpdate
               ) : (
                 <Space>
                   <Tag color={TAG_COLORS.erp_waiting}>— 待反写</Tag>
-                  <Text type="secondary" style={{ fontSize: 12 }}>等 M6 反写阶段把系统真源推过去</Text>
+                  <Text type="secondary" style={{ fontSize: 12 }}>用「字段编辑 / 反写」按钮把系统真源推到 ERP</Text>
                 </Space>
               )}
             </Descriptions.Item>
@@ -642,8 +706,8 @@ export default function ProductInfoDetailDrawer({ skuId, open, onClose, onUpdate
             (auto_bind_execute), 你会立刻看到系统真源 (bound_variant_code) 跟随更新.
             <br />
             <Text type="secondary" style={{ fontSize: 12 }}>
-              反写到 ERP (吉客云后台「规格」「模型编码(规)」「工艺说明(规)」「规格标记」) 走独立的「反写到 ERP」按钮
-              (M6 模块, 当前预留位置).
+              4 个字段对应吉客云后台「规格」「模型编码(规)」「工艺说明(规)」「规格标记」, 保存后用下方
+              「下载反写 Excel」(在吉客云后台手动导入) 或「加入反写队列」(等 worker 异步推送) 推回 ERP.
             </Text>
           </div>
         }
@@ -836,8 +900,29 @@ export default function ProductInfoDetailDrawer({ skuId, open, onClose, onUpdate
               >
                 撤销修改
               </Button>
-              <Tooltip title="把本地修改 + 自动识别结果, 推送到 ERP 货品档案对应字段. M6 模块开发中.">
-                <Button disabled>反写到 ERP (M6 待实现)</Button>
+              <Tooltip
+                title={
+                  dirtyFields.length > 0
+                    ? '当前还有未保存的修改, 建议先保存再反写, 避免推送旧值. 也可以直接反写, 推送的是当前数据库里的真源值.'
+                    : '推送 4 个字段 (规格 / 模型编码(规) / 工艺说明(规) / 规格标记) 到吉客云后台. 推送源 = 数据库里的真源.'
+                }
+              >
+                <Button
+                  onClick={() => writebackExcelMutation.mutate()}
+                  loading={writebackExcelMutation.isPending}
+                  disabled={!sku || editFormMutation.isPending}
+                >
+                  下载反写 Excel
+                </Button>
+              </Tooltip>
+              <Tooltip title="把反写任务入队 (整理在「反写历史」Tab). 后续 worker 会自动调吉客云接口直推, 当前为 pending 状态.">
+                <Button
+                  onClick={() => writebackEnqueueMutation.mutate()}
+                  loading={writebackEnqueueMutation.isPending}
+                  disabled={!sku || editFormMutation.isPending}
+                >
+                  加入反写队列
+                </Button>
               </Tooltip>
               {dirtyFields.length > 0 ? (
                 <Text type="warning" style={{ fontSize: 12 }}>
@@ -964,26 +1049,141 @@ export default function ProductInfoDetailDrawer({ skuId, open, onClose, onUpdate
     </Space>
   )
 
-  // ---- Tab 4: 反写历史 (M6 待实现) ----
-  const tabWriteback = (
-    <Alert
-      type="warning"
-      showIcon
-      message="反写历史 — 待 M6 模块实现"
-      description={
-        <div style={{ lineHeight: 1.7 }}>
-          本 Tab 将显示该 SKU 的 ERP 反写历史 (何时反写, 反写哪些字段, 成功/失败, payload)。
-          <br />
-          数据源: <Text code>metadata.erp.*_writeback</Text> + 独立 <Text code>erp_writeback_log</Text> 表。
-          <br />
-          反写按钮 (单条 / 批量 / Excel 导出) 同样在 M6 实现。
-          <br />
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            提示: 本地字段已支持 4 个字段一次保存 (字段编辑 Tab), 反写到 ERP 走独立通道.
+  // ---- Tab 4: 反写历史 (真实数据, M6) ----
+  const writebackStatusColor: Record<string, string> = {
+    pending: 'gold',
+    retrying: 'orange',
+    succeeded: 'green',
+    failed: 'red',
+    superseded: 'default',
+  }
+
+  const writebackHistoryColumns: ColumnsType<ErpWritebackHistoryItem> = [
+    {
+      title: '入队时间',
+      dataIndex: 'created_at',
+      width: 150,
+      render: (v) => <Text style={{ fontSize: 12 }}>{formatTime(v)}</Text>,
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      width: 100,
+      render: (v: string, row) => (
+        <Space size={4}>
+          <Tag color={writebackStatusColor[v] || 'default'}>{v}</Tag>
+          {row.attempt > 0 ? (
+            <Text type="secondary" style={{ fontSize: 11 }}>
+              {row.attempt}/{row.max_attempts}
+            </Text>
+          ) : null}
+        </Space>
+      ),
+    },
+    {
+      title: '反写字段',
+      dataIndex: 'payload',
+      width: 240,
+      render: (_p, row) => {
+        const fields = (row.payload?.fields as string[]) || []
+        const values = (row.payload?.values as Record<string, unknown>) || {}
+        if (!fields.length) return <Text type="secondary">-</Text>
+        return (
+          <Space direction="vertical" size={2} style={{ width: '100%' }}>
+            {fields.map((f) => {
+              const apiName = {
+                spec_text: 'skuName',
+                model_code_reg: 'model_code',
+                process_instructions_reg: 'process_instructions',
+                sku_flag: 'flagData',
+              }[f] as string | undefined
+              const v = apiName ? values[apiName] : null
+              const label =
+                ERP_WRITEBACK_FIELD_LABELS[f as ErpWritebackField] || f
+              return (
+                <div key={f} style={{ fontSize: 12 }}>
+                  <Text type="secondary">{label}:</Text>{' '}
+                  {v == null || v === '' ? (
+                    <Text type="secondary" italic>
+                      (空)
+                    </Text>
+                  ) : (
+                    <Text>{String(v)}</Text>
+                  )}
+                </div>
+              )
+            })}
+          </Space>
+        )
+      },
+    },
+    {
+      title: '操作人',
+      dataIndex: 'requested_by',
+      width: 100,
+      render: (v) => v || <Text type="secondary">-</Text>,
+    },
+    {
+      title: '最后错误',
+      dataIndex: 'last_error',
+      render: (v) =>
+        v ? (
+          <Text type="danger" style={{ fontSize: 12 }}>
+            {v}
           </Text>
-        </div>
-      }
-    />
+        ) : (
+          <Text type="secondary">-</Text>
+        ),
+    },
+  ]
+
+  const tabWriteback = (
+    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      <Alert
+        type="info"
+        showIcon
+        message="ERP 反写历史"
+        description={
+          <div style={{ lineHeight: 1.7, fontSize: 12 }}>
+            按时间倒序展示本 SKU (条码 <Text code>{barcode || '-'}</Text>) 的反写记录.
+            <br />
+            <b>状态说明:</b>
+            <Space wrap size={4} style={{ marginLeft: 6 }}>
+              <Tag color="gold">pending</Tag>
+              <Text type="secondary">等待 worker 推送</Text>
+              <Tag color="orange">retrying</Tag>
+              <Text type="secondary">已失败重试中</Text>
+              <Tag color="green">succeeded</Tag>
+              <Text type="secondary">已成功推送到吉客云</Text>
+              <Tag color="red">failed</Tag>
+              <Text type="secondary">达到最大重试次数仍失败</Text>
+              <Tag color="default">superseded</Tag>
+              <Text type="secondary">被更新的入队任务覆盖</Text>
+            </Space>
+            <br />
+            Excel 路径不入这个表 (运营在吉客云后台导入 Excel 时是直接覆盖, 不需要本地记录).
+          </div>
+        }
+      />
+      {writebackHistoryQuery.isFetching ? (
+        <Text type="secondary">加载中…</Text>
+      ) : (writebackHistoryQuery.data?.items?.length ?? 0) === 0 ? (
+        <Alert
+          type="warning"
+          showIcon
+          message="尚无反写记录"
+          description="可在「字段编辑」Tab 点击「加入反写队列」或「下载反写 Excel」生成第一条."
+        />
+      ) : (
+        <Table<ErpWritebackHistoryItem>
+          size="small"
+          rowKey="id"
+          dataSource={writebackHistoryQuery.data?.items || []}
+          columns={writebackHistoryColumns}
+          pagination={false}
+        />
+      )}
+    </Space>
   )
 
   // ---- Tab 5: 原始 metadata (debug) ----
@@ -1040,7 +1240,11 @@ export default function ProductInfoDetailDrawer({ skuId, open, onClose, onUpdate
               children: tabEditForm,
             },
             { key: 'shops', label: `店铺映射 (${shopsQuery.data?.shop_skus?.length ?? 0})`, children: tabShops },
-            { key: 'writeback', label: '反写历史', children: tabWriteback },
+            {
+              key: 'writeback',
+              label: `反写历史 (${writebackHistoryQuery.data?.items?.length ?? 0})`,
+              children: tabWriteback,
+            },
             { key: 'raw', label: '原始 metadata', children: tabRawMeta },
           ]}
         />

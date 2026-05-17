@@ -1,12 +1,19 @@
-import { Button, Card, Col, Form, Image, Input, Modal, Radio, Row, Select, Space, Table, Tag, Tooltip, Typography, message } from 'antd'
+import { Button, Card, Col, Dropdown, Form, Image, Input, Modal, Radio, Row, Select, Space, Table, Tag, Tooltip, Typography, message } from 'antd'
 import InfoCircleOutlined from '@ant-design/icons/lib/icons/InfoCircleOutlined'
 import EditOutlined from '@ant-design/icons/lib/icons/EditOutlined'
+import ExportOutlined from '@ant-design/icons/lib/icons/ExportOutlined'
 import type { ColumnsType } from 'antd/es/table'
 import { useEffect, useMemo, useState } from 'react'
-import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 
-import { fetchSkuMaster, fetchTripleTagOverview } from '@/services/planner'
+import {
+  downloadErpWritebackExcel,
+  enqueueErpWriteback,
+  fetchSkuMaster,
+  fetchTripleTagOverview,
+  triggerBrowserDownload,
+} from '@/services/planner'
 import type { SkuMaster } from '@/types/planner'
 import { formatBeijingTime } from '@/utils/beijingTime'
 import { IMAGE_FALLBACK_SVG, pickRowImageUrl } from '@/utils/imageUrl'
@@ -175,6 +182,55 @@ export default function ProductInfoPage() {
 
   const items = (listQuery.data?.items ?? []) as SkuMaster[]
   const total = Number((listQuery.data as any)?.total ?? -1)
+
+  // ----------------------------------------------------------------------
+  // M6 ERP 反写 mutations — 列表「反写」按钮 (单条 / 勾选) 用.
+  // 队列入队入口在抽屉里 (单条更合适); 列表只暴露 Excel 路径, 因为反写到队列
+  // 后再没有 worker 推, 大批量 enqueue 没意义.
+  // ----------------------------------------------------------------------
+  const writebackExcelMutation = useMutation({
+    mutationFn: async (skuIds: string[]) => {
+      if (!skuIds.length) throw new Error('请先选择至少 1 条')
+      return downloadErpWritebackExcel(
+        { sku_master_ids: skuIds },
+        { timeoutMs: 60_000 },
+      )
+    },
+    onSuccess: (result) => {
+      triggerBrowserDownload(result.blob, result.filename)
+      const skipNote =
+        result.skippedMissingBarcode > 0
+          ? `，跳过 ${result.skippedMissingBarcode} 条无条码`
+          : ''
+      message.success(`已生成 ${result.totalRows} 行反写 Excel${skipNote}: ${result.filename}`)
+    },
+    onError: (e: any) => {
+      message.error(e?.response?.data?.detail || e?.message || 'Excel 导出失败')
+    },
+  })
+
+  const writebackEnqueueMutation = useMutation({
+    mutationFn: async (skuIds: string[]) => {
+      if (!skuIds.length) throw new Error('请先选择至少 1 条')
+      return enqueueErpWriteback(
+        {
+          sku_master_ids: skuIds,
+          requested_by: 'product-info-page',
+        },
+        { timeoutMs: 60_000 },
+      )
+    },
+    onSuccess: (resp) => {
+      const parts: string[] = []
+      if (resp.enqueued_count > 0) parts.push(`已入队 ${resp.enqueued_count} 条`)
+      if (resp.superseded_count > 0) parts.push(`合并旧任务 ${resp.superseded_count} 条`)
+      if (resp.skipped_count > 0) parts.push(`跳过 ${resp.skipped_count} 条 (无可反写值)`)
+      message.success(parts.join('，') || '已处理')
+    },
+    onError: (e: any) => {
+      message.error(e?.response?.data?.detail || e?.message || '入队失败')
+    },
+  })
 
   const columns: ColumnsType<SkuMaster> = useMemo(
     () => [
@@ -670,17 +726,46 @@ export default function ProductInfoPage() {
             >
               查看
             </Button>
-            <Tooltip title="把本地字段 (生产工艺 / 规格标记 / 模型编码 / 属性规格) 推送到 ERP 货品档案. M6 反写模块开发中.">
-              <Button size="small" type="link" disabled>
-                反写
-              </Button>
-            </Tooltip>
+            <Dropdown
+              trigger={['click']}
+              menu={{
+                items: [
+                  {
+                    key: 'excel',
+                    label: '下载反写 Excel',
+                    onClick: (info) => {
+                      info.domEvent.stopPropagation()
+                      writebackExcelMutation.mutate([String(row.id)])
+                    },
+                  },
+                  {
+                    key: 'enqueue',
+                    label: '加入反写队列',
+                    onClick: (info) => {
+                      info.domEvent.stopPropagation()
+                      writebackEnqueueMutation.mutate([String(row.id)])
+                    },
+                  },
+                ],
+              }}
+            >
+              <Tooltip title="把本地 4 字段 (规格 / 模型编码(规) / 工艺说明(规) / 规格标记) 推回吉客云. Excel = 立即可用 (后台手动导入); 队列 = 异步推送 (worker 待上线).">
+                <Button
+                  size="small"
+                  type="link"
+                  loading={writebackExcelMutation.isPending || writebackEnqueueMutation.isPending}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  反写
+                </Button>
+              </Tooltip>
+            </Dropdown>
           </Space>
         ),
       },
       { title: '更新时间', dataIndex: 'updated_at', width: 170, render: (v) => formatTime(v) },
     ],
-    [],
+    [writebackExcelMutation, writebackEnqueueMutation],
   )
 
   return (
@@ -934,6 +1019,39 @@ export default function ProductInfoPage() {
             >
               批量改字段
             </Button>
+            <Tooltip
+              title={
+                batchByFilterMode
+                  ? '批量反写仅支持勾选模式 (≤ 5000 条/批). 跨页反写请用「商品关联 / 字段维护」走异步流.'
+                  : selectedRowKeys.length === 0
+                    ? '先勾选要反写的行, 再点这里生成吉客云「批量修改货品」兼容 xlsx'
+                    : `把勾选的 ${selectedRowKeys.length} 条生成反写 Excel, 在吉客云后台导入即可完成 ERP 同步`
+              }
+            >
+              <Button
+                icon={<ExportOutlined />}
+                size="small"
+                disabled={batchByFilterMode || selectedRowKeys.length === 0}
+                loading={writebackExcelMutation.isPending}
+                onClick={() => {
+                  writebackExcelMutation.mutate(selectedRowKeys.map(String))
+                }}
+              >
+                批量反写 Excel ({selectedRowKeys.length})
+              </Button>
+            </Tooltip>
+            <Tooltip title="把勾选行加入反写队列, 在抽屉「反写历史」Tab 可查看状态. 当前 worker 未上线, 任务停在 pending.">
+              <Button
+                size="small"
+                disabled={batchByFilterMode || selectedRowKeys.length === 0}
+                loading={writebackEnqueueMutation.isPending}
+                onClick={() => {
+                  writebackEnqueueMutation.mutate(selectedRowKeys.map(String))
+                }}
+              >
+                批量入队
+              </Button>
+            </Tooltip>
             <Tooltip title="清除勾选">
               {selectedRowKeys.length > 0 ? (
                 <Button size="small" onClick={() => setSelectedRowKeys([])}>清除</Button>

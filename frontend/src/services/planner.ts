@@ -3378,6 +3378,163 @@ export const editSkuForm = async (
   return response.data
 }
 
+// ----------------------------------------------------------------------------
+// M6 ERP 反写 (吉客云) — Excel 模板 (方案 B) + 异步队列 (方案 A) + 反写历史
+// 见 backend/src/planner/services/erp_writeback_service.py
+// ----------------------------------------------------------------------------
+
+export type ErpWritebackField =
+  | 'spec_text'
+  | 'model_code_reg'
+  | 'process_instructions_reg'
+  | 'sku_flag'
+
+export const ERP_WRITEBACK_FIELD_LABELS: Record<ErpWritebackField, string> = {
+  spec_text: '规格',
+  model_code_reg: '模型编码(规)',
+  process_instructions_reg: '工艺说明(规)',
+  sku_flag: '规格标记',
+}
+
+export interface ErpWritebackExcelRequest {
+  sku_master_ids: string[]
+  fields?: ErpWritebackField[] | null
+}
+
+export interface ErpWritebackEnqueueRequest {
+  sku_master_ids: string[]
+  fields?: ErpWritebackField[] | null
+  requested_by?: string | null
+  dry_run?: boolean
+}
+
+export interface ErpWritebackEnqueueJobOut {
+  job_id: string
+  sku_master_id: string
+  erp_sku_barcode: string
+  fields: string[]
+  values: Record<string, unknown>
+}
+
+export interface ErpWritebackEnqueueResponse {
+  enqueued_count: number
+  superseded_count: number
+  skipped_count: number
+  jobs: ErpWritebackEnqueueJobOut[]
+  superseded_job_ids: string[]
+  skipped: Array<{ sku_master_id?: string; reason?: string }>
+  dry_run: boolean
+}
+
+export interface ErpWritebackHistoryItem {
+  id: string
+  source_system: string
+  api_method: string
+  target_id: string
+  status: string
+  attempt: number
+  max_attempts: number
+  next_run_at?: string | null
+  last_attempt_at?: string | null
+  last_error?: string | null
+  requested_by?: string | null
+  payload: Record<string, unknown>
+  metadata: Record<string, unknown>
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface ErpWritebackHistoryResponse {
+  sku_master_id: string
+  items: ErpWritebackHistoryItem[]
+}
+
+export interface ErpWritebackExcelDownloadResult {
+  blob: Blob
+  filename: string
+  totalRows: number
+  fields: string[]
+  skippedMissingBarcode: number
+}
+
+/** 下载吉客云「批量修改货品」兼容 xlsx (浏览器侧自动触发下载需调用方处理 blob). */
+export const downloadErpWritebackExcel = async (
+  payload: ErpWritebackExcelRequest,
+  opts: PlannerRequestOptions = {},
+): Promise<ErpWritebackExcelDownloadResult> => {
+  const response = await plannerClient.post(
+    '/sku-master/erp-writeback/export-excel',
+    payload,
+    {
+      responseType: 'blob',
+      timeout: opts.timeoutMs,
+      signal: opts.signal,
+    },
+  )
+
+  let filename = 'jackyun_writeback.xlsx'
+  const disposition: string | undefined = response.headers?.['content-disposition']
+  if (typeof disposition === 'string') {
+    const m = disposition.match(/filename="?([^";]+)"?/i)
+    if (m && m[1]) filename = m[1]
+  }
+  const totalRows = Number(response.headers?.['x-writeback-total-rows'] ?? 0) || 0
+  const skippedMissingBarcode = Number(response.headers?.['x-writeback-skipped'] ?? 0) || 0
+  const fieldsRaw: string = response.headers?.['x-writeback-fields'] ?? ''
+  const fields = fieldsRaw ? fieldsRaw.split(',').map((s) => s.trim()).filter(Boolean) : []
+
+  return {
+    blob: response.data as Blob,
+    filename,
+    totalRows,
+    fields,
+    skippedMissingBarcode,
+  }
+}
+
+/** 浏览器小工具: 把 download result 直接弹出"另存为". */
+export const triggerBrowserDownload = (blob: Blob, filename: string): void => {
+  const url = window.URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  window.URL.revokeObjectURL(url)
+}
+
+export const enqueueErpWriteback = async (
+  payload: ErpWritebackEnqueueRequest,
+  opts: PlannerRequestOptions = {},
+): Promise<ErpWritebackEnqueueResponse> => {
+  const response = await plannerClient.post(
+    '/sku-master/erp-writeback/enqueue',
+    payload,
+    {
+      timeout: opts.timeoutMs,
+      signal: opts.signal,
+    },
+  )
+  return response.data
+}
+
+export const fetchErpWritebackHistory = async (
+  skuMasterId: string,
+  limit = 50,
+  opts: PlannerRequestOptions = {},
+): Promise<ErpWritebackHistoryResponse> => {
+  const response = await plannerClient.get(
+    `/sku-master/${encodeURIComponent(skuMasterId)}/erp-writeback/history`,
+    {
+      params: { limit },
+      timeout: opts.timeoutMs,
+      signal: opts.signal,
+    },
+  )
+  return response.data
+}
+
 export const bindSkuMastersByBundleTemplate = async (
   payload: {
     template_id: string

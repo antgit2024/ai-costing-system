@@ -4441,6 +4441,80 @@ class SkuMasterEditFormResponse(BaseModel):
     dry_run: bool
 
 
+# -----------------------------------------------------------------------------
+# ERP 反写模块 (M6) — 见 services/erp_writeback_service.py
+# -----------------------------------------------------------------------------
+
+
+ErpWritebackField = Literal[
+    "spec_text",
+    "model_code_reg",
+    "process_instructions_reg",
+    "sku_flag",
+]
+
+
+class ErpWritebackExcelRequest(BaseModel):
+    """按选中行 (sku_master_ids) 下载吉客云「批量修改货品」兼容 xlsx.
+
+    跨页/按筛选场景请用 ``ErpWritebackEnqueueRequest`` 的筛选模式, 或者前端
+    自行循环调 list 获取 ids 再 POST 过来.
+    """
+
+    sku_master_ids: List[str] = Field(default_factory=list, max_items=5000)
+    fields: Optional[List[ErpWritebackField]] = None
+
+
+class ErpWritebackEnqueueRequest(BaseModel):
+    """把反写意图入队 ``integration_writeback_jobs`` (异步, 等 worker 消费)."""
+
+    sku_master_ids: List[str] = Field(default_factory=list, max_items=5000)
+    fields: Optional[List[ErpWritebackField]] = None
+    requested_by: Optional[str] = None
+    dry_run: bool = False
+
+
+class ErpWritebackEnqueueJobOut(BaseModel):
+    job_id: str
+    sku_master_id: str
+    erp_sku_barcode: str
+    fields: List[str] = Field(default_factory=list)
+    values: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ErpWritebackEnqueueResponse(BaseModel):
+    enqueued_count: int
+    superseded_count: int
+    skipped_count: int
+    jobs: List[ErpWritebackEnqueueJobOut] = Field(default_factory=list)
+    superseded_job_ids: List[str] = Field(default_factory=list)
+    skipped: List[Dict[str, Any]] = Field(default_factory=list)
+    dry_run: bool
+
+
+class ErpWritebackHistoryItem(BaseModel):
+    id: str
+    source_system: str
+    api_method: str
+    target_id: str
+    status: str
+    attempt: int
+    max_attempts: int
+    next_run_at: Optional[str] = None
+    last_attempt_at: Optional[str] = None
+    last_error: Optional[str] = None
+    requested_by: Optional[str] = None
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class ErpWritebackHistoryResponse(BaseModel):
+    sku_master_id: str
+    items: List[ErpWritebackHistoryItem] = Field(default_factory=list)
+
+
 class SkuMasterAutoBindPreviewRequest(BaseModel):
     limit: int = Field(200, ge=1, le=2000)
     # max rows to scan among unbound sku masters (server-side filter) to find candidates

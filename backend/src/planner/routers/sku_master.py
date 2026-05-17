@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import io
 import logging
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.orm import Session
 import httpx
 
@@ -12,6 +13,7 @@ from .. import schemas
 from ..schemas import PaginatedSkuMasterResponse, SkuMasterImportResponse, SkuMasterRead
 from ..services import sku_master_service
 from ..services import sku_master_image_storage
+from ..services import erp_writeback_service
 from ...config import settings
 from .. import models
 
@@ -422,6 +424,89 @@ def edit_form(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+# -----------------------------------------------------------------------------
+# M6 ERP 反写: Excel 模板 (方案 B) + 队列 (方案 A) + 反写历史
+# 见 services/erp_writeback_service.py
+# -----------------------------------------------------------------------------
+
+
+@router.post("/erp-writeback/export-excel")
+def erp_writeback_export_excel(
+    payload: schemas.ErpWritebackExcelRequest,
+    db: Session = Depends(get_db_session),
+):
+    """按 sku_master_ids 生成吉客云「批量修改货品」兼容 xlsx, 二进制下载.
+
+    业务流程: 运营选好行 → 点「下载反写 Excel」 → 在吉客云后台导入即可.
+    """
+    if not payload.sku_master_ids:
+        raise HTTPException(status_code=400, detail="sku_master_ids 不能为空")
+    try:
+        xlsx_bytes, summary = erp_writeback_service.build_writeback_excel(
+            db,
+            sku_master_ids=list(payload.sku_master_ids),
+            fields=list(payload.fields) if payload.fields else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    filename = summary.get("filename") or "jackyun_writeback.xlsx"
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        # 把汇总信息也带回去, 让前端能 toast「已生成 N 行」
+        "X-Writeback-Total-Rows": str(summary.get("total_rows", 0)),
+        "X-Writeback-Fields": ",".join(summary.get("fields", [])),
+        "X-Writeback-Skipped": str(summary.get("skipped_missing_barcode", 0)),
+    }
+    return StreamingResponse(
+        io.BytesIO(xlsx_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers=headers,
+    )
+
+
+@router.post("/erp-writeback/enqueue", response_model=schemas.ErpWritebackEnqueueResponse)
+def erp_writeback_enqueue(
+    payload: schemas.ErpWritebackEnqueueRequest,
+    db: Session = Depends(get_db_session),
+):
+    """把反写意图入队 ``integration_writeback_jobs``.
+
+    Worker 由后续模块实现; 当前 enqueue 后 job 留在 ``pending``.
+    用于建立反写历史 + 未来 API 直推.
+    """
+    if not payload.sku_master_ids:
+        raise HTTPException(status_code=400, detail="sku_master_ids 不能为空")
+    try:
+        return erp_writeback_service.enqueue_writeback_jobs(
+            db,
+            sku_master_ids=list(payload.sku_master_ids),
+            fields=list(payload.fields) if payload.fields else None,
+            requested_by=payload.requested_by,
+            dry_run=bool(payload.dry_run),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get(
+    "/{sku_id}/erp-writeback/history",
+    response_model=schemas.ErpWritebackHistoryResponse,
+)
+def erp_writeback_history(
+    sku_id: str,
+    limit: int = 50,
+    db: Session = Depends(get_db_session),
+):
+    """单条 SKU 的反写历史 (供抽屉「反写历史」Tab)."""
+    items = erp_writeback_service.list_jobs_for_sku(
+        db,
+        sku_master_id=sku_id,
+        limit=limit,
+    )
+    return schemas.ErpWritebackHistoryResponse(sku_master_id=sku_id, items=items)
 
 
 @router.post("/bind-by-bundle", response_model=schemas.SkuMasterBindByBundleTemplateResponse)

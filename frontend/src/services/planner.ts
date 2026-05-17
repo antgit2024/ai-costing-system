@@ -3641,20 +3641,36 @@ export const previewBindSkuMastersByBundleTemplateBulk = async (
   return response.data
 }
 
-export const autoBindSkuMastersPreview = async (payload: {
-  limit?: number
-  scan_limit?: number
-} = {}): Promise<SkuMasterAutoBindPreviewResponse> => {
-  const response = await plannerClient.post('/sku-master/auto-bind/preview', payload)
+export const autoBindSkuMastersPreview = async (
+  payload: {
+    limit?: number
+    scan_limit?: number
+  } = {},
+  opts: PlannerRequestOptions = {},
+): Promise<SkuMasterAutoBindPreviewResponse> => {
+  // ⚠ plannerClient 默认 timeout=20s, 但 auto-bind/preview 在大表上单批可能 20~40s,
+  // 必须显式传 timeoutMs (否则 axios 默认 20s 触发 AbortController 超时, 错误信息就是 `canceled`).
+  const response = await plannerClient.post('/sku-master/auto-bind/preview', payload, {
+    timeout: opts.timeoutMs ?? 90_000,
+    signal: opts.signal,
+  })
   return response.data
 }
 
-export const autoBindSkuMastersExecute = async (payload: {
-  limit?: number
-  requested_by?: string
-  sku_master_ids?: string[]
-} = {}): Promise<SkuMasterAutoBindExecuteResponse> => {
-  const response = await plannerClient.post('/sku-master/auto-bind/execute', payload)
+export const autoBindSkuMastersExecute = async (
+  payload: {
+    limit?: number
+    requested_by?: string
+    sku_master_ids?: string[]
+  } = {},
+  opts: PlannerRequestOptions = {},
+): Promise<SkuMasterAutoBindExecuteResponse> => {
+  // 同 preview: auto-bind/execute 单批 200 条实测 ~25s (取决于数据量), 默认 90s 超时,
+  // 调用方可通过 opts.timeoutMs 覆盖, 通过 opts.signal 真正实现 abort.
+  const response = await plannerClient.post('/sku-master/auto-bind/execute', payload, {
+    timeout: opts.timeoutMs ?? 90_000,
+    signal: opts.signal,
+  })
   return response.data
 }
 

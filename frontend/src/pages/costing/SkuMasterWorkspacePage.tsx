@@ -1713,16 +1713,22 @@ const SkuMasterWorkspacePage = () => {
             // 这里每轮只执行小批量（200），循环多轮跑完。
             for (let round = 1; round <= 999; round += 1) {
               if (autoRunAllStopRef.current) break
-              // 前端侧加一个“单次请求超时”保护，避免长时间无反馈造成“看起来死了”的错觉
+              // 单轮"硬超时"保护: 把 AbortController 真接到 axios signal 上, 90s 还没返回就强中止.
+              // 之前这里的 ac 完全没传给 service, 是死代码, 同时 plannerClient 默认 timeout=20s
+              // 在 200 行批量绑定上不够用 (实测 ~25s), 用户看到的"canceled"是 axios 默认 20s timeout
+              // 触发的 AbortController 自动中止. 修复: service 默认 90s + 这里通过 signal 强制 90s 上限.
               const ac = new AbortController()
-              const timer = window.setTimeout(() => ac.abort(), 45_000)
+              const timer = window.setTimeout(() => ac.abort(), 90_000)
               let res: any
               try {
-                res = await autoBindSkuMastersExecute({
-                  limit: 200,
-                  requested_by: reqBy,
-                  // 不传 sku_master_ids：由后端按 preview 的 items 批量绑定
-                } as any)
+                res = await autoBindSkuMastersExecute(
+                  {
+                    limit: 200,
+                    requested_by: reqBy,
+                    // 不传 sku_master_ids：由后端按 preview 的 items 批量绑定
+                  } as any,
+                  { signal: ac.signal, timeoutMs: 90_000 },
+                )
               } finally {
                 window.clearTimeout(timer)
               }
@@ -1768,8 +1774,16 @@ const SkuMasterWorkspacePage = () => {
             setPageSize(DEFAULT_PAGE_SIZE)
             await queryClient.invalidateQueries({ queryKey: ['sku-master', 'list'] })
           } catch (e: any) {
-            if (String(e?.name || '').toLowerCase().includes('abort')) {
-              message.error('单次请求超时（45s）已中止：请稍后再点“一键跑完”继续（或先降低并发/检查服务负载）')
+            const errName = String(e?.name || '').toLowerCase()
+            const errCode = String(e?.code || '').toLowerCase()
+            const errMsg = String(e?.message || '').toLowerCase()
+            if (
+              errName.includes('abort') ||
+              errName.includes('canceled') ||
+              errCode === 'err_canceled' ||
+              errMsg.includes('canceled')
+            ) {
+              message.error('单次请求超时（90s）已中止：请稍后再点"一键跑完"继续（数据量大时这是正常的, 已绑定结果不会丢失）')
             } else {
               message.error(e?.message || '自动执行失败')
             }

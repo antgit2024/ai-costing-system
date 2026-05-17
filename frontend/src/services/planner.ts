@@ -3617,6 +3617,38 @@ export const pushErpWritebackJob = async (
   return response.data
 }
 
+export interface ErpWritebackWorkerRunResult {
+  scanned: number
+  batch_size: number
+  counts: Record<string, number>
+  results: Array<{
+    job_id: string
+    status: string
+    biz_sub_code?: string | null
+    error?: string | null
+  }>
+  started_at: string
+  finished_at: string
+}
+
+export const runErpWritebackWorkerOnce = async (
+  opts: { batchSize?: number; requestedBy?: string; timeoutMs?: number } = {},
+): Promise<ErpWritebackWorkerRunResult> => {
+  // batch_size 默认 20, 单批 60s 可能不够 (20×3s=60s), 给 180s 余裕
+  const response = await plannerClient.post(
+    '/sku-master/erp-writeback/worker/run-once',
+    null,
+    {
+      params: {
+        batch_size: opts.batchSize ?? 20,
+        requested_by: opts.requestedBy || 'product-info-worker-button',
+      },
+      timeout: opts.timeoutMs ?? 180_000,
+    },
+  )
+  return response.data
+}
+
 export const bindSkuMastersByBundleTemplate = async (
   payload: {
     template_id: string

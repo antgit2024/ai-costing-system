@@ -14,9 +14,14 @@ import {
   fetchTripleTagOverview,
   listErpWritebackJobs,
   pushErpWritebackJob,
+  runErpWritebackWorkerOnce,
   triggerBrowserDownload,
 } from '@/services/planner'
-import type { ErpWritebackJobListItem, ErpWritebackPushResult } from '@/services/planner'
+import type {
+  ErpWritebackJobListItem,
+  ErpWritebackPushResult,
+  ErpWritebackWorkerRunResult,
+} from '@/services/planner'
 import type { SkuMaster } from '@/types/planner'
 import { formatBeijingTime } from '@/utils/beijingTime'
 import { IMAGE_FALLBACK_SVG, pickRowImageUrl } from '@/utils/imageUrl'
@@ -1352,6 +1357,64 @@ function WritebackQueueDrawer(props: WritebackQueueDrawerProps) {
     refetchInterval: open ? 15000 : false, // 抽屉打开时 15s 自动刷新, 看 pending → done 的流转
   })
 
+  // 批量 worker mutation — Phase B v1, 一次跑 20 条 pending/retrying
+  const workerMutation = useMutation({
+    mutationFn: () => runErpWritebackWorkerOnce({ batchSize: 20 }),
+    onSettled: () => queueQuery.refetch(),
+    onSuccess: (res: ErpWritebackWorkerRunResult) => {
+      const succeeded = res.counts?.succeeded || 0
+      const failed = res.counts?.failed || 0
+      const retrying = res.counts?.retrying || 0
+      const skipped = res.counts?.skipped || 0
+      Modal[succeeded > 0 && failed === 0 ? 'success' : 'info']({
+        title: `批扫完成 — 扫了 ${res.scanned} 条`,
+        width: 640,
+        content: (
+          <div>
+            <Space wrap style={{ marginBottom: 8 }}>
+              {succeeded > 0 ? <Tag color="green">成功 {succeeded}</Tag> : null}
+              {failed > 0 ? <Tag color="red">失败 {failed}</Tag> : null}
+              {retrying > 0 ? <Tag color="orange">重试 {retrying}</Tag> : null}
+              {skipped > 0 ? <Tag>跳过 {skipped}</Tag> : null}
+            </Space>
+            {res.scanned === 0 ? (
+              <Alert
+                type="info"
+                showIcon
+                message="没有待处理任务"
+                description="当前没有 status=pending/retrying 的反写任务可处理。"
+              />
+            ) : (
+              <details>
+                <summary style={{ cursor: 'pointer', color: '#666' }}>
+                  逐条结果（展开）
+                </summary>
+                <Table
+                  size="small"
+                  pagination={false}
+                  rowKey="job_id"
+                  dataSource={res.results}
+                  columns={[
+                    { title: 'job', dataIndex: 'job_id', width: 90, render: (v: string) => <Text code style={{ fontSize: 11 }}>{v.slice(0, 8)}</Text> },
+                    { title: 'status', dataIndex: 'status', width: 90, render: (v: string) => <Tag color={v === 'succeeded' ? 'green' : v === 'retrying' ? 'orange' : 'red'}>{v}</Tag> },
+                    { title: 'subCode', dataIndex: 'biz_sub_code', width: 100, render: (v?: string | null) => v || '—' },
+                    { title: 'error', dataIndex: 'error', ellipsis: true, render: (v?: string | null) => v ? <Tooltip title={v}><Text style={{ fontSize: 11 }}>{v.length > 50 ? v.slice(0, 50) + '…' : v}</Text></Tooltip> : '—' },
+                  ]}
+                />
+              </details>
+            )}
+          </div>
+        ),
+      })
+    },
+    onError: (e: any) => {
+      Modal.error({
+        title: '批扫请求失败',
+        content: e?.response?.data?.detail || e?.message || '未知错误',
+      })
+    },
+  })
+
   // 单条 push mutation — 失败时不弹错, 走 Modal.info 显示完整 result
   const [pushingId, setPushingId] = useState<string | null>(null)
   const pushMutation = useMutation({
@@ -1645,6 +1708,16 @@ function WritebackQueueDrawer(props: WritebackQueueDrawerProps) {
           <Button onClick={() => queueQuery.refetch()} loading={queueQuery.isFetching}>
             刷新
           </Button>
+          <Tooltip title="串行扫一批 (最多 20 条) 待推送任务, 逐条调吉客云「编辑货品」接口. 等吉客云后台开通对应 API 订阅后, 这就是真实推送的入口.">
+            <Button
+              type="primary"
+              loading={workerMutation.isPending}
+              onClick={() => workerMutation.mutate()}
+              disabled={!(counts.pending || counts.retrying)}
+            >
+              批扫一次 (≤20)
+            </Button>
+          </Tooltip>
           <Text type="secondary" style={{ fontSize: 12 }}>
             共 {total} 条
           </Text>

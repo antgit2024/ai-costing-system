@@ -557,6 +557,27 @@ def erp_writeback_push_one(
     return result
 
 
+@router.post("/erp-writeback/worker/run-once")
+def erp_writeback_worker_run_once(
+    batch_size: int = 20,
+    requested_by: Optional[str] = None,
+    db: Session = Depends(get_db_session),
+):
+    """手动批扫一次 pending/retrying 反写任务 (Phase B v1).
+
+    取最多 batch_size 条 status in (pending, retrying) job 串行推送.
+    返回累计计数 + 每条结果摘要.
+
+    后续若需要全自动: 配 systemd timer 或 cron 周期调用本接口即可,
+    不需要在后端进程内嵌 scheduler.
+    """
+    return erp_writeback_service.run_worker_once(
+        db,
+        batch_size=batch_size,
+        requested_by=requested_by,
+    )
+
+
 @router.post("/bind-by-bundle", response_model=schemas.SkuMasterBindByBundleTemplateResponse)
 def bind_by_bundle(payload: schemas.SkuMasterBindByBundleTemplateRequest, db: Session = Depends(get_db_session)):
     try:

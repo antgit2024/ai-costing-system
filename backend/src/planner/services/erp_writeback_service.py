@@ -635,6 +635,70 @@ def push_one_job(
     }
 
 
+def run_worker_once(
+    db: Session,
+    *,
+    batch_size: int = 20,
+    requested_by: Optional[str] = None,
+) -> Dict[str, Any]:
+    """手动批扫一次 — Phase B v1 的最小可用 worker.
+
+    取最多 ``batch_size`` 条 status in (pending, retrying) + next_run_at <= now
+    的 job, 串行调 push_one_job. 适合运营点按钮触发, 或外部 cron 通过
+    POST /sku-master/erp-writeback/worker/run-once 调用.
+
+    返回累计 succeeded / failed / retrying 计数以及每条 job 的简短结果,
+    UI 直接展示给运营.
+
+    注意:
+    - 串行而非并行 — 避免短时间大量请求触发吉客云限流; batch_size 默认 20
+      足以在 60s 内完成 (单条 push <2s + 网络抖动).
+    - 真"自动调度"留给 Phase B v2 (systemd timer 调本接口即可).
+    """
+    bs = max(min(int(batch_size or 20), 200), 1)
+    now = _now_naive_utc()
+    rows = (
+        db.query(models.IntegrationWritebackJob)
+        .filter(
+            models.IntegrationWritebackJob.source_system == SOURCE_SYSTEM,
+            models.IntegrationWritebackJob.target_type == TARGET_TYPE,
+            models.IntegrationWritebackJob.status.in_(("pending", "retrying")),
+        )
+        .order_by(
+            models.IntegrationWritebackJob.next_run_at.asc().nulls_first(),
+            models.IntegrationWritebackJob.created_at.asc(),
+        )
+        .limit(bs)
+        .all()
+    )
+
+    job_ids = [str(r.id) for r in rows]
+    results: List[Dict[str, Any]] = []
+    counts: Dict[str, int] = {}
+
+    for jid in job_ids:
+        r = push_one_job(db, job_id=jid, requested_by=requested_by, force=False)
+        st = str(r.get("status") or "unknown")
+        counts[st] = counts.get(st, 0) + 1
+        results.append(
+            {
+                "job_id": jid,
+                "status": st,
+                "biz_sub_code": r.get("biz_sub_code"),
+                "error": r.get("error"),
+            }
+        )
+
+    return {
+        "scanned": len(job_ids),
+        "batch_size": bs,
+        "counts": counts,
+        "results": results,
+        "started_at": now.isoformat(),
+        "finished_at": _now_naive_utc().isoformat(),
+    }
+
+
 def mark_job_done(
     db: Session,
     *,

@@ -4,22 +4,38 @@
  * 业务背景
  * --------
  * 商品档案 (/costing/products-info) 是【生产维护主战场】。运营在列表里发现需要维护的商品，
- * 点击行打开本抽屉，按 Tab 分层维护：基础信息只读 / 工艺与标签可编辑 / 反写历史与店铺映射查看。
+ * 点击行打开本抽屉，按 Tab 分层维护：基础只读 / 字段编辑(4 字段一次保存+自动重识别) / 店铺映射 / 反写历史。
+ *
+ * 「字段编辑」统一表单 (M5)
+ * --------------------------
+ * 把原来分散在 3 个 Tab 的字段 (production_process / sku_flag / shop_spec_code) +
+ * 新增的 spec_text 统一到一个表单, 一次保存. 后端走 POST /sku-master/edit-form 接口
+ * (见 backend/src/planner/services/sku_master_service.py::edit_sku_form).
+ *
+ * 字段-反写目标对照:
+ *   生产工艺 (production_process)  ↔ 吉客云「工艺说明(规)」/ process_instructions
+ *   规格标记 (sku_flag)             ↔ 吉客云「规格标记」 / skuFlag
+ *   模型编码 (shop_spec_code) ⭐    ↔ 吉客云「模型编码(规)」/ model_code (反写源=识别后的 bound_variant_code)
+ *   属性规格 (spec_text)            ↔ 吉客云「规格」 / skuName
+ *
+ * 模型编码字段的特殊行为
+ * --------------------
+ * 编辑 shop_spec_code 保存后, 后端会自动 deactivate 当前 active binding +
+ * 触发单条 auto_bind_execute → bound_variant_code 跟随重识别 (P0 商家编码锚点 > P1 关键词).
+ * 表单展示重识别前后对比, 用户立即看到效果.
  *
  * 与商品关联的关系
  * ------------------
- * - 单条编辑（本抽屉里）→ 直接调 updateSkuMasterFieldBulk(sku_master_ids=[id])，不跳转
- * - 批量编辑（M3-P4 列表顶部"批量改"按钮）→ 写 sessionStorage + 跳转 /sku-master?workbenchTab=field_update
- *   走商品关联 FieldUpdateWorkbenchTab 的"一键跑完"
+ * - 单条编辑(本抽屉) → 直接调 editSkuForm, 不跳转
+ * - 批量编辑(商品档案顶部"批量改"按钮) → 写 sessionStorage + 跳转 /sku-master?workbenchTab=field_update
  *
- * Tabs
+ * Tabs (M5 后)
  * ----
- * 1. 基础: 主图、条码、名称、规格、物理参数、分类、状态（只读）
- * 2. 工艺: production_process 输入框 + 保存（调 update-field-bulk set 模式）
- * 3. 标签: metadata.erp.sku_flag 数组 + 添加/移除（P3 标签字典 MVP 暂为自由输入, 字典化下一轮）
- * 4. 店铺映射: shop_sku_mappings (一个 ERP 货品可在多店铺销售)
- * 5. 反写历史: 从 metadata.erp.*_writeback 读 (M4-5 完成后才有数据)
- * 6. 原始 metadata: JSON 折叠 (debug 用)
+ * 1. 基础: 三标签对账(只读) + 主图 + 基础信息 + 规格对照
+ * 2. 字段编辑: 4 字段统一表单 + 单一保存 + 重识别结果提示
+ * 3. 店铺映射: shop_sku_mappings (一个 ERP 货品可在多店铺销售)
+ * 4. 反写历史: 从 metadata.erp.*_writeback 读 (M5-3 stub, 真正实现在 M6)
+ * 5. 原始 metadata: JSON 折叠 (debug)
  */
 
 import { useEffect, useMemo, useState } from 'react'
@@ -29,6 +45,7 @@ import {
   Card,
   Descriptions,
   Drawer,
+  Form,
   Image,
   Input,
   Space,
@@ -43,9 +60,13 @@ import type { ColumnsType } from 'antd/es/table'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import {
+  editSkuForm,
   fetchSkuMasterByBarcode,
   fetchSkuMasterDetail,
-  updateSkuMasterFieldBulk,
+} from '@/services/planner'
+import type {
+  SkuEditFormField,
+  SkuMasterEditFormResponse,
 } from '@/services/planner'
 import type { ShopSkuMappingRead, SkuMaster } from '@/types/planner'
 import { formatBeijingTime } from '@/utils/beijingTime'
@@ -59,7 +80,7 @@ import {
 } from '@/utils/skuMasterTagState'
 import { normalizeSpecForCompare, prettifyDisplaySpec } from '@/utils/specNormalize'
 
-const { Text, Paragraph } = Typography
+const { Text } = Typography
 const { TextArea } = Input
 
 interface Props {
@@ -78,11 +99,43 @@ const asArray = (v: unknown): string[] => {
   return [String(v)]
 }
 
+// 比较两个字符串数组是否等值 (用于 sku_flag dirty 判断)
+const sameStrArray = (a: string[], b: string[]): boolean => {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i += 1) if (a[i] !== b[i]) return false
+  return true
+}
+
+interface FormDraft {
+  production_process: string
+  sku_flag: string[]
+  shop_spec_code: string
+  spec_text: string
+}
+
+const emptyDraft: FormDraft = {
+  production_process: '',
+  sku_flag: [],
+  shop_spec_code: '',
+  spec_text: '',
+}
+
+const draftFromSku = (sku: SkuMaster | undefined): FormDraft => {
+  if (!sku) return emptyDraft
+  const erp = ((sku.metadata_json ?? {}) as any)?.erp ?? {}
+  return {
+    production_process: String(sku.production_process ?? ''),
+    sku_flag: asArray(erp?.sku_flag),
+    shop_spec_code: String(sku.shop_spec_code ?? ''),
+    spec_text: String(sku.spec_text ?? ''),
+  }
+}
+
 export default function ProductInfoDetailDrawer({ skuId, open, onClose, onUpdated }: Props) {
   const queryClient = useQueryClient()
-  const [processDraft, setProcessDraft] = useState<string>('')
-  const [flagDraft, setFlagDraft] = useState<string>('')
-  const [shopSpecDraft, setShopSpecDraft] = useState<string>('')
+  const [draft, setDraft] = useState<FormDraft>(emptyDraft)
+  const [flagInput, setFlagInput] = useState<string>('')
+  const [lastSaveResult, setLastSaveResult] = useState<SkuMasterEditFormResponse | null>(null)
   const [requestedBy] = useState<string>('product-info-drawer')
 
   const detailQuery = useQuery({
@@ -94,26 +147,21 @@ export default function ProductInfoDetailDrawer({ skuId, open, onClose, onUpdate
   const sku = detailQuery.data as SkuMaster | undefined
   const barcode = sku?.erp_sku_barcode
 
-  // Shop mappings: scan by barcode returns {sku_master, shop_skus[]}
+  // 店铺映射: 按条码查询返回 {sku_master, shop_skus[]}
   const shopsQuery = useQuery({
     queryKey: ['product-info', 'shop-mappings', barcode],
     queryFn: () => fetchSkuMasterByBarcode(barcode as string, { limit: 50 }),
     enabled: open && !!barcode,
   })
 
-  // sync draft with server value whenever sku changes
+  // Server 数据回流时, 同步 draft (除非用户有未保存修改)
   useEffect(() => {
     if (sku) {
-      setProcessDraft(String(sku.production_process ?? ''))
-      setShopSpecDraft(String(sku.shop_spec_code ?? ''))
+      setDraft(draftFromSku(sku))
+      setLastSaveResult(null)
+      setFlagInput('')
     }
-  }, [sku?.id, sku?.production_process, sku?.shop_spec_code])
-
-  const currentFlags = useMemo(() => {
-    const meta = (sku?.metadata_json ?? {}) as Record<string, unknown>
-    const erp = (meta?.erp ?? {}) as Record<string, unknown>
-    return asArray(erp?.sku_flag)
-  }, [sku])
+  }, [sku?.id, sku?.production_process, sku?.shop_spec_code, sku?.spec_text, sku?.metadata_json])
 
   const syncedFlags = useMemo(() => {
     const meta = (sku?.metadata_json ?? {}) as Record<string, unknown>
@@ -121,97 +169,63 @@ export default function ProductInfoDetailDrawer({ skuId, open, onClose, onUpdate
     return asArray(erp?.sku_flag_synced)
   }, [sku])
 
+  // dirty fields: 用户改了的字段
+  const dirtyFields: SkuEditFormField[] = useMemo(() => {
+    const base = draftFromSku(sku)
+    const dirty: SkuEditFormField[] = []
+    if (draft.production_process !== base.production_process) dirty.push('production_process')
+    if (!sameStrArray(draft.sku_flag, base.sku_flag)) dirty.push('sku_flag')
+    if (draft.shop_spec_code !== base.shop_spec_code) dirty.push('shop_spec_code')
+    if (draft.spec_text !== base.spec_text) dirty.push('spec_text')
+    return dirty
+  }, [draft, sku])
+
   // ============================================================
-  // Mutations: 单条 update (调 update-field-bulk with sku_master_ids=[id])
+  // Mutation: 统一表单保存 (调 editSkuForm)
   // ============================================================
 
-  const saveProcessMutation = useMutation({
-    mutationFn: async (newValue: string) => {
+  const editFormMutation = useMutation({
+    mutationFn: async () => {
       if (!sku?.id) throw new Error('no sku selected')
-      return updateSkuMasterFieldBulk(
-        {
-          field_name: 'production_process',
-          new_value: newValue.trim() || null,
-          mode: 'set',
-          sku_master_ids: [sku.id],
-          requested_by: requestedBy,
-        },
-        { timeoutMs: 30_000 },
-      )
+      if (dirtyFields.length === 0) throw new Error('没有需要保存的修改')
+      return editSkuForm({
+        sku_master_id: sku.id,
+        update_fields: dirtyFields,
+        production_process: dirtyFields.includes('production_process')
+          ? draft.production_process.trim() || null
+          : undefined,
+        sku_flag: dirtyFields.includes('sku_flag') ? draft.sku_flag : undefined,
+        shop_spec_code: dirtyFields.includes('shop_spec_code')
+          ? draft.shop_spec_code.trim() || null
+          : undefined,
+        spec_text: dirtyFields.includes('spec_text')
+          ? draft.spec_text.trim() || null
+          : undefined,
+        trigger_rebind: true,
+        requested_by: requestedBy,
+      }, { timeoutMs: 30_000 })
     },
     onSuccess: (resp) => {
-      if (resp.errors.length > 0) {
-        message.warning(`保存有错误: ${resp.errors[0].error}`)
-      } else if (resp.skipped_no_change > 0) {
+      setLastSaveResult(resp)
+      const updated = resp.per_field_results.filter((r) => r.updated).length
+      const noChange = resp.per_field_results.filter((r) => r.no_change).length
+      const errors = resp.per_field_results.flatMap((r) => r.errors || [])
+      if (errors.length > 0) {
+        message.warning(`保存有错误: ${errors[0]?.error || '未知'}`)
+      } else if (updated > 0) {
+        if (resp.rebind?.triggered) {
+          const before = resp.rebind.before_variant || '(无)'
+          const after = resp.rebind.after_variant || '(无)'
+          if (before !== after) {
+            message.success(`已保存 ${updated} 个字段；商家编码触发重识别: ${before} → ${after}`)
+          } else {
+            message.success(`已保存 ${updated} 个字段；重识别完成 (结果未变: ${after})`)
+          }
+        } else {
+          message.success(`已保存 ${updated} 个字段`)
+        }
+      } else if (noChange > 0) {
         message.info('值未变化, 跳过')
-      } else if (resp.updated_count > 0) {
-        message.success('工艺已保存')
-      }
-      detailQuery.refetch()
-      onUpdated?.()
-      queryClient.invalidateQueries({ queryKey: ['product-info', 'list'] })
-    },
-    onError: (e: any) => {
-      message.error(e?.response?.data?.detail || e?.message || '保存失败')
-    },
-  })
-
-  const addFlagMutation = useMutation({
-    mutationFn: async (tag: string) => {
-      if (!sku?.id) throw new Error('no sku selected')
-      const t = tag.trim()
-      if (!t) throw new Error('请输入标签')
-      return updateSkuMasterFieldBulk(
-        {
-          field_name: 'metadata.erp.sku_flag',
-          new_value: [t],
-          mode: 'append_unique',
-          sku_master_ids: [sku.id],
-          requested_by: requestedBy,
-        },
-        { timeoutMs: 30_000 },
-      )
-    },
-    onSuccess: (resp) => {
-      if (resp.updated_count > 0) {
-        message.success('标签已添加')
-        setFlagDraft('')
-      } else if (resp.skipped_no_change > 0) {
-        message.info('标签已存在')
-      } else if (resp.errors.length > 0) {
-        message.warning(`添加失败: ${resp.errors[0].error}`)
-      }
-      detailQuery.refetch()
-      onUpdated?.()
-      queryClient.invalidateQueries({ queryKey: ['product-info', 'list'] })
-    },
-    onError: (e: any) => {
-      message.error(e?.response?.data?.detail || e?.message || '添加失败')
-    },
-  })
-
-  // shop_spec_code — 让运营把脏值 (Q26041801KB8-001) 手动改成干净的 KB8-001
-  const saveShopSpecMutation = useMutation({
-    mutationFn: async (newValue: string) => {
-      if (!sku?.id) throw new Error('no sku selected')
-      return updateSkuMasterFieldBulk(
-        {
-          field_name: 'shop_spec_code',
-          new_value: newValue.trim() || null,
-          mode: 'set',
-          sku_master_ids: [sku.id],
-          requested_by: requestedBy,
-        },
-        { timeoutMs: 30_000 },
-      )
-    },
-    onSuccess: (resp) => {
-      if (resp.errors.length > 0) {
-        message.warning(`保存有错误: ${resp.errors[0].error}`)
-      } else if (resp.skipped_no_change > 0) {
-        message.info('值未变化, 跳过')
-      } else if (resp.updated_count > 0) {
-        message.success('商家编码已保存')
       }
       detailQuery.refetch()
       onUpdated?.()
@@ -223,35 +237,39 @@ export default function ProductInfoDetailDrawer({ skuId, open, onClose, onUpdate
     },
   })
 
-  const removeFlagMutation = useMutation({
-    mutationFn: async (tag: string) => {
-      if (!sku?.id) throw new Error('no sku selected')
-      return updateSkuMasterFieldBulk(
-        {
-          field_name: 'metadata.erp.sku_flag',
-          new_value: [tag],
-          mode: 'remove',
-          sku_master_ids: [sku.id],
-          requested_by: requestedBy,
-        },
-        { timeoutMs: 30_000 },
-      )
-    },
-    onSuccess: (resp) => {
-      if (resp.updated_count > 0) {
-        message.success('标签已移除')
-      }
-      detailQuery.refetch()
-      onUpdated?.()
-      queryClient.invalidateQueries({ queryKey: ['product-info', 'list'] })
-    },
-    onError: (e: any) => {
-      message.error(e?.response?.data?.detail || e?.message || '移除失败')
-    },
-  })
+  const handleAddFlag = () => {
+    const t = flagInput.trim()
+    if (!t) return
+    if (draft.sku_flag.includes(t)) {
+      message.info('标签已存在')
+      return
+    }
+    setDraft({ ...draft, sku_flag: [...draft.sku_flag, t] })
+    setFlagInput('')
+  }
+
+  const handleRemoveFlag = (tag: string) => {
+    setDraft({ ...draft, sku_flag: draft.sku_flag.filter((x) => x !== tag) })
+  }
+
+  const handleResetDraft = () => {
+    setDraft(draftFromSku(sku))
+    setFlagInput('')
+    setLastSaveResult(null)
+  }
+
+  const handleFillSpecTextFromShipment = () => {
+    const shipment = ((sku?.last_shipment_spec_text || '') as string).trim()
+    if (!shipment) {
+      message.info('无最后发货规格')
+      return
+    }
+    const pretty = prettifyDisplaySpec(shipment) || shipment
+    setDraft({ ...draft, spec_text: pretty })
+  }
 
   // ============================================================
-  // Render: Tabs
+  // Render
   // ============================================================
 
   const tagState = sku ? computeTripleTagState(sku) : null
@@ -261,6 +279,7 @@ export default function ProductInfoDetailDrawer({ skuId, open, onClose, onUpdate
     return String(erp.model_code_reg ?? '').trim()
   })()
 
+  // ---- Tab 1: 基础 (只读三标签对账 + 主图 + 基础信息 + 规格对照) ----
   const tabBasic = sku ? (
     <Space direction="vertical" size={12} style={{ width: '100%' }}>
       {tagState ? (
@@ -284,7 +303,6 @@ export default function ProductInfoDetailDrawer({ skuId, open, onClose, onUpdate
             const cd = describeConflict(tagState.conflict)
             if (!cd) return null
             const sev = tagState.conflict.kind
-            // 高风险用 error, 中风险用 warning
             const alertType: 'error' | 'warning' =
               sev === 'shop_model_diff' ? 'error' : 'warning'
             return (
@@ -301,10 +319,10 @@ export default function ProductInfoDetailDrawer({ skuId, open, onClose, onUpdate
                       {sev === 'shop_model_diff' || sev === 'shop_variant_diff' ? (
                         <span>
                           {' '}如果<b>系统识别错了</b>, 到「商品关联」重新绑定;
-                          如果<b>商家编码填错了</b>, 在下面的「商家标签」输入框里直接改成正确值并保存
+                          如果<b>商家编码填错了</b>, 切到「字段编辑」Tab 把模型编码改成正确值并保存 (会自动重识别)
                         </span>
                       ) : (
-                        <span> ERP 端值偏离, 点击下方的「立即反写」按钮重新覆盖 ERP</span>
+                        <span> ERP 端值偏离, 切到「字段编辑」Tab 保存后点击「反写到 ERP」按钮 (M6 模块)</span>
                       )}
                     </div>
                   </div>
@@ -337,53 +355,36 @@ export default function ProductInfoDetailDrawer({ skuId, open, onClose, onUpdate
                   <Text type="warning" style={{ fontSize: 12 }}>请到「商品关联」做绑定</Text>
                 </Space>
               )}
+              {sku.recognition_source ? (
+                <div style={{ marginTop: 6, fontSize: 12, color: '#888' }}>
+                  识别依据:{' '}
+                  {sku.recognition_source === 'merchant_code' ? '🟢 商家编码直锁' :
+                    sku.recognition_source === 'keyword_variant'
+                      ? `🔵 关键词→变体${sku.recognition_input_source === 'shipment' ? ' (发货)' : sku.recognition_input_source === 'archive' ? ' (档案)' : ''}`
+                      : sku.recognition_source === 'keyword_model_only'
+                        ? `🟡 关键词→仅模型${sku.recognition_input_source === 'shipment' ? ' (发货)' : sku.recognition_input_source === 'archive' ? ' (档案)' : ''}`
+                        : sku.recognition_source === 'bundle' ? '🟣 套装模板' : '⚪ 未识别'}
+                </div>
+              ) : null}
             </Descriptions.Item>
             <Descriptions.Item
               label={
-                <Tooltip title="网店运营在商家编码字段录入的原始值. 历史脏值 (Q24091001 这种款号) 几十万存量认了, 新上架的会按规范填.">
+                <Tooltip title="网店运营在商家编码字段录入的原始值. 历史脏值认了, 新上架的会按规范填. 编辑入口在「字段编辑」Tab.">
                   <span>🅑 商家标签 (输入材料)</span>
                 </Tooltip>
               }
             >
-              <Space direction="vertical" style={{ width: '100%' }} size={6}>
-                <Space wrap>
-                  {tagState.shop.kind === 'clean' ? (
-                    <Tag color={TAG_COLORS.shop_clean}>✓ 已识别 {tagState.shop.value}</Tag>
-                  ) : tagState.shop.kind === 'dirty' ? (
-                    <Tag color={TAG_COLORS.shop_dirty}>⚠ 未识别 (原值: {tagState.shop.value})</Tag>
-                  ) : (
-                    <Tag color={TAG_COLORS.shop_empty}>— 网店未填</Tag>
-                  )}
-                  {tagState.shop.kind !== 'empty' && tagState.shop.rawIfChanged ? (
-                    <Text type="secondary" style={{ fontSize: 12 }}>(原始: {tagState.shop.rawIfChanged})</Text>
-                  ) : null}
-                </Space>
-                <Space.Compact style={{ width: '100%', maxWidth: 420 }}>
-                  <Input
-                    value={shopSpecDraft}
-                    onChange={(e) => setShopSpecDraft(e.target.value)}
-                    placeholder="可手动修正为标准变体码 (如 KB8-001)"
-                    disabled={saveShopSpecMutation.isPending}
-                    suffix={
-                      shopSpecDraft && isShopSpecCodeClean(shopSpecDraft) ? (
-                        <Tag color="green" style={{ margin: 0, fontSize: 11 }}>格式合规</Tag>
-                      ) : shopSpecDraft ? (
-                        <Tag color="orange" style={{ margin: 0, fontSize: 11 }}>非标准</Tag>
-                      ) : null
-                    }
-                  />
-                  <Button
-                    type="primary"
-                    loading={saveShopSpecMutation.isPending}
-                    onClick={() => saveShopSpecMutation.mutate(shopSpecDraft)}
-                    disabled={shopSpecDraft === (sku.shop_spec_code ?? '')}
-                  >
-                    保存
-                  </Button>
-                </Space.Compact>
-                <Text type="secondary" style={{ fontSize: 11 }}>
-                  修正脏数据为标准格式 (例: KB8-001 / OZU-004) 后, 才能被自动绑定到标准模型。
-                </Text>
+              <Space wrap>
+                {tagState.shop.kind === 'clean' ? (
+                  <Tag color={TAG_COLORS.shop_clean}>✓ 已识别 {tagState.shop.value}</Tag>
+                ) : tagState.shop.kind === 'dirty' ? (
+                  <Tag color={TAG_COLORS.shop_dirty}>⚠ 未识别 (原值: {tagState.shop.value})</Tag>
+                ) : (
+                  <Tag color={TAG_COLORS.shop_empty}>— 网店未填</Tag>
+                )}
+                {tagState.shop.kind !== 'empty' && tagState.shop.rawIfChanged ? (
+                  <Text type="secondary" style={{ fontSize: 12 }}>(原始: {tagState.shop.rawIfChanged})</Text>
+                ) : null}
               </Space>
             </Descriptions.Item>
             <Descriptions.Item
@@ -406,7 +407,7 @@ export default function ProductInfoDetailDrawer({ skuId, open, onClose, onUpdate
               ) : (
                 <Space>
                   <Tag color={TAG_COLORS.erp_waiting}>— 待反写</Tag>
-                  <Text type="secondary" style={{ fontSize: 12 }}>等 M4 反写阶段把系统真源推过去</Text>
+                  <Text type="secondary" style={{ fontSize: 12 }}>等 M6 反写阶段把系统真源推过去</Text>
                 </Space>
               )}
             </Descriptions.Item>
@@ -628,134 +629,290 @@ export default function ProductInfoDetailDrawer({ skuId, open, onClose, onUpdate
     </Space>
   ) : null
 
-  const tabProcess = sku ? (
+  // ---- Tab 2: 字段编辑 (4 字段统一表单 + 单一保存按钮) ----
+  const tabEditForm = sku ? (
     <Space direction="vertical" size={12} style={{ width: '100%' }}>
       <Alert
         type="info"
         showIcon
-        message="工艺说明 (production_process)"
+        message="字段编辑 — 4 个反写字段一次保存"
         description={
           <div style={{ lineHeight: 1.7 }}>
-            这是系统内运营/生产侧维护的"可执行工艺说明"。
+            修改下面 4 个字段后点「保存」, 后端按需更新本地库, <b>修改商家编码会自动触发重识别</b>
+            (auto_bind_execute), 你会立刻看到系统真源 (bound_variant_code) 跟随更新.
             <br />
-            保存后会立即落本系统库 <Text code>sku_master.production_process</Text>，
-            <b>不会立即反写 ERP</b> — ERP 反写走"反写到 ERP"按钮 (M4 模块, 待实现)。
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              反写到 ERP (吉客云后台「规格」「模型编码(规)」「工艺说明(规)」「规格标记」) 走独立的「反写到 ERP」按钮
+              (M6 模块, 当前预留位置).
+            </Text>
           </div>
         }
       />
-      <Card size="small" title="编辑工艺说明">
-        <Space direction="vertical" style={{ width: '100%' }}>
-          <TextArea
-            value={processDraft}
-            onChange={(e) => setProcessDraft(e.target.value)}
-            rows={6}
-            placeholder="例: 高频热压裁边 / 数码印 / 双面贴合..."
-            showCount
-            maxLength={2000}
-          />
-          <Space>
-            <Button
-              type="primary"
-              loading={saveProcessMutation.isPending}
-              onClick={() => saveProcessMutation.mutate(processDraft)}
-              disabled={processDraft === (sku.production_process ?? '')}
-            >
-              保存
-            </Button>
-            <Button
-              onClick={() => setProcessDraft(String(sku.production_process ?? ''))}
-              disabled={processDraft === (sku.production_process ?? '')}
-            >
-              撤销修改
-            </Button>
-            {processDraft !== (sku.production_process ?? '') ? (
-              <Text type="warning" style={{ fontSize: 12 }}>有未保存修改</Text>
-            ) : null}
-          </Space>
-        </Space>
-      </Card>
-      <Card size="small" title="当前值 (服务器)">
-        <Paragraph style={{ whiteSpace: 'pre-wrap', margin: 0 }}>
-          {sku.production_process || <Text type="secondary">(空)</Text>}
-        </Paragraph>
-      </Card>
-    </Space>
-  ) : null
 
-  const tabFlags = sku ? (
-    <Space direction="vertical" size={12} style={{ width: '100%' }}>
-      <Alert
-        type="info"
-        showIcon
-        message="规格标记 (metadata.erp.sku_flag)"
-        description={
-          <div style={{ lineHeight: 1.7 }}>
-            多值标签，用于业务分类 (如 "爆款" / "新品" / "清仓")。本地为真源，
-            <b>反写到 ERP "规格标记" 字段</b> (M4 待实现)。
-            <br />
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              当前 MVP 自由输入；标签字典化 (统一颜色/拼写) 待下一轮 P3 实现。
-            </Text>
-          </div>
-        }
-      />
-      <Card size="small" title="本地标签 (真源, 反写源)">
-        <Space wrap>
-          {currentFlags.length === 0 ? <Text type="secondary">(无标签)</Text> : null}
-          {currentFlags.map((tag) => (
-            <Tag
-              key={tag}
-              color="purple"
-              closable
-              onClose={(e) => {
-                e.preventDefault()
-                removeFlagMutation.mutate(tag)
-              }}
-              style={{ fontSize: 13, padding: '2px 8px' }}
-            >
-              {tag}
-            </Tag>
-          ))}
-        </Space>
-        <div style={{ marginTop: 12 }}>
-          <Space.Compact style={{ width: '100%', maxWidth: 400 }}>
+      <Card size="small">
+        <Form layout="vertical" size="small">
+          {/* 1. 模型编码 (shop_spec_code) */}
+          <Form.Item
+            label={
+              <Space>
+                <span><Tag color="blue" style={{ margin: 0 }}>模型编码</Tag></span>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  ↔ 吉客云「模型编码(规)」(反写源 = 识别后的标准变体码)
+                </Text>
+              </Space>
+            }
+          >
             <Input
-              value={flagDraft}
-              onChange={(e) => setFlagDraft(e.target.value)}
-              onPressEnter={() => flagDraft.trim() && addFlagMutation.mutate(flagDraft)}
-              placeholder="新标签 (回车添加)"
-              disabled={addFlagMutation.isPending}
+              value={draft.shop_spec_code}
+              onChange={(e) => setDraft({ ...draft, shop_spec_code: e.target.value })}
+              placeholder="例: KB8-001 / OZU-004"
+              suffix={
+                draft.shop_spec_code && isShopSpecCodeClean(draft.shop_spec_code) ? (
+                  <Tag color="green" style={{ margin: 0, fontSize: 11 }}>格式合规</Tag>
+                ) : draft.shop_spec_code ? (
+                  <Tag color="orange" style={{ margin: 0, fontSize: 11 }}>非标准</Tag>
+                ) : null
+              }
             />
-            <Button
-              type="primary"
-              onClick={() => addFlagMutation.mutate(flagDraft)}
-              loading={addFlagMutation.isPending}
-              disabled={!flagDraft.trim()}
-            >
-              添加
-            </Button>
-          </Space.Compact>
-        </div>
+            <div style={{ marginTop: 6, fontSize: 12, color: '#666', lineHeight: 1.7 }}>
+              <div>
+                🅂 <b>系统识别 (真源, 反写到 ERP 推这个):</b>{' '}
+                {sku.bound_variant_code ? (
+                  <Tag color="blue" style={{ margin: 0 }}>{sku.bound_variant_code}</Tag>
+                ) : sku.bound_model_code ? (
+                  <Tag color="cyan" style={{ margin: 0 }}>{sku.bound_model_code} (仅模型)</Tag>
+                ) : (
+                  <Tag>未识别</Tag>
+                )}
+                {sku.recognition_source ? (
+                  <span style={{ marginLeft: 8, color: '#888' }}>
+                    来自:{' '}
+                    {sku.recognition_source === 'merchant_code' ? '🟢 商家编码直锁' :
+                      sku.recognition_source === 'keyword_variant'
+                        ? `🔵 关键词→变体${sku.recognition_input_source === 'shipment' ? ' (发货)' : ' (档案)'}`
+                        : sku.recognition_source === 'keyword_model_only'
+                          ? `🟡 关键词→仅模型${sku.recognition_input_source === 'shipment' ? ' (发货)' : ' (档案)'}`
+                          : sku.recognition_source === 'bundle' ? '🟣 套装模板' : '⚪ 未识别'}
+                  </span>
+                ) : null}
+              </div>
+              <div>
+                🅑 <b>商家原值 (即将编辑的物理列):</b>{' '}
+                <Text code style={{ fontSize: 12 }}>{sku.shop_spec_code || '—'}</Text>
+              </div>
+              <div>
+                🅔 <b>ERP 当前值:</b>{' '}
+                <Text code style={{ fontSize: 12 }}>{sku.out_sku_code || '— (待反写)'}</Text>
+                {erpModelCodeReg ? (
+                  <span style={{ marginLeft: 12, color: '#888' }}>
+                    ERP「模型编码(规)」: <Text code style={{ fontSize: 12 }}>{erpModelCodeReg}</Text>
+                  </span>
+                ) : null}
+              </div>
+              <div style={{ color: '#888', marginTop: 4 }}>
+                💡 编辑此字段后保存, 会强制走「商家编码 P0 锚点」, 覆盖之前的关键词识别结果.
+              </div>
+            </div>
+          </Form.Item>
+
+          {/* 2. 属性规格 (spec_text) */}
+          <Form.Item
+            label={
+              <Space>
+                <span><Tag color="purple" style={{ margin: 0 }}>属性规格</Tag></span>
+                <Text type="secondary" style={{ fontSize: 12 }}>↔ 吉客云「规格」(skuName)</Text>
+              </Space>
+            }
+          >
+            <TextArea
+              value={draft.spec_text}
+              onChange={(e) => setDraft({ ...draft, spec_text: e.target.value })}
+              rows={2}
+              placeholder="商品档案规格文本, 例: Q26041801B冰丝凉感-沙发垫;90*240cm"
+              maxLength={1000}
+              showCount
+            />
+            <div style={{ marginTop: 6 }}>
+              <Space size={8}>
+                <Button
+                  size="small"
+                  type="link"
+                  onClick={handleFillSpecTextFromShipment}
+                  disabled={!sku.last_shipment_spec_text}
+                >
+                  ⟸ 用最后发货规格填充
+                </Button>
+                {sku.last_shipment_spec_text ? (
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    发货: {prettifyDisplaySpec(sku.last_shipment_spec_text) || sku.last_shipment_spec_text}
+                  </Text>
+                ) : null}
+              </Space>
+            </div>
+          </Form.Item>
+
+          {/* 3. 规格标记 (sku_flag) */}
+          <Form.Item
+            label={
+              <Space>
+                <span><Tag color="orange" style={{ margin: 0 }}>规格标记</Tag></span>
+                <Text type="secondary" style={{ fontSize: 12 }}>↔ 吉客云「规格标记」(skuFlag)</Text>
+              </Space>
+            }
+          >
+            <Space wrap>
+              {draft.sku_flag.length === 0 ? <Text type="secondary">(无标签)</Text> : null}
+              {draft.sku_flag.map((tag) => (
+                <Tag
+                  key={tag}
+                  color="purple"
+                  closable
+                  onClose={(e) => {
+                    e.preventDefault()
+                    handleRemoveFlag(tag)
+                  }}
+                  style={{ fontSize: 13, padding: '2px 8px' }}
+                >
+                  {tag}
+                </Tag>
+              ))}
+            </Space>
+            <Space.Compact style={{ width: '100%', maxWidth: 400, marginTop: 6 }}>
+              <Input
+                value={flagInput}
+                onChange={(e) => setFlagInput(e.target.value)}
+                onPressEnter={handleAddFlag}
+                placeholder="新标签 (回车添加; 例: 爆款 / 新品 / 清仓)"
+              />
+              <Button onClick={handleAddFlag} disabled={!flagInput.trim()}>
+                添加
+              </Button>
+            </Space.Compact>
+            {syncedFlags.length > 0 ? (
+              <div style={{ marginTop: 8, fontSize: 12 }}>
+                <Text type="secondary">ERP 当前值 (影子, 每日 03:30 同步; 冲突以本地为准): </Text>
+                <Space wrap size={4}>
+                  {syncedFlags.map((tag) => (
+                    <Tag key={tag} color="default" style={{ fontSize: 12 }}>{tag}</Tag>
+                  ))}
+                </Space>
+              </div>
+            ) : null}
+          </Form.Item>
+
+          {/* 4. 生产工艺 (production_process) */}
+          <Form.Item
+            label={
+              <Space>
+                <span><Tag color="green" style={{ margin: 0 }}>生产工艺</Tag></span>
+                <Text type="secondary" style={{ fontSize: 12 }}>↔ 吉客云「工艺说明(规)」(process_instructions)</Text>
+              </Space>
+            }
+          >
+            <TextArea
+              value={draft.production_process}
+              onChange={(e) => setDraft({ ...draft, production_process: e.target.value })}
+              rows={4}
+              placeholder="例: 高频热压裁边 / 数码印 / 双面贴合..."
+              maxLength={2000}
+              showCount
+            />
+          </Form.Item>
+
+          {/* 保存按钮 */}
+          <Form.Item style={{ marginBottom: 0 }}>
+            <Space>
+              <Button
+                type="primary"
+                onClick={() => editFormMutation.mutate()}
+                disabled={dirtyFields.length === 0 || editFormMutation.isPending}
+                loading={editFormMutation.isPending}
+              >
+                保存 {dirtyFields.length > 0 ? `(${dirtyFields.length} 个字段已修改)` : ''}
+              </Button>
+              <Button
+                onClick={handleResetDraft}
+                disabled={dirtyFields.length === 0 || editFormMutation.isPending}
+              >
+                撤销修改
+              </Button>
+              <Tooltip title="把本地修改 + 自动识别结果, 推送到 ERP 货品档案对应字段. M6 模块开发中.">
+                <Button disabled>反写到 ERP (M6 待实现)</Button>
+              </Tooltip>
+              {dirtyFields.length > 0 ? (
+                <Text type="warning" style={{ fontSize: 12 }}>
+                  待保存: {dirtyFields.map((f) => {
+                    const label: Record<SkuEditFormField, string> = {
+                      production_process: '生产工艺',
+                      sku_flag: '规格标记',
+                      shop_spec_code: '模型编码',
+                      spec_text: '属性规格',
+                    }
+                    return label[f]
+                  }).join(' / ')}
+                </Text>
+              ) : null}
+            </Space>
+          </Form.Item>
+        </Form>
       </Card>
-      {syncedFlags.length > 0 ? (
-        <Card size="small" title="ERP 当前值 (影子, 同步拉回, 不覆盖本地)">
-          <Space wrap>
-            {syncedFlags.map((tag) => (
-              <Tag key={tag} color="default" style={{ fontSize: 12 }}>
-                {tag}
-              </Tag>
-            ))}
-          </Space>
-          <div style={{ marginTop: 8 }}>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              来自 metadata.erp.sku_flag_synced — 每日 03:30 同步拉回。冲突时以本地为准。
-            </Text>
-          </div>
-        </Card>
+
+      {/* 保存后展示重识别结果 */}
+      {lastSaveResult ? (
+        <Alert
+          type={
+            (lastSaveResult.per_field_results.flatMap((r) => r.errors || [])).length > 0
+              ? 'error'
+              : 'success'
+          }
+          showIcon
+          message="保存结果"
+          description={
+            <div style={{ lineHeight: 1.7, fontSize: 13 }}>
+              {lastSaveResult.per_field_results.map((r) => {
+                const label: Record<SkuEditFormField, string> = {
+                  production_process: '生产工艺',
+                  sku_flag: '规格标记',
+                  shop_spec_code: '模型编码',
+                  spec_text: '属性规格',
+                }
+                return (
+                  <div key={r.field}>
+                    {r.updated ? '✓' : r.no_change ? '○' : '✗'} {label[r.field]}{' '}
+                    {r.updated ? <Text type="success">已更新</Text> :
+                      r.no_change ? <Text type="secondary">无变化</Text> :
+                        <Text type="danger">{(r.errors || [])[0]?.error || '失败'}</Text>}
+                  </div>
+                )
+              })}
+              {lastSaveResult.rebind?.triggered ? (
+                <div style={{ marginTop: 8, padding: 8, background: '#fff7e6', borderRadius: 4 }}>
+                  ⚙️ <b>商家编码触发了自动重识别:</b>{' '}
+                  <Tag color="default">前: {lastSaveResult.rebind.before_variant || '(无)'}</Tag>
+                  →
+                  <Tag color={lastSaveResult.rebind.bound ? 'green' : 'orange'}>
+                    后: {lastSaveResult.rebind.after_variant || '(无)'}
+                  </Tag>
+                  {lastSaveResult.rebind.before_variant === lastSaveResult.rebind.after_variant ? (
+                    <Text type="secondary" style={{ fontSize: 12, marginLeft: 6 }}>(结果未变, 可能商家编码格式不规范或模型未发布)</Text>
+                  ) : null}
+                  {(lastSaveResult.rebind.errors || []).length ? (
+                    <div style={{ color: '#c00', marginTop: 4 }}>
+                      重识别错误: {(lastSaveResult.rebind.errors || [])[0]?.error}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          }
+          closable
+          onClose={() => setLastSaveResult(null)}
+        />
       ) : null}
     </Space>
   ) : null
 
+  // ---- Tab 3: 店铺映射 ----
   const shopColumns: ColumnsType<ShopSkuMappingRead> = useMemo(
     () => [
       { title: '渠道', dataIndex: 'channel', width: 90, render: (v) => v ? <Tag>{v}</Tag> : '-' },
@@ -807,23 +964,29 @@ export default function ProductInfoDetailDrawer({ skuId, open, onClose, onUpdate
     </Space>
   )
 
+  // ---- Tab 4: 反写历史 (M6 待实现) ----
   const tabWriteback = (
     <Alert
       type="warning"
       showIcon
-      message="反写历史 — 待 M4 模块实现"
+      message="反写历史 — 待 M6 模块实现"
       description={
         <div style={{ lineHeight: 1.7 }}>
           本 Tab 将显示该 SKU 的 ERP 反写历史 (何时反写, 反写哪些字段, 成功/失败, payload)。
           <br />
           数据源: <Text code>metadata.erp.*_writeback</Text> + 独立 <Text code>erp_writeback_log</Text> 表。
           <br />
-          反写按钮 (单条 / 批量 / Excel 导出) 同样在 M4 实现。
+          反写按钮 (单条 / 批量 / Excel 导出) 同样在 M6 实现。
+          <br />
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            提示: 本地字段已支持 4 个字段一次保存 (字段编辑 Tab), 反写到 ERP 走独立通道.
+          </Text>
         </div>
       }
     />
   )
 
+  // ---- Tab 5: 原始 metadata (debug) ----
   const tabRawMeta = sku ? (
     <Card size="small" title="原始 metadata_json (debug)">
       <pre
@@ -844,10 +1007,22 @@ export default function ProductInfoDetailDrawer({ skuId, open, onClose, onUpdate
 
   return (
     <Drawer
-      title={sku ? `商品档案详情 — ${sku.erp_sku_barcode || '(无条码)'}` : '商品档案详情'}
+      title={
+        <Space>
+          <span>{sku ? `商品档案详情 — ${sku.erp_sku_barcode || '(无条码)'}` : '商品档案详情'}</span>
+          {dirtyFields.length > 0 ? (
+            <Tag color="orange">有 {dirtyFields.length} 个字段待保存</Tag>
+          ) : null}
+        </Space>
+      }
       open={open}
       width={1080}
-      onClose={onClose}
+      onClose={() => {
+        if (dirtyFields.length > 0) {
+          if (!window.confirm(`有 ${dirtyFields.length} 个字段未保存, 确定关闭吗?`)) return
+        }
+        onClose()
+      }}
       destroyOnClose
     >
       {detailQuery.isFetching && !sku ? (
@@ -859,8 +1034,11 @@ export default function ProductInfoDetailDrawer({ skuId, open, onClose, onUpdate
           defaultActiveKey="basic"
           items={[
             { key: 'basic', label: '基础', children: tabBasic },
-            { key: 'process', label: '工艺', children: tabProcess },
-            { key: 'flags', label: '规格标记', children: tabFlags },
+            {
+              key: 'edit-form',
+              label: dirtyFields.length > 0 ? `字段编辑 (${dirtyFields.length})` : '字段编辑',
+              children: tabEditForm,
+            },
             { key: 'shops', label: `店铺映射 (${shopsQuery.data?.shop_skus?.length ?? 0})`, children: tabShops },
             { key: 'writeback', label: '反写历史', children: tabWriteback },
             { key: 'raw', label: '原始 metadata', children: tabRawMeta },

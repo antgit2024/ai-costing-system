@@ -4107,6 +4107,15 @@ _UPDATE_BULK_ALLOWED_FIELDS: Dict[str, Dict[str, Any]] = {
         "modes": {"set"},
         "value_type": "string_or_null",
     },
+    # 属性规格 - 商品档案 spec_text (吉客云后台「规格」/ skuName).
+    # 允许在抽屉里手动覆盖, 用于发货规格已更新但商品档案没更新的场景.
+    # 同 shop_spec_code 一样: 后端允许批量, UI 仅在抽屉单条入口暴露.
+    "spec_text": {
+        "kind": "physical",
+        "column": "spec_text",
+        "modes": {"set"},
+        "value_type": "string_or_null",
+    },
 }
 
 
@@ -4500,6 +4509,201 @@ def update_sku_master_field_bulk(
         "mode": mode_norm,
         "new_value": normalized_value,
         "requested_by": requested_by,
+    }
+
+
+# ============================================================================
+# 抽屉「字段编辑」统一表单 — 单条 SKU 4 字段一次保存 + 自动重识别
+# ----------------------------------------------------------------------------
+# 配套前端: ProductInfoDetailDrawer.tsx 「字段编辑」卡片 (合并原 3 个分散卡片).
+#
+# 设计要点:
+# 1. 复用 update_sku_master_field_bulk(sku_master_ids=[id]) 单条入口, 避免重复代码.
+# 2. 用 ``update_fields`` 显式列表区分 "未传字段" 与 "传 None 清空".
+# 3. ``shop_spec_code`` 被修改后自动触发 auto_bind_execute, 让系统编码 (bound_variant_code)
+#    跟随商家编码重新识别 (P0 锚点 > P1 关键词).
+# 4. 返回 ``row`` (最新的 SkuMaster ORM 对象, 已 attach 识别字段) + 子调用统计,
+#    让前端立即拿到 recognition_source / bound_variant_code 等更新后的值.
+# ============================================================================
+
+_EDIT_FORM_FIELD_MAP: Dict[str, str] = {
+    # 表单字段 → update_sku_master_field_bulk 的 field_name
+    "production_process": "production_process",
+    "sku_flag": "metadata.erp.sku_flag",
+    "shop_spec_code": "shop_spec_code",
+    "spec_text": "spec_text",
+}
+
+
+def edit_sku_form(
+    db: Session,
+    *,
+    sku_master_id: str,
+    requested_by: Optional[str],
+    update_fields: List[str],
+    production_process: Optional[str] = None,
+    sku_flag: Optional[List[str]] = None,
+    shop_spec_code: Optional[str] = None,
+    spec_text: Optional[str] = None,
+    trigger_rebind: bool = True,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """单条 SKU 统一表单编辑 (4 字段任意子集 + 自动重识别).
+
+    Args:
+        sku_master_id: 必填.
+        update_fields: 显式声明要更新的字段名 (production_process/sku_flag/
+            shop_spec_code/spec_text). 不在此列表中的字段即使带了值也不会被改, 避免
+            "未传 vs 传 None" 歧义.
+        production_process: 当 "production_process" 在 update_fields 中时生效;
+            None/"" 视为清空字段.
+        sku_flag: 当 "sku_flag" 在 update_fields 中时生效; None 视为清空数组.
+        shop_spec_code: 同上规则; 变更后会触发 auto_bind_execute (除非 trigger_rebind=False).
+        spec_text: 同上规则.
+        trigger_rebind: shop_spec_code 变更后是否自动重识别 (默认 True).
+        dry_run: 预演模式; True 时所有子调用 rollback, 不写库, 也不重识别.
+
+    Returns dict:
+        - sku_master_id
+        - row: SkuMaster ORM 对象 (最新值, 含 attach 后的识别字段) | None
+        - per_field_results: [{field, updated, no_change, errors}]
+        - rebind: {triggered, bound, before_variant, after_variant, errors}
+        - dry_run
+    """
+    row = db.get(models.SkuMaster, sku_master_id)
+    if not row or row.is_archived:
+        raise ValueError("SKU master not found")
+
+    valid_fields = [f for f in (update_fields or []) if f in _EDIT_FORM_FIELD_MAP]
+    if not valid_fields:
+        # 啥都没改, 直接返回当前最新值供 UI 刷新
+        fresh = get_sku_master(db, sku_master_id)
+        return {
+            "sku_master_id": sku_master_id,
+            "row": fresh,
+            "per_field_results": [],
+            "rebind": {"triggered": False},
+            "dry_run": bool(dry_run),
+        }
+
+    # 字段值映射 (用于按顺序传给 update_sku_master_field_bulk)
+    value_map: Dict[str, Any] = {
+        "production_process": production_process,
+        "sku_flag": sku_flag,
+        "shop_spec_code": shop_spec_code,
+        "spec_text": spec_text,
+    }
+
+    per_field_results: List[Dict[str, Any]] = []
+    shop_spec_changed = False
+
+    for f in valid_fields:
+        backend_field = _EDIT_FORM_FIELD_MAP[f]
+        try:
+            sub = update_sku_master_field_bulk(
+                db,
+                field_name=backend_field,
+                new_value=value_map[f],
+                mode="set",
+                requested_by=requested_by,
+                dry_run=dry_run,
+                sku_master_ids=[sku_master_id],
+            )
+            per_field_results.append({
+                "field": f,
+                "updated": int(sub.get("updated_count", 0) or 0) > 0,
+                "no_change": int(sub.get("skipped_no_change", 0) or 0) > 0,
+                "errors": list(sub.get("errors") or []),
+            })
+            if f == "shop_spec_code" and int(sub.get("updated_count", 0) or 0) > 0:
+                shop_spec_changed = True
+        except ValueError as exc:
+            per_field_results.append({
+                "field": f,
+                "updated": False,
+                "no_change": False,
+                "errors": [{"sku_master_id": sku_master_id, "error": str(exc)}],
+            })
+
+    # ---- 自动重识别: shop_spec_code 变了 且 触发开关开 且 非 dry_run ----
+    rebind_info: Dict[str, Any] = {"triggered": False, "bound": False, "errors": []}
+    if shop_spec_changed and trigger_rebind and not dry_run:
+        # 重读 row 拿到 commit 后的最新 metadata
+        db.expire(row)
+        row = db.get(models.SkuMaster, sku_master_id)  # reload after commit
+        before_meta = dict(getattr(row, "metadata_json", None) or {})
+        before_variant = (before_meta.get("bound_variant_code") or "").strip().upper() or None
+
+        try:
+            # CRITICAL: auto_bind_preview 优先读 metadata.shop_spec_code (L5534),
+            # update_sku_master_field_bulk 只改了物理列, 必须同步 metadata 否则
+            # 重识别会用旧值. 这里把物理列的新值同步到 metadata.shop_spec_code.
+            new_shop = (str(getattr(row, "shop_spec_code", "") or "").strip()) or None
+            sync_meta = dict(getattr(row, "metadata_json", None) or {})
+            if new_shop:
+                sync_meta["shop_spec_code"] = new_shop
+                sync_meta["shop_spec_code_source"] = "manual_edit"
+                sync_meta["shop_spec_code_seen_at"] = _utcnow().isoformat()
+            else:
+                sync_meta.pop("shop_spec_code", None)
+                sync_meta.pop("shop_spec_code_source", None)
+            row.metadata_json = _json_safe(sync_meta)
+            try:
+                from sqlalchemy.orm.attributes import flag_modified
+                flag_modified(row, "metadata_json")
+            except Exception:  # noqa: BLE001
+                pass
+            db.commit()
+
+            # auto_bind_execute 的 "已绑跳过" 逻辑会拦住已绑 SKU 的重识别
+            # (见 L5625 get_active_sku_binding 命中就 skip).
+            # 改商家编码场景下用户的诉求就是 "重走一遍识别", 所以先把旧绑定 deactivate,
+            # 让 auto_bind_execute 把新识别结果作为新 active binding 落库.
+            sku_code = (row.erp_sku_barcode or "").strip()
+            existing = product_model_service.get_active_sku_binding(db, sku_code) if sku_code else None
+            if existing is not None:
+                existing.is_active = False
+                meta_e = dict(existing.metadata_json or {})
+                meta_e.setdefault("effective_through", _utcnow().isoformat())
+                meta_e["deactivated_reason"] = "shop_spec_code_edited_trigger_rebind"
+                meta_e["deactivated_by"] = requested_by
+                existing.metadata_json = _json_safe(meta_e)
+                db.commit()
+
+            rebind_result = auto_bind_execute(
+                db,
+                limit=1,
+                requested_by=requested_by,
+                sku_master_ids=[sku_master_id],
+            )
+            db.expire(row)
+            after_meta = dict(getattr(row, "metadata_json", None) or {})
+            after_variant = (after_meta.get("bound_variant_code") or "").strip().upper() or None
+            rebind_info = {
+                "triggered": True,
+                "bound": int(rebind_result.get("bound_count", 0) or 0) > 0,
+                "skipped_already_bound": int(rebind_result.get("skipped_already_bound", 0) or 0) > 0,
+                "before_variant": before_variant,
+                "after_variant": after_variant,
+                "errors": list(rebind_result.get("errors") or []),
+            }
+        except Exception as exc:  # noqa: BLE001
+            rebind_info = {
+                "triggered": True,
+                "bound": False,
+                "before_variant": before_variant,
+                "after_variant": before_variant,
+                "errors": [{"sku_master_id": sku_master_id, "error": f"rebind failed: {exc}"}],
+            }
+
+    # 取最新 row (含 attach 识别字段) 给前端
+    fresh = get_sku_master(db, sku_master_id)
+    return {
+        "sku_master_id": sku_master_id,
+        "row": fresh,
+        "per_field_results": per_field_results,
+        "rebind": rebind_info,
+        "dry_run": bool(dry_run),
     }
 
 

@@ -397,6 +397,33 @@ def update_field_bulk(
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+@router.post("/edit-form", response_model=schemas.SkuMasterEditFormResponse)
+def edit_form(
+    payload: schemas.SkuMasterEditFormRequest,
+    db: Session = Depends(get_db_session),
+):
+    """抽屉「字段编辑」统一表单 — 单条 SKU 4 字段一次保存 + 自动重识别.
+
+    见 ``sku_master_service.edit_sku_form`` 的 docstring. 配套前端
+    ProductInfoDetailDrawer.tsx 的「字段编辑」卡片.
+    """
+    try:
+        return sku_master_service.edit_sku_form(
+            db,
+            sku_master_id=payload.sku_master_id,
+            requested_by=payload.requested_by,
+            update_fields=list(payload.update_fields or []),
+            production_process=payload.production_process,
+            sku_flag=payload.sku_flag,
+            shop_spec_code=payload.shop_spec_code,
+            spec_text=payload.spec_text,
+            trigger_rebind=payload.trigger_rebind,
+            dry_run=payload.dry_run,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @router.post("/bind-by-bundle", response_model=schemas.SkuMasterBindByBundleTemplateResponse)
 def bind_by_bundle(payload: schemas.SkuMasterBindByBundleTemplateRequest, db: Session = Depends(get_db_session)):
     try:

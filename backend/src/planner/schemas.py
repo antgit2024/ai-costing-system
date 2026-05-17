@@ -4394,6 +4394,53 @@ class SkuMasterUpdateFieldBulkResponse(BaseModel):
     requested_by: Optional[str] = None
 
 
+class SkuMasterEditFormRequest(BaseModel):
+    """抽屉「字段编辑」统一表单 — 单条 SKU 4 字段一次保存 + 自动重识别.
+
+    设计:
+    - ``update_fields`` 显式列表声明要改的字段, 避免 "未传 vs 传 None" 歧义.
+    - 不在 update_fields 中的字段即使带了值也不会被改 (前端 dirty-tracking 用).
+    - ``shop_spec_code`` 被改后自动触发 auto_bind_execute, 让 bound_variant_code 跟随重识别.
+    """
+
+    sku_master_id: str
+    requested_by: Optional[str] = None
+    dry_run: bool = False
+    trigger_rebind: bool = True
+
+    update_fields: List[Literal["production_process", "sku_flag", "shop_spec_code", "spec_text"]] = Field(
+        default_factory=list
+    )
+    production_process: Optional[str] = None
+    sku_flag: Optional[List[str]] = None
+    shop_spec_code: Optional[str] = None
+    spec_text: Optional[str] = None
+
+
+class SkuMasterEditFormFieldResult(BaseModel):
+    field: str
+    updated: bool
+    no_change: bool
+    errors: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class SkuMasterEditFormRebindInfo(BaseModel):
+    triggered: bool
+    bound: bool = False
+    skipped_already_bound: bool = False
+    before_variant: Optional[str] = None
+    after_variant: Optional[str] = None
+    errors: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class SkuMasterEditFormResponse(BaseModel):
+    sku_master_id: str
+    row: Optional[SkuMasterRead] = None
+    per_field_results: List[SkuMasterEditFormFieldResult] = Field(default_factory=list)
+    rebind: SkuMasterEditFormRebindInfo
+    dry_run: bool
+
+
 class SkuMasterAutoBindPreviewRequest(BaseModel):
     limit: int = Field(200, ge=1, le=2000)
     # max rows to scan among unbound sku masters (server-side filter) to find candidates

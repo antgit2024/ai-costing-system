@@ -3321,6 +3321,63 @@ export const previewUpdateSkuMasterFieldBulk = async (
   return response.data
 }
 
+// ----------------------------------------------------------------------------
+// editSkuForm — 抽屉「字段编辑」统一表单 (4 字段一次保存 + shop_spec_code 自动重识别)
+// 见 backend/src/planner/services/sku_master_service.py::edit_sku_form
+// ----------------------------------------------------------------------------
+export type SkuEditFormField =
+  | 'production_process'
+  | 'sku_flag'
+  | 'shop_spec_code'
+  | 'spec_text'
+
+export interface SkuMasterEditFormRequest {
+  sku_master_id: string
+  requested_by?: string | null
+  dry_run?: boolean
+  trigger_rebind?: boolean
+  update_fields: SkuEditFormField[]
+  production_process?: string | null
+  sku_flag?: string[] | null
+  shop_spec_code?: string | null
+  spec_text?: string | null
+}
+
+export interface SkuMasterEditFormFieldResult {
+  field: SkuEditFormField
+  updated: boolean
+  no_change: boolean
+  errors: Array<{ sku_master_id?: string; sku_code?: string; error?: string }> | null
+}
+
+export interface SkuMasterEditFormRebindInfo {
+  triggered: boolean
+  bound?: boolean
+  skipped_already_bound?: boolean
+  before_variant?: string | null
+  after_variant?: string | null
+  errors?: Array<{ sku_master_id?: string; error?: string }> | null
+}
+
+export interface SkuMasterEditFormResponse {
+  sku_master_id: string
+  row: SkuMaster | null
+  per_field_results: SkuMasterEditFormFieldResult[]
+  rebind: SkuMasterEditFormRebindInfo
+  dry_run: boolean
+}
+
+export const editSkuForm = async (
+  payload: SkuMasterEditFormRequest,
+  opts: PlannerRequestOptions = {},
+): Promise<SkuMasterEditFormResponse> => {
+  const response = await plannerClient.post('/sku-master/edit-form', payload, {
+    timeout: opts.timeoutMs,
+    signal: opts.signal,
+  })
+  return response.data
+}
+
 export const bindSkuMastersByBundleTemplate = async (
   payload: {
     template_id: string

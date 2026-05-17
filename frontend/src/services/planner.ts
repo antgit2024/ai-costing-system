@@ -3590,6 +3590,33 @@ export const listErpWritebackJobs = async (
   return response.data
 }
 
+export interface ErpWritebackPushResult {
+  status: 'succeeded' | 'failed' | 'retrying' | 'skipped' | 'not_found' | string
+  error?: string | null
+  biz_sub_code?: string | null
+  biz_code?: string | null
+  biz?: Record<string, unknown> | null
+}
+
+export const pushErpWritebackJob = async (
+  jobId: string,
+  opts: { force?: boolean; requestedBy?: string; timeoutMs?: number } = {},
+): Promise<ErpWritebackPushResult> => {
+  // push 实际调吉客云, 可能慢, 默认 60s timeout
+  const response = await plannerClient.post(
+    `/sku-master/erp-writeback/jobs/${encodeURIComponent(jobId)}/push`,
+    null,
+    {
+      params: {
+        force: opts.force ? 'true' : undefined,
+        requested_by: opts.requestedBy || 'product-info-queue-button',
+      },
+      timeout: opts.timeoutMs ?? 60_000,
+    },
+  )
+  return response.data
+}
+
 export const bindSkuMastersByBundleTemplate = async (
   payload: {
     template_id: string

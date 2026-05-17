@@ -500,8 +500,139 @@ def list_writeback_jobs(
 
 
 # ---------------------------------------------------------------------------
-# Worker 钩子 (供后续模块实现真正的 push)
+# Worker 钩子 — push_one_job 真实调用吉客云
 # ---------------------------------------------------------------------------
+
+
+def _build_jackyun_biz_from_job(job: "models.IntegrationWritebackJob") -> Dict[str, Any]:
+    """根据 job.payload_json 构造调吉客云「修改货品」接口的 biz dict.
+
+    payload_json 形如 {"sku_master_id": "...", "fields": [...], "values": {...}}
+    其中 values 的 key 已经是吉客云 API 字段名 (skuName / model_code /
+    process_instructions / flagData), 见 WRITEBACK_FIELD_MAP.
+
+    主键: skuBarcode = job.target_id (= erp_sku_barcode), 这是吉客云用来定位货品的字段.
+    若以后接口要求改用 skuCode / goodsNo / outerCode, 调整这里即可.
+    """
+    payload = job.payload_json or {}
+    values = dict(payload.get("values") or {})
+    biz: Dict[str, Any] = {"skuBarcode": str(job.target_id or "").strip()}
+    # 把 values 里非 None / 非空字符串的字段挂上去
+    for k, v in values.items():
+        if v is None:
+            continue
+        if isinstance(v, str) and not v.strip():
+            continue
+        biz[k] = v
+    return biz
+
+
+def push_one_job(
+    db: Session,
+    *,
+    job_id: str,
+    requested_by: Optional[str] = None,
+    force: bool = False,
+) -> Dict[str, Any]:
+    """同步推送单条 job 到吉客云.
+
+    步骤:
+    1. 取出 job, 校验 status 是否可推 (pending / retrying; force=True 时也允许其他)
+    2. 构造 biz dict (用 job.payload_json["values"] + 主键 skuBarcode)
+    3. 调 JackyunClient.call(job.api_method, biz, db=db) — 会自动签名 + 记 api 日志
+    4. 成功 → mark_job_done; 业务/认证错 → mark_job_failed(retry=False); 网络错 → retry=True
+
+    返回:
+        {"status": "...", "biz_sub_code": "...", "error": "...", "biz": {...}}
+        UI 拿来给运营看完整真实响应.
+
+    注意:
+    - 当前 erp.storage.goods.update 这个 method / biz 字段集**未经实际验证**,
+      第一次跑大概率会有 biz_sub_code 不在 _BUSINESS_OK_SUB_CODES 白名单或
+      字段名不对的报错. 根据真实 last_error 调整本函数即可.
+    """
+    # 延迟 import 避免循环依赖
+    from src.integrations.jackyun import build_default_client
+    from src.integrations.base.errors import (
+        IntegrationAuthError,
+        IntegrationBusinessError,
+        IntegrationTransportError,
+    )
+
+    job = db.get(models.IntegrationWritebackJob, job_id)
+    if not job:
+        return {"status": "not_found", "error": f"job {job_id} 不存在"}
+
+    if not force and job.status not in ("pending", "retrying"):
+        return {
+            "status": "skipped",
+            "error": f"job 当前状态={job.status}, 不可推 (需 pending / retrying, 或 force=True)",
+        }
+
+    # 主键必须有
+    target_id = (job.target_id or "").strip()
+    if not target_id:
+        mark_job_failed(db, job_id=job_id, error="missing target_id (skuBarcode 为空)", retry=False)
+        return {"status": "failed", "error": "missing target_id (skuBarcode)"}
+
+    biz = _build_jackyun_biz_from_job(job)
+    # 至少要有一个待写字段
+    has_writable = any(k for k in biz.keys() if k != "skuBarcode")
+    if not has_writable:
+        mark_job_failed(db, job_id=job_id, error="biz 除主键外没有任何待写字段", retry=False)
+        return {"status": "failed", "error": "no writable field"}
+
+    # 推送前先把 status 置为 retrying / attempt 自增, 防止并发
+    job.attempt = int(job.attempt or 0) + 1
+    job.last_attempt_at = _now_naive_utc()
+    job.updated_at = _now_naive_utc()
+    if job.status == "pending":
+        job.status = "retrying"
+    db.commit()
+
+    try:
+        client = build_default_client()
+    except RuntimeError as exc:
+        # JACKYUN_APP_KEY/SECRET 未配置
+        mark_job_failed(db, job_id=job_id, error=f"客户端初始化失败: {exc}", retry=False)
+        return {"status": "failed", "error": str(exc), "biz": biz}
+
+    try:
+        resp = client.call(job.api_method, biz, db=db)
+    except IntegrationAuthError as exc:
+        mark_job_failed(db, job_id=job_id, error=f"AUTH: {exc.message} (sub={exc.biz_sub_code})", retry=False)
+        return {
+            "status": "failed",
+            "error": exc.message,
+            "biz_sub_code": exc.biz_sub_code,
+            "biz_code": exc.biz_code,
+            "biz": biz,
+        }
+    except IntegrationBusinessError as exc:
+        mark_job_failed(db, job_id=job_id, error=f"BIZ: {exc.message} (sub={exc.biz_sub_code})", retry=False)
+        return {
+            "status": "failed",
+            "error": exc.message,
+            "biz_sub_code": exc.biz_sub_code,
+            "biz_code": exc.biz_code,
+            "biz": biz,
+        }
+    except IntegrationTransportError as exc:
+        # 网络层错误, 允许重试
+        mark_job_failed(db, job_id=job_id, error=f"NET: {exc.message}", retry=True)
+        return {"status": "retrying", "error": exc.message, "biz": biz}
+    except Exception as exc:  # noqa: BLE001 — 兜底, 防止 worker 进程挂
+        mark_job_failed(db, job_id=job_id, error=f"UNEXPECTED: {type(exc).__name__}: {exc}", retry=True)
+        return {"status": "retrying", "error": str(exc), "biz": biz}
+
+    # 成功路径
+    mark_job_done(db, job_id=job_id, requested_by=requested_by)
+    return {
+        "status": "succeeded",
+        "biz_sub_code": resp.biz_sub_code,
+        "biz_code": resp.biz_code,
+        "biz": biz,
+    }
 
 
 def mark_job_done(
@@ -531,10 +662,10 @@ def mark_job_failed(
     job = db.get(models.IntegrationWritebackJob, job_id)
     if not job:
         return None
-    job.attempt = int(job.attempt or 0) + 1
+    # 注意: push_one_job 已经把 attempt 自增了, 这里不再加
     job.last_attempt_at = _now_naive_utc()
     job.last_error = (error or "")[:4000]
-    if retry and job.attempt < int(job.max_attempts or 5):
+    if retry and int(job.attempt or 0) < int(job.max_attempts or 5):
         job.status = "retrying"
     else:
         job.status = "failed"

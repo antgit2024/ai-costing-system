@@ -536,6 +536,27 @@ def erp_writeback_jobs_list(
     return data
 
 
+@router.post("/erp-writeback/jobs/{job_id}/push")
+def erp_writeback_push_one(
+    job_id: str,
+    force: bool = False,
+    requested_by: Optional[str] = None,
+    db: Session = Depends(get_db_session),
+):
+    """同步推送单条 job 到吉客云 (供「立刻推送」按钮 + 后续 worker 复用).
+
+    - 返回 push_one_job 的真实结果, 包含 status / error / biz_sub_code / biz
+    - force=True 时允许推 succeeded / failed / superseded 状态的 job (运营手动重试)
+    """
+    result = erp_writeback_service.push_one_job(
+        db,
+        job_id=job_id,
+        requested_by=requested_by,
+        force=force,
+    )
+    return result
+
+
 @router.post("/bind-by-bundle", response_model=schemas.SkuMasterBindByBundleTemplateResponse)
 def bind_by_bundle(payload: schemas.SkuMasterBindByBundleTemplateRequest, db: Session = Depends(get_db_session)):
     try:

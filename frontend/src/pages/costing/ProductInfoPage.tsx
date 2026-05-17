@@ -13,9 +13,10 @@ import {
   fetchSkuMaster,
   fetchTripleTagOverview,
   listErpWritebackJobs,
+  pushErpWritebackJob,
   triggerBrowserDownload,
 } from '@/services/planner'
-import type { ErpWritebackJobListItem } from '@/services/planner'
+import type { ErpWritebackJobListItem, ErpWritebackPushResult } from '@/services/planner'
 import type { SkuMaster } from '@/types/planner'
 import { formatBeijingTime } from '@/utils/beijingTime'
 import { IMAGE_FALLBACK_SVG, pickRowImageUrl } from '@/utils/imageUrl'
@@ -1351,6 +1352,73 @@ function WritebackQueueDrawer(props: WritebackQueueDrawerProps) {
     refetchInterval: open ? 15000 : false, // 抽屉打开时 15s 自动刷新, 看 pending → done 的流转
   })
 
+  // 单条 push mutation — 失败时不弹错, 走 Modal.info 显示完整 result
+  const [pushingId, setPushingId] = useState<string | null>(null)
+  const pushMutation = useMutation({
+    mutationFn: (vars: { jobId: string; force: boolean }) =>
+      pushErpWritebackJob(vars.jobId, { force: vars.force }),
+    onSettled: () => {
+      setPushingId(null)
+      queueQuery.refetch()
+    },
+    onSuccess: (res: ErpWritebackPushResult) => {
+      const ok = res.status === 'succeeded'
+      Modal[ok ? 'success' : 'info']({
+        title: ok ? '推送成功' : `推送结果：${res.status}`,
+        width: 600,
+        content: (
+          <div>
+            <div style={{ marginBottom: 8 }}>
+              <Tag color={ok ? 'green' : res.status === 'retrying' ? 'orange' : 'red'}>
+                {res.status}
+              </Tag>
+              {res.biz_sub_code ? (
+                <Text type="secondary" style={{ marginLeft: 8 }}>
+                  subCode: <Text code>{res.biz_sub_code}</Text>
+                </Text>
+              ) : null}
+            </div>
+            {res.error ? (
+              <Alert
+                type={ok ? 'success' : 'error'}
+                showIcon
+                message="吉客云响应"
+                description={<Text style={{ fontSize: 12 }}>{res.error}</Text>}
+                style={{ marginBottom: 8 }}
+              />
+            ) : null}
+            {res.biz ? (
+              <details style={{ marginTop: 8 }}>
+                <summary style={{ cursor: 'pointer', color: '#666' }}>
+                  推送的 biz payload (展开)
+                </summary>
+                <pre
+                  style={{
+                    background: '#f5f5f5',
+                    padding: 8,
+                    marginTop: 4,
+                    fontSize: 11,
+                    whiteSpace: 'pre-wrap',
+                    maxHeight: 240,
+                    overflow: 'auto',
+                  }}
+                >
+                  {JSON.stringify(res.biz, null, 2)}
+                </pre>
+              </details>
+            ) : null}
+          </div>
+        ),
+      })
+    },
+    onError: (e: any) => {
+      Modal.error({
+        title: '推送请求失败',
+        content: e?.response?.data?.detail || e?.message || '未知错误',
+      })
+    },
+  })
+
   const data = queueQuery.data
   const items = data?.items || []
   const total = data?.total ?? 0
@@ -1472,10 +1540,45 @@ function WritebackQueueDrawer(props: WritebackQueueDrawerProps) {
     {
       title: '提交人',
       dataIndex: 'requested_by',
-      width: 130,
+      width: 110,
       render: (v?: string | null) => (
         <Text style={{ fontSize: 12 }}>{v || '—'}</Text>
       ),
+    },
+    {
+      title: '操作',
+      dataIndex: 'op',
+      width: 110,
+      fixed: 'right',
+      render: (_: any, r) => {
+        const canDirectPush = r.status === 'pending' || r.status === 'retrying'
+        const isFinal = r.status === 'succeeded' || r.status === 'failed' || r.status === 'superseded'
+        const loading = pushingId === r.id && pushMutation.isPending
+        return (
+          <Tooltip
+            title={
+              canDirectPush
+                ? '同步调吉客云「编辑货品」接口推送本条; 成功 → succeeded, 失败 → failed (带真实错误码)'
+                : isFinal
+                  ? `当前状态 ${r.status}, 点击强制重推 (force=true)`
+                  : '推送'
+            }
+          >
+            <Button
+              type={canDirectPush ? 'primary' : 'default'}
+              size="small"
+              loading={loading}
+              disabled={pushMutation.isPending && !loading}
+              onClick={() => {
+                setPushingId(r.id)
+                pushMutation.mutate({ jobId: r.id, force: isFinal })
+              }}
+            >
+              {canDirectPush ? '立刻推送' : '强制重推'}
+            </Button>
+          </Tooltip>
+        )
+      },
     },
   ]
 
@@ -1554,7 +1657,7 @@ function WritebackQueueDrawer(props: WritebackQueueDrawerProps) {
           loading={queueQuery.isFetching}
           columns={columns}
           dataSource={items}
-          scroll={{ x: 1100 }}
+          scroll={{ x: 1280 }}
           pagination={{
             current: page,
             pageSize,

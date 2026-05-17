@@ -240,10 +240,13 @@ export default function ProductInfoPage() {
           <Tooltip
             title={(
               <div style={{ lineHeight: 1.7, maxWidth: 380 }}>
-                <div style={{ fontWeight: 600, marginBottom: 4 }}>三标签 = 模型编码的三路来源</div>
-                <div><b>🅂 系统</b> (蓝/紫) — 我们权威识别出的标准模型变体, 真源</div>
-                <div><b>🅑 商家</b> (绿=干净 / 橙=历史脏) — 网店原值 shop_spec_code</div>
-                <div><b>🅔 ERP</b> (绿=已反写 / 红=不一致 / 灰=待反写) — ERP outSkuCode</div>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>模型编码 — 两行布局</div>
+                <div><b>第 1 行</b>: 已绑定的标准模型 / 套装的可读描述</div>
+                <div style={{ marginLeft: 10 }}>例: OZU 直喷切割垫类 科技皮(OZU-004) / B-DB9EAE</div>
+                <div style={{ marginTop: 4 }}><b>第 2 行</b>: 模型编码三路来源 (真源 / 输入 / ERP 镜像)</div>
+                <div style={{ marginLeft: 10 }}><b>🅂 系统</b> (蓝/紫) — 我们权威识别的标准模型变体, 真源</div>
+                <div style={{ marginLeft: 10 }}><b>🅑 商家</b> (绿=干净 / 橙=历史脏) — 网店原值 shop_spec_code</div>
+                <div style={{ marginLeft: 10 }}><b>🅔 ERP</b> (绿=已反写 / 红=不一致 / 灰=待反写) — ERP outSkuCode</div>
                 <div style={{ marginTop: 6, color: '#999', fontSize: 12 }}>
                   数据流: 商家 → 系统 → ERP. 系统标签是真源, ERP 不能反向覆盖.
                 </div>
@@ -251,15 +254,40 @@ export default function ProductInfoPage() {
             )}
           >
             <span>
-              模型编码 (三路){' '}
+              模型编码{' '}
               <Text type="secondary" style={{ fontSize: 11 }}>ⓘ</Text>
             </span>
           </Tooltip>
         ),
         key: 'triple_tag',
-        width: 300,
+        width: 360,
         render: (_v, row: any) => {
           const s = computeTripleTagState(row)
+          // 第 1 行: "已绑定" 的可读描述 (复用抽屉「已绑定」字段同源数据)
+          const boundLine = (() => {
+            const modelCode = safeString(row?.bound_model_code).trim()
+            const modelName = safeString(row?.bound_model_name).trim()
+            const variantLabel = safeString(row?.bound_variant_label).trim()
+            const bundleCode = safeString(row?.bundle_template_code).trim()
+            const bundleSelector = safeString(row?.bundle_preset_selector).trim()
+            if (modelCode) {
+              return (
+                <Space size={4} wrap style={{ fontSize: 12, lineHeight: 1.3 }}>
+                  <Tag color="blue" style={{ margin: 0 }}>{modelCode}</Tag>
+                  {modelName ? <Text type="secondary">{modelName}</Text> : null}
+                  {variantLabel ? <Tag color="purple" style={{ margin: 0 }}>{variantLabel}</Tag> : null}
+                </Space>
+              )
+            }
+            if (bundleCode) {
+              return (
+                <Tag color="purple" style={{ margin: 0, fontSize: 12 }}>
+                  B-{bundleCode}{bundleSelector || ''}
+                </Tag>
+              )
+            }
+            return <Text type="secondary" style={{ fontSize: 12 }}>未关联</Text>
+          })()
 
           const sysTag = (() => {
             if (s.sys.kind === 'matched') {
@@ -349,33 +377,115 @@ export default function ProductInfoPage() {
                   : null
 
           return (
-            <Space wrap size={4} align="center">
-              {sysTag}
-              {shopTag}
-              {erpTag}
-              {conflictDesc ? (
-                <Tooltip
-                  title={(
-                    <div style={{ lineHeight: 1.7, maxWidth: 360 }}>
-                      <div style={{ fontWeight: 600, marginBottom: 4 }}>{conflictDesc.title}</div>
-                      <div>{conflictDesc.detail}</div>
-                      <div style={{ marginTop: 6, color: '#ccc', fontSize: 12 }}>点击行打开抽屉, 在「三标签对账」面板里核对处理</div>
-                    </div>
-                  )}
-                >
-                  <span
-                    style={{
-                      color: conflictColor!,
-                      fontWeight: 700,
-                      fontSize: 14,
-                      cursor: 'help',
-                      marginLeft: 2,
-                    }}
+            <Space direction="vertical" size={2} style={{ width: '100%' }}>
+              {boundLine}
+              <Space wrap size={4} align="center">
+                {sysTag}
+                {shopTag}
+                {erpTag}
+                {conflictDesc ? (
+                  <Tooltip
+                    title={(
+                      <div style={{ lineHeight: 1.7, maxWidth: 360 }}>
+                        <div style={{ fontWeight: 600, marginBottom: 4 }}>{conflictDesc.title}</div>
+                        <div>{conflictDesc.detail}</div>
+                        <div style={{ marginTop: 6, color: '#ccc', fontSize: 12 }}>点击右侧「查看」打开抽屉, 在「三标签对账」面板里核对处理</div>
+                      </div>
+                    )}
                   >
-                    ⚠
-                  </span>
-                </Tooltip>
+                    <span
+                      style={{
+                        color: conflictColor!,
+                        fontWeight: 700,
+                        fontSize: 14,
+                        cursor: 'help',
+                        marginLeft: 2,
+                      }}
+                    >
+                      ⚠
+                    </span>
+                  </Tooltip>
+                ) : null}
+              </Space>
+            </Space>
+          )
+        },
+      },
+      // 「分类」「店铺数」已移到行抽屉的"基础"区, 列表不再展示.
+      // 「识别依据」「规格标记」「操作」列在下方按用户要求重新组织顺序:
+      //   模型编码 → 规格(档案/发货) → 识别依据 → 解析尺寸 → 状态 → 规格标记 → 操作 → 更新时间
+      {
+        title: (
+          <Tooltip title="档案 = 商品规格(网店) spec_text; 发货 = last_shipment_spec_text. 发货展示时已剥天猫属性标签前缀, hover 可看原文. 两边归一化后仍不同, 显示红色「规格不一致」.">
+            <span>
+              规格 (档案 / 发货){' '}
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                ⓘ
+              </Text>
+            </span>
+          </Tooltip>
+        ),
+        key: 'spec_combined',
+        width: 560,
+        render: (_v, row: any) => {
+          const shop = safeString(row?.spec_text).trim()
+          const ship = safeString(row?.last_shipment_spec_text).trim()
+          const shipPretty = ship ? prettifyDisplaySpec(ship) : ''
+          const beautified = !!ship && shipPretty !== ship
+          const mismatch = !!shop && !!ship && normalizeSpecForCompare(ship) !== normalizeSpecForCompare(shop)
+          // 两行布局: 档案 / 发货. 任一为空就只显示有的那行.
+          return (
+            <Space direction="vertical" size={2} style={{ width: '100%' }}>
+              {shop ? (
+                <div style={{ display: 'flex', gap: 6, lineHeight: 1.3 }}>
+                  <Text type="secondary" style={{ flexShrink: 0, fontSize: 12 }}>档案:</Text>
+                  <div style={{ whiteSpace: 'normal', wordBreak: 'break-word' }}>{shop}</div>
+                </div>
               ) : null}
+              {ship ? (
+                <div style={{ display: 'flex', gap: 6, lineHeight: 1.3, alignItems: 'flex-start' }}>
+                  <Text type="secondary" style={{ flexShrink: 0, fontSize: 12 }}>发货:</Text>
+                  <div style={{ whiteSpace: 'normal', wordBreak: 'break-word', flex: 1 }}>
+                    {beautified ? (
+                      <Tooltip
+                        title={
+                          <div style={{ maxWidth: 560, lineHeight: 1.6 }}>
+                            <div style={{ color: '#ccc', fontSize: 12, marginBottom: 4 }}>显示已剥前缀, 原文如下:</div>
+                            <div>{ship}</div>
+                          </div>
+                        }
+                      >
+                        <span style={{ cursor: 'help' }}>{shipPretty}</span>
+                      </Tooltip>
+                    ) : (
+                      shipPretty
+                    )}
+                    {mismatch ? (
+                      <Tooltip
+                        title={
+                          <div style={{ maxWidth: 560 }}>
+                            <div>
+                              <b>档案规格 (网店)</b>: {shop}
+                            </div>
+                            <div style={{ marginTop: 6 }}>
+                              <b>最后发货规格 (原文)</b>: {ship}
+                            </div>
+                            <div style={{ marginTop: 6, color: '#ccc' }}>
+                              归一化后两边仍不同, 说明档案规格 与实际发货规格 有真实差异 (尺寸/材质/颜色等).
+                              系统会以「最后发货规格」为识别真源. 详见行抽屉的「规格对照」区.
+                            </div>
+                          </div>
+                        }
+                      >
+                        <Tag color="red" style={{ cursor: 'help', marginLeft: 6 }}>
+                          规格不一致
+                        </Tag>
+                      </Tooltip>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+              {!shop && !ship ? <Text type="secondary">—</Text> : null}
             </Space>
           )
         },
@@ -479,113 +589,6 @@ export default function ProductInfoPage() {
           )
         },
       },
-      // 「分类」「店铺数」已移到行抽屉的"基础"区, 列表不再展示.
-      {
-        title: (
-          <Tooltip title="ERP 货品档案里的「规格标记」(skuFlag) — 多值字段, 用于业务标签 / 分组. 来自 metadata.erp.sku_flag_synced">
-            <span>
-              规格标记{' '}
-              <Text type="secondary" style={{ fontSize: 11 }}>
-                ⓘ
-              </Text>
-            </span>
-          </Tooltip>
-        ),
-        key: 'sku_flag',
-        width: 200,
-        render: (_v, row: any) => {
-          const erp = (row?.metadata_json as any)?.erp ?? {}
-          const flags = erp?.sku_flag_synced
-          const arr = Array.isArray(flags) ? flags : flags ? [String(flags)] : []
-          if (!arr.length) return <Text type="secondary">—</Text>
-          return (
-            <Space wrap size={[4, 4]}>
-              {arr.slice(0, 4).map((f, i) => (
-                <Tag key={i} color="purple" style={{ margin: 0 }}>
-                  {String(f)}
-                </Tag>
-              ))}
-              {arr.length > 4 ? <Text type="secondary">+{arr.length - 4}</Text> : null}
-            </Space>
-          )
-        },
-      },
-      {
-        title: (
-          <Tooltip title="档案 = 商品规格(网店) spec_text; 发货 = last_shipment_spec_text. 发货展示时已剥天猫属性标签前缀, hover 可看原文. 两边归一化后仍不同, 显示红色「规格不一致」.">
-            <span>
-              规格 (档案 / 发货){' '}
-              <Text type="secondary" style={{ fontSize: 11 }}>
-                ⓘ
-              </Text>
-            </span>
-          </Tooltip>
-        ),
-        key: 'spec_combined',
-        width: 560,
-        render: (_v, row: any) => {
-          const shop = safeString(row?.spec_text).trim()
-          const ship = safeString(row?.last_shipment_spec_text).trim()
-          const shipPretty = ship ? prettifyDisplaySpec(ship) : ''
-          const beautified = !!ship && shipPretty !== ship
-          const mismatch = !!shop && !!ship && normalizeSpecForCompare(ship) !== normalizeSpecForCompare(shop)
-          // 两行布局: 档案 / 发货. 任一为空就只显示有的那行.
-          return (
-            <Space direction="vertical" size={2} style={{ width: '100%' }}>
-              {shop ? (
-                <div style={{ display: 'flex', gap: 6, lineHeight: 1.3 }}>
-                  <Text type="secondary" style={{ flexShrink: 0, fontSize: 12 }}>档案:</Text>
-                  <div style={{ whiteSpace: 'normal', wordBreak: 'break-word' }}>{shop}</div>
-                </div>
-              ) : null}
-              {ship ? (
-                <div style={{ display: 'flex', gap: 6, lineHeight: 1.3, alignItems: 'flex-start' }}>
-                  <Text type="secondary" style={{ flexShrink: 0, fontSize: 12 }}>发货:</Text>
-                  <div style={{ whiteSpace: 'normal', wordBreak: 'break-word', flex: 1 }}>
-                    {beautified ? (
-                      <Tooltip
-                        title={
-                          <div style={{ maxWidth: 560, lineHeight: 1.6 }}>
-                            <div style={{ color: '#ccc', fontSize: 12, marginBottom: 4 }}>显示已剥前缀, 原文如下:</div>
-                            <div>{ship}</div>
-                          </div>
-                        }
-                      >
-                        <span style={{ cursor: 'help' }}>{shipPretty}</span>
-                      </Tooltip>
-                    ) : (
-                      shipPretty
-                    )}
-                    {mismatch ? (
-                      <Tooltip
-                        title={
-                          <div style={{ maxWidth: 560 }}>
-                            <div>
-                              <b>档案规格 (网店)</b>: {shop}
-                            </div>
-                            <div style={{ marginTop: 6 }}>
-                              <b>最后发货规格 (原文)</b>: {ship}
-                            </div>
-                            <div style={{ marginTop: 6, color: '#ccc' }}>
-                              归一化后两边仍不同, 说明档案规格 与实际发货规格 有真实差异 (尺寸/材质/颜色等).
-                              系统会以「最后发货规格」为识别真源. 详见行抽屉的「规格对照」区.
-                            </div>
-                          </div>
-                        }
-                      >
-                        <Tag color="red" style={{ cursor: 'help', marginLeft: 6 }}>
-                          规格不一致
-                        </Tag>
-                      </Tooltip>
-                    ) : null}
-                  </div>
-                </div>
-              ) : null}
-              {!shop && !ship ? <Text type="secondary">—</Text> : null}
-            </Space>
-          )
-        },
-      },
       {
         title: (
           <Tooltip title="把「最后发货规格」(优先) 或「商品规格(网店)」(回退) 喂给规格解析器后, 抽出的结构化宽×高. 解析不出时显示「未解析」(如定制尺寸 / 联系客服).">
@@ -619,6 +622,61 @@ export default function ProductInfoPage() {
           if (row?.is_deleted_at_source) tags.push(<Tag key="d" color="default">ERP 已删除</Tag>)
           return tags.length ? <Space size={4}>{tags}</Space> : <Tag color="success">正常</Tag>
         },
+      },
+      {
+        title: (
+          <Tooltip title="ERP 货品档案里的「规格标记」(skuFlag) — 多值字段, 用于业务标签 / 分组. 来自 metadata.erp.sku_flag_synced">
+            <span>
+              规格标记{' '}
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                ⓘ
+              </Text>
+            </span>
+          </Tooltip>
+        ),
+        key: 'sku_flag',
+        width: 200,
+        render: (_v, row: any) => {
+          const erp = (row?.metadata_json as any)?.erp ?? {}
+          const flags = erp?.sku_flag_synced
+          const arr = Array.isArray(flags) ? flags : flags ? [String(flags)] : []
+          if (!arr.length) return <Text type="secondary">—</Text>
+          return (
+            <Space wrap size={[4, 4]}>
+              {arr.slice(0, 4).map((f, i) => (
+                <Tag key={i} color="purple" style={{ margin: 0 }}>
+                  {String(f)}
+                </Tag>
+              ))}
+              {arr.length > 4 ? <Text type="secondary">+{arr.length - 4}</Text> : null}
+            </Space>
+          )
+        },
+      },
+      {
+        title: '操作',
+        key: 'actions',
+        width: 130,
+        fixed: 'right',
+        render: (_v, row: any) => (
+          <Space size={4}>
+            <Button
+              size="small"
+              type="link"
+              onClick={(e) => {
+                e.stopPropagation()
+                setDetailOpenId(String(row.id))
+              }}
+            >
+              查看
+            </Button>
+            <Tooltip title="把本地字段 (生产工艺 / 规格标记 / 模型编码 / 属性规格) 推送到 ERP 货品档案. M6 反写模块开发中.">
+              <Button size="small" type="link" disabled>
+                反写
+              </Button>
+            </Tooltip>
+          </Space>
+        ),
       },
       { title: '更新时间', dataIndex: 'updated_at', width: 170, render: (v) => formatTime(v) },
     ],
@@ -897,15 +955,7 @@ export default function ProductInfoPage() {
             onChange: (keys) => setSelectedRowKeys(keys),
             preserveSelectedRowKeys: true,
           }}
-          onRow={(row) => ({
-            onClick: (e) => {
-              // 避免点 checkbox 触发打开抽屉
-              const target = e.target as HTMLElement
-              if (target.closest('.ant-checkbox-wrapper, .ant-table-selection-column')) return
-              setDetailOpenId(String(row.id))
-            },
-            style: { cursor: 'pointer' },
-          })}
+          // 行点击改为右侧操作列「查看」按钮触发, 避免误触 + 给「反写」按钮独立位置.
           pagination={{
             current: page,
             pageSize,

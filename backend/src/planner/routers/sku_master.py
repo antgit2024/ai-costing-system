@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import logging
+from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response, StreamingResponse
@@ -507,6 +508,32 @@ def erp_writeback_history(
         limit=limit,
     )
     return schemas.ErpWritebackHistoryResponse(sku_master_id=sku_id, items=items)
+
+
+@router.get(
+    "/erp-writeback/jobs",
+    response_model=schemas.ErpWritebackJobsListResponse,
+)
+def erp_writeback_jobs_list(
+    status: Optional[str] = None,
+    search: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 50,
+    db: Session = Depends(get_db_session),
+):
+    """全局反写队列 (供「反写队列」抽屉/页面).
+
+    - status: pending / retrying / succeeded / failed / superseded (多个用 "," 分隔)
+    - search: 模糊匹配 erp_sku_barcode / product_code / product_name / out_sku_code
+    """
+    data = erp_writeback_service.list_writeback_jobs(
+        db,
+        status=status,
+        search=search,
+        page=page,
+        page_size=page_size,
+    )
+    return data
 
 
 @router.post("/bind-by-bundle", response_model=schemas.SkuMasterBindByBundleTemplateResponse)

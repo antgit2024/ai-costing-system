@@ -4515,6 +4515,39 @@ class ErpWritebackHistoryResponse(BaseModel):
     items: List[ErpWritebackHistoryItem] = Field(default_factory=list)
 
 
+# ---- 全局反写队列 (供 UI「反写队列」入口) ----
+class ErpWritebackJobListItem(BaseModel):
+    """全局列表的一行 — 比 ErpWritebackHistoryItem 多了从 payload/metadata 抽出来的便利字段."""
+    id: str
+    source_system: str
+    api_method: str
+    target_id: str  # = erp_sku_barcode
+    sku_master_id: Optional[str] = None
+    fields: List[str] = Field(default_factory=list)
+    values: Dict[str, Any] = Field(default_factory=dict)
+    product_code: Optional[str] = None
+    product_name: Optional[str] = None
+    out_sku_code: Optional[str] = None
+    status: str
+    attempt: int
+    max_attempts: int
+    next_run_at: Optional[str] = None
+    last_attempt_at: Optional[str] = None
+    last_error: Optional[str] = None
+    requested_by: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class ErpWritebackJobsListResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: List[ErpWritebackJobListItem] = Field(default_factory=list)
+    # status -> count, e.g. {"pending": 12, "succeeded": 30}
+    status_counts: Dict[str, int] = Field(default_factory=dict)
+
+
 class SkuMasterAutoBindPreviewRequest(BaseModel):
     limit: int = Field(200, ge=1, le=2000)
     # max rows to scan among unbound sku masters (server-side filter) to find candidates

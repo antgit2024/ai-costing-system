@@ -3537,6 +3537,59 @@ export const fetchErpWritebackHistory = async (
   return response.data
 }
 
+// 全局反写队列 — 由 ProductInfoPage 顶部「反写队列」按钮调用
+export interface ErpWritebackJobListItem {
+  id: string
+  source_system: string
+  api_method: string
+  target_id: string
+  sku_master_id?: string | null
+  fields: string[]
+  values: Record<string, unknown>
+  product_code?: string | null
+  product_name?: string | null
+  out_sku_code?: string | null
+  status: 'pending' | 'retrying' | 'succeeded' | 'failed' | 'superseded' | string
+  attempt: number
+  max_attempts: number
+  next_run_at?: string | null
+  last_attempt_at?: string | null
+  last_error?: string | null
+  requested_by?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface ErpWritebackJobsListResponse {
+  total: number
+  page: number
+  page_size: number
+  items: ErpWritebackJobListItem[]
+  status_counts: Record<string, number>
+}
+
+export const listErpWritebackJobs = async (
+  params: {
+    status?: string
+    search?: string
+    page?: number
+    page_size?: number
+  } = {},
+  opts: PlannerRequestOptions = {},
+): Promise<ErpWritebackJobsListResponse> => {
+  const response = await plannerClient.get('/sku-master/erp-writeback/jobs', {
+    params: {
+      status: params.status || undefined,
+      search: params.search || undefined,
+      page: params.page ?? 1,
+      page_size: params.page_size ?? 50,
+    },
+    timeout: opts.timeoutMs,
+    signal: opts.signal,
+  })
+  return response.data
+}
+
 export const bindSkuMastersByBundleTemplate = async (
   payload: {
     template_id: string

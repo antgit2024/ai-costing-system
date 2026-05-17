@@ -1,4 +1,4 @@
-import { Button, Card, Col, Dropdown, Form, Image, Input, Modal, Radio, Row, Select, Space, Table, Tag, Tooltip, Typography, message } from 'antd'
+import { Alert, Badge, Button, Card, Col, Drawer, Dropdown, Form, Image, Input, Modal, Radio, Row, Select, Space, Table, Tag, Tooltip, Typography, message } from 'antd'
 import InfoCircleOutlined from '@ant-design/icons/lib/icons/InfoCircleOutlined'
 import EditOutlined from '@ant-design/icons/lib/icons/EditOutlined'
 import ExportOutlined from '@ant-design/icons/lib/icons/ExportOutlined'
@@ -12,8 +12,10 @@ import {
   enqueueErpWriteback,
   fetchSkuMaster,
   fetchTripleTagOverview,
+  listErpWritebackJobs,
   triggerBrowserDownload,
 } from '@/services/planner'
+import type { ErpWritebackJobListItem } from '@/services/planner'
 import type { SkuMaster } from '@/types/planner'
 import { formatBeijingTime } from '@/utils/beijingTime'
 import { IMAGE_FALLBACK_SVG, pickRowImageUrl } from '@/utils/imageUrl'
@@ -86,6 +88,12 @@ export default function ProductInfoPage() {
   const navigate = useNavigate()
 
   const [detailOpenId, setDetailOpenId] = useState<string | null>(null)
+  // 全局反写队列 drawer (顶部「反写队列」按钮开启)
+  const [writebackQueueOpen, setWritebackQueueOpen] = useState(false)
+  const [writebackQueueStatus, setWritebackQueueStatus] = useState<string>('')  // ''=全部
+  const [writebackQueueSearch, setWritebackQueueSearch] = useState<string>('')
+  const [writebackQueuePage, setWritebackQueuePage] = useState(1)
+  const [writebackQueuePageSize, setWritebackQueuePageSize] = useState(50)
 
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
 
@@ -1052,6 +1060,14 @@ export default function ProductInfoPage() {
                 批量入队
               </Button>
             </Tooltip>
+            <Tooltip title="查看全局反写队列 — 显示所有 pending / 已完成 / 失败的反写任务, 可按 status / SKU 筛选">
+              <Button
+                size="small"
+                onClick={() => setWritebackQueueOpen(true)}
+              >
+                反写队列
+              </Button>
+            </Tooltip>
             <Tooltip title="清除勾选">
               {selectedRowKeys.length > 0 ? (
                 <Button size="small" onClick={() => setSelectedRowKeys([])}>清除</Button>
@@ -1097,6 +1113,25 @@ export default function ProductInfoPage() {
         open={!!detailOpenId}
         onClose={() => setDetailOpenId(null)}
         onUpdated={() => listQuery.refetch()}
+      />
+
+      <WritebackQueueDrawer
+        open={writebackQueueOpen}
+        onClose={() => setWritebackQueueOpen(false)}
+        statusFilter={writebackQueueStatus}
+        setStatusFilter={setWritebackQueueStatus}
+        searchFilter={writebackQueueSearch}
+        setSearchFilter={setWritebackQueueSearch}
+        page={writebackQueuePage}
+        setPage={setWritebackQueuePage}
+        pageSize={writebackQueuePageSize}
+        setPageSize={setWritebackQueuePageSize}
+        onClickSku={(skuMasterId) => {
+          if (skuMasterId) {
+            setWritebackQueueOpen(false)
+            setDetailOpenId(skuMasterId)
+          }
+        }}
       />
 
       <Modal
@@ -1253,3 +1288,288 @@ export default function ProductInfoPage() {
   )
 }
 
+// ===========================================================================
+// WritebackQueueDrawer — 全局反写队列 (顶部「反写队列」按钮开启)
+// ===========================================================================
+
+const STATUS_COLOR: Record<string, string> = {
+  pending: 'blue',
+  retrying: 'orange',
+  succeeded: 'green',
+  failed: 'red',
+  superseded: 'default',
+}
+
+const STATUS_LABEL: Record<string, string> = {
+  pending: '待推送',
+  retrying: '重试中',
+  succeeded: '已成功',
+  failed: '失败',
+  superseded: '已被新任务覆盖',
+}
+
+interface WritebackQueueDrawerProps {
+  open: boolean
+  onClose: () => void
+  statusFilter: string
+  setStatusFilter: (s: string) => void
+  searchFilter: string
+  setSearchFilter: (s: string) => void
+  page: number
+  setPage: (n: number) => void
+  pageSize: number
+  setPageSize: (n: number) => void
+  onClickSku?: (skuMasterId: string | null | undefined) => void
+}
+
+function WritebackQueueDrawer(props: WritebackQueueDrawerProps) {
+  const {
+    open,
+    onClose,
+    statusFilter,
+    setStatusFilter,
+    searchFilter,
+    setSearchFilter,
+    page,
+    setPage,
+    pageSize,
+    setPageSize,
+    onClickSku,
+  } = props
+
+  const queueQuery = useQuery({
+    queryKey: ['erp-writeback-jobs', statusFilter, searchFilter, page, pageSize],
+    queryFn: () =>
+      listErpWritebackJobs({
+        status: statusFilter || undefined,
+        search: searchFilter || undefined,
+        page,
+        page_size: pageSize,
+      }),
+    enabled: open,
+    placeholderData: keepPreviousData,
+    refetchInterval: open ? 15000 : false, // 抽屉打开时 15s 自动刷新, 看 pending → done 的流转
+  })
+
+  const data = queueQuery.data
+  const items = data?.items || []
+  const total = data?.total ?? 0
+  const counts = data?.status_counts || {}
+
+  const columns: ColumnsType<ErpWritebackJobListItem> = [
+    {
+      title: '状态',
+      dataIndex: 'status',
+      width: 100,
+      filters: [
+        { text: '待推送', value: 'pending' },
+        { text: '重试中', value: 'retrying' },
+        { text: '已成功', value: 'succeeded' },
+        { text: '失败', value: 'failed' },
+        { text: '已覆盖', value: 'superseded' },
+      ],
+      filterMultiple: false,
+      filteredValue: statusFilter ? [statusFilter] : null,
+      onFilter: () => true,
+      render: (s: string, r) => (
+        <Space direction="vertical" size={2}>
+          <Tag color={STATUS_COLOR[s] || 'default'}>{STATUS_LABEL[s] || s}</Tag>
+          {r.attempt > 0 ? (
+            <Text type="secondary" style={{ fontSize: 11 }}>
+              第 {r.attempt}/{r.max_attempts} 次
+            </Text>
+          ) : null}
+        </Space>
+      ),
+    },
+    {
+      title: 'SKU',
+      dataIndex: 'target_id',
+      width: 230,
+      render: (sku: string, r) => (
+        <Space direction="vertical" size={2}>
+          <Space size={4}>
+            <Text code style={{ fontSize: 12 }}>{sku}</Text>
+            {r.sku_master_id ? (
+              <Button
+                type="link"
+                size="small"
+                style={{ padding: 0, height: 'auto', fontSize: 12 }}
+                onClick={() => onClickSku?.(r.sku_master_id)}
+              >
+                查看
+              </Button>
+            ) : null}
+          </Space>
+          {r.product_code ? (
+            <Text type="secondary" style={{ fontSize: 11 }}>
+              {r.product_code}
+              {r.product_name ? ` · ${r.product_name.length > 18 ? r.product_name.slice(0, 18) + '…' : r.product_name}` : ''}
+            </Text>
+          ) : null}
+        </Space>
+      ),
+    },
+    {
+      title: '反写字段',
+      dataIndex: 'fields',
+      width: 200,
+      render: (fields: string[], r) => (
+        <Space direction="vertical" size={2} style={{ width: '100%' }}>
+          {(fields || []).map((f) => (
+            <Tag key={f} color="geekblue" style={{ fontSize: 11 }}>
+              {f}
+            </Tag>
+          ))}
+          <Tooltip
+            title={
+              <pre style={{ margin: 0, fontSize: 11, maxWidth: 360, whiteSpace: 'pre-wrap' }}>
+                {JSON.stringify(r.values || {}, null, 2)}
+              </pre>
+            }
+            placement="right"
+          >
+            <Text type="secondary" style={{ fontSize: 11, cursor: 'help' }}>
+              查看推送值 ⓘ
+            </Text>
+          </Tooltip>
+        </Space>
+      ),
+    },
+    {
+      title: '入队时间',
+      dataIndex: 'created_at',
+      width: 150,
+      render: (v?: string | null) => (
+        <Text style={{ fontSize: 12 }}>{formatTime(v)}</Text>
+      ),
+    },
+    {
+      title: '最后尝试',
+      dataIndex: 'last_attempt_at',
+      width: 150,
+      render: (v?: string | null) => (
+        <Text style={{ fontSize: 12 }}>{v ? formatTime(v) : '—'}</Text>
+      ),
+    },
+    {
+      title: '错误信息',
+      dataIndex: 'last_error',
+      ellipsis: true,
+      render: (e?: string | null) =>
+        e ? (
+          <Tooltip title={e} placement="topLeft">
+            <Text type="danger" style={{ fontSize: 12 }}>
+              {e.length > 60 ? e.slice(0, 60) + '…' : e}
+            </Text>
+          </Tooltip>
+        ) : (
+          <Text type="secondary" style={{ fontSize: 11 }}>
+            —
+          </Text>
+        ),
+    },
+    {
+      title: '提交人',
+      dataIndex: 'requested_by',
+      width: 130,
+      render: (v?: string | null) => (
+        <Text style={{ fontSize: 12 }}>{v || '—'}</Text>
+      ),
+    },
+  ]
+
+  return (
+    <Drawer
+      title={
+        <Space>
+          <span>ERP 反写队列</span>
+          <Badge count={counts.pending || 0} showZero overflowCount={9999} color="blue" title={`待推送 ${counts.pending || 0}`} />
+          <Tag color="blue">待 {counts.pending || 0}</Tag>
+          <Tag color="orange">重试 {counts.retrying || 0}</Tag>
+          <Tag color="green">成功 {counts.succeeded || 0}</Tag>
+          <Tag color="red">失败 {counts.failed || 0}</Tag>
+          <Tag>覆盖 {counts.superseded || 0}</Tag>
+        </Space>
+      }
+      width={1180}
+      open={open}
+      onClose={onClose}
+      destroyOnClose
+    >
+      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        <Alert
+          type="info"
+          showIcon
+          message="当前 worker 未上线 — 任务停在 pending 状态等待真实推送 ERP"
+          description={
+            <span style={{ fontSize: 12 }}>
+              这里展示所有进入反写队列的任务（包括抽屉「反写历史」Tab 看不到的全局视图）。
+              入队 → pending → 后续 worker 自动调吉客云「编辑货品」接口 → succeeded / failed。
+              同一 SKU 重复入队时，旧的 pending 任务会被自动标记为「已覆盖」（superseded）。
+              数据每 15 秒自动刷新。
+            </span>
+          }
+        />
+
+        <Space wrap>
+          <Select
+            value={statusFilter || ''}
+            onChange={(v) => {
+              setStatusFilter(v || '')
+              setPage(1)
+            }}
+            style={{ width: 160 }}
+            options={[
+              { value: '', label: '全部状态' },
+              { value: 'pending', label: '待推送' },
+              { value: 'retrying', label: '重试中' },
+              { value: 'succeeded', label: '已成功' },
+              { value: 'failed', label: '失败' },
+              { value: 'superseded', label: '已覆盖' },
+            ]}
+          />
+          <Input.Search
+            placeholder="按 SKU / 商品编码 / 商品名称 搜索"
+            allowClear
+            style={{ width: 320 }}
+            defaultValue={searchFilter}
+            onSearch={(v) => {
+              setSearchFilter(v || '')
+              setPage(1)
+            }}
+          />
+          <Button onClick={() => queueQuery.refetch()} loading={queueQuery.isFetching}>
+            刷新
+          </Button>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            共 {total} 条
+          </Text>
+        </Space>
+
+        <Table<ErpWritebackJobListItem>
+          rowKey="id"
+          size="small"
+          bordered
+          loading={queueQuery.isFetching}
+          columns={columns}
+          dataSource={items}
+          scroll={{ x: 1100 }}
+          pagination={{
+            current: page,
+            pageSize,
+            total,
+            showSizeChanger: true,
+            pageSizeOptions: ['20', '50', '100', '200'],
+            showTotal: (t) => `共 ${t} 条`,
+            onChange: (p, ps) => {
+              setPage(p)
+              if (ps !== pageSize) setPageSize(ps)
+            },
+          }}
+          locale={{ emptyText: '当前没有反写任务（可在顶部「批量入队」按钮 或 单行操作里加入）' }}
+        />
+      </Space>
+    </Drawer>
+  )
+}

@@ -37,6 +37,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from uuid import uuid4
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -396,6 +397,106 @@ def list_jobs_for_sku(
             }
         )
     return out
+
+
+# ---------------------------------------------------------------------------
+# 全局队列查看 (供 UI 「反写队列」入口)
+# ---------------------------------------------------------------------------
+
+
+def list_writeback_jobs(
+    db: Session,
+    *,
+    status: Optional[str] = None,
+    search: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 50,
+) -> Dict[str, Any]:
+    """全局列出 integration_writeback_jobs (jackyun / sku_master).
+
+    - ``status``: 过滤 status (pending/retrying/succeeded/failed/superseded), 多个用逗号
+    - ``search``: 模糊匹配 target_id (= erp_sku_barcode), metadata.product_code,
+      metadata.product_name, metadata.out_sku_code 任一
+    - 默认按 created_at desc, 分页
+    """
+    q = db.query(models.IntegrationWritebackJob).filter(
+        models.IntegrationWritebackJob.source_system == SOURCE_SYSTEM,
+        models.IntegrationWritebackJob.target_type == TARGET_TYPE,
+    )
+    if status:
+        statuses = [s.strip().lower() for s in str(status).split(",") if s.strip()]
+        if statuses:
+            q = q.filter(models.IntegrationWritebackJob.status.in_(statuses))
+    if search:
+        s = f"%{str(search).strip()}%"
+        # SQL JSON 模糊匹配在 MySQL/PostgreSQL 上语法差异大, 用 cast(json -> text) 折中.
+        # 性能不重要 (反写队列规模一般 <10w), 简单 OR 即可.
+        from sqlalchemy import cast, String as SAString
+        q = q.filter(
+            models.IntegrationWritebackJob.target_id.ilike(s)
+            | cast(models.IntegrationWritebackJob.metadata_json, SAString).ilike(s)
+        )
+
+    total = q.count()
+    p = max(int(page or 1), 1)
+    ps = max(min(int(page_size or 50), 200), 1)
+    rows = (
+        q.order_by(models.IntegrationWritebackJob.created_at.desc())
+        .offset((p - 1) * ps)
+        .limit(ps)
+        .all()
+    )
+
+    items: List[Dict[str, Any]] = []
+    for j in rows:
+        payload = j.payload_json or {}
+        meta = j.metadata_json or {}
+        items.append(
+            {
+                "id": str(j.id),
+                "source_system": j.source_system,
+                "api_method": j.api_method,
+                "target_id": j.target_id,
+                "sku_master_id": payload.get("sku_master_id"),
+                "fields": payload.get("fields") or [],
+                "values": payload.get("values") or {},
+                "product_code": meta.get("product_code"),
+                "product_name": meta.get("product_name"),
+                "out_sku_code": meta.get("out_sku_code"),
+                "status": j.status,
+                "attempt": int(j.attempt or 0),
+                "max_attempts": int(j.max_attempts or 0),
+                "next_run_at": j.next_run_at.isoformat() if j.next_run_at else None,
+                "last_attempt_at": j.last_attempt_at.isoformat() if j.last_attempt_at else None,
+                "last_error": j.last_error,
+                "requested_by": j.requested_by,
+                "created_at": j.created_at.isoformat() if j.created_at else None,
+                "updated_at": j.updated_at.isoformat() if j.updated_at else None,
+            }
+        )
+
+    # 顺手返回 status 维度的累计 (UI 顶部展示 "pending X / failed Y / done Z")
+    status_counts_q = (
+        db.query(
+            models.IntegrationWritebackJob.status,
+            func.count(models.IntegrationWritebackJob.id),
+        )
+        .filter(
+            models.IntegrationWritebackJob.source_system == SOURCE_SYSTEM,
+            models.IntegrationWritebackJob.target_type == TARGET_TYPE,
+        )
+        .group_by(models.IntegrationWritebackJob.status)
+        .all()
+    )
+    status_counts = {str(k): int(v) for k, v in status_counts_q}
+
+    return {
+        "total": int(total),
+        "page": p,
+        "page_size": ps,
+        "items": items,
+        "status_counts": status_counts,
+    }
 
 
 # ---------------------------------------------------------------------------

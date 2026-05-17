@@ -1166,7 +1166,7 @@ const SkuMasterWorkspacePage = () => {
                 if (!batch.length) break
 
                 const ac = new AbortController()
-                const timer = window.setTimeout(() => ac.abort(), 45_000)
+                const timer = window.setTimeout(() => ac.abort(), 90_000)
                 let res: any
                 try {
                   if (targetKind === 'bundle') {
@@ -1178,7 +1178,7 @@ const SkuMasterWorkspacePage = () => {
                         requested_by: reqBy,
                         allow_rebind: allowRebind,
                       },
-                      { timeoutMs: 45_000, signal: ac.signal },
+                      { timeoutMs: 90_000, signal: ac.signal },
                     )
                   } else {
                     res = await bindSkuMastersByModel(
@@ -1192,7 +1192,7 @@ const SkuMasterWorkspacePage = () => {
                             ? targetSelection.variant_code ?? null
                             : null,
                       },
-                      { timeoutMs: 45_000, signal: ac.signal },
+                      { timeoutMs: 90_000, signal: ac.signal },
                     )
                   }
                 } finally {
@@ -1237,7 +1237,7 @@ const SkuMasterWorkspacePage = () => {
               await queryClient.invalidateQueries({ queryKey: ['sku-master', 'list'] })
             } catch (e: any) {
               if (String(e?.name || '').toLowerCase().includes('abort')) {
-                message.error('单次请求超时（45s）已中止：请稍后重试（或减少勾选量）')
+                message.error('单次请求超时（90s）已中止：请稍后重试（或减少勾选量）')
               } else {
                 message.error(e?.message || '人工审核自动执行失败')
               }
@@ -1333,7 +1333,7 @@ const SkuMasterWorkspacePage = () => {
                 // 拉一批"已绑定"候选（按当前筛选条件）。
                 // 解绑后这些 SKU 会从"已绑定"列表消失，所以始终拉第一页（避免分页漂移）。
                 const acFetch = new AbortController()
-                const tFetch = window.setTimeout(() => acFetch.abort(), 45_000)
+                const tFetch = window.setTimeout(() => acFetch.abort(), 90_000)
                 let pageRes: any
                 try {
                   pageRes = await fetchSkuMaster(
@@ -1352,7 +1352,7 @@ const SkuMasterWorkspacePage = () => {
                       include_parsed_fields: false,
                       include_bindings: false,
                     },
-                    { timeoutMs: 45_000, signal: acFetch.signal },
+                    { timeoutMs: 90_000, signal: acFetch.signal },
                   )
                 } finally {
                   window.clearTimeout(tFetch)
@@ -1364,12 +1364,12 @@ const SkuMasterWorkspacePage = () => {
                 if (!ids.length) break
 
                 const acUnb = new AbortController()
-                const tUnb = window.setTimeout(() => acUnb.abort(), 45_000)
+                const tUnb = window.setTimeout(() => acUnb.abort(), 90_000)
                 let unbRes: any
                 try {
                   unbRes = await unbindSkuMasters(
                     { sku_master_ids: ids, requested_by: reqBy },
-                    { timeoutMs: 45_000, signal: acUnb.signal },
+                    { timeoutMs: 90_000, signal: acUnb.signal },
                   )
                 } finally {
                   window.clearTimeout(tUnb)
@@ -1413,7 +1413,7 @@ const SkuMasterWorkspacePage = () => {
               await queryClient.invalidateQueries({ queryKey: ['sku-master', 'list'] })
             } catch (e: any) {
               if (String(e?.name || '').toLowerCase().includes('abort')) {
-                message.error('单次请求超时（45s）已中止：请稍后重试（或缩小筛选范围/分批执行）')
+                message.error('单次请求超时（90s）已中止：请稍后重试（或缩小筛选范围/分批执行）')
               } else {
                 message.error(e?.message || '一键跨页清空执行失败')
               }
@@ -1427,10 +1427,14 @@ const SkuMasterWorkspacePage = () => {
       return
     }
 
-    // B2：跨页绑定（保留旧护栏）
+    // B2：跨页绑定
+    // 注：之前这里有 `if (listTab !== 'unbound') return` 护栏, 实际是 false-positive —
+    // 后端 bind-by-model/bulk 按筛选条件(search/include_terms/...)取数, 与前端 listTab
+    // 完全无关 (listTab 只切换 UI 列表显示的范围). 用户报"按钮变运行中后没反应"的一类原因
+    // 就是这个护栏静默拦了一下却没足够明显提示. 已去掉.
     if (listTab !== 'unbound') {
-      message.warning('请先切到"未绑定"列表再执行（避免误操作）')
-      return
+      // 仍给个温和提示, 但不阻止执行
+      message.info(`当前列表显示"${listTab}"，跨页绑定按筛选条件执行，与列表显示无关`)
     }
 
     const _normConfirm = (s: string) => String(s || '').replace(/\s+/g, ' ').trim()
@@ -1507,7 +1511,30 @@ const SkuMasterWorkspacePage = () => {
 
         setManualRunAllRunning(true)
         manualRunAllStopRef.current = false
-        setManualRunAllStatus(null)
+        // 体验改进: 立刻显示一张"准备中"进度卡, 让用户知道按钮已经接收 ——
+        // 之前是 setManualRunAllStatus(null) 然后等第一轮请求回来才有数字,
+        // 用户感觉"按钮按了没反应". 现在直接拿列表查询里的 total (当前筛选 +
+        // bound_state=unbound 的服务端总数) 给个预估, 配合 50/轮 算大致轮数.
+        const _BATCH_SIZE = 50
+        const _estTotal = Number(listQuery.data?.total ?? 0)
+        const _estRounds = _estTotal > 0 ? Math.ceil(_estTotal / _BATCH_SIZE) : 0
+        const _t0 = new Date()
+        const _stamp0 = `${_t0.getHours().toString().padStart(2, '0')}:${_t0
+          .getMinutes()
+          .toString()
+          .padStart(2, '0')}:${_t0.getSeconds().toString().padStart(2, '0')}`
+        setManualRunAllStatus({
+          round: 0,
+          last_bound: 0,
+          total_bound: 0,
+          processed: 0,
+          total: _estTotal,
+          errors: 0,
+          last_update: _stamp0,
+          note: _estTotal > 0
+            ? `预估候选 ≈ ${_estTotal} 条，按 ${_BATCH_SIZE}/轮 约 ${_estRounds} 轮（第 1 轮正在处理…）`
+            : '正在准备第 1 轮…（如果你刚改了筛选，可先点列表"刷新"刷新候选总数）',
+        })
 
         void (async () => {
           let totalBound = 0
@@ -1519,16 +1546,19 @@ const SkuMasterWorkspacePage = () => {
               if (manualRunAllStopRef.current) break
 
               const ac = new AbortController()
-              const timer = window.setTimeout(() => ac.abort(), 45_000)
+              const timer = window.setTimeout(() => ac.abort(), 90_000)
               let res: any
               try {
+                // PERF: 临时把单轮 limit 从 200 降到 50 — 后端 bind_by_model_bulk
+                // 200/轮 在 90s 内跑不完 (bound=0 case). 50 条预期 < 30s 稳定返回.
+                // 单轮量小 → 多跑几轮即可, has_more 会自动驱动循环.
                 if (targetKind === 'bundle') {
                   res = await bindSkuMastersByBundleTemplateBulk(
                     {
                       template_id: templateId as string,
                       preset_selector: presetSelector as string,
                       requested_by: reqBy,
-                      limit: 200,
+                      limit: 50,
                       allow_rebind: allowRebind,
                       search: fSearch,
                       channel: fChannel,
@@ -1538,14 +1568,14 @@ const SkuMasterWorkspacePage = () => {
                       match_scope: fMatchScope as any,
                       excluded_sku_master_ids: excluded,
                     },
-                    { timeoutMs: 45_000, signal: ac.signal },
+                    { timeoutMs: 90_000, signal: ac.signal },
                   )
                 } else {
                   res = await bindSkuMastersByModelBulk(
                     {
                       model_id: modelId as string,
                       requested_by: reqBy,
-                      limit: 200,
+                      limit: 50,
                       allow_rebind: allowRebind,
                       search: fSearch,
                       channel: fChannel,
@@ -1560,7 +1590,7 @@ const SkuMasterWorkspacePage = () => {
                           ? targetSelection.variant_code ?? null
                           : null,
                     },
-                    { timeoutMs: 45_000, signal: ac.signal },
+                    { timeoutMs: 90_000, signal: ac.signal },
                   )
                 }
               } finally {
@@ -1580,15 +1610,23 @@ const SkuMasterWorkspacePage = () => {
                 .getMinutes()
                 .toString()
                 .padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`
+              const _progressNote = (() => {
+                const tail = hasMore ? '仍有更多候选（跨页）' : '已无更多候选'
+                if (_estTotal > 0) {
+                  const pct = Math.min(100, Math.round((totalProcessed / _estTotal) * 100))
+                  return `进度 ${pct}%（已处理 ${totalProcessed}/${_estTotal}）｜${tail}`
+                }
+                return tail
+              })()
               setManualRunAllStatus({
                 round,
                 last_bound: bound,
                 total_bound: totalBound,
                 processed: totalProcessed,
-                total: -1,
+                total: _estTotal,
                 errors: totalErrors,
                 last_update: stamp,
-                note: hasMore ? '仍有更多候选（跨页）' : '已无更多候选',
+                note: _progressNote,
               })
 
               if (processedThisRound <= 0) break
@@ -1609,10 +1647,62 @@ const SkuMasterWorkspacePage = () => {
             setPageSize(DEFAULT_PAGE_SIZE)
             await queryClient.invalidateQueries({ queryKey: ['sku-master', 'list'] })
           } catch (e: any) {
-            if (String(e?.name || '').toLowerCase().includes('abort')) {
-              message.error('单次请求超时（45s）已中止：请稍后重试（或缩小筛选范围/分批执行）')
+            // 关键：把详细错误打到 devtools, 之前 message.error 一闪而过用户看不见
+            // eslint-disable-next-line no-console
+            console.error('[manual-run-all] failed:', e, {
+              name: e?.name,
+              code: e?.code,
+              message: e?.message,
+              response: e?.response?.data,
+              status: e?.response?.status,
+              targetKind,
+              modelId,
+              templateId,
+              presetSelector,
+            })
+            const errName = String(e?.name || '').toLowerCase()
+            const errCode = String(e?.code || '').toLowerCase()
+            const errMsg = String(e?.message || '').toLowerCase()
+            if (
+              errName.includes('abort') ||
+              errName.includes('canceled') ||
+              errCode === 'err_canceled' ||
+              errMsg.includes('canceled')
+            ) {
+              // 单轮超时不是"错误", 是后端处理慢于 90s.
+              // 用 info 弹窗 + 累计进度, 让用户知道"已完成的不会丢, 再点一次继续"
+              Modal.info({
+                title: '单轮超时, 已暂停（这是正常的）',
+                content: (
+                  <div>
+                    <div style={{ marginBottom: 8 }}>
+                      <b>已完成累计：bound={totalBound} / 已处理≈{totalProcessed} / errors={totalErrors}</b>
+                    </div>
+                    <div style={{ marginBottom: 8 }}>
+                      单轮请求超过 90s 被中止（候选量大时这是正常的）。<b>已绑定的不会丢失</b>。
+                    </div>
+                    <div style={{ color: '#666' }}>
+                      再次点「一键跑完」会从当前未绑定继续；多按几次直到提示「无更多候选」即可全部完成。
+                    </div>
+                  </div>
+                ),
+                okText: '知道了',
+              })
             } else {
-              message.error(e?.message || '人工审核自动执行失败')
+              // 用 Modal.error 替代 message.error, 一定能让用户看到
+              Modal.error({
+                title: '人工审核一键跑完失败',
+                content: (
+                  <div>
+                    <div style={{ marginBottom: 8 }}>
+                      {e?.response?.data?.detail || e?.message || '未知错误'}
+                    </div>
+                    <div style={{ color: '#999', fontSize: 12 }}>
+                      详细错误已打印到浏览器控制台 (F12 → Console)，可截图反馈。
+                    </div>
+                  </div>
+                ),
+              })
             }
           } finally {
             setManualRunAllRunning(false)
@@ -1996,8 +2086,8 @@ const SkuMasterWorkspacePage = () => {
       </div>
 
       <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
-        {/* 左侧：绑定工作台（1/4） */}
-        <Col xs={24} lg={6}>
+        {/* 左侧：绑定工作台 (收窄到 5/24 ~ 21%, 让右侧表格更宽) */}
+        <Col xs={24} lg={5}>
           <Space direction="vertical" size={12} style={{ width: '100%' }}>
             <Card size="small" title="映射工作台（SKU→标准模型/套装模块）">
               <Tabs
@@ -2146,7 +2236,11 @@ const SkuMasterWorkspacePage = () => {
                           <Alert
                             type={manualRunAllRunning ? 'info' : 'success'}
                             showIcon
-                            message={`进度：第${manualRunAllStatus.round}轮 / 本轮绑定${manualRunAllStatus.last_bound} / 累计绑定${manualRunAllStatus.total_bound} / 已处理≈${manualRunAllStatus.processed} / 错误累计${manualRunAllStatus.errors}`}
+                            message={
+                              manualRunAllStatus.round === 0
+                                ? '准备中…（第 1 轮正在拉取并处理候选）'
+                                : `第${manualRunAllStatus.round}轮｜本轮绑定 ${manualRunAllStatus.last_bound}｜累计绑定 ${manualRunAllStatus.total_bound}｜已处理 ${manualRunAllStatus.processed}${manualRunAllStatus.total > 0 ? `/${manualRunAllStatus.total}` : ''}｜错误 ${manualRunAllStatus.errors}`
+                            }
                             description={`最后更新：${manualRunAllStatus.last_update}${manualRunAllStatus.note ? `；${manualRunAllStatus.note}` : ''}`}
                           />
                         ) : null}
@@ -2240,20 +2334,14 @@ const SkuMasterWorkspacePage = () => {
                 ]}
               />
             </Card>
-
-            <Card size="small" title="导入/同步（入口）">
-              <Space direction="vertical" style={{ width: '100%' }}>
-                <Text type="secondary">SKU 主档文件导入建议放到抽屉里，主页面更干净。</Text>
-                <Button block onClick={() => setImportDrawerOpen(true)}>
-                  上传/导入SKU主档（xlsx）
-                </Button>
-              </Space>
-            </Card>
+            {/* 「导入/同步（入口）」卡片已下线 (页面瘦身)。
+                如需恢复入口, 加个按钮 onClick={() => setImportDrawerOpen(true)} 即可 ——
+                state 和抽屉本体仍保留 (见本文件 importDrawerOpen). */}
           </Space>
         </Col>
 
-        {/* 右侧：筛选 + 列表（3/4） */}
-        <Col xs={24} lg={18}>
+        {/* 右侧：筛选 + 列表（加宽到 19/24 ~ 79%） */}
+        <Col xs={24} lg={19}>
             <Card
             title="候选列表"
             extra={

@@ -3199,7 +3199,9 @@ export const bindSkuMastersByModelBulk = async (
   has_more: boolean
 }> => {
   const response = await plannerClient.post('/sku-master/bind-by-model/bulk', payload, {
-    timeout: opts.timeoutMs,
+    // 默认 90s: 200 条/轮在大量未绑数据下后端处理常常 >20s, 没有这个 fallback
+    // 调用方不传 timeoutMs 时会被 plannerClient 默认 20s timeout abort.
+    timeout: opts.timeoutMs ?? 90_000,
     signal: opts.signal,
   })
   return response.data
@@ -3605,7 +3607,8 @@ export const bindSkuMastersByBundleTemplateBulk = async (
   has_more: boolean
 }> => {
   const response = await plannerClient.post('/sku-master/bind-by-bundle/bulk', payload, {
-    timeout: opts.timeoutMs,
+    // 默认 90s, 同 bindSkuMastersByModelBulk 理由
+    timeout: opts.timeoutMs ?? 90_000,
     signal: opts.signal,
   })
   return response.data

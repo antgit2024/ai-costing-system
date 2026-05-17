@@ -3958,12 +3958,16 @@ def bind_sku_master_by_model_bulk(
     if excluded_list:
         q = q.filter(~models.SkuMaster.id.in_(excluded_list))
 
+    # PERF: timing 收集. 当 200/轮 在 90s 内跑不完时打开看哪段慢
+    import time as _time
+    _t_fetch_start = _time.perf_counter()
     # Fetch limit+1 to compute has_more without an extra COUNT()
     rows = (
         q.order_by(models.SkuMaster.updated_at.desc())
         .limit(limit2 + 1)
         .all()
     )
+    _t_fetch_ms = (_time.perf_counter() - _t_fetch_start) * 1000.0
     has_more = len(rows) > limit2
     batch_rows = rows[:limit2]
 
@@ -3973,20 +3977,40 @@ def bind_sku_master_by_model_bulk(
     errors: List[Dict[str, Any]] = []
     now_iso = _utcnow().isoformat()
 
+    # PERF: 累计各段总耗时
+    _t_active_total = 0.0
+    _t_sample_total = 0.0
+    _t_bom_total = 0.0
+    _t_bind_total = 0.0
+    _t_preparse_total = 0.0
+    _n_active = 0
+    _n_sample = 0
+    _n_bom = 0
+    _n_bind = 0
+    _n_preparse = 0
+
+    _t_loop_start = _time.perf_counter()
     for row in batch_rows:
         sku = (row.erp_sku_barcode or "").strip()
         if not sku:
             skipped_missing_barcode += 1
             continue
+        _t0 = _time.perf_counter()
         active = product_model_service.get_active_sku_binding(db, sku)
+        _t_active_total += _time.perf_counter() - _t0
+        _n_active += 1
         if active and not allow_rebind:
             skipped_already_bound += 1
             continue
         if active and str(getattr(active, "model_version_id", "") or "") == str(version.id) and allow_rebind:
             skipped_already_bound += 1
             continue
+        _t0 = _time.perf_counter()
         sh, raw_spec, norm_spec = _latest_shipment_spec_sample(db, sku_code=sku)
+        _t_sample_total += _time.perf_counter() - _t0
+        _n_sample += 1
         if norm_spec:
+            _t0 = _time.perf_counter()
             try:
                 bom_generation_service.generate_bom(
                     db,
@@ -3997,9 +4021,14 @@ def bind_sku_master_by_model_bulk(
                     include_disabled_variants=False,
                 )
             except Exception as exc:  # noqa: BLE001
+                _t_bom_total += _time.perf_counter() - _t0
+                _n_bom += 1
                 errors.append({"sku_master_id": row.id, "sku_code": sku, "error": f"BOM试算失败：{str(exc)}"})
                 continue
+            _t_bom_total += _time.perf_counter() - _t0
+            _n_bom += 1
         try:
+            _t0 = _time.perf_counter()
             product_model_service.bind_sku_to_version(
                 db,
                 sku_code=sku,
@@ -4012,13 +4041,18 @@ def bind_sku_master_by_model_bulk(
                     "skip_prefix_check": True,
                 },
             )
+            _t_bind_total += _time.perf_counter() - _t0
+            _n_bind += 1
             # 先跑 preparse 再写"我们要落的字段"——避免 preparse 内部 read-modify-write
             # 把 model_bound_at / bound_variant_code 抹掉。详见 bind_sku_master_by_model 同位置注释。
             if norm_spec:
+                _t0 = _time.perf_counter()
                 try:
                     _apply_preparse_no_commit(db, sku_master_row=row, spec_text=norm_spec, requested_by=requested_by)
                 except Exception:
                     pass
+                _t_preparse_total += _time.perf_counter() - _t0
+                _n_preparse += 1
             meta = dict(getattr(row, "metadata_json", None) or {})
             meta.update(
                 {
@@ -4043,7 +4077,21 @@ def bind_sku_master_by_model_bulk(
         except Exception as exc:  # noqa: BLE001
             errors.append({"sku_master_id": row.id, "sku_code": sku, "error": str(exc)})
 
+    _t_loop_ms = (_time.perf_counter() - _t_loop_start) * 1000.0
+    _t_commit_start = _time.perf_counter()
     db.commit()
+    _t_commit_ms = (_time.perf_counter() - _t_commit_start) * 1000.0
+    # PERF log — 一行一批 (便于 grep)
+    print(
+        f"[bind_by_model_bulk PERF] candidates={len(batch_rows)} bound={bound_count} skipped_bound={skipped_already_bound} "
+        f"fetch_ms={_t_fetch_ms:.0f} loop_ms={_t_loop_ms:.0f} commit_ms={_t_commit_ms:.0f} | "
+        f"active(n={_n_active},sum={_t_active_total*1000:.0f}ms,avg={(_t_active_total*1000/max(_n_active,1)):.1f}ms) "
+        f"sample(n={_n_sample},sum={_t_sample_total*1000:.0f}ms,avg={(_t_sample_total*1000/max(_n_sample,1)):.1f}ms) "
+        f"bom(n={_n_bom},sum={_t_bom_total*1000:.0f}ms,avg={(_t_bom_total*1000/max(_n_bom,1)):.1f}ms) "
+        f"bind(n={_n_bind},sum={_t_bind_total*1000:.0f}ms,avg={(_t_bind_total*1000/max(_n_bind,1)):.1f}ms) "
+        f"preparse(n={_n_preparse},sum={_t_preparse_total*1000:.0f}ms,avg={(_t_preparse_total*1000/max(_n_preparse,1)):.1f}ms)",
+        flush=True,
+    )
     return {
         "batch_candidates": len(batch_rows),
         "bound_count": bound_count,

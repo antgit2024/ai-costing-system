@@ -5656,10 +5656,34 @@ def auto_bind_preview(
     # 真实存在的 model_code 集合：传给 _extract_model_code_from_shop_spec
     # 做容错（识别 "<款号前缀><MMM-NNN>" 复合形式末尾的真实模型码）
     known_model_codes: set = set()
+    # PERF: 把 (model_code → (model, latest_published_version)) 全部 cache 到内存,
+    # 避免每行 SKU 命中 hint 时再调 get_latest_published_standard_version_for_model_code()
+    # (该函数每次 2 次 SQL, scan_limit=50000 + hint 命中率 50% 会触发 ~5w 次 query,
+    # 是"一键跑完"在数据量大时 canceled 的根本原因).
+    # 同 model 多版本时, 用 (published_at, created_at) DESC 取最新, 与
+    # product_model_service.get_latest_published_standard_version_for_model_code() 同语义.
+    model_code_to_version: Dict[str, Tuple[Any, Any]] = {}
     for m, v in rows:
         mc = str(getattr(m, "model_code", "") or "").strip().upper()
         if mc:
             known_model_codes.add(mc)
+            existing = model_code_to_version.get(mc)
+            if existing is None:
+                model_code_to_version[mc] = (m, v)
+            else:
+                # 选择更新的版本: published_at desc, then created_at desc, NULL 排最后
+                _, ev = existing
+                ev_pub = getattr(ev, "published_at", None)
+                v_pub = getattr(v, "published_at", None)
+                if (v_pub is not None and ev_pub is None) or (
+                    v_pub is not None and ev_pub is not None and v_pub > ev_pub
+                ):
+                    model_code_to_version[mc] = (m, v)
+                elif v_pub == ev_pub:
+                    ev_cre = getattr(ev, "created_at", None)
+                    v_cre = getattr(v, "created_at", None)
+                    if v_cre is not None and (ev_cre is None or v_cre > ev_cre):
+                        model_code_to_version[mc] = (m, v)
         meta = m.metadata_json or {}
         kws = _extract_model_keywords(meta)
         if not kws:
@@ -5759,10 +5783,14 @@ def auto_bind_preview(
         version = None
 
         if hint:
-            version = product_model_service.get_latest_published_standard_version_for_model_code(db, hint)
-            if version:
-                model = db.get(models.ProductModel, version.model_id)
-                if model and not model.is_archived:
+            # PERF: 用内存 cache 替代 get_latest_published_standard_version_for_model_code(),
+            # 避免 N+1 DB 查询. hint 已 strip+upper, 直接对 dict key.
+            cached = model_code_to_version.get(hint)
+            if cached is not None:
+                _model_cached, _version_cached = cached
+                if _model_cached and not _model_cached.is_archived:
+                    model = _model_cached
+                    version = _version_cached
                     # 注意：只有 shop_hint 严格通过 + 与最终 hint 一致时才标 shop_spec_code，
                     # 否则归类到 model_code_hint（说明命中来自 spec_text 而非商家编码）
                     match_method = "shop_spec_code" if (shop_hint and shop_hint == hint) else "model_code_hint"

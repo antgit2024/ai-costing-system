@@ -41,9 +41,12 @@ import {
   fetchSkuMaster,
   fetchSkuMasterDetail,
   importSkuMasterXlsx,
+  listAutoRecognizeRuns,
   recomputeSkuDataQuality,
   resolveSkuMasterSpecMismatch,
+  runAutoRecognizeOnce,
 } from '@/services/planner'
+import type { AutoRecognizeRunListItem } from '@/services/planner'
 import type {
   PublishedStandardModelCandidate,
   SkuMaster,
@@ -2089,6 +2092,7 @@ const SkuMasterWorkspacePage = () => {
         {/* 左侧：绑定工作台 (收窄到 5/24 ~ 21%, 让右侧表格更宽) */}
         <Col xs={24} lg={5}>
           <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <NightlyAutoRecognizeCard />
             <Card size="small" title="映射工作台（SKU→标准模型/套装模块）">
               <Tabs
                 activeKey={workbenchTab}
@@ -2903,5 +2907,153 @@ const SkuMasterWorkspacePage = () => {
 }
 
 export default SkuMasterWorkspacePage
+
+
+// ===========================================================================
+// NightlyAutoRecognizeCard — 「夜间自动识别」状态卡 + 立刻跑一次按钮
+// 与 ops/systemd/user/auto-recognize-nightly.timer (03:30) 走同一个后端服务,
+// 给运营即时看到最近一次的绑了多少 / 解析了多少 + 一键手动触发当夜流程
+// ===========================================================================
+
+function NightlyAutoRecognizeCard() {
+  const recentQuery = useQuery({
+    queryKey: ['auto-recognize-recent-runs'],
+    queryFn: () => listAutoRecognizeRuns(5),
+    refetchInterval: 60_000, // 每分钟刷一次, 让跑过的结果及时显现
+    placeholderData: keepPreviousData,
+  })
+
+  const runMutation = useMutation({
+    mutationFn: () =>
+      runAutoRecognizeOnce({
+        requested_by: 'sku-master-page',
+        max_bind: 2000,
+        max_preparse: 2000,
+      }),
+    onSuccess: (res) => {
+      const bound = res.bind?.bound_count || 0
+      const saved = res.preparse?.saved || 0
+      const skipHash = res.preparse?.skipped_same_hash || 0
+      const elapsed = res.elapsed_ms ? `${Math.round(res.elapsed_ms / 1000)}s` : '?'
+      Modal[res.status === 'success' ? 'success' : 'info']({
+        title: res.status === 'success' ? '自动识别完成' : `识别结果: ${res.status}`,
+        width: 520,
+        content: (
+          <div style={{ fontSize: 12, lineHeight: 1.8 }}>
+            <div>
+              <Tag color="blue">绑模型 {bound}</Tag>
+              <Tag color="green">解析规格 {saved}</Tag>
+              <Tag>跳过(同 hash) {skipHash}</Tag>
+              <Tag>耗时 {elapsed}</Tag>
+            </div>
+            {(res.bind?.errors?.length || 0) + (res.preparse?.errors?.length || 0) > 0 ? (
+              <Alert
+                type="warning"
+                showIcon
+                style={{ marginTop: 8 }}
+                message={`绑定错误 ${res.bind?.errors?.length || 0} · 解析错误 ${res.preparse?.errors?.length || 0}`}
+                description="详情可在 journalctl 看, 或下一次自动重试"
+              />
+            ) : null}
+            <Text type="secondary" style={{ display: 'block', marginTop: 8 }}>
+              注: 单次最多绑 2000 + 解析 2000. 待识别的剩余 SKU 明天 03:30 systemd timer 会继续跑.
+            </Text>
+          </div>
+        ),
+      })
+      recentQuery.refetch()
+    },
+    onError: (e: any) => {
+      Modal.error({
+        title: '运行失败',
+        content: e?.response?.data?.detail || e?.message || '未知错误',
+      })
+    },
+  })
+
+  const items: AutoRecognizeRunListItem[] = recentQuery.data?.items || []
+  const last = items[0]
+
+  return (
+    <Card
+      size="small"
+      title={
+        <Space size={6}>
+          <span>夜间自动识别</span>
+          <Tooltip title="systemd timer 每晚 03:30 自动跑: 把发货同步落地的新 SKU 自动绑模型 + 自动预解析规格. 你也可以点「立刻跑一次」手动触发当夜流程.">
+            <Tag style={{ fontSize: 10 }}>03:30 cron</Tag>
+          </Tooltip>
+        </Space>
+      }
+      extra={
+        <Button
+          size="small"
+          type="primary"
+          loading={runMutation.isPending}
+          onClick={() => runMutation.mutate()}
+        >
+          立刻跑一次
+        </Button>
+      }
+    >
+      <Space direction="vertical" size={8} style={{ width: '100%' }}>
+        {last ? (
+          <div style={{ fontSize: 12, lineHeight: 1.8 }}>
+            <div>
+              <Tag color={last.status === 'success' ? 'green' : last.status === 'failed' ? 'red' : 'orange'}>
+                {last.status || '?'}
+              </Tag>
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                {last.triggered_by || 'cron'} ·{' '}
+                {last.started_at ? formatBeijingTime(last.started_at) : '?'}
+              </Text>
+            </div>
+            <div>
+              <Tag color="blue">绑 {last.bound_count}</Tag>
+              <Tag color="green">解析 {last.preparse_saved}</Tag>
+              {last.preparse_skipped_same_hash ? (
+                <Tag>跳过 {last.preparse_skipped_same_hash}</Tag>
+              ) : null}
+              {(last.bind_errors || last.preparse_errors) ? (
+                <Tag color="orange">错误 {last.bind_errors + last.preparse_errors}</Tag>
+              ) : null}
+              {last.elapsed_ms ? (
+                <Text type="secondary" style={{ fontSize: 11 }}>
+                  {Math.round((last.elapsed_ms || 0) / 1000)}s
+                </Text>
+              ) : null}
+            </div>
+            {items.length > 1 ? (
+              <Tooltip
+                title={
+                  <div style={{ fontSize: 11, lineHeight: 1.6, maxWidth: 320 }}>
+                    {items.slice(0, 5).map((r) => (
+                      <div key={r.id}>
+                        {r.started_at ? formatBeijingTime(r.started_at).slice(5) : '?'} ·{' '}
+                        <Tag color={r.status === 'success' ? 'green' : 'red'} style={{ fontSize: 10 }}>
+                          {r.status}
+                        </Tag>{' '}
+                        绑 {r.bound_count} · 解析 {r.preparse_saved}
+                        {r.triggered_by !== 'cron' ? ` · ${r.triggered_by}` : ''}
+                      </div>
+                    ))}
+                  </div>
+                }
+              >
+                <Text type="secondary" style={{ fontSize: 11, cursor: 'help' }}>
+                  最近 {items.length} 次 ⓘ
+                </Text>
+              </Tooltip>
+            ) : null}
+          </div>
+        ) : (
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            尚无运行记录. 等待 03:30 systemd timer 首次触发, 或点「立刻跑一次」.
+          </Text>
+        )}
+      </Space>
+    </Card>
+  )
+}
 
 

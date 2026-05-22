@@ -1120,3 +1120,45 @@ def execute_spec_preparse(
     )
 
 
+# ---------------------------------------------------------------------------
+# 夜间自动识别 orchestrator (auto_bind + preparse 三联)
+# 给 ops/systemd/user/auto-recognize-nightly.timer 用, 也给前端「立刻跑一次」按钮用
+# ---------------------------------------------------------------------------
+
+
+@router.post("/auto-recognize/run-once", response_model=schemas.SkuMasterAutoRecognizeRunResponse)
+def auto_recognize_run_once(
+    payload: schemas.SkuMasterAutoRecognizeRunRequest,
+    db: Session = Depends(get_db_session),
+):
+    """手动触发一次"夜间自动识别"流程 (auto_bind → preparse 串联).
+
+    与 cron 走的是同一个 service 函数 (sku_master_service.run_auto_recognize_nightly),
+    结果落 integration_sync_runs 表, UI 可在「夜间自动识别」状态卡看到.
+
+    生产建议 max_bind=2000 / max_preparse=2000 (默认值), 单次 < 10 分钟可完成.
+    超时不影响下次, 因为 status=unbound / preparse_state=not_done 的 SKU 第二晚还在.
+    """
+    triggered_by = (payload.requested_by or "manual:unknown").strip() or "manual:unknown"
+    if not triggered_by.startswith("manual:") and not triggered_by.startswith("cron"):
+        triggered_by = f"manual:{triggered_by}"
+    return sku_master_service.run_auto_recognize_nightly(
+        db,
+        triggered_by=triggered_by,
+        max_bind=payload.max_bind,
+        bind_scan_limit=payload.bind_scan_limit,
+        max_preparse=payload.max_preparse,
+        skip_if_same_hash=payload.skip_if_same_hash,
+    )
+
+
+@router.get("/auto-recognize/recent-runs", response_model=schemas.SkuMasterAutoRecognizeRunsListResponse)
+def auto_recognize_recent_runs(
+    limit: int = 20,
+    db: Session = Depends(get_db_session),
+):
+    """最近 N 次夜间自动识别记录 (供前端状态卡 / 运维查 cron 是否在跑)."""
+    items = sku_master_service.list_auto_recognize_runs(db, limit=limit)
+    return {"items": items, "total": len(items)}
+
+

@@ -3639,6 +3639,101 @@ export interface OutSkuCodeFillExcelResult {
   onlyEmpty: boolean
 }
 
+// ---------------------------------------------------------------------------
+// 夜间自动识别 (auto_bind + preparse 串联)
+// 与 ops/systemd/user/auto-recognize-nightly.timer 走同一个后端服务函数,
+// 给前端「立刻跑一次」+「最近运行」用
+// ---------------------------------------------------------------------------
+
+export interface AutoRecognizeRunRequest {
+  requested_by?: string
+  max_bind?: number
+  bind_scan_limit?: number
+  max_preparse?: number
+  skip_if_same_hash?: boolean
+}
+
+export interface AutoRecognizeBindStat {
+  bound_count: number
+  skipped_already_bound: number
+  errors: Array<Record<string, unknown>>
+  elapsed_ms: number
+}
+
+export interface AutoRecognizePreparseStat {
+  saved: number
+  scanned: number
+  skipped_same_hash: number
+  errors: Array<Record<string, unknown>>
+  elapsed_ms: number
+}
+
+export interface AutoRecognizeRunResponse {
+  sync_run_id: string
+  status: 'success' | 'failed' | 'running' | string
+  started_at?: string | null
+  finished_at?: string | null
+  elapsed_ms?: number | null
+  bind: AutoRecognizeBindStat
+  preparse: AutoRecognizePreparseStat
+}
+
+export interface AutoRecognizeRunListItem {
+  id: string
+  status?: string | null
+  triggered_by?: string | null
+  started_at?: string | null
+  finished_at?: string | null
+  elapsed_ms?: number | null
+  bound_count: number
+  skipped_already_bound: number
+  bind_errors: number
+  preparse_saved: number
+  preparse_scanned: number
+  preparse_skipped_same_hash: number
+  preparse_errors: number
+  error_message?: string | null
+}
+
+export interface AutoRecognizeRunsListResponse {
+  items: AutoRecognizeRunListItem[]
+  total: number
+}
+
+export const runAutoRecognizeOnce = async (
+  payload: AutoRecognizeRunRequest = {},
+  opts: PlannerRequestOptions = {},
+): Promise<AutoRecognizeRunResponse> => {
+  const response = await plannerClient.post(
+    '/sku-master/auto-recognize/run-once',
+    {
+      requested_by: payload.requested_by ?? null,
+      max_bind: payload.max_bind ?? 2000,
+      bind_scan_limit: payload.bind_scan_limit ?? 200000,
+      max_preparse: payload.max_preparse ?? 2000,
+      skip_if_same_hash: payload.skip_if_same_hash ?? true,
+    },
+    {
+      // 单次最坏 ~10 分钟 (2000 绑 + 2000 解析), 给 12 分钟 timeout 留缓冲
+      timeout: opts.timeoutMs ?? 720_000,
+      signal: opts.signal,
+    },
+  )
+  return response.data
+}
+
+export const listAutoRecognizeRuns = async (
+  limit = 20,
+  opts: PlannerRequestOptions = {},
+): Promise<AutoRecognizeRunsListResponse> => {
+  const response = await plannerClient.get('/sku-master/auto-recognize/recent-runs', {
+    params: { limit },
+    timeout: opts.timeoutMs ?? 30_000,
+    signal: opts.signal,
+  })
+  return response.data
+}
+
 export const downloadOutSkuCodeFillExcel = async (
   payload: { sku_master_ids?: string[]; only_empty?: boolean } = {},
   opts: PlannerRequestOptions = {},

@@ -6643,3 +6643,218 @@ def auto_promote_pending_model(
     db.flush()
     return {"promoted": promoted, "skipped": skipped, "missing": missing}
 
+
+# ============================================================================
+# Auto-recognize nightly orchestrator
+#
+# 把人工"一键跑完"做成夜间无人值守: 拉发货同步落地的新 SKU → 自动绑模型 →
+# 自动预解析规格. 由 ops/systemd/user/auto-recognize-nightly.timer 在 03:30
+# 触发 (jackyun-shipment-sync 02:30 完后, ai-costing-nightly-refresh 04:00
+# 之前). 也可以前端「立刻跑一次」按钮手动触发, 给运营同样的入口.
+#
+# 设计要点:
+# - 复用 IntegrationSyncRun 表做审计 (source_system="internal_auto_recognize")
+# - 失败不中断: bind 失败不影响 preparse step, 各 step 自带 try/except
+# - 单次有 max_bind / max_preparse 上限, 防止全量 40w SKU 把 timer 卡 30 分钟
+#   超时. 一夜跑不完明天再跑, 因为 status=unbound 的 SKU 第二晚还在
+# - triggered_by="cron" / "manual:<user>" 区分入口
+# ============================================================================
+
+
+AUTO_RECOGNIZE_SOURCE = "internal_auto_recognize"
+AUTO_RECOGNIZE_SYNC_TYPE = "auto_recognize_nightly"
+AUTO_RECOGNIZE_API_METHOD = "sku_master_service.run_auto_recognize_nightly"
+
+
+def run_auto_recognize_nightly(
+    db: Session,
+    *,
+    triggered_by: str = "cron",
+    max_bind: int = 2000,
+    bind_scan_limit: int = 200000,
+    max_preparse: int = 2000,
+    skip_if_same_hash: bool = True,
+) -> Dict[str, Any]:
+    """夜间无人值守: auto_bind 全量未绑定 → preparse 全量未解析.
+
+    Args:
+        triggered_by: "cron" / "manual:<user>" 区分入口, 落在 sync_run.triggered_by
+        max_bind: 单次 auto_bind 最多绑多少条 (上限 2000, 不会真的扫 200000 SKU
+            然后绑全部, 而是先 preview 出最多 max_bind 个候选再绑)
+        bind_scan_limit: auto_bind preview 扫多少行 SKU 找候选 (上限 500000)
+        max_preparse: 单次 preparse 最多保存多少条
+        skip_if_same_hash: preparse 时若 hash 没变就跳过 (省 IO)
+
+    Returns:
+        {
+            "sync_run_id": str,
+            "status": "success" | "failed",
+            "started_at": iso, "finished_at": iso,
+            "bind": {"bound_count": int, "skipped_already_bound": int, "errors": [...]},
+            "preparse": {"saved": int, "scanned": int, "skipped_same_hash": int, ...},
+            "elapsed_ms": int,
+            "error": Optional[str],  # 仅 failed 时
+        }
+    """
+    started_at = _utcnow()
+    run = models.IntegrationSyncRun(
+        source_system=AUTO_RECOGNIZE_SOURCE,
+        sync_type=AUTO_RECOGNIZE_SYNC_TYPE,
+        api_method=AUTO_RECOGNIZE_API_METHOD,
+        direction="internal",
+        status="running",
+        request_params_json={
+            "max_bind": max_bind,
+            "bind_scan_limit": bind_scan_limit,
+            "max_preparse": max_preparse,
+            "skip_if_same_hash": skip_if_same_hash,
+        },
+        triggered_by=triggered_by,
+        started_at=started_at,
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+    run_id = run.id
+
+    result: Dict[str, Any] = {
+        "sync_run_id": run_id,
+        "status": "running",
+        "started_at": started_at.isoformat(),
+        "bind": {},
+        "preparse": {},
+    }
+
+    # ---- Step 1: auto_bind_execute (全量未绑定 + shop_spec_code 有值 的 SKU) ----
+    bind_t0 = _utcnow()
+    try:
+        bind_res = auto_bind_execute(
+            db,
+            limit=max(min(int(max_bind), 2000), 1),
+            scan_limit=max(min(int(bind_scan_limit), 500000), 100),
+            requested_by=f"auto-recognize/{triggered_by}",
+            sku_master_ids=None,  # 全量
+        )
+    except Exception as exc:  # noqa: BLE001
+        # bind 失败也别中断 preparse, 后者跟绑没绑无关 — 但要把错误记下来
+        db.rollback()
+        bind_res = {
+            "bound_count": 0,
+            "skipped_already_bound": 0,
+            "errors": [{"step": "auto_bind_execute", "error": str(exc)}],
+        }
+    bind_ms = int((_utcnow() - bind_t0).total_seconds() * 1000)
+    result["bind"] = {
+        "bound_count": int(bind_res.get("bound_count") or 0),
+        "skipped_already_bound": int(bind_res.get("skipped_already_bound") or 0),
+        "errors": list(bind_res.get("errors") or [])[:50],  # 截断, 防 result 巨大
+        "elapsed_ms": bind_ms,
+    }
+
+    # ---- Step 2: bulk_save_spec_preparse (preparse_state="not_done" + 已绑) ----
+    # 走"已绑定 + 未预解析"的 SKU. spec-matching 页一键跑完的同名后端入口.
+    preparse_t0 = _utcnow()
+    try:
+        preparse_res = bulk_save_spec_preparse(
+            db,
+            limit=max(min(int(max_preparse), 5000), 1),
+            search=None,
+            channel=None,
+            match_status=None,
+            include_terms=None,
+            exclude_terms=None,
+            match_scope=None,
+            preparse_state="not_done",  # 关键: 只跑未做过的
+            skip_if_same_hash=skip_if_same_hash,
+            requested_by=f"auto-recognize/{triggered_by}",
+        )
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        preparse_res = {
+            "saved": 0,
+            "scanned": 0,
+            "skipped_same_hash": 0,
+            "errors": [{"step": "bulk_save_spec_preparse", "error": str(exc)}],
+        }
+    preparse_ms = int((_utcnow() - preparse_t0).total_seconds() * 1000)
+    result["preparse"] = {
+        "saved": int(preparse_res.get("saved") or 0),
+        "scanned": int(preparse_res.get("scanned") or 0),
+        "skipped_same_hash": int(preparse_res.get("skipped_same_hash") or 0),
+        "errors": list(preparse_res.get("errors") or [])[:50],
+        "elapsed_ms": preparse_ms,
+    }
+
+    # ---- 收尾: 写回 sync_run ----
+    finished_at = _utcnow()
+    total_errors = (
+        len(result["bind"]["errors"]) + len(result["preparse"]["errors"])
+    )
+    overall_status = "failed" if total_errors and result["bind"]["bound_count"] == 0 and result["preparse"]["saved"] == 0 else "success"
+
+    elapsed_ms = int((finished_at - started_at).total_seconds() * 1000)
+    result["finished_at"] = finished_at.isoformat()
+    result["elapsed_ms"] = elapsed_ms
+    result["status"] = overall_status
+
+    run = db.get(models.IntegrationSyncRun, run_id)
+    if run is not None:
+        run.status = overall_status
+        run.finished_at = finished_at
+        run.total_rows = result["bind"]["bound_count"] + result["preparse"]["saved"]
+        run.inserted_rows = result["bind"]["bound_count"]
+        run.updated_rows = result["preparse"]["saved"]
+        run.skipped_rows = (
+            result["bind"]["skipped_already_bound"] + result["preparse"]["skipped_same_hash"]
+        )
+        run.error_rows = total_errors
+        run.error_message = None if overall_status == "success" else (
+            (result["bind"]["errors"] + result["preparse"]["errors"])[0].get("error")
+            if (result["bind"]["errors"] + result["preparse"]["errors"]) else None
+        )
+        run.result_json = result
+        db.commit()
+
+    return result
+
+
+def list_auto_recognize_runs(
+    db: Session,
+    *,
+    limit: int = 20,
+) -> List[Dict[str, Any]]:
+    """运维 UI 用: 最近 N 次夜间自动识别的运行记录."""
+    limit = max(min(int(limit or 20), 200), 1)
+    rows = (
+        db.query(models.IntegrationSyncRun)
+        .filter(
+            models.IntegrationSyncRun.source_system == AUTO_RECOGNIZE_SOURCE,
+            models.IntegrationSyncRun.sync_type == AUTO_RECOGNIZE_SYNC_TYPE,
+        )
+        .order_by(models.IntegrationSyncRun.started_at.desc().nullslast())
+        .limit(limit)
+        .all()
+    )
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        result_json = r.result_json or {}
+        bind = result_json.get("bind") or {}
+        preparse = result_json.get("preparse") or {}
+        out.append({
+            "id": r.id,
+            "status": r.status,
+            "triggered_by": r.triggered_by,
+            "started_at": r.started_at.isoformat() if r.started_at else None,
+            "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+            "elapsed_ms": result_json.get("elapsed_ms"),
+            "bound_count": int(bind.get("bound_count") or 0),
+            "skipped_already_bound": int(bind.get("skipped_already_bound") or 0),
+            "bind_errors": len(bind.get("errors") or []),
+            "preparse_saved": int(preparse.get("saved") or 0),
+            "preparse_scanned": int(preparse.get("scanned") or 0),
+            "preparse_skipped_same_hash": int(preparse.get("skipped_same_hash") or 0),
+            "preparse_errors": len(preparse.get("errors") or []),
+            "error_message": r.error_message,
+        })
+    return out
+

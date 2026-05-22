@@ -22,6 +22,7 @@ SERVICES=(
   ai-costing-snapshot-sweep.service
   ai-costing-data-quality.service
   ai-costing-nightly-refresh.service
+  auto-recognize-nightly.service
   costing-workspace-health.service
   costing-audit-summary.service
   jackyun-shipment-sync.service
@@ -34,6 +35,7 @@ TIMERS=(
   ai-costing-snapshot-sweep.timer
   ai-costing-data-quality.timer
   ai-costing-nightly-refresh.timer
+  auto-recognize-nightly.timer
   costing-workspace-health.timer
   costing-audit-summary.timer
   jackyun-shipment-sync.timer

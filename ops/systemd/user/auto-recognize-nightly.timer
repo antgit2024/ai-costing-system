@@ -1,0 +1,22 @@
+[Unit]
+Description=Trigger auto-recognize-nightly.service nightly at 03:30 Asia/Shanghai
+
+[Timer]
+# 03:30 every night. Picked because:
+#   - jackyun-shipment-sync.timer fires 02:30 and usually finishes ~03:00
+#     (~30min for typical backlog). We give it a 30min cushion to land new
+#     SkuMaster rows + write shop_spec_code before we try to recognize them.
+#   - jackyun-goods-sync.timer (if scheduled later) might also feed new SKUs,
+#     but it doesn't block this — we'll catch its output tomorrow night.
+#   - ai-costing-nightly-refresh.timer 04:00 then pre-warms report caches
+#     using the freshly-bound SKUs, so /reports/insights/* see them too.
+#   - Server timezone Asia/Shanghai (verified 2026-05-07).
+OnCalendar=*-*-* 03:30:00
+# If the host was off at trigger time, run as soon as it comes back up.
+Persistent=true
+# Stagger with 02:30 / 04:00 / 05:30 / 05:50 timers, ±2min for NTP jitter.
+RandomizedDelaySec=120
+Unit=auto-recognize-nightly.service
+
+[Install]
+WantedBy=timers.target

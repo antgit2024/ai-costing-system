@@ -4485,6 +4485,73 @@ class ErpWritebackOutSkuCodeFillRequest(BaseModel):
     only_empty: bool = True
 
 
+# ---------------------------------------------------------------------------
+# 夜间自动识别 (auto_bind + preparse 串联)
+# ---------------------------------------------------------------------------
+
+
+class SkuMasterAutoRecognizeRunRequest(BaseModel):
+    """手动触发一次「夜间自动识别」流程."""
+
+    requested_by: Optional[str] = None
+    # 单次 auto_bind 最多绑多少条 (1..2000), 默认与 cron 一致
+    max_bind: int = Field(default=2000, ge=1, le=2000)
+    # auto_bind preview 扫多少行 SKU 找候选 (100..500000)
+    bind_scan_limit: int = Field(default=200000, ge=100, le=500000)
+    # 单次 preparse 最多保存多少条 (1..5000)
+    max_preparse: int = Field(default=2000, ge=1, le=5000)
+    skip_if_same_hash: bool = True
+
+
+class SkuMasterAutoRecognizeBindStat(BaseModel):
+    bound_count: int = 0
+    skipped_already_bound: int = 0
+    errors: List[Dict[str, Any]] = Field(default_factory=list)
+    elapsed_ms: int = 0
+
+
+class SkuMasterAutoRecognizePreparseStat(BaseModel):
+    saved: int = 0
+    scanned: int = 0
+    skipped_same_hash: int = 0
+    errors: List[Dict[str, Any]] = Field(default_factory=list)
+    elapsed_ms: int = 0
+
+
+class SkuMasterAutoRecognizeRunResponse(BaseModel):
+    sync_run_id: str
+    status: str  # success | failed | running
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+    elapsed_ms: Optional[int] = None
+    bind: SkuMasterAutoRecognizeBindStat = Field(default_factory=SkuMasterAutoRecognizeBindStat)
+    preparse: SkuMasterAutoRecognizePreparseStat = Field(default_factory=SkuMasterAutoRecognizePreparseStat)
+
+
+class SkuMasterAutoRecognizeRunListItem(BaseModel):
+    """供前端「最近运行」表格用. service 已经把字段压平, 这里只描述类型."""
+
+    id: str
+    status: Optional[str] = None
+    triggered_by: Optional[str] = None
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+    elapsed_ms: Optional[int] = None
+    bound_count: int = 0
+    skipped_already_bound: int = 0
+    bind_errors: int = 0
+    preparse_saved: int = 0
+    preparse_scanned: int = 0
+    preparse_skipped_same_hash: int = 0
+    preparse_errors: int = 0
+    error_message: Optional[str] = None
+
+
+class SkuMasterAutoRecognizeRunsListResponse(BaseModel):
+    items: List[SkuMasterAutoRecognizeRunListItem] = Field(default_factory=list)
+    total: int = 0
+
+
 class ErpWritebackEnqueueJobOut(BaseModel):
     job_id: str
     sku_master_id: str

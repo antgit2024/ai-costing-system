@@ -1,0 +1,22 @@
+[Unit]
+Description=AI-Costing nightly auto-recognize — auto_bind + spec preparse, picks up SKUs that jackyun-shipment-sync just landed
+Documentation=file:///home/admin/ai-costing-system/backend/scripts/cron_auto_recognize.py
+# Sync must finish first (so newly-arrived SKUs with shop_spec_code exist to be recognized).
+# Don't fail loudly if backend is restarting — this script has its own DB session.
+After=jackyun-shipment-sync.service network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/admin/ai-costing-system/backend
+EnvironmentFile=/home/admin/ai-costing-system/.env
+ExecStart=/home/admin/ai-costing-system/backend/.venv/bin/python scripts/cron_auto_recognize.py
+StandardOutput=journal
+StandardError=journal
+# Default max_bind=2000 + max_preparse=2000. Each item ~50ms (bind: BOM lookups,
+# preparse: regex + spec_parser). Worst case 200s, easily fits 15min ceiling.
+# Hitting this means something is wrong (probably DB lock) — let next nightly retry.
+TimeoutStartSec=900
+
+[Install]
+# Wanted by the timer, not by default.target — we don't run on boot.
+WantedBy=default.target

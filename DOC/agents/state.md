@@ -1,0 +1,3682 @@
+## 当前状态（崩了也能继续）
+
+- **最近校对（北京时间 GMT+8）**：2026-05-15（简易日盈亏 /costing/insights/daily-pnl 闭环）
+  - 背景：老板看完《电商税负下低毛利经营应对报告》要求"昨天发了多少单、哪个赚哪个亏、按单笔税后贡献排名"。
+  - 落地：复刻一份简化版 ProfitInsightsPage → `/costing/insights/daily-pnl`，加 5 个运营经营参数（推广17%/扣点6.1%/税8%/人工20%/场地+快递10%）+ 未建模兜底成本比 50%；多方案库（4 预置方案下拉切换：默认标准/大促降推广/试涨价/0推广（最低边界））；左侧模型日报按"税后贡献"倒序+🟢/🟡/🔴/⚠️ 颜色徽章；右侧父 Tabs 模型明细（保留 ProfitInsights 原貌 BOM/工序/扣库单 3 子 Tab）+ 商品明细（Top 赚/Top 亏 SKU + 全量行级明细，按当前方案重算）；每张表加 Excel 导出（xlsx 库，文件名 `简易日盈亏_<方案名>_<起>_<止>_<导出时间>.xlsx`，含「方案与口径」首 sheet）。
+  - 后端：`backend/src/planner/routers/ops_assumptions.py`（CRUD via taxonomy domain='ops_assumption_scheme' **不新建表**）+ `backend/tests/planner/test_ops_assumption_schemes.py` 6 单测全过 + schemas/router 挂载。analytics 加 `variant_code/variant_breakdown` 向下兼容增量。
+  - 前端：`frontend/src/pages/costing/SimpleDailyPnlPage.tsx`（1493 行，复用 fetchModelInsightsSummary/fetchModelInsightsDetail/fetchSalesProfitDashboardSnapshot/fetchSalesLines，前端 JS 按当前方案重算"运营扣减/税后贡献/税后率/颜色"）+ App.tsx Route + AppLayout.tsx 菜单「💰 简易日盈亏」。
+  - 验收命令（全部 0 退出码）：
+    - `source backend/venv/bin/activate && pytest backend/tests/planner/test_ops_assumption_schemes.py -v` → 6 passed
+    - `npm -C frontend run build` → ✓ built in 9.49s 0 类型错误
+    - `alembic upgrade head` → noop（heads=`0043_cost_allocation_line` 不变）
+    - `systemctl --user restart planner-costing.service` Active running PID 103101 + `/api/planner/health = ok`
+    - `bash frontend/scripts/deploy_static.sh` 原子切换 `/var/www/html/ai-costing/dist`
+    - `curl https://work.znma.com/api/planner/ops-assumption-schemes -H "X-PLANNER-ADMIN-KEY: dev"` → `total=4 default=1`（4 预置方案就位）
+    - `curl https://work.znma.com/costing/insights/daily-pnl` → HTTP 200
+  - 红线遵守：未动 ProfitInsightsPage / SalesInsightsPage / ShopInsightsPage / AfterSalesInsightsPage 任何一行（前一个挂死 subagent 错误改了 ProfitInsightsPage 232 行+删法人主体筛选已被 Hub git checkout HEAD 回退）。
+  - 派单文档：`DOC/agents/briefings/simple_daily_pnl_page_brief.md`。
+  - 下一步：(1) 运营建模 Top 50 头部 SKU 让"未建模兜底50%估算"逐步替换为真 BOM 成本；(2) 老板决定后单独派 PR 删法人主体筛选（不混入本任务）；(3) 6 项参数若有"按渠道一组"需求另开闭环（本期是全店一组）；(4) Excel 导出当前为客户端 xlsx 库，10w+ 订单需求时改后端流式导出。
+
+### 项目定义（仓库单一真相：当前项目是什么）
+
+本仓库（`/home/admin/ai-costing-system`）是一个 **ERP 级的“SKU 绑定 + 规格解析 + 动态 BOM 生成 + 发货对账/扣库/成本核算”系统**，核心理念是 **“发货时再解析（Shipment-time parse）”**：  
+导入发货单（xlsx）→ 以 `sku_code + spec_text` 为输入解析规格（`spec_hash` 缓存）→ 生成 **BOM 快照**（可追溯/可重跑/历史不回写）→ 解析/绑定异常进入 **异常队列** 兜底。
+
+- **主线蓝图（以此为准）**：`DOC/costing/blueprints/sku_binding_bom_shipment_plan.md`
+  - 明确：SKU 主键=货品条码（`sku_code`）、spec_text 不稳定、快照不回写、异常队列与重跑语义等。
+- **发货单样例（字段与列位移风险证据）**：`DOC/index/extracted/shipment_xlsx_extracted_20251222T000000+0800.md`
+- **30% 复杂产品（套装/非规则型）的“编码/模型套模型”方案**：`DOC/基础表单/BOM系统优化完整方案_最终版.md`
+  - 该文档聚焦“复杂套装/编码抽取/模型套模型/自动编码”的可运营落地；与“发货时再解析”主链互补，但**不替代**主链蓝图。
+- **数据分析（利润/退货，2025 校准 Run / 2026 扣库落库）蓝图**：`DOC/costing/blueprints/profit_and_returns_analytics_plan_2025_2026_v0_1.md`
+  - 已落地（后端 MVP）：售后导入 `/api/planner/after-sales/import`（xlsx 幂等落库）+ 退货率 API `/api/planner/analytics/returns-rate/sku`（按发货完成时间归属期，强关联键：订单号+商品链接ID+货品条码）。
+  - 已落地（前端 MVP）：左侧菜单“数据洞察→售后分析”可点，页面 `/costing/insights/after-sales`（仅按用户选择范围查询；不做默认全量计算）。
+  - 已落地（利润 MVP）：后端 `/api/planner/analytics/profit/sku`（货品利润）与 `/api/planner/analytics/profit/model`（模型利润）；前端“数据洞察→模型分析”页面 `/costing/insights/models`（货品/模型两Tab，需手动选择范围再查询）。
+  - 已落地（店铺数据 MVP）：后端 `/api/planner/analytics/profit/channel` 与 `/api/planner/analytics/returns-rate/channel`；前端页面 `/costing/insights/shops`（利润/退货率两Tab，支持“仅看覆盖率=100%”筛选；仍需手动选择范围再查询）。
+  - 已落地（数据导入 MVP）：发货单上传在 `/costing/shipments`（预览→执行）；售后退货单上传在 `/costing/insights/after-sales`（xlsx 导入）。
+  - 硬验收命令（全部 0 退出码）见：`DOC/agents/commands.md` → “数据洞察（利润/售后）MVP 硬验收（必须）”。
+
+> 注：若需要对外一句话解释本项目——“以 SKU 绑定已发布标准版本为入口，在发货导入时解析交易规格并生成可追溯的 BOM 快照，用异常队列兜底，支撑扣库与成本核算对账”。
+
+- **最近校对（北京时间 GMT+8）**：2026-05-10（TDABC v1 闭环 — A2 接通 + standard-models 抽屉「成本核算」Tab）
+  - 背景：Path A 完工后留下「A2 数据是孤儿」漏洞 — `cost_center_aggregator_service` 已写 `cost_rate_master.labor_per_minute scope=cost_center`（班组真工资 ÷ 班组工时容量），但 `bom_generation_service._compute_process_costing` 仍读 `metadata_json.rate_per_minute`（模型快照里的死数）→ A2 真工资写入但下游不读。同时 standard-models 抽屉缺成本可视化入口。本轮按 brief `tdabc_v1_closing_loop_brief.md` + 方法论 `costing_methodology_industry_alignment.md`（POD 不是 SAP MTO，铁律 §6 三条）一次性闭环 G + H。
+  - 本轮产物（后端）：
+    - `backend/src/planner/services/long_tail_strategy_service.py`：紧跟 `resolve_overhead_rate` 后新增 `resolve_labor_rate()` + `resolve_labor_per_piece()`（4 层 Hub resolve：model > category > cost_center > global > hard_fallback；hard_fallback 返回 `rate_per_minute=None` 不返回硬编码值，因为班组时薪 5x 差异硬编码会扭曲 5x）
+    - `backend/src/planner/services/bom_generation_service.py`：`_compute_process_costing` 时/件双分支走 Hub-first → metadata fallback；返回 6 个新字段（`rate_per_minute_legacy` / `piece_rate_legacy` / `rate_source` / `rate_hit_layer` / `cost_center_id` / `cost_rate_strategy_id`，向后兼容老前端）
+    - `backend/src/planner/services/product_model_service.py`：3 个 helper（`_resolve_labor_rate_for_preview` / `_resolve_overhead_for_preview` / `_pick_dominant_cost_center`）+ `preview_model_cost` / `preview_version_cost` 走同一 Hub 链；overhead 从硬编码 ×0.3 改为走 4 层 resolve（KB8 model-level 0.25 命中后老 0.30 → 0.25 是预期对齐）
+    - `backend/src/planner/schemas.py`：`ProductModelPreviewLaborLine` 加 6 个 Optional 字段 + 新增 `ProductModelPreviewCostingMeta` + `ProductModelPreviewResponse.costing` Optional
+    - `backend/tests/planner/test_compute_process_costing_hub_labor.py`：8 用例全绿（计划 4 个，超额完成）— Hub 命中 cost_center / NULL cost_center 回退 / 无 strategy 行回退 / 0 值防御回退 / piece 类型 Hub 命中 / model > cost_center 优先级 / hard_fallback 返回 None / global 兜底层
+  - 本轮产物（前端）：
+    - `frontend/src/components/costing/CostingTab.tsx`（新建）：试算参数（宽/高/数量+刷新）+ 物料/人工/制造费 3 层成本卡片 + 5 色徽章（🟢 物料级精确 / 🔵 Hub 命中 / ⚪ Hub 全局兜底 / ⚫ 硬编码兜底 / ⚠️ 未配置）+ 4 层链路展开 + 「为本模型单独设固定时薪/费率」Modal（写 `cost_rate_master scope=model source=manual_model_override`）
+    - `frontend/src/components/costing/ProductModelEditorDrawer.tsx`：activeTab 类型加 'cost' + items 数组结尾加新 Tab
+    - `frontend/src/types/planner.ts`：同步类型
+  - 真机验证（生产 https://work.znma.com）：
+    - `curl https://work.znma.com/api/planner/product-models/464ca78d-81d6-40e5-8370-66d94ce49312/preview` 返回 `totals.material_cost=0.1249526 / labor_cost=4.25 / overhead_cost=1.0937 / total=5.4687`；`costing.overhead_hit_layer=model rate=0.25 strategy_id=7c83bc7b-…`；`labor_lines[*].rate_per_minute=0.85 rate_source=hub_cost_center cost_center_id=8520ec7a-…(CC_FABRIC_PROD) cost_rate_strategy_id=714d21b8-…`，`rate_per_minute_legacy=0.6` 保留审计快照
+    - 前端打开 KB8 抽屉「成本核算」Tab 三层数字渲染正常 + 数据来源徽章 + 4 层链路展开
+  - 验收命令（必须，全部 0 退出码）：
+    - Backend：`cd backend && source venv/bin/activate && pytest tests/planner/test_compute_process_costing_hub_labor.py -v`（8 passed）
+    - Frontend：`cd frontend && npm run build`（✓ built in ~9s 0 类型错误）
+    - alembic：`alembic upgrade head` noop（heads=`0043_cost_allocation_line`）
+  - 下一步（v2 立项 POD 行业 3 件事，参考 `costing_methodology_industry_alignment.md` §5）：
+    - 设备小时折旧（DTF / 热压 / 缝纫机，占成本 10-15%）：`cost_rate_master.equipment_per_hour` + `process.equipment_id`
+    - 换型/开机成本（每款打样首件 + 多 SKU 切换工时，占成本 5-15%）：`model_version_processes.setup_minutes`
+    - Printify 风格销量摊销层（月间接费 ÷ 月销量）：Hub 加第 5 层 fallback
+  - 运维落地（让所有 KB8 类模型自动从 metadata fallback 升级到 hub_cost_center 真工资，不需任何代码改动）：
+    - `POST /cost-centers/refresh-finance-mapping`（A2 接口）→ 把 finance employees.department 字符串映射到 6 个班组
+    - `POST /cost-centers/aggregate-payroll-batch?period=2026-04`（A2 接口）→ 自动写真工资到 `cost_rate_master.labor_per_minute`
+    - `POST /cost-allocation/run?period=2026-04`（A4 接口）→ 自动写制造费费率
+  - Handover：`DOC/costing/handovers/tdabc_v1_handover_20260510.md`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-31（售后洞察仪表盘 500：兼容 MySQL/MariaDB 的时间分组/lag 计算）
+  - 背景：线上 `https://work.znma.com/costing/insights/after-sales/` 仪表盘提示 `Request failed with status code 500`；前端回退到实时接口时仍 500，说明后端 `/api/planner/analytics/after-sales/dashboard` 在生产环境存在兼容性问题。
+  - 推断根因：`analytics_service._group_time_expr(_dash)` 与 lag 计算的 “sqlite/mysql fallback” 实际使用了 sqlite 专用函数（`strftime/julianday/date(...,'weekday')`），在 MySQL/MariaDB 环境会直接 SQL 报错 → 500。
+  - 本轮产物（后端）：
+    - `backend/src/planner/services/analytics_service.py`
+      - 对 `mysql/mariadb` 方言补齐：
+        - `_group_time_expr`：改用 `DATE_FORMAT` 生成 `day/month` 分组 key
+        - `_group_time_expr_dash`：改用 `DATE_FORMAT + CONCAT` 生成 `day/month/week` 分组 key（week 使用 `YYYY-WWW`）
+        - lag 计算：改用 `DATEDIFF`（替代 sqlite 的 `julianday`）
+  - 验收命令（必须，全部 0 退出码）：
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Frontend：`npm -C frontend run build`
+  - 下一步：
+    - 线上部署后，建议用浏览器或 curl 复核：
+      - `GET /api/planner/analytics/after-sales/dashboard?start=...&end=...&group_by=week&view=ops`
+      - `GET /api/planner/analytics/after-sales/dashboard?start=...&end=...&group_by=week&view=factory`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-29（发货作业中心：快照重建 TAB 重构 + 多维筛选）
+  - 背景：`/costing/shipments/ops` 的“快照重建（清空→再生成）”此前直接展示“本批次所有快照”，与“已完成（成本快照）”几乎重复；同时难以定位“已解绑但仍有快照”等真实问题行。
+  - 口径（重新梳理）：
+    - **已完成（成本快照）**：用于“查询/核对快照 + 单条回填 + 批量覆盖重算（高风险）”，面向“已经有快照”的记录。
+    - **快照重建（清空→再生成）**：用于“找出需要处理的发货行（绑定变更/解绑/已清空待重建）→ 定向清空（让报表忽略旧快照）→ 修好绑定后回到待生成生成新快照”，面向“需要把快照从业务口径里先剔除再重建”的场景。
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/shipment-ops/components/BatchWorkbench.tsx`
+        - 批次统计口径澄清：新增展示“跳过(重复)”并将“异常”改名为“待处理”，避免误以为导入失败
+      - “快照重建”TAB 改为基于 `GET /api/planner/shipments/lines` 的 **发货行列表**（而非快照列表），并提供：
+        - 范围切换：`需重建（绑定变更/解绑）`（`need_rebuild_snapshot=true`）/ `已清空待重建`（`unresolved_reason=SNAPSHOT_CLEARED`）
+        - 筛选：日期区间（`start/end`）、绑定类型（模型/套装）、绑定关键字、交易规格模糊、商家编码下拉、重建原因下拉（含“解绑但仍有快照”）
+        - 操作：`清空所选`（标记 `SNAPSHOT_CLEARED`，不删历史快照）/ `覆盖重算所选`（按当前绑定覆盖重算）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+  - 下一步：
+    - 若需要“商家编码/交易规格”的下拉候选做成**全量可搜索**（不依赖当前页数据），建议后端补一个轻量 options 接口（按 batch_id + 时间范围聚合 distinct 值）。
+
+- **最近校对（北京时间 GMT+8）**：2026-01-29（发货台账：提升加载稳定性（超时与重计算解耦））
+  - 背景：`/costing/shipments/` 的“问题订单（需核对）”与台账列表在数据量/并发下容易出现浏览器请求 `timeout of 20000ms exceeded`，导致页面卡住或加载失败。
+  - 处理策略（两层兜底）：
+    - 前端：`fetchShipmentLines` 单独提高 timeout（默认 60s），避免 20s 的假失败。
+    - 后端：`GET /api/planner/shipments/lines` 增加参数 `include_issue_hints`，默认不计算“疑似绑错/尺寸异常”等重计算字段；仅在台账“问题订单（需核对）”TAB 打开时开启。
+  - 本轮产物：
+    - 前端：`frontend/src/services/planner.ts`、`frontend/src/pages/costing/ShipmentLedgerPage.tsx`
+    - 后端：`backend/src/planner/routers/shipments.py`、`backend/src/planner/services/shipment_import_service.py`
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-29（企业级交互：TAB 切换可中止请求 + 短期缓存）
+  - 背景：台账/作业中心是高频页面；用户快速切换 TAB、频繁点“查询/刷新”时，如果每次都新开请求且不取消，会造成后端排队与前端“越切越卡”。
+  - 处理策略：
+    - 前端：对 `fetchShipmentLines`、台账详情抽屉相关查询（快照/计价/扣库/工序）接入 AbortSignal，让 React Query 在 key 变化/组件卸载时**真正中止请求**。
+    - 前端：给台账/作业中心查询增加短期缓存（`staleTime`），减少“来回切 TAB”重复打后端。
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/ShipmentLedgerPage.tsx`
+    - `frontend/src/pages/costing/shipment-ops/components/BatchWorkbench.tsx`
+    - `frontend/src/pages/costing/shipment-ops/components/BulkCostingTab.tsx`
+    - `frontend/src/services/planner.ts`
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-29（夜间预处理 + 冷热分层：洞察页“先读缓存”+ 手动刷新）
+  - 背景：
+    - “数据洞察”类页面（利润/售后/店铺/销售）在数据量上来后，实时聚合会越来越慢；多人同时使用会放大 DB 压力与请求排队。
+    - 目标是把“重计算”从用户点击时剥离出去：**夜间预处理（落库）** → 白天默认读缓存；用户需要即时口径时再手动刷新。
+  - 口径（MVP）：
+    - 后端新增“报表快照”存储层（复用 `taxonomy_items` 做 KV，不引入迁移），按 `kind + params` 生成 key，落库保存 `data/params/computed_at`。
+    - 前端洞察页默认走“缓存读数”，并提供 `刷新数据` 与 `切到实时/切到缓存`。
+    - 时间范围默认 **近30天**；快捷仅保留 **近7/近30/近90**（移除近1年）。
+    - 兼容性：快照落库前统一做 JSON 可序列化转换（避免 Decimal/Datetime 等导致 500）。
+  - 本轮产物（后端）：
+    - `backend/src/planner/services/report_snapshot_service.py`：快照 key 生成 + get/upsert（落 `taxonomy_items`）
+    - `backend/src/planner/routers/reports.py`：`GET/POST /api/planner/reports/*`（洞察快照读取/刷新）
+    - `backend/src/planner/router.py`：挂载 `reports` router
+    - `GET/POST /api/planner/reports/shipments/issues`：发货台账“问题订单（需核对）”快照（可夜间预处理/手动刷新）
+  - 本轮产物（前端）：
+    - `frontend/src/services/planner.ts`：新增 `fetch*/refresh*Snapshot` 调用
+    - `frontend/src/pages/costing/ProfitInsightsPage.tsx`：模型榜单支持缓存/刷新/切换，展示“数据更新时间”
+    - `frontend/src/pages/costing/SalesInsightsPage.tsx`：利润看板支持缓存/刷新/切换，展示“数据更新时间”
+    - `frontend/src/pages/costing/AfterSalesInsightsPage.tsx`：售后仪表盘支持缓存/刷新/切换，展示“数据更新时间”
+    - `frontend/src/pages/costing/ShopInsightsPage.tsx`：店铺利润/退货率支持缓存/刷新/切换，展示“数据更新时间”
+    - `frontend/src/pages/costing/ShipmentLedgerPage.tsx`：
+      - 台账默认近30天，并补齐快捷：近7/近30/近90
+      - “问题订单（需核对）”默认读快照（仅渠道筛选/快捷范围时），提供“刷新问题提示”与更新时间展示
+  - 夜间刷新脚本（可用于 cron/systemd timer）：
+    - `ops/nightly_refresh_reports.sh`（默认 `RANGE_DAYS=30`，可通过 `BASE_URL/OPERATOR_ID` 覆盖）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+  - 下一步（仍未闭环）：
+    - 进一步把 issue hints 做成 **行级落库**（而非仅“问题列表快照”落库），让“问题提示”成为可复用字段：用于排序/筛选/导出/历史追溯，并减少每次扫描时的规格解析/快照 trace 拉取成本。
+
+- **最近校对（北京时间 GMT+8）**：2026-01-30（销售洞察：说明改为 ! 悬停 + “统计时间（日/周/月/自定义）”）
+  - 背景：销售洞察页面筛选项偏“报表系统”，不够贴近运营日常（天猫/ERP 看板常见的“统计时间：日/周/月 + 自定义”心智）；同时“说明（利润看板）”占用首屏空间。
+  - 口径：
+    - 标题右侧使用 `!`（悬停 Tooltip）展示说明，不再占用首屏 Alert。
+    - 时间筛选改为：`统计时间` + `日/周/月/自定义`；默认“日=昨天”，并展示本次统计的起止日期范围（便于对账）。
+    - 原有的“缓存/刷新/切到实时”保持不变（仍可夜间预处理）。
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/SalesInsightsPage.tsx`
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-30（销售洞察：修复“条码无法清空/致命错误 reading '0'”）
+  - 现象：
+    - 货品条码输入框会被历史记忆反复回填，导致“清除后又出现”（例如 `5970014255534`）。
+    - 页面偶发出现致命错误：`Cannot read properties of undefined (reading '0')`（unhandledrejection）。
+  - 原因：
+    - 新版“统计时间（日/周/月）”下，`range` 字段在非自定义模式不一定挂载到表单，仍用 `v.range[0]` 会触发 undefined 访问。
+    - localStorage 恢复了高级筛选（sku_code/order_no 等），导致条码看起来“始终在里面”。
+  - 修复：
+    - 查询口径不再依赖表单的 `range` 字段，统一使用页面计算出的 `computedRange`。
+    - localStorage 只记忆最小字段（start/end/channel/include_missing/page_size），不再自动恢复条码等高级筛选。
+  - 影响文件：
+    - `frontend/src/pages/costing/SalesInsightsPage.tsx`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-30（销售洞察：按天猫口径简化控件 + 周/月按自然周期快照）
+  - 调整点：
+    - 移除“按周（默认）/按月”下拉与旁边口径提示（口径已固定：按发货完成时间）。
+    - 移除“含未计价/仅已计价”开关与“切到实时”按钮：默认走缓存 + 手动刷新；仅自定义范围再走实时（fallback）。
+    - 报表快照接口支持 `start/end` 参数，周/月可按自然周一~周日/整月做预处理与缓存对齐天猫心智。
+  - 影响文件：
+    - `backend/src/planner/routers/reports.py`
+    - `frontend/src/services/planner.ts`
+    - `frontend/src/pages/costing/SalesInsightsPage.tsx`
+  - 下一步：
+    - Top 赚钱/亏损货品支持“更多排名”弹窗（Top100 列表），并尽量走快照（夜间预处理/按需刷新）。
+
+- **最近校对（北京时间 GMT+8）**：2026-01-30（发货台账：模型/套装筛选改为可复用“目标选择器”）
+  - 背景：多个页面（发货台账/售后/作业中心等）的“模型/套装下拉”因远程搜索/二级选择分散在各页，容易出现“下拉不好用/状态互相打架”。
+  - 口径：
+    - 参考 `sku-master` 的交互：先选“目标类型”（标准模型/套装模块），再选“目标对象”。
+    - 标准模型：下拉远程搜索（仅在线发布），自动显示该模型的发布版本标签（用于对账）。
+    - 套装模块：下拉远程搜索套装模板 + selector（二级，优先从 `metadata.phrase_presets` 提供候选，仍支持手输）。
+  - 本轮产物（前端）：
+    - 新增可复用组件：`frontend/src/components/common/BoundTargetPicker.tsx`
+    - 发货台账接入：`frontend/src/pages/costing/ShipmentLedgerPage.tsx`（替换原先分散的绑定筛选下拉）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-27（数据洞察：首屏不再“空白”，默认轻量查询 + 记住筛选）
+  - 现象：`/costing/insights/after-sales`、`/costing/insights/sales`、`/costing/insights/models` 进入页面首屏为空，必须点“查询”才有内容，体验弱于常见 ERP 报表页。
+  - 处理策略（不新增重复列表，只让原列表首屏有真实数据）：
+    - 售后退货率（按 SKU 明细表）：进入页面默认自动查询最近 30 天（默认按月），并记住/恢复上次筛选。
+    - 销售明细：进入页面默认自动查询最近 30 天，并记住/恢复上次筛选。
+    - 模型分析：进入页面默认自动查询最近 30 天榜单，并记住/恢复上次筛选。
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/SalesInsightsPage.tsx`
+    - `frontend/src/pages/costing/ProfitInsightsPage.tsx`
+    - `frontend/src/pages/costing/AfterSalesInsightsPage.tsx`
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-28（售后洞察 Top 模型：展示套装二级“公式短语”胶囊）
+  - 背景：售后洞察 `/costing/insights/after-sales` 的 “Top 模型” 在遇到套装（BundleAsModel）时，仅显示 `B-DB9EAE 印花抱枕（26前历史）`，缺少二级（selector 的中文/公式短语）导致对账/排查无法识别子名称。
+  - 口径：
+    - `model_code` 仍保持 `B-<模板码><selector>`（例如 `B-DB9EAE`），作为分析聚合主键不变。
+    - UI 增强展示：在模型名称后追加一个小型胶囊标签，显示该 selector 的 `phrase_presets[*].phrase`（例如 `[{}{毛球}][{黄金绒}{雪尼尔}]0*0*0`），并提供 tooltip 全文。
+  - 本轮产物：
+    - 后端：`AfterSalesDashboardTopModelItem` 增加可选字段 `bundle_template_code / bundle_preset_selector / bundle_preset_phrase`；在 `/api/planner/analytics/after-sales/dashboard` 的 top_models 返回中，若 `model_code` 命中 `B-XXXXYY` 形式，则从 `bundle_templates.metadata.phrase_presets` 读取对应 selector 的 phrase 进行补齐。
+    - 前端：`AfterSalesInsightsPage.tsx` 的 “Top 模型” 列渲染增加胶囊样式展示 `bundle_preset_phrase`（按 antd success 主题色混合），并支持 tooltip。
+  - 验收命令（必须，全部 0 退出码）：
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Frontend：`npm -C frontend run build`
+  - 下一步：
+    - 若需要把 “B-DB9EAE-AE 印花抱枕（26前历史）” 也直接拼成一个稳定展示串，可在前端用 `bundle_template_code + bundle_preset_selector` 组合生成，并决定是否显示为独立列/换行。
+
+- **最近校对（北京时间 GMT+8）**：2026-01-28（发货台账/销售洞察：套装二级短语贯穿 + 台账筛选增强 + 未绑定短提示）
+  - 背景：
+    - 运营需要以“用于解析的规格（发货规格优先）”为准，但 `sku-master` 的“商品规格（网店）”历史可能较乱，若两者不一致容易造成成本核算误判。
+    - 发货台账“待处理（SKU_NOT_BOUND）：SKU 未绑定已发布标准版本”过长，不利于快速扫表；同时需要更细粒度筛选与“绑定目标”对账列。
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/ShipmentLedgerPage.tsx`
+      - 处理状态：`SKU_NOT_BOUND` 统一短展示为 `未绑定`（tooltip 保留原 reason/message）。
+      - 筛选增强：新增“状态（待处理原因）”下拉、`交易规格`搜索框。
+      - 表格新增列：`绑定目标`（展示当前生效绑定的 model_code/model_name；套装也会以 `B-XXXXYY` 体现）。
+    - `frontend/src/pages/costing/ProductInfoPage.tsx`、`frontend/src/pages/costing/SkuSpecMatchingPage.tsx`
+      - 当“发货规格（用于解析）”与“商品规格（网店）”同时存在且不一致时，增加红色 `规格不一致` 提示（tooltip 展示两段原文对比）。
+  - 本轮产物（后端）：
+    - `/api/planner/shipments/lines`：
+      - 支持新增查询参数：`spec_text`（交易规格模糊匹配）、`unresolved_reason`（待处理原因过滤）。
+      - 返回补齐：`bound_model_code / bound_model_name`（用于台账“绑定目标”列展示）。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shipment_import_bom_snapshots_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shipment_exception_retry_mvp.py -q`
+  - 下一步（如需更强约束）：
+    - 若希望“发货导入/计价当下就报警（不是事后列表提示）”，可在发货导入 preview/execute 阶段把“发货规格 vs 网店规格不一致”写入 warnings，并在作业中心交接视图聚合展示。
+
+- **最近校对（北京时间 GMT+8）**：2026-01-28（发货作业中心 ERP 化：主从工作台 + 批量计价快照）
+  - 背景：原“发货作业中心”以抽屉+技术Tab为主，运营难以理解与操作；需要按 ERP 习惯把任务流（导入→待处理→已完成→批量作业）梳理清楚，并提供从“发货台账”一键带筛选进入的批量入口。
+  - 口径：
+    - 批量入口默认 **只补齐缺失**（已有快照/计价结果跳过）。
+    - 可选 **覆盖重算（高风险）**：对已有快照执行覆盖写回（用于历史对账/洞察回算）。
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/ShipmentMonitorPage.tsx`
+      - 改为新作业中心入口（ERP式页面），旧实现已从主路径移除（可从 Git 历史回溯）。
+    - `frontend/src/pages/costing/shipment-ops/ShipmentOpsPage.tsx`
+      - 新作业中心：顶部“导入发货单/去发货台账”，主Tab：`单据/待处理/快照` + `批量计价快照（按台账范围）`。
+    - `frontend/src/pages/costing/shipment-ops/components/BatchWorkbench.tsx`
+      - 单据主从工作台：左侧批次列表，右侧单据详情（对账概览/异常/快照）。
+    - `frontend/src/pages/costing/shipment-ops/components/BulkCostingTab.tsx`
+      - 批量执行器：预览范围→逐条执行→进度/可停止→汇总结果；支持从台账 URL 参数恢复筛选与默认覆盖开关。
+    - `frontend/src/pages/costing/ShipmentLedgerPage.tsx`
+      - 右上新增按钮 `批量计价快照`：弹窗确认（默认只补齐缺失，可勾选覆盖重算）→带当前筛选跳转到作业中心批量页。
+    - `frontend/src/services/planner.ts` + `frontend/src/types/planner.ts`
+      - 新增 `computeShipmentLineSnapshot` 调用；补齐相关类型字段。
+  - 本轮产物（后端）：
+    - `GET /api/planner/shipments/lines` 返回补齐 `bom_snapshot_id`（用于批量覆盖重算定位最新快照）
+    - `POST /api/planner/shipments/lines/{shipment_line_id}/compute-snapshot`
+      - 支持“只补齐缺失/覆盖重算”，用于批量计价快照执行器逐条落库。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shipment_import_bom_snapshots_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shipment_exception_retry_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-28（作业中心：异常队列一目了然（绑定/规格解析）+ 勾选后“处理所选”）
+  - 需求：运营希望在“待处理（异常）”里一眼看到：哪些已重新绑定模型/套装、哪些已完成规格解析（含尺寸），并能勾选后直接批量处理，避免依赖“详情”列。
+  - 本轮产物：
+    - 后端：`GET /api/planner/shipments/exceptions` 返回补齐
+      - `bound_model_code/bound_model_name`（当前生效绑定）
+      - `spec_parsed` + `spec_width_cm/spec_height_cm`（基于 spec_hash 的解析缓存）
+    - 前端：作业中心“异常队列（本批次）”
+      - 新增列：`模型/套装`、`规格解析`；去掉“详情”列（详情合并到原因 Tag tooltip）
+      - 将“订单号”列改为“货品条码”（更实用）
+      - 新增勾选 + 按钮：`处理所选（生成快照）`（逐条调用 compute-snapshot，只补齐缺失）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shipment_import_bom_snapshots_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shipment_exception_retry_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-26（线上深链接 404：BrowserRouter /costing/* Not Found 兜底）
+  - 现象：直接访问 `https://<host>/costing/insights/models` 返回 `Not Found`（history 深链接无法回退到 SPA 入口）。
+  - 根因：前端使用 `BrowserRouter`（history 模式），需要服务端对 `/costing/*` 做 `try_files ... /index.html` 回退。
+  - 本轮产物（前端）：
+    - `frontend/scripts/generate_spa_fallbacks.mjs`
+      - 构建后自动把 `dist/index.html` 复制到 `dist/<route>/index.html`（例如 `dist/costing/insights/models/index.html`），提升“静态目录 index.html”场景的可用性。
+    - `frontend/package.json`
+      - `deploy:static` 增加：`node ./scripts/generate_spa_fallbacks.mjs`（发布前生成兜底文件）。
+    - `frontend/scripts/deploy_static.sh`
+      - 修复：`rsync --exclude "index.html"` 会误伤子目录的 `index.html`（导致 `/costing/` 仍 403）；改为只排除根目录：`--exclude "/index.html"`。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+  - 上线提示（运维）：
+    - 推荐修 Nginx：对 SPA 路由前缀启用 `try_files $uri $uri/ /index.html;`，但对 `/assets/*` 必须 `try_files $uri =404`（避免 MIME=text/html）。
+
+- **最近校对（北京时间 GMT+8）**：2026-01-26（“服务器慢”初步排查：workers/连接池/索引）
+  - 结论（先看这一句）：本机直连 `127.0.0.1:8800` 的洞察接口耗时在 0.15~0.35s 量级，若体感“整体慢/多人同时点就卡”，更像是 **并发排队（worker/DB连接池）或 DB 缺复合索引导致的慢查询**，而不是“数据量小就一定快”。
+  - 数据点（无需改代码拿到的）：
+    - 后端启动方式：`planner-costing.service` 使用 `uvicorn src.main:app --port 8800 --workers 2`（systemd user scope）；机器规格：8 核 / 30Gi。
+    - DB 方言：Postgres（`backend/src/database.py` 的 engine 初始化 + 运行时确认）。
+    - 本机采样（curl time_total，同一时间窗口：2025-12-26 ~ 2026-01-26）：
+      - `/api/planner/analytics/models/detail?...` 约 0.14s
+      - `/api/planner/analytics/models/summary?...` 约 0.27s
+      - `/api/planner/analytics/profit/model?...` 约 0.35s
+  - 代码侧观察（只读）：
+    - `backend/src/database.py` 的 `create_engine(...)` 未显式配置连接池参数（Postgres 默认 `pool_size=5`、`max_overflow=10`；并发下容易出现“DB 连接不足→请求排队”）。
+    - 洞察聚合 SQL 主要围绕 `shipment_lines / after_sales_lines / shipment_costing_results / bom_snapshots`，并频繁使用：
+      - 时间范围过滤：`ShipmentLine.completed_at between [start,end)`
+      - 强关联键 join：`(order_no, product_link_id, sku_code)`
+      - “每条发货行最新快照”子查询：对 `bom_snapshots` 做 “按 shipment_line_id 取最新 created_at”
+    - 现有 ORM 模型大多只有单列 index，缺少对上述访问模式的**复合索引**（例如 `shipment_lines.channel` 当前无 index）。
+  - 最短路径优化优先级（先配置→再索引→最后缓存）：
+    - 先改启动参数（立竿见影，风险低）：
+      - 把 `--workers 2` 调到 4（或按压测/CPU 调整）；多人同时查询时减少排队。
+      - 同步评估 DB 最大连接与连接池（见下一条），避免“worker 上去了，DB 连接反而不够”。
+    - 再加索引（解决慢查询根因，收益最大）：
+      - 推荐先做这 3 组（按洞察接口实际 SQL）：
+        - `shipment_lines`：`(completed_at)` + `channel`（至少给 `channel` 加 index；更优是 `(channel, completed_at)`）
+        - `shipment_lines` 与 `after_sales_lines`：各自增加 `(order_no, product_link_id, sku_code)` 复合索引（支撑强关联 join）
+        - `bom_snapshots`：`(shipment_line_id, created_at DESC)`（支撑“取最新快照”）
+      - 进阶（按实际慢查询再补）：`shipment_costing_results(model_version_id)`、`shipment_inventory_deduction_lines(shipment_line_id, material_code)` 等。
+    - 最后做缓存/降采样（避免重复重算）：
+      - `models/detail` 会“现场生成”样本 BOM（`bom_generation_service.generate_bom`）；若用户频繁切换版本/模型，可按 `(model_version_id, spec_hash)` 做短 TTL 缓存。
+  - 下一步（建议拿到 80% 定性所需的两类数据）：
+    - 接口层：补一层 request 耗时 / SQL 耗时日志（或接 APM），输出每个 `/analytics/*` 的 p95/p99。
+    - DB 层：确认慢查询与索引命中（`EXPLAIN (ANALYZE, BUFFERS)` / `pg_stat_statements` / `pg_stat_activity` 连接数与等待）。
+  - 自检命令（可直接复制执行）：
+    - 运行态：`systemctl --user status planner-costing.service`
+    - 本机接口采样：`curl -sS -o /dev/null -w 'time_total=%{time_total}\\n' 'http://127.0.0.1:8800/api/planner/analytics/models/summary?start=...&end=...'`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-26（模型分析页面：修复 TypeScript 未使用变量错误）
+  - 背景：前端构建时报 `TS6133: 'r' is declared but its value is never read`（ProfitInsightsPage.tsx 第 162 行）。
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/ProfitInsightsPage.tsx`
+      - 修复：移除 BOM 单价列 render 函数中未使用的 `r` 参数。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`（已通过）
+
+- **最近校对（北京时间 GMT+8）**：2026-01-26（模型分析页面：左侧榜单卡片化 + 退货数量 returned_qty 补齐 + SQLite 测试建表修复）
+  - 需求：左侧“模型榜单”做成卡片式列表（第一行：模型编码+名称大字；第二行：发货数量/销售金额/成本/毛利/毛利率/退货数量/退货金额小字），并把“物料/人工/制造费用”从左侧移到右侧“版本”表的成本列里展示。
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/ProfitInsightsPage.tsx`
+      - 左侧榜单改为卡片样式与两行指标结构；指标文案收口为“发货数量/销售金额/退货数量/退货金额”。
+      - 右侧“版本”表保留并展示成本拆分列：物料成本/人工成本/制造费用（与总成本并列）。
+  - 本轮产物（后端/测试）：
+    - `backend/src/planner/schemas.py` + `backend/src/planner/services/analytics_service.py`
+      - 模型榜单返回补齐 `returned_qty`（退货数量）。
+    - `backend/tests/planner/conftest.py`
+      - 修复 SQLite 测试缺表：在建表前强制 import planner models，并对持久化 sqlite 文件先 `drop_all` 再 `create_all`，避免 `no such table: shipment_import_batches`。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+  - 下一步：
+    - 若需要“左侧榜单多列网格（大屏 2 列）/ 支持排序切换（按销售额/毛利等）”，建议单开迭代，避免和数据口径混改。
+
+- **最近校对（北京时间 GMT+8）**：2026-01-26（模型分析页面：左侧榜单改为单行表格 + 主题色胶囊编码 + 移除主版本/店铺列）
+  - 需求变更：
+    - 左侧榜单从卡片恢复为“一行列表（表格）”，列：编码/模型名称/发货数量/销售金额/成本/毛利/毛利率/退货数量/退货金额。
+    - 列表中不再展示店铺（店铺筛选以上方下拉为准），并移除每条记录的“主版本：...”说明行。
+    - 模型编码使用 antd 主题色胶囊（`--ant-color-primary-*`）风格。
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/ProfitInsightsPage.tsx`
+      - 左侧榜单改用 `Table` 实现单行列表；点击行加载右侧明细；选中行高亮。
+      - 编码列渲染为主题色胶囊样式。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-26（模型分析页面：编码胶囊彩色化 + 列宽收口 + 右侧去掉样本信息块 + 版本号胶囊化）
+  - 左侧榜单：
+    - “编码”列宽收口约 1/3（更紧凑）。
+    - 编码胶囊改为“多色主题色”（按 model_code 稳定 hash 到 antd 色板：blue/purple/cyan/green/magenta/volcano/gold/geekblue）。
+  - 右侧明细：
+    - 移除“样本发货时间/样本货品条码/样本交易规格”描述块，避免误解为模型通用规格（右侧 BOM/扣库仍由样本行触发生成）。
+    - “版本”列不再展示 `archived/standard` 标签；改为 success 主题色胶囊展示版本号（`color-mix + --ant-color-success`）。
+  - 产物：
+    - `frontend/src/pages/costing/ProfitInsightsPage.tsx`
+    - `DOC/agents/state.md`
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-26（模型分析：最终 BOM 估算合计增强 + 覆盖率提示精简）
+  - 成本概览（最终 BOM 顶部表格）：
+    - 改为按“本次范围内发货数量”显示合计：合计成本/物料成本/工序成本/制造费用均为区间合计。
+    - “制造费率”改为百分比显示（例如 23%）。
+  - 物料/工序（最终 BOM）：
+    - 保留末尾两列：`发货数量` 与 `合计`（按“单件行成本 × 发货数量”估算）。
+    - 在表格底部增加一行加粗汇总：发货数量总计、合计总计（用于快速核对）。
+    - 物料表新增“来源”列：基准/变体（变体物料会标识为 `变体`）。
+  - 左侧覆盖率提示：
+    - 移除 Alert 卡片样式，改为一排精致小字：总发货行/已归因（覆盖率）/已计价/缺成本字段。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-26（发货单上传：413 失败提示收口 + 文件大小引导）
+  - 背景：线上 `/costing/shipments` 上传发货单预览报 `Request failed with status code 413`（请求体过大），通常是网关/Nginx `client_max_body_size` 限制触发。
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/ShipmentMonitorPage.tsx`
+      - 上传前：展示文件大小提示（大文件更容易触发 413）。
+      - 失败时：对 413 弹窗给出可执行动作（拆分文件 / 运维放开 `client_max_body_size`，并覆盖 `/api/planner/shipments/import/preview` 与 `/api/planner/shipments/import`）。
+      - 执行长耗时：提供“心跳弹窗（已等待xx秒）+ 可取消执行 + 后台完成后自动定位批次”的 UX，避免误以为卡死。
+      - 交接视图：优化刷新性能 + 状态中文化
+        - 默认“仅异常（交接）”+ `limit=200`，减少每次刷新同时拉“快照+异常”的压力。
+        - 提供“仅异常 / 仅成功（快照）/ 合并”切换，明确该视图是本批次的对账交接点（不是单纯成功或失败列表）。
+        - 批次状态、异常原因、交接视图状态全部改为中文展示（必要时保留英文码在括号里便于定位）。
+        - 长规格文本在表格内改为省略号展示（hover 可看完整），降低渲染卡顿。
+      - Tabs 信息架构重排（降低“重复感”）
+        - 同级 Tab 收口为：批次列表 / 交接对账 / 异常处理 / 快照结果（按用户任务流组织）。
+        - “解析队列（预览抽查）”从同级 Tab 下沉到上传区的按钮与抽屉：`执行前抽查（预览样本）`，避免与结果页混淆。
+      - 交接对账表格可读性增强
+        - “仅异常（交接）”的状态列增加步骤提示：\(1/3\) 绑定、\(2/3\) 规格解析、\(3/3\) BOM生成；并收窄“交易规格”列宽，给状态列更多空间。
+        - “成功：已生成快照”文案更明确为“成功：已落库快照”；对旧快照（缺 `shipment_line_id`）可能导致“渠道/交易规格为空”的情况给出提示。
+      - 交接对账展开面板“后置为空”解释增强
+        - 在“后置”区块增加数据来源说明（是否有关联 `shipment_line_id`、是否已有 `snapshot_id`），并在交易规格为空时明确提示常见原因（旧快照缺关联行无法回填 / 原始数据缺规格应进入异常）。
+        - 说明文案明确：系统以“本批次交易规格”为准用于计价与扣库；前置主档预解析仅作为参考，不要求一致。
+      - 标准已发货利润表（本批次，明细口径）
+        - 后端新增：`GET /api/planner/shipments/profit-lines?batch_id=...` 返回批次级明细（shipment_line + 最新 bom_snapshot），成本取 `bom_snapshots.trace.costing.total_cost`，利润=金额-成本，显式标记缺快照/缺成本字段。
+        - 前端落点：`/costing/shipments` → “快照结果”Tab 新增二级视图“利润表（本批次）”，默认仅已计价（有快照），可切换包含未计价（缺快照）。
+        - 说明：这是“标准已发货利润表单”的第一版落点（围绕批次）。若要做“按日期范围/店铺”的标准报表，可在后续迭代扩展为洞察页（复用 analytics 的时间口径）。
+      - 数据洞察：销售分析（明细，全量发货行 + 成本回填）
+        - 新增页面：`/costing/insights/sales`（数据洞察→销售分析）
+        - 后端新增：`GET /api/planner/analytics/sales/lines?start=...&end=...&include_missing=...` 返回发货明细行并回填成本（缺快照显示 `-`）。
+        - 字段：支持展示付款时间/完成时间/店铺/条码/交易规格/数量/金额/成本单价/成本金额/利润/利润率/原始单号/标记/备注（缺快照成本显示 `-`；物流与部分字段默认隐藏）。
+        - 修复：上线后若出现 500（`too many values to unpack`），已修正查询返回形态（显式选取子查询列），避免 Row 解包错误。
+        - 修复：分页空页问题：当切换为“仅已计价（include_missing=false）”时，后端 `total` 现按“有 BOM 快照”的行数统计，避免分页器页数虚高导致后面多页为空。
+      - 口径澄清（2025 预推 / 扣库 vs 快照）
+        - 2025 的“不扣”指**不要求每条发货行落 `bom_snapshots(trace_json)` 快照**，但仍需要扣库相关数据（流水/结存/对账）；建议引入“扣库凭证/轻量结果”表承载 `shipment_line_id + model_version_id + cost_total + deduction_job_id` 等核心字段，避免存大 trace。
+      - 2025 扣库轻量结果（落库，不落大快照）
+        - 后端新增表：`shipment_costing_results`、`shipment_inventory_deduction_lines`（用于承载每条发货行的计价结果与扣库明细，不存 `bom_snapshots.trace_json`）。
+        - 发货执行新增 `mode=2025|2026`：`2025` 模式写轻量结果与扣库明细但不写 `bom_snapshots`；`2026` 模式保持原有快照落库并同步写轻量结果。
+        - 分析接口已兼容：销售/利润接口优先读轻量结果，缺失时回退到历史 `bom_snapshots`（避免老数据无结果导致报表空白）。
+        - 前端上传执行区新增模式切换：`2026（落快照）` / `2025（不落快照）`，执行时会带上 `mode` 参数。
+    - `frontend/src/services/planner.ts`
+      - 发货预览/执行/导入使用更长超时（5 分钟），避免大文件导入在前端 20s 超时误报失败。
+      - `execute/import` 超时进一步放宽（默认 30 分钟）；即便浏览器超时/断开，也可通过批次列表按 `file_hash` 自动定位确认是否已落库。
+  - 下一步（需要运维配合，前端无法绕过）：
+    - 在网关/Nginx 放开上传限制（例如 `client_max_body_size 20m;`），并在对应 location / upstream 路径生效。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-27（发货导入链路防丢：交易规格解析→扣库/计价落库→快照/异常/重试）
+  - 你关心的“解析交易规格 / 以后落库动作放哪里”——**不在前端**，主链在后端：
+    - `backend/src/planner/services/shipment_import_service.py`
+  - 实际流程（按代码执行顺序）：
+    - 1) **预览（不落库）**：`POST /api/planner/shipments/import/preview`
+      - 只读取 xlsx、归一化字段（含 `spec_text`），统计 missing_sku/missing_spec/unbound_sku，并把文件缓存到 `logs/shipment_previews/<file_hash>.xlsx` 供 execute 复用。
+    - 2) **执行导入（落库）**：`POST /api/planner/shipments/import/execute` → `import_shipment_xlsx(...)`
+      - 写 `shipment_lines`（每行一条发货行，含 `sku_code/spec_text/spec_hash/qty/revenue_amount/...`）
+      - **spec_hash 缓存解析并落库**：`_upsert_spec_snapshot(...)` → `SpecParseSnapshot`（调用 `spec_parser_service.parse_spec`）
+      - **扣库/计价轻量落库**：`_persist_deduction_artifacts(...)` → `shipment_costing_results` + `shipment_inventory_deduction_lines`
+      - **BOM 快照（可追溯 trace）**：
+        - `mode=2026`：写 `bom_snapshots(final_lines_json + trace_json)`
+        - `mode=2025`：不写 `bom_snapshots`，但仍写上面的“轻量结果”
+      - 失败兜底：写 `shipment_exception_queue`（如 `SKU_NOT_BOUND/SPEC_EMPTY/BOM_GENERATION_FAILED/...`）
+    - 3) **异常重试（不回写历史，生成新快照）**：`POST /api/planner/shipments/exceptions/retry`
+      - 重新走“绑定→spec_snapshot→bom”，成功则创建**新** `bom_snapshot` 并把旧异常标记 resolved；失败则保留 unresolved 并累计 retry trace。
+    - 4) **历史快照回填（覆盖该快照内容）**：`POST /api/planner/shipments/bom-snapshots/{snapshot_id}/recompute`
+      - 重新生成并覆盖 `final_lines_json/trace_json`（用于旧快照缺字段/成本回填等场景）。
+  - `/costing/shipments` 页面 UI 结构说明（避免误删能力）：
+    - “当前批次摘要”卡片本质是**快捷导航**：两个按钮只是打开“导入记录/排查”抽屉并切 Tab（异常/快照）；能力本身在抽屉内，不依赖该卡片。
+    - “解析交易规格”按钮仅用于**现场对比/排查**（调用 `POST /api/planner/spec/parse`），不影响导入落库链路。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-27（信息架构：发货台账与作业中心拆分，运营页与自动化解耦）
+  - 背景：运营查账（台账/报表）不应与系统自动化（导入/解析/快照/重试/回填）混在同一页，避免误操作与权限边界不清。
+  - 调整：
+    - 台账页（运营查账）：`/costing/shipments` → `frontend/src/pages/costing/ShipmentLedgerPage.tsx`
+    - 发货作业中心（自动化/排查）：`/costing/shipments/ops` → `frontend/src/pages/costing/ShipmentMonitorPage.tsx`
+    - 菜单新增：`自动化/作业中心` → `发货作业中心`
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-27（发货台账：默认时间范围扩大 + 空态提示，避免“有数据但看不到”）
+  - 现象：线上 `/costing/shipments` 首屏看不到发货记录，常见原因是默认只查最近 7 天，而库中数据多为历史导入/回补（更早日期）。
+  - 修复（前端）：
+    - `frontend/src/pages/costing/ShipmentLedgerPage.tsx`
+      - 默认查询范围从最近 7 天扩大为最近 90 天
+      - 增加空态提示与错误提示，指导用户扩大日期范围/清空筛选
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-27（发货台账：线上后端未升级时 404 兜底回退）
+  - 现象：线上台账请求 `GET /api/planner/shipments/lines` 返回 404（`{"detail":"Not Found"}`），导致页面提示“台账加载失败 Not Found”。
+  - 兼容修复（前端）：
+    - `frontend/src/services/planner.ts`
+      - `fetchShipmentLines(...)` 若命中 404 Not Found，则回退到 `GET /api/planner/analytics/sales/lines` 拉明细并映射为台账结构（短期兼容，待线上后端发布补齐 `/shipments/lines` 后可移除）。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-27（商家编码贯通：SKU 主档 + 发货台账展示，支撑 2026 前置规则）
+  - 背景：`/costing/tmall-sku-generator/mvp` 已把“商家编码（绑定锚点：模型码/套装码）+ 交易规格（解析尺寸/TOKEN）”前置跑通；2026 上架到天猫后商家编码会写入渠道侧，因此必须在系统里“显式可见 + 可追溯”。
+  - 本轮产物（后端）：
+    - `backend/src/planner/services/shipment_import_service.py`
+      - 导入归一化新增：从 `规格编码（网店）/商家编码` 解析 `shop_spec_code`，并写入 `shipment_lines.metadata_json.shop_spec_code`
+      - `list_shipment_lines` 返回新增 `shop_spec_code`/`platform_sku_id`（历史行 best-effort 从 `raw_row_json/metadata_json` 回溯）
+    - `backend/src/planner/services/sku_master_service.py`
+      - `SkuMasterRead` 动态字段新增 `shop_spec_code`（来源：`metadata_json.shop_spec_code`；并把发货回写时的 `shop_spec_code/platform_sku_id` 记录到 `shipment_backfill`）
+    - `backend/src/planner/schemas.py`
+      - `SkuMasterRead.shop_spec_code`、`ShipmentLineListItem.shop_spec_code/platform_sku_id` 补齐到 API 契约
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/SkuMasterWorkspacePage.tsx`
+      - 列表新增“商家编码”列；详情抽屉补充“规格编码（网店）/商家编码”
+    - `frontend/src/pages/costing/ShipmentLedgerPage.tsx`
+      - 台账列表新增“商家编码”列（用于对齐 2026 渠道侧字段）
+    - `frontend/src/types/planner.ts`
+      - `SkuMaster.shop_spec_code`、`ShipmentLineListItem.shop_spec_code/platform_sku_id` 类型补齐
+  - 下一步：
+    - 若要做“强一致 + 可索引查询/筛选”，建议把 `shop_spec_code/platform_sku_id` 从 JSON 下沉为 `shipment_lines` 显式列并做索引（需要 migration）；当前为零迁移快速贯通版本。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-27（商品关联增强：保留原 UI，新增“标准模型/套装模块”两段绑定）
+  - 背景：商品关联（`/costing/sku-master`）是 2026 “前置”体系的人工兜底入口：商家编码（`shop_spec_code`）承载“模型码/套装码锚点”，交易规格负责解析尺寸/TOKEN。
+  - 本轮产物（后端）：
+    - `backend/src/planner/routers/sku_master.py`
+      - 新增：`POST /api/planner/sku-master/bind-by-bundle`（按勾选绑定套装模板）
+      - 新增：`POST /api/planner/sku-master/bind-by-bundle/bulk`（跨页一键跑完绑定套装模板）
+    - `backend/src/planner/services/sku_master_service.py`
+      - 新增：`bind_sku_master_by_bundle_template` / `bind_sku_master_by_bundle_template_bulk`
+      - Phase0 存储策略：套装绑定写入 `sku_master.metadata_json`（`bundle_template_id/bundle_template_code/...`），不覆盖原始 `shop_spec_code`
+    - `backend/src/planner/schemas.py`
+      - `SkuMasterRead` 增加：`bundle_template_id/bundle_template_code`
+      - 新增：套装绑定请求/响应 schema（bind-by-bundle + bulk）
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/SkuMasterWorkspacePage.tsx`
+      - 保留原“人工审核/自动识别/一键跑完”等交互
+      - 人工审核新增“目标类型：标准模型/套装模块”两段选择：标准模型复用原逻辑；套装模块下拉来自 `/bundle-templates`
+      - 列表状态新增紫色 Tag：`套装 <code>`；详情增加“套装模板绑定”字段
+    - `frontend/src/services/planner.ts`
+      - 新增：`bindSkuMastersByBundleTemplate` / `bindSkuMastersByBundleTemplateBulk`
+    - `frontend/src/types/planner.ts`
+      - `SkuMaster` 增加：`bundle_template_id/bundle_template_code`
+  - 下一步：
+    - 若要把“套装绑定”用于发货自动扣库/快照生成：需要在 BOM 生成/发货导入主链里识别并优先使用 `bundle_template_code`（再结合交易规格 dims/tokens 做组件条件），建议单开迭代避免口径混改。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-28（SKU 主档“闪空/白屏”排障兜底：致命错误覆盖层 + ErrorBoundary）
+  - 现象：线上 `/costing/sku-master` 仍反馈“刷新后闪空”，且页面未出现我们新增的“状态/提示/红框错误提示”，更像是运行时崩溃导致 React 未能稳定挂载。
+  - 诊断要点：
+    - 线上静态资源与页面 HTML 均可 200 返回，但用户侧仍表现为空白，可能是运行时异常被吞掉/不易复现（浏览器扩展、环境差异、偶发 JS 错误等）。
+  - 追加定位（已复现的真实报错）：
+    - 报错：`TypeError: (D.data ?? []).find is not a function`
+    - 根因：`bundleTemplatesQuery.data` 实际为分页对象 `{ items, total, ... }`，但渲染时误当成数组直接 `.find()` 导致崩溃。
+  - 追加修复（前端）：
+    - `frontend/src/pages/costing/SkuMasterWorkspacePage.tsx`
+      - 将 `bundleTemplatesQuery.data` 统一归一为数组 `bundleTemplates`（仅取 `data.items`）
+      - 列表/详情里对套装模板的 `.find()` 全部改为在 `bundleTemplates` 上查找，并兼容 `metadata/metadata_json` 下的 `phrase_presets`
+  - 修复（前端）：
+    - `frontend/src/main.tsx`
+      - 新增 `FatalErrorBoundary`：捕获 React 渲染错误并在页面直接显示 message/stack（避免“白屏无提示”）
+      - 新增 `installFatalOverlay()`：捕获 `window.error`/`unhandledrejection` 的第一条非 chunkload 类错误，并用覆盖层显示（即使 React 未挂载也能看到）
+      - 与原有 `installChunkLoadRecovery()` 配合：chunk/preload 类错误仍优先自动刷新恢复，覆盖层不干扰该路径
+  - 下一步：
+    - 若线上仍“闪空”，请直接截图页面覆盖层（或 ErrorBoundary）中的第一条错误 message/stack，用于定位真实根因（例如某字段为空导致渲染异常、第三方脚本冲突等）。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-28（规格匹配工作台：锚点只读提示 + Z/B 推荐动作 + 跳转商品关联）
+  - 背景：你确认 spec-matching 作为“第一步：尺寸/规格解析”应保持解析底座，不在此承载模型/套装绑定的下拉入口；Z-（指定型）只需套装绑定，B-（解析型）需先绑定再用 TOKEN 分支。
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/SkuSpecMatchingPage.tsx`
+      - 左侧“单条人工审核”新增“锚点信息（只读）”：展示 `商家编码(shop_spec_code)`、`套装模板+二级preset`（若有）
+      - 自动识别 Z/B（基于 `shop_spec_code` 前缀），并给出推荐动作提示：
+        - Z：只需完成套装绑定；本页解析主要用于校验/排查
+        - B：先绑定套装模板+preset，再解析 TOKEN/尺寸用于后续 BOM 分支
+      - 提供按钮“去商品关联（sku-master）绑定/复核”，并自动带 `search` 预填（优先商家编码，其次条码）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-28（规格解析支持“套装锚点筛选 + 强制覆盖 + 一键跑完覆盖 Z/B”）
+  - 现象：你反馈“在商品关联已绑定了几个指定型(Z-)套装编码，但在规格解析页看不见记录”。根因是 spec-matching 原先固定 `bound_state='bound'`（只看已绑定模型），导致“只绑套装未绑模型”的 SKU 被过滤。
+  - 本轮产物（后端）：
+    - `backend/src/planner/routers/sku_master.py` + `backend/src/planner/services/sku_master_service.py`
+      - `GET /api/planner/sku-master` 支持筛选参数：
+        - `target_kind`: `model|bundle|any`（any=模型绑定或套装绑定任一命中）
+        - `bundle_bound_state`: `bound|unbound`
+        - `bundle_template_id` / `bundle_template_code` / `bundle_preset_selector`
+      - `POST /api/planner/sku-master/spec-preparse/preview` 与 `/spec-preparse/bulk` 同步支持上述筛选（用于预览/一键跑完覆盖“只绑套装”的 SKU）
+    - `backend/src/planner/schemas.py`
+      - `SkuMasterSpecPreparseBulkRequest/PreviewRequest` 增加套装锚点与 `target_kind` 字段
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/SkuSpecMatchingPage.tsx`
+      - 右侧筛选栏新增：
+        - 目标类型：自动/标准模型/套装模块
+        - 套装模板下拉 + 二级 preset（仅在“套装模块”时显示）
+        - 强制覆盖（忽略相同 hash）用于重算已解析项
+      - 列表查询改为支持 `target_kind=any|model|bundle`，确保 Z/B“只绑套装”也可在本页可见并参与预览/一键跑完
+    - `frontend/src/services/planner.ts`
+      - `fetchSkuMaster`、`preview/bulk spec-preparse` 参数补齐：`target_kind` 与套装锚点筛选项
+  - 下一步：
+    - 若需要“按套装模板/二级 preset”做更强的跨页排除/勾选体验（类似 sku-master 的人工审核），可单开迭代；本轮先保证筛选与一键跑完覆盖链路正确。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-28（规格解析工作台口径回归：仅展示已绑定锚点，避免未绑定误入）
+  - 现象：你反馈 spec-matching 列表里出现大量“未绑定模型/未绑套装”的行，违背“第一步必须先绑定锚点”的约定。
+  - 处理（前端兜底）：
+    - `frontend/src/pages/costing/SkuSpecMatchingPage.tsx`
+      - 列表展示侧增加“锚点准入”过滤：只展示满足其一的 SKU：
+        - 已绑定模型（`active_model_version_id`/`bound_model_*` 任一存在）
+        - 已绑定套装（`bundle_template_*` 或 `metadata_json.bundle_template_*` 任一存在）
+      - 列展示由“两列（已绑定模型/已绑定套装）”合并为“一列（已绑定目标）”，规则：
+        - 若绑定模型：显示 `model_code model_name`（如：`F6A 皮革桌垫`）
+        - 若绑定套装：显示 `B-/Z-` 前缀 + 业务码(+preset) + ` template_name`（如：`B-DB9EAE 印花抱枕（26前历史）`）
+        - 若两者同时存在：同一格分两行展示，避免口径混淆
+      - 展示口径对齐 `sku-master`：
+        - 模型列仅展示：`<model_code> <model_name>`
+        - 套装列展示：`B-/Z-` 前缀 + 业务码（必要时拼接 preset 后缀）+ ` <template_name>`（例如：`B-DB9EAE 印花抱枕（26前历史）`）
+      - 若本页拉到未绑定项：提示“已隐藏未绑定记录 X 条”，并引导先去 sku-master 绑定
+
+- **2026-01-28（规格解析落库：套装/模型批量保存为 0 的排障与修复）**
+  - **现象**：在 `/costing/spec-matching` 点“执行保存/一键跑完”，提示“批量结束：累计保存0”，且用户反馈“套装解析不能落库”；同时需要确认模型预解析是否丢失。
+  - **根因**：
+    - 后端 `execute_spec_preparse`/`bulk_save_spec_preparse` 遇到 `spec_text` 为空时按 **error** 处理，导致整批落库没有任何 saved；
+    - 前端“一键跑完”结束提示只展示 `累计保存`，并且会在 finally 用 success 覆盖掉中途的 error 信息，导致“看起来像没发生错误也没落库”。
+  - **修复（后端）**：
+    - `backend/src/planner/services/sku_master_service.py`：`execute_spec_preparse` 与 `bulk_save_spec_preparse` 将空规格改为 **skipped_empty_spec**（不再作为 error）。
+    - `backend/src/planner/schemas.py`：响应增加 `skipped_empty_spec` 字段，便于前端展示真实原因。
+    - **补充：Z/指定型（force）套装不依赖规格文本**：
+      - 当 `bundle_template_id + bundle_preset_selector` 对应 preset 为 `mode=force`（或模板 code 以 `Z-` 开头）且 `spec_text` 为空时，允许“标记为已预解析”：
+        - 写入 `preparse_spec_hash=sha1("__BUNDLE_FORCE__:template_id:preset")`
+        - 写入 `preparse_mode="bundle_force"`，并保持 dims/tokens 为空（表示无需解析）
+      - 目的：Z/指定型套装在“未解析”TAB 批量执行时不再永远 `saved=0`。
+  - **修复（前端）**：
+    - `frontend/src/pages/costing/SkuSpecMatchingPage.tsx`：执行保存/一键跑完展示 `空规格跳过`、`相同Hash跳过`；最终提示不再无条件 success 覆盖 error，并给出完整汇总。
+    - `frontend/src/services/planner.ts`：补齐返回字段类型（`skipped_empty_spec`）。
+    - `frontend/src/pages/costing/SkuSpecMatchingPage.tsx`：左侧单条按钮文案改为 **“保存本条（当前行）”**，避免和批量“执行保存（仅选中候选）”混淆。
+  - **关于“模型预解析是否丢失”**：
+    - 预解析结果写在 `sku_master.metadata_json` 的 `preparse_*` 字段中；本次修复只改变“空规格”是跳过还是报错，不会清空或覆盖已有预解析数据（除非用户勾选“强制覆盖”）。
+  - **验收命令**：
+    - 前端：`npm -C frontend run build`
+    - 后端：按 `DOC/agents/commands.md`（本仓库约定的三条 pytest：`test_profit_analytics_mvp.py` / `test_after_sales_import_mvp.py` / `test_shop_analytics_mvp.py`）
+
+- **2026-01-28（规格解析列表 UX：精简列 + 提升渲染性能）**
+  - **需求**：
+    - 列表“货品条码（系统）”去掉“去重绑”按钮（意义不大，且影响渲染）
+    - 去掉两列：“商品名称（网店）”、“商品编码（网店）”
+    - 评估“宽/高(ERP缓存)”：该列用于快速核对 ERP 维度缓存与预解析结果；暂时保留（后续如确认无用可再下线）
+    - 列表整体渲染偏慢，需优化
+  - **处理**：
+    - `frontend/src/pages/costing/SkuSpecMatchingPage.tsx`
+      - 条码列改为纯文本，不再渲染按钮
+      - 移除商品名称/编码两列
+      - `Table` 增加 `tableLayout="fixed"`，降低长文本导致的重排成本
+      - 列表请求对 `GET /api/planner/sku-master` 传 `compute_total=false`，避免默认 `COUNT()` 导致首屏卡顿（本页不依赖 total）
+    - `backend/src/planner/routers/sku_master.py`
+      - `GET /api/planner/sku-master` 增加可选 query 参数：`compute_total/include_bindings/include_parsed_fields`（默认保持旧行为）
+    - `frontend/src/services/planner.ts`
+      - `fetchSkuMaster` 参数补齐上述开关字段
+
+- **2026-01-28（性能：sku-master 列表 target_kind=any 慢查询修复）**
+  - **现象**：`/costing/spec-matching` 列表请求很慢，典型请求：`GET /api/planner/sku-master?page=1&page_size=100&match_scope=spec&target_kind=any&bound_state=all`，即便 `compute_total=false` 仍 >30s。
+  - **根因**：`target_kind=any` 走了相关子查询 `EXISTS (SkuModelVersionMapping ...)` 与 `OR (bundle_template_id != '')` 组合，容易在大表下退化为嵌套循环/全表扫描。
+  - **修复（后端）**：
+    - `backend/src/planner/services/sku_master_service.py`
+      - 将 `target_kind=model/any` 的“已绑定模型”判断由相关 `EXISTS` 改为半连接：
+        - `SkuMaster.erp_sku_barcode IN (SELECT DISTINCT sku_code FROM sku_model_version_mappings WHERE is_active AND NOT is_archived)`
+      - 实测本机直连：`target_kind=any` 从 ~30s 降到 ~1~2s（首屏明显变快）。
+  - **验收命令**：
+    - 前端：`npm -C frontend run build`
+    - 后端：按 `DOC/agents/commands.md`
+
+- **2026-01-28（sku-master：已关联口径修正 + 覆盖关联开关 + 规格差异释义）**
+  - **现象**：
+    - 用户已绑定套装（例如 `Z-DB9EAL`）但列表仍显示“未绑定”，容易误解为“未关联成功”。
+    - 需要“覆盖关联”勾选框，用于修正绑定错误后重新绑定。
+    - 用户询问“规格差异”含义。
+  - **根因**：
+    - `sku-master` 列表的“未绑定/已绑定”此前仅按 **模型绑定**（`active_model_version_id`）判断；套装绑定存放在 `metadata_json.bundle_*` 不计入该状态。
+  - **修复（前端）**：
+    - `frontend/src/pages/costing/SkuMasterWorkspacePage.tsx`
+      - “对接状态（本系统）”改为：**模型绑定 或 套装绑定 任一存在即显示“已关联”**（避免套装已绑仍显示未绑定）。
+      - Tab“已绑定”查询口径改为包含套装锚点（`target_kind=any + bound_state=all`）；Tab“未绑定”改为“模型未绑且套装未绑”（`bound_state=unbound + bundle_bound_state=unbound`）。
+      - 增加勾选框：`覆盖关联（允许重新绑定）`，并把 `allow_rebind` 传给模型/套装的单次/批量绑定接口。
+  - **规格差异（解释）**：
+    - `spec_mismatch` 表示：**ERP 主档里的 `spec_text` 与“最近一次发货回写看到的交易规格（last_shipment_spec_text）”不一致**（按原文比较），用于提醒主档规格可能已过时/渠道规格口径不一（非必然错误，但建议复核）。
+
+- **2026-01-28（规格解析：识别 sku-master 锚点更新并提示重算）**
+  - **诉求**：在 `sku-master` 更新过模型/套装绑定后，`spec-matching` 需要能自动识别并提示“需要重算”，避免用户不知道绑定已变更。
+  - **实现**：
+    - 后端 `sku-master` 绑定动作写入时间戳：
+      - `bind_sku_master_by_model` / `bind_sku_master_by_model_bulk` 写入 `metadata_json.model_bound_at/model_bound_by`
+      - 套装绑定已存在 `metadata_json.bundle_bound_at/bundle_bound_by`
+    - 前端 `spec-matching` 增加“锚点已变更（需重算）”判断：
+      - 若 `preparse_saved_at < max(model_bound_at, bundle_bound_at)` → 标记需重算
+      - 若 `preparse_spec_text` 是 `__BUNDLE_FORCE__:<template_id>:<preset>` 且当前绑定的 template/preset 不一致 → 标记需重算
+      - 页面顶部给出统计提示，并建议勾选“强制覆盖”后重跑
+  - **产物**：
+    - `backend/src/planner/services/sku_master_service.py`
+    - `frontend/src/pages/costing/SkuSpecMatchingPage.tsx`
+  - **验收命令**：
+    - 前端：`npm -C frontend run build`
+    - 后端：按 `DOC/agents/commands.md`
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+
+- **2026-01-28（规格解析：候选预览保持“已绑定目标”不回跳未绑定）**
+  - **现象**：在 `spec-matching` 点“候选预览(命中)”后，右侧列表在刷新时会先显示套装编码为“已绑定”，待预览数据返回后又变成“未绑定”。
+  - **根因**：预览接口 `/sku-master/spec-preparse/preview` 返回的 items 未携带 `bundle_template_id / bundle_template_code / bundle_preset_selector`，前端切换到 preview 数据源后无法渲染套装锚点，导致“回跳”。
+  - **修复**：
+    - 后端：`backend/src/planner/services/sku_master_service.py`
+      - `preview_spec_preparse` 的每条 item 补齐套装锚点字段（从 `sku_master.metadata_json` 读取）。
+    - 后端：`backend/src/planner/schemas.py`
+      - `SkuMasterSpecPreparsePreviewItem` 增加：`bundle_template_id / bundle_template_code / bundle_preset_selector`。
+    - 前端：`frontend/src/pages/costing/SkuSpecMatchingPage.tsx`
+      - 预览行映射时保留套装锚点，并写入 `metadata_json.bundle_*` 供“已绑定目标”列稳定渲染。
+  - **验收命令（全部 0 退出码）**：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+
+- **2026-01-28（规格解析：预览态不覆盖“已落库预解析”展示 + 明确回退来源）**
+  - **现象**：预览命中后右侧表格能看到“解析尺寸（预览）”，但“预解析尺寸/Token（已落库）”两列会显示未解析；默认态在 `last_shipment_spec_text` 为空时实际回退使用了网店规格，但页面只显示“-”，观感混乱。
+  - **修复（前端）**：`frontend/src/pages/costing/SkuSpecMatchingPage.tsx`
+    - 预览行构造改为：**用当前列表行（含已落库 preparse_*）作为 base，再合并预览返回**，避免预览数据源把落库字段“抹掉”。
+    - “发货规格（优先用于解析）”列：当发货规格为空且回退到网店规格时，展示 `回退：网店规格` Tag，帮助用户理解解析来源。
+  - **验收命令（全部 0 退出码）**：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+
+- **2026-01-28（套装模板发布版本 + 套装=模型版本（单出口 model_version_id））**
+  - **目标**：避免“标准模型 / 套装模板”双出口导致口径漂移；让套装也像 ERP 一样成为“可销售商品”，并最终统一落到 `model_version_id`。
+  - **实现要点**：
+    - **套装模板增加“发布版本”**（不可变更快照）：
+      - 新表：`bundle_template_versions`（迁移 `backend/migrations/versions/0029_bundle_template_versions.py`）
+      - 后端接口：
+        - `POST /api/planner/bundle-templates/{template_id}/publish`（发布为新版本）
+        - `GET /api/planner/bundle-templates/{template_id}/versions`（历史版本列表）
+      - 前端：`/costing/bundle-templates` 编辑抽屉新增“发布为新版本”按钮与发布状态提示
+    - **BundleAsModel（套装模板发布版本 → 套装模型版本）**：
+      - `product_model_service.ensure_bundle_model_version(...)`：按 `(bundle_template_version_id, preset_selector)` 幂等生成并发布 `ProductModelVersion(version_kind='bundle')`
+      - `sku-master` 套装绑定：要求模板先发布版本；绑定时同时写入 `sku_model_version_mapping`（单出口），并在 `sku_master.metadata_json` 记录：
+        - `bundle_template_version_id / bundle_template_version_label / bundle_model_version_id`
+      - `bom_generation_service.generate_bom`：当 SKU 绑定到 `version_kind=bundle` 时，改为走 `generate_bom_by_spec` 生成套装 BOM，并将 `trace.model_version_id` 覆盖为“套装模型版本”（保证发货快照/洞察按模型聚合）
+  - **产物**：
+    - 后端：`backend/src/planner/models.py`、`backend/src/planner/services/bundle_template_service.py`、`backend/src/planner/routers/bundle_templates.py`
+    - 后端：`backend/src/planner/services/product_model_service.py`、`backend/src/planner/services/sku_master_service.py`、`backend/src/planner/services/bom_generation_service.py`
+    - 迁移：`backend/migrations/versions/0029_bundle_template_versions.py`
+    - 前端：`frontend/src/pages/costing/BundleTemplatesPage.tsx`、`frontend/src/services/planner.ts`
+    - 回填脚本：`backend/scripts/backfill_bundle_model_bindings.py`
+    - 测试：`backend/tests/planner/test_bundle_as_model.py`
+  - **验收命令（全部 0 退出码）**：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_bundle_as_model.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_migrations.py -q`
+  - **下一步建议**：
+    - 运营流程：修改套装模板后先“保存草稿”→ 再“发布新版本”→ 再去 `sku-master` 绑定/覆盖绑定（保证口径稳定）。
+
+- **2026-01-28（套装模板抽屉：版本管理/套装设置双 TAB，对齐标准模型抽屉交互）**
+  - **诉求**：`/costing/bundle-templates` 抽屉做成两个 TAB：
+    - “版本管理”：显示全部版本，可“复制发布”（按历史版本回滚/复用口径）
+    - “套装设置”：编辑草稿（保存不影响线上口径，需发布才生效）
+  - **实现（前端）**：`frontend/src/pages/costing/BundleTemplatesPage.tsx`
+    - 抽屉增加 `Tabs`：`版本管理` / `套装设置`
+    - 版本管理：
+      - 展示历史版本列表（版本号/发布时间/发布人）
+      - 操作：`载入为草稿`（回填到当前编辑态，需用户再点保存）/ `复制发布`（先写回草稿再发布新版本）/ `查看JSON`
+    - 抽屉顶部按钮收敛：仅在“套装设置”TAB展示“保存模板”；发布动作放在“版本管理”TAB
+  - **验收命令**：
+    - Frontend：`npm -C frontend run build`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-27（商品关联 UI 优化：目标下拉同一行 + 套装二级 preset 绑定）
+  - 需求：人工审核的“模型类型下拉 + 模型/套装下拉”合并为同一行；套装绑定改为二级（先选模板，再选 `preset_selector`，第二级才是最终绑定目标）。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/SkuMasterWorkspacePage.tsx`
+      - 目标选择改为一行：类型 +（模型或套装模板）+（套装 preset）
+      - 套装绑定强制选择 `preset_selector`（无 preset 时默认 AA）
+      - 列表/详情展示：`套装 <code>-<selector>`
+    - 后端：`backend/src/planner/schemas.py`、`backend/src/planner/services/sku_master_service.py`、`backend/src/planner/routers/sku_master.py`
+      - 套装绑定接口新增参数：`preset_selector` 并落库到 `sku_master.metadata_json.bundle_preset_selector`
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-27（SKU 主档：人工勾选绑定超时修复，自动分批 + 超时提示）
+  - 现象：`/costing/sku-master` 中“人工审核→执行绑定（仅勾选）”在勾选量较大时出现前端超时，导致用户误以为“没绑定上”。
+  - 根因：`plannerClient` 默认 `timeout=20s`；该按钮路径未传入更长超时，也未做分批。
+  - 修复（前端）：
+    - `frontend/src/pages/costing/SkuMasterWorkspacePage.tsx`
+      - “仅勾选绑定”改为按 200/批自动分批调用（bundle/model 同样处理），单批超时提高到 60s
+      - 若仍遇到超时：提示“后端可能仍在执行，请稍后刷新确认（大批量建议用一键跑完）”
+      - UI：套装的“二级（preset）”下拉改为独占下一行，并加宽下拉面板（避免文字被截断）；若线上出现 405，会提示后端未部署套装绑定接口
+      - 修复：页面刷新后“先有数据→几秒后闪空”的体验问题（URL 的 `search/tab` 预填改为初始化阶段生效，避免二次 setState 覆盖）
+      - 展示口径：套装绑定展示改为短码（按 preset 模式自动显示 `Z-<code><selector>` 或 `B-<code><selector>`；例如 `Z-DB9EAC`）
+      - 可观测性：列表加载失败时显示错误 Alert（避免“空白=不知道发生了什么”）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-27（套装锚点贯穿：发货导入/计价/快照 + 销售分析可筛选）
+  - 背景：你确认“后期大部分都会用套装模板关联”，且将要导入大批量数据；为避免未来按套装维度对账/排查时需要回头重算历史快照，本轮先做“锚点贯通（不做组件拆解）”。
+  - 本轮产物（后端）：
+    - `backend/src/planner/services/shipment_import_service.py`
+      - 发货导入时从 `sku-master` 读取 `bundle_template_code + bundle_preset_selector`，写入 `shipment_lines.metadata_json`
+      - 计价结果 `shipment_costing_results.metadata_json` 同步写入 bundle 锚点
+      - 2026 模式的 `bom_snapshots.trace_json` 增加 `trace.bundle{template_id,template_code,preset_selector}`
+      - 台账接口 `/shipments/lines` 额外返回 `bundle_template_code/bundle_preset_selector`
+    - `backend/src/planner/services/analytics_service.py` + `backend/src/planner/routers/analytics.py`
+      - `GET /api/planner/analytics/sales/lines` 返回 bundle 锚点，并支持筛选参数：
+        - `bundle_template_code`
+        - `bundle_preset_selector`
+    - `backend/src/planner/schemas.py`
+      - `SalesLineItem`/`ShipmentLineListItem` 增加 `bundle_template_code/bundle_preset_selector`
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/SalesInsightsPage.tsx`
+      - 明细表新增“套装”列（`code-selector`）与两项筛选（套装模板/套装二级）
+    - `frontend/src/services/planner.ts` + `frontend/src/types/planner.ts`
+      - `fetchSalesLines` 支持 bundle 筛选参数，并补齐类型字段
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-30（销售分析：新增“销售明细”TAB + 明细回填模型/套装绑定名称）
+  - 需求：`/costing/insights/sales` 在“利润看板（赚钱/亏钱）”旁边增加一个“销售明细”TAB（非弹窗），可按店铺/条码/订单号/套装等筛选，并在列表中展示“模型/套装（绑定）名称”，给运营直接做决策与下钻排查。
+  - 本轮产物：
+    - 前端：
+      - `frontend/src/pages/costing/SalesInsightsPage.tsx`
+        - 新增 `Tabs`：`利润看板（赚钱/亏钱）` / `销售明细`
+        - 明细表新增列：`模型/套装（绑定）`（展示 `bound_model_code + bound_model_name`）
+        - 明细默认 `page_size=100`（更符合“运营看列表”的使用方式）
+        - “更多排名”不再弹窗，改为直接切换到“销售明细”TAB展示 Top100（赚钱/亏损）排行
+        - 排行表点击行不再跳台账：改为回到“销售明细-明细行列表”，并自动带入 SKU 条码筛选立即查询；需要排查单笔时再点“去台账”
+        - “数据更新时间”提示移入看板内部并改为纯文本（无 Alert 底框/标题），放在“时间口径...”前
+        - 筛选升级：使用 `BoundTargetPicker`（可搜索下拉，先选目标类型再选目标对象），并接入后端 `bound_model_code` 过滤
+        - 销售明细 Top100 排行补齐“模型/套装”列（基于 active mapping 回填；套装额外展示 template/selector/phrase）；看板 Top12 货品不展示该列（避免重复）
+        - 视图状态写入 URL（`tab/view`），浏览器后退优先在销售分析页内回退（不再直接跳走）
+        - 利润看板 4 个 KPI 卡片增加趋势 Sparkline（近7点/近12点）
+        - 时间选择修复：周/月选择展示“所选周期本身”，避免出现“选12月但显示11月导致销售额=0”的冲突
+        - 销售看板接口支持 `group_by=day`（用于按日趋势）
+        - KPI“成本覆盖率”卡片移除占比条，仅保留曲线；“x / y”以小字跟在覆盖率百分比后展示
+        - 临时校验口径：默认“自定义”范围固定为 `2025-12-01 ~ 2025-12-31`（近期无数据时便于检验）
+      - `frontend/src/pages/costing/AfterSalesInsightsPage.tsx`
+        - 临时校验口径：默认“自定义”范围固定为 `2025-12-01 ~ 2025-12-31`
+        - 降噪：自定义范围不再触发“请选择时间范围”弹窗；默认趋势按周（避免 day=422 降级提示）
+        - 默认口径：切到“运营看板”（申请期全量退货）以便验数
+        - 运营看板不再展示“退货率%”（跨期容易>100%引起误解），趋势/Top榜改为展示件数与金额
+      - `frontend/src/pages/costing/ProfitInsightsPage.tsx`
+        - 临时校验口径：默认日期范围固定为 `2025-12-01 ~ 2025-12-31`
+        - 默认切到“实时计算”（快照仅支持近 N 天，无法固定到历史月份）
+        - 验数模式：默认不自动恢复“渠道”等历史筛选（默认全量）
+      - `frontend/src/types/planner.ts`：`SalesLineItem` 增加 `bound_model_code/bound_model_name`
+    - 后端：
+      - `backend/src/planner/services/analytics_service.py`：`sales_lines` 通过 `sku_code -> active mapping` 回填 `bound_model_code/bound_model_name`
+      - `backend/src/planner/schemas.py`：`SalesLineItem` 增加 `bound_model_code/bound_model_name`
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-30（售后分析：KPI 卡片加入趋势曲线 Sparkline）
+  - 需求：`/costing/insights/after-sales` 四个 KPI 卡（发货数量/退货数量/退货率/覆盖率或退款率）在卡片内展示趋势曲线；按日/周默认展示近 7 个点，按月展示近 12 个点。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/AfterSalesInsightsPage.tsx`
+      - KPI 卡片下方新增轻量 `Sparkline`（SVG），不引入新依赖
+      - 复用销售分析的“统计时间（日/周/月/自定义）+ 翻期箭头 + 更多筛选（高级筛选）”交互
+      - 仪表盘 `group_by` 增加 `day` 选项，并据此截取近 7/12 个点渲染曲线
+    - 前端类型：`frontend/src/types/planner.ts`、`frontend/src/services/planner.ts`
+      - `AfterSalesDashboardResponse.group_by` 扩展为 `day|week|month`
+      - `AfterSalesDashboardSeriesItem` 增加 `model_mapped_rate`（工厂口径覆盖率趋势）等可选字段
+    - 后端：`backend/src/planner/services/analytics_service.py`、`backend/src/planner/routers/analytics.py`、`backend/src/planner/routers/reports.py`、`backend/src/planner/schemas.py`
+      - `after_sales_dashboard` 支持 `group_by=day`，并在 series 中补齐 `model_mapped_rate`（工厂口径）
+      - 快照接口 `/reports/insights/after-sales-dashboard` 同步支持 `group_by=day`，并支持 `start/end` 显式范围（与销售分析一致）
+    - 运维：`ops/nightly_refresh_reports.sh`
+      - 追加刷新：销售/售后曲线所需的 `group_by=day`，以及销售 Top100（`top_n=100`）快照
+  - 修复：
+    - 解决页面偶发 “页面发生致命错误（unhandledrejection） Cannot read properties of undefined (reading '0')”
+      - 根因：非自定义模式下 `validateFields()` 不一定返回 `range`，导致访问 `v.range[0]` 报错
+      - 修复：售后页统一改用 `computedRange` 作为时间口径来源，并对自定义缺失做兜底提示
+    - 解决仪表盘加载失败（422）
+      - 兼容：若线上后端尚未部署 `group_by=day`，前端自动降级为按周请求，并提示一次
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-27（模型分析支持套装筛选：先筛选不拆件，仍按模型聚合）
+  - 目标：对“模型分析”补齐套装锚点筛选（`bundle_template_code + bundle_preset_selector`），用于未来按套装模块对账/排查/看板；口径保持“按模型聚合”，暂不做组件拆解归因。
+  - 本轮产物（后端）：
+    - `backend/src/planner/routers/analytics.py`
+      - `GET /api/planner/analytics/models/summary` 与 `/api/planner/analytics/models/detail` 新增筛选参数：
+        - `bundle_template_code`
+        - `bundle_preset_selector`
+    - `backend/src/planner/services/analytics_service.py`
+        - 售后看板“发货数量”口径与台账对齐：仅统计 `shipment_lines.is_active = true` 的有效行（避免修订/替换导致统计偏差）
+        - 售后看板新增“未绑定模型”提示：不影响发货/退货总数，仅影响 Top 模型归因（发货/退货各给出未映射数量）
+      - `backend/src/planner/schemas.py` / `frontend/src/types/planner.ts`
+        - 补齐 `AfterSalesDashboardKpis`：`model_unmapped_shipped_qty` / `model_mapped_returned_qty` / `model_unmapped_returned_qty` / `model_mapped_returned_rate`
+      - `frontend/src/pages/costing/AfterSalesInsightsPage.tsx`
+        - 售后看板顶部增加一行“模型未绑定”摘要（发货/退货），避免误解“未绑定就不计入售后”
+        - 运营看板 KPI 卡片恢复展示“退货率/退款率”，并移除“发货金额”卡片（按运营验数习惯）
+        - 趋势/Top模型/Top货品&链接 在运营看板下也展示退货率（可能>100%时以红字提示）
+      - `backend/src/planner/services/after_sales_import_service.py`
+        - 修复：支持解析 Excel 序列号类型的“申请时间”(applied_at)，避免申请期统计被低估
+        - 修复：售后明细/筛选改为按 `coalesce(applied_at, occurred_at)` 口径，避免 applied_at 缺失导致“明细只有 11 条”与看板不一致
+        - 新增：明细支持 `time_basis=shipment_completed`（按发货完成时间过滤，供“工厂口径”下钻对账）
+      - `backend/src/planner/routers/after_sales.py`
+        - `/after-sales/lines/search` 支持 `time_basis` 参数（applied | shipment_completed）
+      - `frontend/src/pages/costing/AfterSalesInsightsPage.tsx`
+        - 工厂看板下钻明细改为按发货完成时间过滤，并显示“发货完成”列
+      - `backend/tests/planner/test_after_sales_import_mvp.py`
+        - 新增回归用例：applied_at 为 excel 数值时可正确解析落库
+      - `model_insights_summary/detail` 在 `shipment_lines.metadata_json` 上按 bundle 锚点过滤（与销售明细筛选口径一致）
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/ProfitInsightsPage.tsx`
+      - 说明：前端筛选控件（套装模板/套装二级）已按运营页面简化诉求隐藏；后端接口仍保留参数能力，后续如需再开启 UI 可快速恢复
+    - `frontend/src/services/planner.ts`
+      - `fetchModelInsightsSummary/detail` 参数补齐 bundle 筛选项
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`cd backend && pytest -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-27（套装模板编辑器：Z 指定型校验降级为警告，兜底分支可用）
+  - 背景：运营反馈“Z 指定型”模板编辑时，存在“依赖触发词但未强制指定”被判为失败，导致兜底/默认分支在实践中用不上；且同名物料可能重复提示，噪音偏大。
+  - 调整口径（前端校验，不影响后端实际生成逻辑）：
+    - Z 模式下：允许不强制指定“依赖触发词”的行，默认走“基准物料/兜底分支”，只给警告提示（不阻塞“检验通过/保存”流程）。
+    - 对同一组件内同名物料提示做去重，并在提示中尽量带结构槽位以便定位。
+  - 本轮产物：
+    - `frontend/src/pages/costing/BundleTemplatesPage.tsx`
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`cd backend && pytest -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-22（天猫SKU生成器：尺寸胶囊常显 + Z 规格同列不变色 + 检验补齐商家编码）
+  - 本轮范围：对齐业务口径：检验用于校验“商品规格（网店）+ 商家编码”是否能命中系统编码/公式；尺寸展示与检验解绑；Z- 规格字样显示在“TOKEN/公式”列但不做红绿高亮。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/TmallSkuTemplateGeneratorPage.tsx`
+      - 表格列：`长度/厚度/宽度` 合并为 `尺寸`（常显；支持 1~2 个灰底小字胶囊）。
+      - 移除：`属性规格` 列。
+      - `TOKEN/公式` 列：若无公式（含 Z- / 模型码），显示对应的规格字样（灰底胶囊、非黑色、不变色）。
+      - 检验：除公式匹配外，补齐对“商家编码是否绑定来源编码”的校验提示（帮助运营及时修正）。
+      - Z-：检验时不做规格文本的命中高亮（无红/绿字符）。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-23（天猫SKU生成器：列宽微调 + 尺寸纳入检验 + 口径备注）
+  - 本轮范围：将“天猫SKU生成器详情页”作为 `SKU主档(商品关联)` 与 `发货批次/BOM快照` 的**前置校验台**，把 B/Z 尺寸策略 + spec_text 尺寸解析 + 商家编码锚点在前端先跑通并暴露问题。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/TmallSkuTemplateGeneratorPage.tsx`
+      - 表格列宽：`模型属性` 与 `商家编码` 各缩小约 1/3；`尺寸` 增加约 1/3（避免组件尺寸展示挤压）。
+      - 检验：新增尺寸相关校验提示（与后端口径对齐）：
+        - Z-：要求套版组件必须有 `width_mm/height_mm/quantity`，否则提示（后端会直接失败）。
+        - B-：当套版组件缺尺寸时，要求“商品规格（网店）”可解析出宽高，否则提示（后端会直接失败进异常队列）。
+        - 标准模型/未绑定：若 spec_text 明显包含尺寸段但解析失败，提示运营规范化写法（避免后端尺寸条件/扣库口径走不通）。
+      - 表格工具条：在“检验”后新增“上架渠道（天猫/京东/小红书/抖音）”下拉，并新增“导出模板xlsx”按钮（当前仅天猫实现，后续按渠道字段差异扩展）。
+      - 口径备注：在代码中标注了对齐后端 `spec_parser_service.parse_spec` 与 `bom_generation_service` 的 B/Z 尺寸策略，保证后续“发货扣库解析”可复用同口径。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-23（侧边栏菜单：按业务分组重排 + 一级图标 + 二级圆点）
+  - 本轮范围：按业务分组重排左侧菜单结构，并将“总览/PLANNER/场景列表/场景Builder”整体移到底部；一级菜单带图标，二级菜单统一“圆点 + 名称”风格。
+  - 产物（前端）：
+    - `frontend/src/components/layout/AppLayout.tsx`
+    - `frontend/src/components/layout/appLayoutMenu.css`
+  - 菜单分组（路由均为站内相对路径，不包含域名）：
+    - 基础设置：`/costing/materials` `/costing/virtual-materials` `/costing/structure-standards` `/costing/process-modules` `/costing/processes` `/costing/taxonomy`
+    - 模型管理：`/costing/sample-models` `/costing/standard-models` `/costing/bundle-templates`
+    - 上架测试：`/costing/product-listing` `/costing/tmall-sku-generator` `/costing/pricing-tools`
+    - 货品管理：`/costing/sku-master` `/costing/spec-matching` `/costing/shipments` `/costing/shipping-rules`
+    - 生产工具：`/costing/production-scan`
+    - PLANNER（移至最下）：`/` `/planner` `/planner/scenarios` `/planner/scenario-builder`
+  - 备注（缺失功能/占位）：
+    - “数据洞察：售后分析/模型分析/店铺数据”当前无对应路由，已作为 disabled 占位菜单项保留。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-27（规格匹配：一键跑完崩溃修复 + 支持按模型/版本过滤 + 去重绑入口）
+  - 背景：
+    - `/costing/spec-matching` 的“一键跑完”调用 `POST /api/planner/sku-master/spec-preparse/bulk`，此前后端路由层会传 `cursor_id`，但 service 未接该参数，导致运行时报错（页面表现为“点了就卡/又崩了”）。
+    - 对几十万级别数据，“循环取第一页/按更新时间排序”容易产生重复扫描；需要 cursor 扫描避免无效重复。
+  - 本轮产物（后端）：
+    - `backend/src/planner/services/sku_master_service.py`
+      - 修复：`bulk_save_spec_preparse(...)` 补齐 `cursor_id` 参数，不再因参数不匹配崩溃。
+      - 增强：当传入 `cursor_id` 时启用 `id > cursor_id` 的稳定扫描模式（limit+1 判断 `has_more`，返回 `next_cursor_id`/`mode`），避免大数据量下重复/回扫。
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/SkuSpecMatchingPage.tsx`
+      - 新增筛选：按“模型（已发布标准）”过滤；可选“仅当前发布标准版本”进一步收敛。
+      - “一键跑完”改为带 `cursor_id` 循环（若后端返回 `next_cursor_id`），减少重复扫描造成的体感卡顿。
+      - 列表增加“去重绑”入口：跳转到 `/costing/sku-master?tab=bound&search=<条码>` 便于换版本/纠正绑定。
+    - `frontend/src/pages/costing/SkuMasterWorkspacePage.tsx`
+      - 支持从 URL 读取 `?search=` 与 `?tab=` 作为跳转落点（配合“去重绑”）。
+    - `frontend/src/services/planner.ts`
+      - 补齐参数透传：`bound_model_id/bound_model_code/bound_version_id/cursor_id`（用于列表/预览/批量接口）。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-27（规格匹配：保存 500 幂等修复）
+  - 现象：`/costing/spec-matching` 的“保存/执行”偶发返回 500。
+  - 根因（高概率）：`spec_parse_snapshots.spec_hash` 为 UNIQUE；大批量/并发保存时同一 `spec_hash` 可能被并发插入，触发 `IntegrityError`，导致接口 500。
+  - 本轮产物（后端）：
+    - `backend/src/planner/services/sku_master_service.py`
+      - 新增 `_ensure_spec_parse_snapshot(...)`：使用 nested transaction 做 **冲突忽略**，避免唯一冲突污染外层事务。
+      - 应用到 `save_spec_preparse` / `bulk_save_spec_preparse` / `execute_spec_preparse`（快照写入改为 best-effort）。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-27（售后分析：导入记录可见 + 查询超时上调）
+  - 现象：
+    - `/costing/insights/after-sales` 上传后“看不到文件/不知道导入到哪里”。
+    - 查询偶发 `timeout of 20000ms exceeded`（前端 axios 默认 20s 超时）。
+  - 本轮产物（前端）：
+    - `frontend/src/pages/costing/AfterSalesInsightsPage.tsx`
+      - 新增“导入记录（最近）”表格：对接后端 `GET /api/planner/after-sales/import-batches`，可看到批次/文件名/导出日期/插入跳过异常/状态/导入时间。
+      - “查询”调用退货率接口时将超时提高到 120s，避免大范围/服务忙时误判失败。
+    - `frontend/src/services/planner.ts`
+      - `importAfterSalesXlsx` 默认超时提升（10min）。
+      - `fetchReturnsRateBySku`/`fetchReturnsRateByChannel` 默认超时提升（60s，可传 opts 覆盖）。
+      - 新增 `fetchAfterSalesImportBatches` 请求封装。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - Backend：`source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-27（任务角标探针：空闲轮询降频）
+  - 背景：右上角“任务列表”角标探针会定时请求 `task-center/recent?limit=5`；多数人很少用该功能，频繁轮询会占用网络并在弱网/代理环境下放大体感卡顿。
+  - 本轮产物（前端）：
+    - `frontend/src/components/layout/AppLayout.tsx`
+      - 调整探针轮询：运行中 10s / 空闲 60s；页面不可见时停止轮询（保持原行为）。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-23（标准模型：清单编辑/标签色统一为 antd 主题色）
+  - 本轮范围：在“标准模型管理 → 清单编辑”中，将彩色文字/标签/提示色从硬编码色值统一替换为 antd 主题色变量（success/error/warning/text-secondary/fill-tertiary/link/primary），使暗色主题下不刺眼、风格一致。
+  - 产物（前端）：
+    - `frontend/src/components/costing/ProductModelEditorDrawer.tsx`
+    - `frontend/src/pages/costing/StandardModelsPage.tsx`
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-22（天猫SKU生成器：仅移除“套装模板(B/Z)→天猫属性词”展示区块，保留检验/公式渲染）
+  - 本轮范围：只删除天猫SKU生成器里“套装模板（B/Z）→ 天猫属性词（占主动权）”那块展示 Card；保留表格中的“检验 / TOKEN/公式渲染 / 命中高亮”等能力。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/TmallSkuTemplateGeneratorPage.tsx`
+      - 移除：套装短码解析、互斥组组合生成颜色分类等 UI 区块。
+      - 保留：表格检验按钮、TOKEN/公式列渲染、规格命中高亮与状态图标。
+      - 仍支持从“模型属性”下拉选择套装模板短码（用于展示/检验公式），但不再提供“占主动权”的独立模块入口。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-22（规格模块：列表风格对齐标准模型 + 新建模板 + 详情可编辑名称）
+  - 本轮范围：`/costing/tmall-sku-generator` 的列表风格与 `standard-models` 一致（筛选框 + 操作框 + 列表），并支持新建模板；进入详情页后可编辑模板名称（回写列表）。
+  - 本轮产物：
+    - 前端：
+      - `frontend/src/pages/costing/SpecModulesPage.tsx`
+        - 列表页采用“标准模型”同款布局：筛选（名称/ID、类型）+ 操作（新建模板、刷新）+ Table（模板名称/类型/矩阵数量/发布时间/操作）。
+      - `frontend/src/pages/costing/TmallSkuTemplateGeneratorPage.tsx`
+        - 详情页顶部支持编辑“模板名称/类型”，并写回列表展示。
+        - 配置从“单一全局 localStorage”调整为“按 templateId 分开存储”，支持多模板。
+      - `frontend/src/pages/costing/tmallSkuGeneratorTemplates.ts`
+        - 本地模板索引与按模板配置存储（localStorage）的小工具。
+      - 路由调整：
+        - `/costing/tmall-sku-generator` → 列表页
+        - `/costing/tmall-sku-generator/:templateId` → 详情页（`mvp` 作为默认种子模板 id）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-22（套装模板：切换模型版本时自动迁移 FORCE/筛选别名，避免只剩 id）
+  - 本轮范围：前端防呆增强；当组件行的 `model_version_id` 被切换时，尽量用稳定键把旧版本的强制规则与筛选配置迁移到新版本，避免 UI 退化为“（无 TOKEN）+ UUID”导致运营无法识别原选择。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/BundleTemplatesPage.tsx`
+      - 组件行切换模型版本时，自动迁移：
+        - `force_variant_by_base_line`（base_line_id/variant_id）→ 通过 `force_variant_by_base_line_stable` 或稳定键重绑到新版本对应规则。
+        - `presetSelectedByIdx`（预设变体筛选的选中状态）→ 尝试按稳定键迁移到新版本，迁移失败则置空等待重选。
+        - `fallbackTokenOverrides`（别名/兜底展示）→ 将旧版本的 `${oldVid}:${oldBaseLineId}` 覆盖值复制到新版本 `${newVid}:${newBaseLineId}`（不删除旧值，避免影响其他组件）。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-22（Z 强制绑定：引入稳定键并支持跨版本重绑定）
+  - 本轮范围：补齐“发布版不可编辑 + 新版本发布”场景下的引用稳定性；避免 `base_line_id/variant_id` 复制后失效导致套装乱套。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/BundleTemplatesPage.tsx`
+      - 在“指定(强制命中)”写入 `force_variant_by_base_line_stable`（稳定键映射：`base_line_key -> variant_key`），与现有 `force_variant_by_base_line` 并存，兼容旧数据。
+    - 后端：`backend/src/planner/services/bom_generation_service.py`
+      - 组件执行强制命中时，若 `base_line_id/variant_id` 在新版本中失效/变化，尝试用稳定键映射自动重绑定到新版本对应行/规则，再执行。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+  - 下一步：
+    - 把“清理失效规则”扩展为：对 `enabled=false` 的强制规则也可一键清理/提示（进一步防呆）。
+    - 若出现稳定键碰撞（同 module/slot 下重复材料位），再补充更强的 disambiguation 字段（例如 sequence_order 或结构位 index）。
+
+- **最近校对（北京时间 GMT+8）**：2026-01-22（筛选弹窗：规则状态改为中文“已启用/未启用”）
+  - 本轮范围：仅文案展示；不改业务逻辑。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/BundleTemplatesPage.tsx`
+      - 预设变体筛选弹窗中，规则状态从 `enabled/disabled` 改为 `已启用/未启用`，减少误解。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-22（套装模板：Z 模式兜底-零成本未强制改为警告）
+  - 本轮范围：仅前端校验口径调整；不改后端业务逻辑。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/BundleTemplatesPage.tsx`
+      - Z 模式校验中：当 base line 为“兜底-零成本”且存在 token 依赖规则时，允许“不强制=走兜底（默认无/不选）”，将原错误降级为警告，并提示“如需有/选中再强制”。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-22（产品上架测试台：套装工序明细从 debug components 兜底汇总）
+  - 本轮范围：仅前端展示兜底；不改后端业务逻辑。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/ProductListingPage.tsx`
+      - 套装预演时，若合并 BOM 的 `trace.costing.process_lines` 与 `trace.components` 均为空，则从 `bundleComponentsDebug` / `bundleDebugRaw.components` 汇总 `process_lines`，避免右侧“工序”持续显示空态。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-22（产品上架测试台：工序兜底解析增强 + 过滤兜底-零成本虚拟物料警告 + 自动生成空行修复）
+  - 本轮范围：仅前端展示/提示收口；不改后端业务逻辑。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/ProductListingPage.tsx`
+      - 修复“自动生成：”上方空行：将 `<style>` 从 `Space` 子节点移出，避免被 `Space` 当作一项导致多余间距。
+      - 工序明细兜底增强：兼容 `trace.components[*].costing.process_lines` 与 `trace.components[*].trace.costing.process_lines` 两种返回形态，避免右侧“工序”为空。
+      - 扣库展开提示：对“虚拟物料未配置绑定：VMxxxx”警告做过滤——若该 VM 在本次结果中名称/标记包含“兜底-零成本”，则不作为警告展示（例如 VM00052）。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-22（产品上架测试台：自动生成区块扁平化 DOM）
+  - 本轮范围：仅 UI 结构收口；不改业务逻辑/接口。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/ProductListingPage.tsx`
+      - “自动生成”区块去掉一层多余的内层 `div`（避免双层容器/双层边框造成观感冗余）。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-22（产品上架测试台：移除自动拼接区块 + Z提示字体收口）
+  - 本轮范围：仅 UI 收口；不改业务逻辑/接口。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/ProductListingPage.tsx`
+      - 套装测试“属性规格”卡片：删除“自动拼接（用于预演 spec_text）”展示与相关按钮（复制/写入 spec_text），避免干扰主流程。
+      - Z 指定型提示（Alert）的 message/description 字体缩小一号（更贴近说明文案的层级）。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-22（产品上架测试台：移除排序按钮 + 下拉收口宽度）
+  - 本轮范围：仅 UI 收口；不改业务逻辑/接口。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/ProductListingPage.tsx`
+      - 套装测试“自动生成”区块：移除“模型行上下/互斥组左右”移动按钮，按模板已保存顺序展示即可。
+      - 互斥组下拉宽度从 150px 收口到 100px（约缩小 1/3），避免撑破页面。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-22（产品上架测试台：同步套装模板抽屉“自动生成”整块 + 修复 build）
+  - 本轮范围：仅前端测试台 UI/辅助生成器补齐；不改后端业务逻辑。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/ProductListingPage.tsx`
+      - 修复构建错误：补齐 `CopyOutlined` 缺失的图标导入（避免 `TS2304 Cannot find name 'CopyOutlined'`）。
+      - 套装测试（`/costing/product-listing` → “套装测试”）：把 `/costing/bundle-templates` 抽屉里的“自动生成：”整块能力复制过来：
+        - 显示“自动生成”文本（按互斥组下拉选择实时生成），并支持一键复制。
+        - 下方按“模型编码 pill + 互斥组下拉”一行展示，可组合下拉；支持模型行上下排序、互斥组左右排序（复用模板 metadata 的 order 配置）。
+        - 数据来源：复用套装模板 metadata（`phrase_variant_presets / fallback_token_overrides / variant_token_alias_overrides / component_order_by_preset / group_order_by_preset_component`），并按涉及版本拉取版本清单与变体规则，确保下拉候选完整。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+  - 下一步：
+    - 若需要进一步“与 bundle-templates 100% 一致”：可将该块抽成复用组件（避免两处逻辑漂移），并补充 UI 截图/手工验收步骤到接力包。
+
+- **最近校对（北京时间 GMT+8）**：2026-01-22（测试台：移除短语生成器 + Debug 默认开启 + 工序明细兜底展示）
+  - 本轮范围：仅 UI 体验收口，不改业务逻辑。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/ProductListingPage.tsx`
+      - 移除“短语生成器（运营可改词+验证）”面板（保留“规格生成”面板）。
+      - 套装 Debug 默认开启（返回组件明细），方便排障。
+      - 工序明细：当合并 BOM 未返回 `trace.costing.process_lines` 时，尝试从 `trace.components[*].trace.costing.process_lines` 汇总展示；并且即使为 0 也显示表格空态，不再用提示遮挡。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+
+- **最近校对（北京时间 GMT+8）**：2026-01-22（测试台：套装选择与属性规格同排 + 下拉展示 B/Z 编码胶囊）
+  - 本轮范围：仅 UI 布局与展示优化，不改业务逻辑。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/ProductListingPage.tsx`
+      - 套装测试：将“套装选择”和“属性规格（原短语选择器）”放在一行两列。
+      - “属性规格”下拉项在名称前展示 `B-`/`Z-` 编码，并用胶囊 Tag 包裹（Z=volcano，B=blue）。
+      - 预演与 spec_text 生成根据属性规格的模式（parse/force）自动选择 `B-` 或 `Z-` 前缀拼接 token。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+
+- **最近校对（北京时间 GMT+8）**：2026-01-22（产品测试台：工序名称列宽观感回归）
+  - 本轮范围：仅 UI 视觉对齐，不改业务逻辑。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/ProductListingPage.tsx`
+      - 工序表“警告”列取消固定宽度，作为最后一列自然伸缩，避免把多余宽度挤到“工序名称”导致观感偏宽（约 +46px）。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+
+- **最近校对（北京时间 GMT+8）**：2026-01-22（产品测试台：三表列宽进一步对齐工序口径）
+  - 本轮范围：仅 UI 视觉对齐，不改业务逻辑。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/ProductListingPage.tsx`
+      - 以“工序”表为列宽基准，进一步收口“物料/扣库单”表的字段宽度；并让各表最后一列不固定宽度自动伸缩，三组更一致。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+
+- **最近校对（北京时间 GMT+8）**：2026-01-22（产品测试台：扣库清单改名 + 三表前两列列宽对齐）
+  - 本轮范围：仅 UI 视觉对齐，不改业务逻辑。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/ProductListingPage.tsx`
+      - “扣库清单（真实物料展开）”标题与空态文案改为“扣库单”。
+      - 物料/工序/扣库单三张表格的前两列列宽统一：编码列 120、名称列 220（与工序一致），整体排版更齐。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+
+- **最近校对（北京时间 GMT+8）**：2026-01-22（模型发布后锁定模型名称不可编辑）
+  - 本轮范围：仅 UI 限制，不改后端接口。
+  - 本轮产物：
+    - 前端：`frontend/src/components/costing/ProductModelEditorDrawer.tsx`
+      - 当模型存在“已发布 standard 版本”时，基础信息中的“模型名称”输入框禁用，并提示“名称已锁定不可编辑”。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+
+- **最近校对（北京时间 GMT+8）**：2026-01-22（标准模型：复制版本命名规则与复制失败修复）
+  - 本轮范围：仅修复“复制版本失败”的稳定性与默认命名规则，不改业务逻辑。
+  - 本轮产物：
+    - 前端：`frontend/src/components/costing/ProductModelEditorDrawer.tsx`
+      - 复制版本默认命名从 `（复制）` 改为 `-01/-02...`（例如 `PI5-STANDARD-20260104-03` 复制 => `PI5-STANDARD-20260104-03-01`）。
+      - 新增版本（标准）默认命名：在同前缀下末段 `-NN` 自增（例如 `...-03` 新增 => `...-04`）。
+      - 复制版本时，复制清单写入目标版本前会剥离源物料/工序行的 `id`，避免后端校验 “id 不属于目标版本” 导致复制失败。
+    - 恢复包：更新 `DOC/agents/state.md`（本条）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+
+- **最近校对（北京时间 GMT+8）**：2026-01-22（产品测试台：模型测试选择区改为三列布局）
+  - 本轮范围：仅 UI 布局对齐“利润推演”，不改业务逻辑。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/ProductListingPage.tsx`
+      - “模型测试”下方模型选择区改为一行三列：**模型类型（打样/标准，默认标准）/ 模型名称 / 版本名称**。
+      - “版本名称”列右侧提供“全部/仅发布”切换（仅标准模型时展示），与“利润推演”一致。
+    - 恢复包：更新 `DOC/agents/state.md`（本条）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+
+- **最近校对（北京时间 GMT+8）**：2026-01-22（产品上架测试台：Tabs 选中态改为淡蓝高对比）
+  - 本轮范围：仅 UI 视觉收口，不改业务逻辑。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/ProductListingPage.tsx`
+      - 左侧模式 Tabs（模型测试/套装测试/规格生成/利润推演/店铺预演）与右侧结果 Tabs（解析结果/命中情况/最终 BOM/套装组件命中）：为 Tabs 添加页面级 className。
+    - 样式：`frontend/src/index.css`
+      - 新增 `.product-listing-tabs` 的 active tab 颜色与 ink bar，使用与提示 icon 一致的淡蓝（`--ant-color-info` / `--ant-color-primary`），避免选中态灰色贴底不易识别。
+    - 恢复包：更新 `DOC/agents/state.md`（本条）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+
+- **最近校对（北京时间 GMT+8）**：2026-01-22（标准模型：移除“当前结构标准/结构骨架”说明）
+  - 本轮范围：仅移除 UI 文案说明，不改结构标准过滤逻辑。
+  - 本轮产物：
+    - 前端：`frontend/src/components/costing/ProductModelEditorDrawer.tsx`
+      - 删除“当前结构标准：xxx（选择工艺模块候选将自动按该结构过滤）”与“结构骨架：拉链/侧边/…”的说明展示。
+    - 恢复包：更新 `DOC/agents/state.md`（本条）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+
+- **最近校对（北京时间 GMT+8）**：2026-01-22（物料组/工序组：来源模块彩色条去白框）
+  - 本轮范围：仅 UI 视觉收口，不改业务逻辑。
+  - 本轮产物：
+    - 前端：`frontend/src/components/costing/ProductModelEditorDrawer.tsx`
+      - 右侧“物料组/工序组”列表中，每条记录前的“来源模块彩色条”（含汇总视图与明细视图）移除白色边框（去掉 `border: 1px solid #e5e5e5`），避免出现白框噪音。
+    - 恢复包：更新 `DOC/agents/state.md`（本条）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+
+- **最近校对（北京时间 GMT+8）**：2026-01-22（工艺模块：编码前竖条色块收口为 1px）
+  - 本轮范围：仅 UI 视觉收口，不改业务逻辑。
+  - 本轮产物：
+    - 前端：`frontend/src/components/costing/ProductModelEditorDrawer.tsx`
+      - 清单编辑 → 工艺模块表格：编码单元格左侧“模块色竖条”从 4px 收口为 **1px**，避免过宽抢视觉。
+    - 恢复包：更新 `DOC/agents/state.md`（本条）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+
+- **最近校对（北京时间 GMT+8）**：2026-01-22（标准模型：清单编辑“变体”按钮底色收口）
+  - 本轮范围：仅 UI 视觉收口，不改业务逻辑。
+  - 本轮产物：
+    - 前端：`frontend/src/components/costing/ProductModelEditorDrawer.tsx`
+      - 标准模型 → 清单编辑 → 物料组“变体（Overlay）”图标按钮：当已配置变体（hasVariants）时，将底色从淡黄改为**深黑黄**（避免刺眼），并保持 hover 有轻微加亮。
+    - 样式：`frontend/src/index.css`
+      - 新增 `.line-variant-btn--active` 样式（深黑黄背景 + 暗金边框 + 高对比文字/图标色）
+    - 恢复包：更新 `DOC/agents/state.md`（本条）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+
+- **最近校对（北京时间 GMT+8）**：2026-01-22（接手 Frontend：验收链路确认 + Gitignore 补齐）
+  - 本轮范围：不改业务功能；仅完成“新 Frontend 接力”规范动作（恢复包/硬验收/落地提交）。
+  - 本轮产物：
+    - 前端工程交付基线：补齐 `.gitignore` 忽略 `frontend/node_modules/` 与 `frontend/dist/`（避免误提交依赖与构建产物）。
+    - 恢复包：更新 `DOC/agents/state.md`（本条）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+
+- **最近校对（北京时间 GMT+8）**：2026-01-21（UI：自动生成区块缩进收口 + 移动按钮浅灰）
+  - 本轮范围：仅调整 `/costing/bundle-templates` 编辑抽屉“自动生成”区块的对齐与按钮可读性（不改业务逻辑）。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/BundleTemplatesPage.tsx`
+      - “自动生成：”区块左右缩进：10px → 5px（更贴近内容区但仍居中）
+      - 区块内上下移动按钮（`.bt-model-reorder-btn`）默认色改为浅灰（暗色变量），hover 保持高对比
+    - 恢复包：更新 `DOC/agents/state.md`（本条）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+
+- **最近校对（北京时间 GMT+8）**：2026-01-21（UI：套装模板抽屉右侧 FORCE/TOKEN 胶囊去外框 + “自动生成”区块深灰居中）
+  - 本轮范围：仅收口 `/costing/bundle-templates` 编辑抽屉的视觉细节（不改业务逻辑）。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/BundleTemplatesPage.tsx`
+      - 右侧摘要区：`FORCE / 强制替换 / TOKEN / 羽丝绒` 等胶囊 Tag 去掉外框线（暗色下边框过亮）
+      - “自动生成：”区块底色改为深灰，并左右各缩进 10px（框体更居中）
+    - 恢复包：更新 `DOC/agents/state.md`（本条）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+
+- **最近校对（北京时间 GMT+8）**：2026-01-21（UI：套装模板抽屉左侧可读性 + FORCE/TOKEN 去外框 + 自动生成区块暗黄）
+  - 本轮范围：仅调整 `/costing/bundle-templates` 的“编辑套装模板”抽屉视觉（不改业务逻辑）。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/BundleTemplatesPage.tsx`
+      - 左侧“属性列表”卡片：文字与图标按钮颜色改为暗色变量（不再与背景融在一起）
+      - FORCE（强制：选1条子条件）胶囊：去掉 Tag 外框线
+      - TOKEN 胶囊（例如“羽丝绒”）：去掉 Tag 外框线
+      - “自动生成”区块：底色从浅黄（接近白）改为更深的暗黄（rgba），匹配当前暗色风格
+    - 恢复包：更新 `DOC/agents/state.md`（本条）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+  - 下一步：
+    - 若仍有“图标太暗”的点（例如自动生成区块内的上下移动按钮），建议把同类按钮样式抽成统一 class 并复用（避免多处内联 style）。
+
+- **最近校对（北京时间 GMT+8）**：2026-01-21（UI：Bundle Templates 编码胶囊去外框并收口宽度）
+  - 本轮范围：仅调整 `/costing/bundle-templates` 列表“属性名称”列里的编码胶囊样式（不改业务逻辑）。
+  - 本轮产物：
+    - 前端：`frontend/src/pages/costing/BundleTemplatesPage.tsx`
+      - 编码胶囊（Tag）移除亮色边框（避免暗色主题下视觉噪声）
+      - 胶囊最小宽度收口约 1/5：120 → 96
+    - 恢复包：更新 `DOC/agents/state.md`（本条）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+  - 下一步：
+    - 若要进一步收口（比如长编码不换行/支持复制），建议抽出统一的 `CodePill` 组件并全站复用（避免页面内联样式散落）。
+
+- **最近校对（北京时间 GMT+8）**：2026-01-21（UI：彻底修复 Modal/Confirm 白底（AntD 变量注入））
+  - 本轮范围：仅针对 `Modal.confirm/info` 的白底根因（`--ant-modal-content-bg: #fff`）做变量级覆盖，并补齐弹窗内容常见白底容器（Card/Descriptions/Table）。
+  - 本轮产物：
+    - 前端：`frontend/src/index.css`
+      - 在 `.ant-modal/.ant-modal-confirm` 作用域内覆写 `--ant-modal-content-bg/--ant-modal-title-color/--ant-color-text...` 等变量为暗色体系
+      - 强制 `.ant-modal` 内 `Card/Descriptions/Table` 背景与边框为暗色（避免内容面板仍白）
+    - 部署：执行 `frontend/scripts/deploy_static.sh` 原子发布到 `/var/www/html/ai-costing/dist`
+    - 恢复包：更新 `DOC/agents/state.md`（本条）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+  - 下一步：
+    - 若仍出现白底，请在 DevTools 选中白底元素并截图 class/Computed（用于识别是否为 Popover/Dropdown 等非 Modal 组件）。
+
+- **最近校对（北京时间 GMT+8）**：2026-01-21（UI：修复 Material 主数据页弹窗“外壳白底”）
+  - 本轮范围：仅收口 `Modal.confirm/info` 在 portal 场景下仍出现“外壳白底”的观感问题（不改业务逻辑）。
+  - 本轮产物：
+    - 前端：`frontend/src/index.css`
+      - 直接覆盖 `.ant-modal-content/.ant-modal-header/.ant-modal-body/.ant-modal-footer` 的背景与边框，避免仅写 `.ant-modal .ant-modal-content` 时漏掉结构差异导致白底
+      - 目标覆盖点：`/costing/materials` 的“同步新料 / 更新图片 / 查看来源”
+    - 恢复包：更新 `DOC/agents/state.md`（本条）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+  - 下一步：
+    - 若仍看到白色面板，优先截图 DOM 层级确认是否为 `Card/Descriptions/Table` 内部白底（再针对性补齐组件层覆盖）。
+
+- **最近校对（北京时间 GMT+8）**：2026-01-21（UI：Modal/Confirm 边框再压暗一档，避免“白框”）
+  - 本轮范围：不扩展功能，仅修复暗色弹窗边框观感，并完成 Frontend 接力三件套（恢复包/硬验收/提交）。
+  - 本轮产物：
+    - 前端：`frontend/src/index.css`
+      - `.ant-modal` 的 content/header/footer 边线从 `--color-theme-border-tertiary` 改为 `--color-theme-border-quaternary`
+      - `.ant-modal-confirm-body-wrapper` 补边框与圆角，避免 confirm 仍出现亮边
+    - 恢复包：更新 `DOC/agents/state.md`（本条）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+  - 下一步：
+    - 若线上仍出现“白框”，优先排查是否来自业务自定义容器（非 AntD Modal）或第三方组件（如 Popover/Dropdown）边框未统一。
+
+- **最近校对（北京时间 GMT+8）**：2026-01-21（UI：品牌区收口 + BOM token alias 回溯）
+  - 本轮产物：
+    - 前端品牌区：
+      - 顶部栏品牌区：改为文字 `饰家如画®AI智慧数字工厂`（实现：`frontend/src/components/layout/AppLayout.tsx`）
+      - 侧栏品牌区：LOGO 区域高度 -8px，并用 `border-bottom` 对齐顶部栏底线；同时避免 Menu 叠加边线导致“双灰线”（见 `frontend/src/index.css`）
+      - `logo-full.svg`：修复头部 `id` 乱码（统一为 `layer_1`，避免编码差异导致 diff 漂移）
+      - 标准模型列表“货品映射关键词”胶囊标签：字体缩小一号，并按 Cursor 风格做“中性彩色（alpha 再降一档）”（实现：`frontend/src/pages/costing/StandardModelsPage.tsx`）
+      - 打样管理（清单编辑）：
+        - 仅“手动新增（无来源模块）”行底色从白改为深灰；按模块同步的彩色底保持不变
+        - “新增物料/新增工序/上传图片”按钮改为深灰底色
+        - 工艺模块图片区：黑底 + 三列缩略图；缩略图默认压亮度（透明黑盖层+brightness），hover 还原
+        - 工艺模块列表底色 alpha 下调，使其与子项（物料/工序）的模块色底一致（避免模块区更亮）
+        - 实现：`frontend/src/components/costing/ProductModelEditorDrawer.tsx`
+    - 后端（宜搭同步）：钉钉 token 获取的网络/DNS 异常做了“可读化 + 脱敏”，避免把 appsecret 回显到错误里；同时 MaterialSyncJob 的 error_message 也做了脱敏（实现：`backend/src/planner/services/yida_sync.py`、`backend/src/planner/services/dingtalk_client.py`）
+    - 前端（物料详情 → 同步宜搭）：失败提示改为优先展示后端 `detail/error_message`，避免只显示 `Request failed with status code 500`（实现：`frontend/src/components/costing/MaterialDrawer.tsx`）
+    - 运维/排障沉淀：补充“DNS 被 Tailscale/NetworkManager 接管导致 DB 全站 500/列表为空”的已知坑与修复口径（见 `DOC/agents/known_issues.md`）
+    - 标准模型列表：操作列按钮改为图标式（编辑/实时核价/删除），避免列宽放不下（实现：`frontend/src/pages/costing/StandardModelsPage.tsx`）
+    - 标准模型管理抽屉：标准版本列表“操作”列文字按钮改为图标按钮（编辑/发布/复制/克隆/删除），避免放不下（实现：`frontend/src/components/costing/ProductModelEditorDrawer.tsx`）
+    - 标准模型管理抽屉：标准版本列表中“已发布（运行中）版本”行底色改为**深绿色半透明**（alpha），便于一眼识别当前运行版本（实现：`frontend/src/components/costing/ProductModelEditorDrawer.tsx`）
+    - 标准模型列表：“当前发布标准”列的版本号胶囊底色同步改为**深绿色半透明**（alpha），与抽屉“已发布行”语义一致（实现：`frontend/src/pages/costing/StandardModelsPage.tsx`）
+    - 物料主数据管理：顶部改为与“打样模型”一致的**筛选卡 + 操作卡**布局，移除“当前概览”；收口批量高风险按钮，仅保留“同步新料/更新图片/同步日志/导出物料”（另保留刷新），把更新单条价格收口到抽屉“同步宜搭”（实现：`frontend/src/pages/costing/MaterialMasterPage.tsx`）
+    - 物料主数据管理：相关弹窗（查看来源/同步新料/更新图片等 `Modal`）统一改为黑灰风格（含背景/边线/底部按钮/Confirm 按钮区域）；“查看来源”内容区从浅底改为暗色面板（实现：`frontend/src/index.css`、`frontend/src/pages/costing/MaterialMasterPage.tsx`）
+    - 文档/源文件：补齐 LOGO 源文件入库（`DOC/基础表单/logo-full.svg`），作为 `frontend/public/logo-full.svg` 的上游来源
+    - 后端（BOM）：支持“变体 TOKEN 别名”回溯——当 `spec_text` 命中 alias 时，自动注入原始 token 进 `shared_tokens`，确保原规则仍可命中（实现：`backend/src/planner/services/bom_generation_service.py`，读取 `variant_token_alias_overrides` + selector）
+    - 清理：移除误生成的无关文档草稿（避免污染恢复包）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+    - Backend（最小）：`backend/.venv/bin/python -m pytest backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py -q`
+  - 下一步：
+    - 若要让“别名”从模板配置到 UI 完整闭环：在套装模板/编辑器侧暴露 `variant_token_alias_overrides` 的编辑入口，并补齐对应用例测试（避免 alias 漏配导致线上难排查）
+
+- **最近校对（北京时间 GMT+8）**：2026-01-20（UI：Costing 左侧菜单/抽屉/筛选卡片 Cursor 风格收口）
+  - 背景：之前 Cursor 风格只做到一半，存在 3 个明显断层：左侧菜单底色/右侧分隔线未统一、右侧抽屉底色偏浅且与 Tabs 线条冲突、部分“筛选区”卡片缺少外框线。
+  - 本轮产物（前端）：
+    - 侧栏品牌区（“总览”上方）：保留 LOGO（`frontend/public/logo-full.svg`，来源 `DOC/基础表单/logo-full.svg`），并按你要求：
+      - LOGO 放大 1/3（侧栏 logo 高度从 28px → 37px）
+      - 分隔菜单的灰线向上移动 12px（实现：`.sidebar-logo::after { bottom: 12px; }`）
+      - 暗色可见：对黑色 LOGO 使用 `filter: invert(1)`（视觉上为白）
+    - 顶部栏品牌区：不再展示 LOGO，改为文字：`饰家如画®AI智慧数字工厂`
+    - 稳定性：修复 `logo-full.svg` 头部 `id` 乱码问题（统一为 `layer_1`，避免编码差异导致 diff 漂移）。
+    - 菜单信息架构：把原先“成本核算”下的所有功能拆成 4 个一级分组（均带统一风格图标）：
+      - 模型管理 / 货品管理 / 货品发布 / 数据分析（实现：`frontend/src/components/layout/AppLayout.tsx`）
+    - 左侧菜单：统一侧栏背景为 `--color-theme-bg-card`，并在右侧加分隔线 `border-inline-end: 1px solid var(--color-theme-border-tertiary)`；同时关闭 AntD Menu 选中态默认 `::after` 竖线指示（更像 Cursor）。
+    - 抽屉：`Drawer header/body/footer` 统一 `--color-theme-bg-card`，右侧抽屉额外加 `border-left` 灰线；Tabs 的分隔线/ink-bar 统一灰白体系，避免与抽屉灰线打架；Close hover 同风格处理。
+    - 顶部筛选外框：为以下 4 个页面的“筛选 Card”统一加 `size="small" + className="costing-filter-card"`，并在全局 CSS 里给它外框线与 head 分隔线（对齐“打样模型”）：
+      - `frontend/src/pages/costing/MaterialMasterPage.tsx`
+      - `frontend/src/pages/costing/VirtualMaterialsPage.tsx`
+      - `frontend/src/pages/costing/ProcessesPage.tsx`
+      - `frontend/src/pages/costing/ProcessModulesPage.tsx`
+    - 关键样式落点：`frontend/src/index.css`
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档校验清单逐条验证（grep/test -d）
+    - Backend（最小）：`backend/.venv/bin/python -m pytest backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py -q`
+  - 下一步：
+    - 若你希望“当前概览/列表卡片”等非筛选区的 Card 也统一成同一套极简边框体系（目前部分 `bordered={false}`），可继续在这些 costing 页面做一次收口（仍保持小步提交）。
+
+- **最近校对（北京时间 GMT+8）**：2026-01-15（套装模板：Z/B 尺寸策略（B运行时解析尺寸；Z必须固定））
+  - 背景：B 套版不在模板中固定尺寸，运行时仅依赖“商品规格（网店）”解析宽高；Z 套版为指定型必须固定尺寸/数量。
+  - 产物：
+    - 后端：
+      - `backend/src/planner/services/spec_parser_service.py`：支持解析 `45*45*1 / 45×45×1 / 45X45X1` 的数量段（未写数量默认=1），输出 `dimension_qty`
+      - `backend/src/planner/services/bom_generation_service.py`：
+        - B：组件行尺寸为 0/空时，从 spec_text 解析宽高灌入；若无法解析宽高则直接失败（C1：缺尺寸进异常队列）
+        - Z：强制校验组件行尺寸/数量必须填写
+    - 前端：
+      - `/costing/bundle-templates`（`frontend/src/pages/costing/BundleTemplatesPage.tsx`）：
+        - Z（指定型）保存前强制校验“宽/高/数量”
+        - B（解析型）允许宽/高留空（运行时由商品规格解析灌入），但检验提示风险
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`backend/venv/bin/python -m pytest backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-15（天猫 SKU：从套装模板(B)互斥组公式自动生成“颜色分类”值域）
+  - 背景：套装模板 B 模式已沉淀互斥组公式（例如 `[{}{毛球}][{黄金绒}{雪尼尔}]45*45*1 + [{PP}{羽丝绒}]45*45*1`），需要把这套规则直接转成“天猫建属性可用的对客词”，占主动权并保证回传 ERP 规格可解析命中 TOKEN。
+  - 产物（前端）：
+    - 页面：`/costing/tmall-sku-generator`（`frontend/src/pages/costing/TmallSkuTemplateGeneratorPage.tsx`）
+    - 新增：卡片“套装模板（B/Z）→ 天猫属性词（占主动权）”
+      - 输入 `B-XXXXAA / Z-XXXXAA` 后，自动拉取套装模板 preset 的“属性名称/公式”
+      - B（解析型）：从公式 `[...] {..}` 中解析互斥组选项，按组合生成“颜色分类”并可一键写入/追加、复制清单
+      - Z（指定型）：仅提示“无需解析 TOKEN；用于回填商家编码 Z-XXXXAA”
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档 grep/test -d 校验
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+  - 下一步：
+    - 将“互斥组 → 天猫属性”的映射进一步结构化（例如：将某些互斥组映射到 `主图案类型/推荐卖点`，而不是全部塞进颜色分类）
+    - 增加“组合数量预估/超限提示更显式”，避免互斥组过多时爆炸
+    - 支持“尺寸/规格绑定来源编码（模型/套版）”，使商家编码可按来源自动生成、而颜色/尺寸展示词可独立维护
+
+- **最近校对（北京时间 GMT+8）**：2026-01-15（天猫 SKU：颜色分类/尺寸支持下拉绑定模型/套版 + 显式保存方案）
+  - 目标：让运营在“颜色分类/尺寸”层级直接选择 **模型或套版（含 B/Z+selector）**，并以“颜色分类绑定”为最高优先级覆盖，避免手输编码；同时提供“保存方案/加载方案”，避免反复录入。
+  - 产物（前端）：
+    - 页面：`/costing/tmall-sku-generator`（`frontend/src/pages/costing/TmallSkuTemplateGeneratorPage.tsx`）
+    - 设置抽屉：
+      - 颜色分类行新增“绑定来源(模型/套版)”下拉（最高优先级覆盖尺寸绑定）
+      - 尺寸行新增“绑定来源(模型/套版)”下拉（兜底）
+      - 下拉数据来源：发布标准模型候选 + 套装模板 `phrase_presets`（输出 `B-XXXXAA` / `Z-XXXXAA`）
+      - 商家编码：不再拼尺寸/宽高（避免出现 `-4545` 一类后缀）；尺寸区移除“编码段(可选)”
+      - 下拉体验：下拉输入框加宽 + 增加“刷新模型/套版”按钮（新建后可立即刷新看到）
+      - 下拉刷新：请求增加时间戳 cache-bust，并对套装模板分页拉取（避免新建/更新条目落在后续分页导致“刷新也看不见”）
+    - 输出区新增：方案名保存/选择方案加载/删除（localStorage）
+    - SKU 表格列：隐藏“价格/数量/主图案类型/条形码/预扣数量/推荐卖点”，并在“商家编码”后新增“属性规格”（展示尺寸绑定的模型/套版名称）
+    - SKU 表格列：在“属性规格”后新增“TOKEN/公式”（仅当尺寸绑定为 B-XXXXAA 时展示其属性公式；Z/模型码留空）
+    - SKU 表格列：将“颜色分类/尺寸”在表格中合并为“商品规格（网店）”；新增“检验”按钮，校验 TOKEN/公式的互斥组是否能被“商品规格（网店）”命中，并在“是否上架”旁显示绿/红通过状态
+    - SKU 表格列：新增“模型属性”行级下拉（模型/套版），作为最高优先级覆盖，直接覆盖该行的“商家编码/属性规格/TOKEN公式”
+    - 高安全检验：互斥组严格校验（缺失/多命中均视为不通过）；“商品规格（网店）”命中词红色高亮，多命中橙色高亮；“TOKEN/公式”中命中词绿色高亮、缺失组红色提示；列表字段改为只读展示（不再用输入框）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-15（天猫 SKU：销售属性配置器（模拟天猫建属性第一步））
+  - 目标：以系统为主体维护“天猫销售属性值域”（颜色分类/尺寸/主图案类型），按 TOKEN 口径沉淀为可复制/可导出清单，再到天猫后台建立属性。
+  - 产物（前端）：
+    - 页面：`/costing/tmall-sku-generator`（`frontend/src/pages/costing/TmallSkuTemplateGeneratorPage.tsx`）
+    - 新增：主页面“设置”按钮 → 抽屉（对齐天猫心智）：
+      - 顶部：属性选择（颜色分类/尺寸必选；主图案类型可选）
+      - 下方：按所选属性支持“添加多行”（可选图片/备注/删除/新增）
+    - 新增：颜色分类行可选主图案类型（仅当启用主图案类型属性时）
+    - 新增：SKU 规格“表格样式”展示（行=颜色×尺寸），并提供“表格/矩阵”切换
+    - 新增：建属性清单输出（预览+一键复制+导出 xlsx）
+    - 新增：配置持久化与迁移（localStorage + 导入/导出 JSON）
+    - 约束：天猫模板/平台侧销售属性不可由模板回写；本工具只负责“建属性清单 + 后续模板回填编码/上架”
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档 grep/test -d 校验
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+  - 下一步：
+    - 按渠道抽象为“渠道属性模板”（天猫/抖音/拼多多…）复用同一套值域与编码规则（先从天猫开始）
+
+- **最近校对（北京时间 GMT+8）**：2026-01-15（天猫 SKU：回填天猫官方模板（商家编码/是否上架））
+  - 背景：天猫官方模板中“颜色分类/尺寸”为销售属性不可编辑；实际痛点是给模板批量填 **商家编码** 与 **是否上架(0/1)**。
+  - 产物（前端）：
+    - 页面：`/costing/tmall-sku-generator`（`frontend/src/pages/costing/TmallSkuTemplateGeneratorPage.tsx`）
+    - 新增：上传天猫官方模板（xls/xlsx）→ 调用 `preview` 产出编码/上架 → 回填模板列（颜色分类/尺寸不改）→ 下载 `*_filled.xlsx`
+    - 支持：可选“覆盖已有值”开关（关闭时若目标单元格已有值则跳过）
+  - 依赖：
+    - 前端新增依赖：`xlsx`（用于在浏览器端读写模板并尽量保留原 sheet 结构）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档 grep/test -d 校验
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+  - 下一步：
+    - 若天猫模板 sheet 名/表头存在变体：补齐更强的表头识别（同义列名、全角括号等）与“选择工作表”下拉
+
+- **最近校对（北京时间 GMT+8）**：2026-01-15（天猫 SKU：模板回填鲁棒性增强（工作表选择/表头识别））
+  - 产物（前端）：
+    - 页面：`/costing/tmall-sku-generator`（`frontend/src/pages/costing/TmallSkuTemplateGeneratorPage.tsx`）
+    - 新增：上传模板后自动解析并提供“工作表（Sheet）”下拉选择（多 Sheet 模板不再默认只取第一个）
+    - 增强：表头识别更鲁棒（兼容全角括号/括号备注；`上架状态` 同义列名）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档 grep/test -d 校验
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+  - 下一步：
+    - 若仍存在“颜色分类/尺寸”值域不一致导致未匹配：增加差异报告（输出未匹配行的颜色/尺寸值，便于回看配置或天猫模板）
+
+- **最近校对（北京时间 GMT+8）**：2026-01-15（发货导入：ERP字段口径对齐（条码/规格）+ 表头兼容）
+  - 背景：
+    - 上架阶段我们拿不到“平台规格Id（网店）”；ERP 配对后会写入 **货品条码（系统）**（主键），发货/售后回传以此为准。
+    - 发货时的规格口径以 **商品规格（网店）** 更“实时真实”；**货品规格（系统）** 是 ERP 配对写入字段，可能存在滞后。
+    - 天猫上架时可通过模板回填 **商家编码**，在 ERP 中对应字段为 **规格编码（网店）**（用于识别/归类到模型/套装编码）。
+  - 产物：
+    - 后端：新增“字段映射字典（单一真相）”，发货导入解析兼容 ERP 导出表头变体（含括号字段名）
+      - 条码字段：`货品条码（系统）`（主键）/`货品条码` 等同义名均可识别
+      - 规格字段优先级：`商品规格（网店）/交易规格`（实时）→ `货品规格（系统）`（滞后兜底）
+      - 预留：`规格编码（网店）`（商家编码）与 `平台规格Id（网店）`（1条码→多平台规格Id）用于后续 API 接入/配对
+    - 前端：`/costing/shipments` 列标题展示按当前发货表习惯：`货品条码/交易规格`（语义仍为“系统条码主键 + 网店实时规格解析”）
+  - 关键文件：
+    - `backend/src/planner/services/shipment_import_service.py`
+    - `frontend/src/pages/costing/ShipmentMonitorPage.tsx`
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档 grep/test -d 校验
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+  - 下一步：
+    - 若 ERP 导出字段进一步变化：继续补齐同义表头（但坚持“条码锁定版本、规格解析尺寸/tokens”的主链不变）
+
+- **最近校对（北京时间 GMT+8）**：2026-01-15（Frontend 接力：强制三件套验收 + 工作区干净度）
+  - 本轮范围：不扩展功能，仅完成接力验收与恢复包落地（避免“正确版本只在工作区”）
+  - 本轮产物：
+    - `.gitignore`：精确忽略本地临时表单 `DOC/基础表单/SKU模板_213002_1768447607241.xls`（避免误提交/工作区长期脏）
+    - 更新恢复包：补充本条记录到 `DOC/agents/state.md`
+  - 硬验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档 grep/test -d 校验
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+  - 下一步：
+    - 若继续迭代“天猫布艺 SKU规格生成器”：优先等你补齐第二张图的字段细节/交互区形态（矩阵/列表、灰行启用、商家编码入口）
+
+- **最近校对（北京时间 GMT+8）**：2026-01-14（Bundle Templates：属性复制继承B/Z模式+编码；抽屉文案“短语”→“属性”】【/costing/bundle-templates】）
+  - 产物（前端）：
+    - 页面：`/costing/bundle-templates`（`frontend/src/pages/costing/BundleTemplatesPage.tsx`）
+    - 修复：左侧列表“复制”按钮复制出来的新记录 **生成新编码（新 selector）**，并 **继承原记录的模式（B/Z）** 与其它配置，避免“复制后模式丢失/编码不对”的误解
+    - 防呆：启用按钮增加护栏——同一 selector 编码仅允许 1 条启用（理论上 selector 应唯一，但用于兜底防止异常数据导致命中歧义）
+    - 文案：抽屉 UI 中“短语”统一改为“属性”（列表/编辑/空态/提示/占位符等）
+    - 增强：属性编辑区新增 **“属性公式（可复制）”**，按 **互斥组**自动生成，例如：`[{黄金绒}{雪尼尔}][{}{毛球}]+[{PP}{羽丝绒}]`
+      - `[{...}]` 表示一个互斥组（多选一，组内只能选一个 TOKEN；`{}` 表示空/默认）
+      - 同一互斥组选项可覆盖多个位置（例如同一个 `{雪尼尔}` 同时替换前片+后片）
+      - TOKEN 输入框收口：仅允许 1 个 TOKEN（自动取第一个）
+      - **兜底-零成本口径**：只有当基准物料存在“兜底-零成本”占位时才会生成带空选项的互斥组（例如 `[{}{毛球}]`）；若无该占位，则不会出现 `{}` 分支（避免把“本来没有毛球选项”的款错误表达为可选）
+      - **筛选口径**：属性公式只基于“已筛选/已强制”的基准行生成；未筛选时不应出现 `[{}{毛球}]` 这类互斥组
+      - **解析型专用**：仅当属性为 **解析型（B）** 时展示“属性公式/互斥组下拉”；指定型（Z）不展示该功能
+      - **UI 交互**：互斥组选项以下拉方式展示，并按“模型编码 + 该模型全部下拉”一行呈现；模型编码使用带底色胶囊样式便于扫读
+      - **公式落点**：生成的属性公式会自动写入上方“属性名称/公式”输入框（可编辑），且携带每个组件的 `宽*高*数量`
+      - **体验优化**：
+        - 模型编码胶囊缩小（更像标签，不抢眼）
+        - 每个模型行支持上下移动（影响生成顺序/组词顺序）
+        - 同一模型行内，互斥组下拉支持左右移动（用于调整“毛球在前/材质在后”等顺序）
+        - 增加“自动生成”：基于当前下拉选择自动生成简化规则（如 `黄金绒30*50*1 + 羽丝绒45*45*1`）
+        - 对客别名（TOKEN）维护入口迁移：从主界面移除，改到“筛选”弹窗的物料位标题行右侧（右对齐输入框），同底层物料自动同步，避免误改
+        - 属性编辑区降噪与聚焦：移除“已锁定/运营短码”等说明；将“复制公式/重新生成/预演(debug)”集中到模式行；“属性生成器”（模型互斥组下拉+自动生成）使用淡黄底高亮，并支持一键复制自动生成文本
+        - 生成器体验补强：淡黄底区域宽度 100% 铺满；“自动生成”移到下拉上方；筛选弹窗里填写的兜底别名会直接成为下拉可选 TOKEN（即使未勾选替换规则），避免下拉为空
+        - 候选口径与可视化：未勾选规则时，下拉只展示兜底别名；勾选规则后才将规则 TOKEN（如“雪尼尔”）加入候选；自动生成里“不可更改”的兜底 TOKEN 以红色加粗显示
+        - 修复细节：生成器淡黄底现在独立占一行（确保铺满表单宽度）；零成本互斥组不再误判为“不可更改”；上下/左右移动的顺序随“保存当前属性”持久化并在编辑时恢复
+        - 交互强调：自动生成中，凡是“通过下拉选择”的 TOKEN 一律红色加粗（跨模型/跨组）；淡黄底区域进一步处理了 Card 内边距导致的“看似不满宽”
+      - **新增：天猫布艺 SKU规格生成器（MVP）**
+        - 新页面：`/costing/tmall-sku-generator`
+        - 支持维护：颜色分类（=图案/工艺款式）× 尺寸 的 SKU 矩阵（每格开关=是否上架）
+        - 支持：生成预览行（调用后端 preview），导出 xlsx（sheet1 数据 + sheet2 字段映射）
+        - 后端接口：
+          - `POST /api/planner/tmall/sku-template/preview`
+          - `POST /api/planner/tmall/sku-template/export`
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档 grep/test -d 校验
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-14（Frontend Agent 接力校验：仅阅读接力包 + 硬验收 + 落地提交）
+  - 本轮范围：不做功能改动，仅完成接力校验与流程落地（避免“正确版本只在工作区”）
+  - 本轮产物：
+    - 已核对 `DOC/agents/handoff_frontend.md`（前端编辑器/两入口/接口单一真相/验收门槛）
+    - 更新恢复包：补充本条记录到 `DOC/agents/state.md`
+  - 硬验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档 grep/test -d 校验
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+  - 下一步（建议）：
+    - 若有具体前端需求，请指明页面/功能点；我将按 `DOC/agents/handoff_frontend.md` 的 workset 优先在 `frontend/src/components/costing/ProductModelEditorDrawer.tsx` / `frontend/src/services/planner.ts` 范围内小步闭环
+
+- **最近校对（北京时间 GMT+8）**：2026-01-14（套装模板制度化：Z/B 双前缀 + Z关键行强制覆盖 + 后端Z解析）
+  - 产物（后端）：
+    - `/bom/generate-by-spec` 支持识别 `Z-XXXXAA` / `Z:CODE:AA`（指定型入口），并在 trace 增加：
+      - `bundle_prefix`（B/Z）
+      - `bundle_code_display`（B:CODE 或 Z:CODE）
+    - `spec_parser_service.parse_spec` 支持提取 `Z-` / `Z:` 形式套装 token（生成 `Z:CODE(:AA)` 内部 token）
+  - 产物（前端）：
+    - `/costing/bundle-templates`（编辑套装模板）：
+      - selector 增加 **模式**：B（解析型）/ Z（指定型），并展示运营应使用的短码
+      - 解析型（B）：禁止配置强制映射（防止混用）
+      - 指定型（Z）：新增 **Z模式关键行（必须强制覆盖）** 多选区（默认一键选中“依赖触发词”的行）
+      - 保存/检验：Z 模式下要求“所有依赖触发词的行”必须纳入关键行，并且关键行必须配置强制映射且规则未禁用
+      - 短语生成器支持 B/Z 前缀输出（复制/预演 debug 均使用当前 selector 模式前缀）
+  - 新增文档：
+    - `DOC/costing/blueprints/bundle_templates_z_b_protocol.md`（Z/B 协议与制度化使用规范 v0.1）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`backend/venv/bin/python -m pytest backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-14（套装模板：筛选弹窗锁模式 + FORCE 展示补强）
+  - 产物（前端）：
+    - `/costing/bundle-templates` 的“筛选”弹窗：
+      - 模式（变体/指定）**由 selector 的 B/Z 模式锁死**，弹窗内不可切换，避免新增行/误操作导致混用失控
+      - OK 按钮文案随锁定模式变化（填充触发词 / 强制指定）
+    - Z/指定型下的 FORCE 展示更直观：
+      - 明确展示“兜底物料行（前片/后片等结构槽位） → 替换后物料”
+      - 保留一级/子规则 id 片段用于排障定位
+  - 验收命令：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`backend/venv/bin/python -m pytest backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-14（套装模板：UI降噪 + Z/B短码颜色区分 + 模式锁定）
+  - 产物（前端）：
+    - `/costing/bundle-templates`：
+      - 删除多余提示：不再展示“编码已生成/把短码放进规格/已注入触发词/依赖触发词行列表”等噪声块
+      - 左侧短语列表：`Z-XXXXAA` 与 `B-XXXXAA` 使用不同颜色 Tag 区分
+      - selector 模式（B/Z）：一旦该 selector 已经做过“筛选/强制映射”，模式切换自动锁死，避免配置语义翻车
+  - 验收命令：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`backend/venv/bin/python -m pytest backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-14（套装模板：移除短语生成器 + 左侧短码随模式变化 + 保存校验更可理解）
+  - 产物（前端）：
+    - `/costing/bundle-templates`：
+      - 移除“短语生成器（可复制/可校验）”区域（按运营反馈降噪）
+      - 左侧短语列表短码根据 selector 模式显示：
+        - B 解析型 → `B-XXXXAA`
+        - Z 指定型 → `Z-XXXXAA`
+      - “保存前校验未通过（短语 AH 缺组件行）”提示文案补强：明确告知“补齐至少 1 条组件行或停用该短语”
+      - 新建短语默认 **停用**，避免未填完阻塞保存
+  - 验收命令：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`backend/venv/bin/python -m pytest backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-14（套装模板：移除“Z模式关键行”区块 + FORCE 胶囊样式优化）
+  - 产物（前端）：
+    - `/costing/bundle-templates`：
+      - 删除“Z模式关键行（必须强制覆盖）”UI 区块（避免运营困惑）
+      - Z 模式校验改为自动约束：凡是“依赖触发词”的物料行必须存在强制映射且规则可用（不需要人工维护关键行）
+      - FORCE 展示样式优化：兜底物料行使用绿色胶囊 Tag，替换后物料使用红色胶囊 Tag
+  - 验收命令：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`backend/venv/bin/python -m pytest backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-14（套装模板：进一步降噪（不展示一级/子规则ID）+ 胶囊颜色统一）
+  - 产物（前端）：
+    - `/costing/bundle-templates`：
+      - FORCE 行不再展示“一级/子规则 id”（对运营无意义，避免干扰）
+      - 兜底物料行统一为灰色胶囊 Tag（`color=default`），替换后物料统一为红色胶囊 Tag（`color=red`）
+      - TOKEN 分支展示也按同样胶囊风格呈现（灰兜底 → 红替换）
+  - 验收命令：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`backend/venv/bin/python -m pytest backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-14（套装模板：模式默认指定型 + 列表短码分色 + 运营短语不截断 + 模型多选换行）
+  - 产物（前端）：
+    - `/costing/bundle-templates`：
+      - 抽屉：模式选择“指定型(Z)”排在前面；新建短语默认模式为指定型
+      - 列表页：
+        - 编码列更窄（缩小约 1/3）
+        - “短码(B/Z)”列按 selector 模式输出并分色（B蓝/Z橙红）
+        - “运营短语”不再省略号截断，全文展示
+      - 模型池多选框：选中模型标签支持换行显示（不再一行挤爆）
+  - 验收命令：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`backend/venv/bin/python -m pytest backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-14（套装模板：列表列重排（属性名称合并列）+ 无复制图标 + 更新时间仅日期）
+  - 产物（前端）：
+    - `/costing/bundle-templates` 列表页：
+      - 名称列缩小（约 1/3）
+      - “短码(B/Z)”与“运营短语”合并为单列：**属性名称**（前短码胶囊、后运营短语；均不显示复制图标）
+      - 模型列缩小约一半
+      - 更新时间只展示日期（YYYY-MM-DD）且列宽缩小（约 1/3）
+  - 验收命令：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`backend/venv/bin/python -m pytest backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-14（套装模板：属性名称去掉 selector 前缀 + 短码胶囊样式补强）
+  - 产物（前端）：
+    - 列表页“属性名称”：
+      - 运营短语不再显示 `AC:` 这类 selector 前缀（只显示短语正文）
+      - 短码胶囊：增加圆角+边框线，并统一最小宽度，视觉更像“胶囊”且对齐
+  - 验收命令：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`backend/venv/bin/python -m pytest backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-14（套装模板：一键清理“变体改了导致空规则/清不掉”的失效绑定）
+  - 产物（前端）：
+    - `/costing/bundle-templates` 编辑页：
+      - 新增按钮：**清理失效规则**（按当前已加载的变体规则，清除失效的 `parent_variant_id / forced_child_variant_id / force_variant_by_base_line`）
+      - 文案口径明确区分：触发词（参与匹配） vs 对客TOKEN（展示用途，不参与匹配）
+  - 验收命令：
+    - Frontend：`npm -C frontend run build`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-14（套装模板：明确“运营只用 B-XXXXAA”并可视化/预警触发词依赖）
+  - 产物（前端）：
+    - `/costing/bundle-templates` 编辑页：
+      - “筛选→变体/强制”时，触发词会被写入模板组件（并对 `材质:雪尼尔` 同步注入 `雪尼尔`，降低 token 口径差异导致的漏命中）
+      - 组件行展开区新增提示：**是否已注入触发词**（已注入=运营无需再写“雪尼尔/棉麻布”等；未注入=提示可能仍依赖运营写词）
+      - 校验结果新增 warn：当版本存在依赖 TOKEN 的规则但当前组件未注入且未强制时，提示风险并给出示例触发词
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-14（套装模板：编辑页增强“保存前强校验 + 预演debug”以降低误用风险）
+  - 产物（前端）：
+    - `/costing/bundle-templates`（套装模板）编辑抽屉：
+      - “保存当前短语”新增**全局保存前校验**：启用的短语必须有备注（phrase）且至少1条完整组件行，避免保存后不可用/不敢用
+      - “短语生成器”新增**预演（debug）**：一键调用后端 `/bom/generate-by-spec-debug`，并在 Drawer 展示输入 spec_text 与返回 JSON，便于核对 selector/强制命中/变体命中是否稳定
+  - 说明（当前理解的关键边界）：
+    - **纯编码**：`B:CODE` / `B-XXXX` 只负责定位套装模板；不保证变体命中稳定
+    - **selector**：`B:CODE:AA` / `B-XXXXAA` 可强制选择某条 phrase_preset（推荐），从而注入 tokens 或直接使用 preset.components（更稳定）
+    - **强制命中**：`force_variant_by_base_line` 会在后端以 `reason=forced_by_bundle` 记录命中；当变体规则变更/失效时会报错，需重新筛选保存
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-14（测试台：新增“店铺预演”TAB（店铺独立核算/组合模型））
+  - 产物（前端）：
+    - `/costing/product-listing` 左侧 Tabs 新增：**店铺预演**
+    - 支持输入店铺月 GMV、目标净利%、固定成本%、广告费%、平台扣款%、平台活动%、快递费%（店铺口径）
+    - 输出：全店所需贡献毛利（元/%)、变动费合计与拆分、产品成本预算（元/%），并按“引流/利润/形象”结构反推 **利润款需要达到的贡献毛利率%**
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-14（利润推演：新增“目标成本（给定市场售价）”模式）
+  - 产物（前端）：
+    - `/costing/product-listing` → 利润推演「模式」新增：**目标成本（给定市场售价）**
+    - 输入市场到手价（券后成交价/可选标价）后，页面会：
+      - 计算该售价下的 **当前实际净利/净利%**
+      - 反推满足“目标净利%”时 **可承受的最大进厂价/单位成本**
+      - 给出 **需降本金额/需降本%（相对当前进厂价）**
+    - 说明：该模式是“目标成本法（市场价→允许成本）”，用于避免运营被“成本顺加推高价”劝退；不改 BOM 成本口径，只做反推与对比。
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-14（全站：制造费用 UI 展示 30% → 23%）
+  - 产物（前端）：
+    - 统一将前端 UI 中“制造费/制造费用/管理费”相关的 **30% 文案**改为 **23%**
+    - 覆盖页面/区域：`/costing/product-listing` 的 BOM 汇总、`/costing/shipment-monitor` 的 BOM 汇总、`/costing/costing-models` 的打样汇总标签、以及内置指南 `frontend/src/guides/product_model_guide.md`
+    - 说明：本次仅改 **展示文案**，不改后端/前端实际计算字段（如 `overhead_rate=0.3` 等仍保持原样）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-14（Standard Models：抽屉宽度 +100px（仅右侧变宽））
+  - 产物（前端）：
+    - `ProductModelEditorDrawer`：标准模型（`entryContext="standard"`）抽屉宽度从 1320 调整为 **1420**（+100px）
+    - 左侧“工艺模块”栏保持固定宽度不变，新增宽度全部让给右侧清单区域
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-14（Sample/Standard 抽屉：制造费显示改为“约23%”（不改计算口径））
+  - 产物（前端）：
+    - 打样/标准模型抽屉（`ProductModelEditorDrawer`）计算汇总：`制造费(30%)` 文案改为 **`制造费(约23%)`**
+    - 产品上架（测试台）BOM 汇总：`制造费用（30%）/制造费率30%` 文案改为 **约23%展示**，并补充“计算口径仍为30%（折算合计≈23%）”
+  - 备注：
+    - 不影响计算：制造费仍按 **(物料+人工)×30%** 计算，仅修正文案，避免误解为“合计×30%”
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-14（Product Listing：利润诊断价格输入默认空 + 单价也可运行）
+  - 产物（前端）：
+    - `/costing/product-listing` → Tab「利润推演」→ “利润诊断（按券后价/标价）”：
+      - 券后/券前价格输入 **默认不预填**（需人工输入）
+      - 允许 **只填券后价** 直接运行（券前会按券后兜底，折扣=0）
+      - 若只填券前价：自动视为券后=券前（折扣=0）
+      - 若券后+券前都填：会自动按两者反算活动折扣（显示在结果区）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-14（Product Listing：税制切换默认税率联动）
+  - 产物（前端）：
+    - `/costing/product-listing` → Tab「利润推演」：
+      - 选择 **小规模**：自动将“增值税%”设置为 **3%**
+      - 切回 **一般纳税人**：自动将“增值税%”设置为 **13%**
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-14（Product Listing：利润推演 Tab 模型选择块三列化（打样/标准））
+  - 产物（前端）：
+    - `/costing/product-listing` → Tab「利润推演」：
+      - 模型选择块拆为三列：**类型（打样/标准） / 模型名称 / 版本名称**
+      - 标准模型：版本下拉默认 **仅 published**，并在版本选择右侧提供“**全部/仅发布**”切换
+      - 打样模型：版本下拉始终展示全部（不做 published 限制）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-14（Product Listing：利润推演 Tab 行内布局再收口 + 诊断模式锁定目标净利%）
+  - 产物（前端）：
+    - `/costing/product-listing` → Tab「利润推演」：
+      - “平台相关/发货成本/售后预估/管理费用/交纳税费”全部改为 **标题与输入同一行**（不再标题换行）
+      - “利润款（定位）”下拉已移动到 **目标净利%** 之前
+      - 移除“日常”后面的“税率/税制”标签（避免干扰）
+      - 选择“利润诊断”时：**目标净利% 输入框置灰锁定**
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-14（Product Listing：利润推演 Tab 布局收口 + 预设保存 + 税制（一般/小规模））
+  - 产物（前端）：
+    - `/costing/product-listing` → Tab「利润推演」：
+      - “模式”区改为分行展示：诊断模式的 **券后成交价(含税)** / **优惠前标价(含税)** 下移到下一行
+      - 新增独立一行：**目标净利% + 预设下拉 + 新建 + 保存**（保存“成本构成分析与利润模型推演（输入）”区全部参数，下次直接复用）
+      - 输入区按口径拆行：平台相关 / 发货成本 / 售后预估 / 管理费用 / 交纳税费，并新增 **销售提成%**
+      - “利润款天猫上海中通日常”块补充税率标签与税制标签（区域不挪动）
+      - 税制切换：一般纳税人（销项-进项抵扣）/ 小规模（不抵扣进项）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档 grep/test -d 校验
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-14（Frontend 接力恢复：遗留改动落地前硬验收全绿）
+  - 产物（接力/恢复）：
+    - `.gitignore` 增加忽略 `.vscode/`（避免误提交本机配置导致工作区长期“脏”）
+    - 已完成强制验收：Frontend build + Docs grep/test -d + Backend 最小 pytest
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`cd frontend && npm ci`、`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档 grep/test -d 校验
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+  - 下一步：
+    - 将本工作区遗留改动按主题小步提交（一个主题一个 commit），并在需要上线时按 `DOC/agents/commands.md` 执行静态资源原子发布
+
+- **最近校对（北京时间 GMT+8）**：2026-01-13（Product Listing：利润推演口径调整：快递费改按件金额、支付费并入平台扣点）
+  - 产物（前端）：
+    - `/costing/product-listing` → 左侧 Tab “利润推演”：
+      - **快递费**：从“快递费%”改为 **快递费(元/件)**（更贴近低客单价商品）
+      - **支付费**：不再单列输入与拆解（默认视为已包含在平台扣点中）
+      - 反推公式与结果拆解同步更新
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的 4 条 `grep -nF ...` 校验文档存在性
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-13（Product Listing：利润推演税金口径升级为“一般纳税人：销项-进项抵扣”）
+  - 产物（前端）：
+    - `/costing/product-listing` → 左侧 Tab “利润推演”：
+      - 新增输入：**进项可抵扣%**（默认 60%，用于把“进厂价/单位成本”中反推的进项税额按比例抵扣销项）
+      - 税金拆解升级：新增展示 **进项可抵扣(估算)**、**应纳增值税(估算)**；附加税按“应纳增值税×附加比例”计算
+      - **进项拆分**（业务确认）：平台扣点与广告费按 **6% 专票**估算进项税额并**全额抵扣**（与“进厂价进项抵扣”合并为总进项抵扣）
+      - 反推售价（solve）同步使用该口径（分段闭式解：应纳税为 0 / >0 两段）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的 4 条 `grep -nF ...` 校验文档存在性
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-13（Materials：回滚“真实物料”用途选项，恢复三选一）
+  - 产物（前端）：
+    - `/costing/materials` → 物料详情 → 成本参数：物料用途保持三选一 **直接BOM / 条件物料 / 间接耗材**（不新增“真实物料”展示项）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的 4 条 `grep -nF ...` 校验文档存在性
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-12（Standard Models：班组下拉隐藏ID仅展示名称）
+  - 产物（前端）：
+    - 工序行“班组”下拉选项仅展示班组名称（不显示短ID）；内部 value 仍使用 `team.id` 并写入 `metadata_json.team_id`（不影响工资归属主键）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的 4 条 `grep -nF ...` 校验文档存在性
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-12（Materials：物料详情“成本参数”用途口径收口 + 选择器隐藏间接耗材）
+  - 产物（前端）：
+    - `/costing/materials` → “物料详情抽屉 → 成本参数”：将“是否 BOM 物料 + 物料用途（本地分类）”合并为一个三选一：**直接BOM / 条件物料 / 间接耗材**
+      - 保存口径：选择 **间接耗材** → 自动写 `is_bom_material=false`；选择 **直接BOM/条件物料** → 自动写 `is_bom_material=true`，并写入 `metadata_json.usage_class`
+      - 默认回显：历史 `is_bom_material=true` 的物料，会默认回显为“直接BOM”（满足“保留原勾选=直接BOM”）
+      - 默认交互（修正）：用途默认 **不选**；保存时 **必选**（避免默认落到“间接耗材”造成误导）
+    - “物料选择”（真实物料）：在工艺模块 / 虚拟物料 / 模型清单编辑等新增物料入口的选择器里，默认 **不展示间接耗材**
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+  - 备注（Phase0）：
+    - 目前仅做标记与筛选，不改变 BOM 输出/扣库逻辑；条件物料的“条件表达式/生效规则”后续再做闭环。
+
+- **最近校对（北京时间 GMT+8）**：2026-01-12（Standard Models：班组切换确认不再依赖单价差异）
+  - 产物（前端）：
+    - 班组切换确认弹窗触发条件改为：只要 `team_id` 发生变化就弹窗确认（避免“同单价但归属变更”导致误记工资）
+    - 确认后：若班组配置了默认单价则回填；未配置则仅更新归属
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的 4 条 `grep -nF ...` 校验文档存在性
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+
+ - **最近校对（北京时间 GMT+8）**：2026-01-12（Materials：入库单价显示精度修复，避免“BOM单价实时计算看起来错误”）
+   - 产物（前端）：
+     - `/costing/materials`：入库单价（<1）显示改为 4 位小数（例如 `0.0650`），避免默认货币格式四舍五入成 `0.07` 导致与实时 BOM 单价计算结果不一致的错觉
+   - 验收命令（必须，全部 0 退出码）：
+     - Frontend：`npm -C frontend run build`
+     - Docs：按 `DOC/agents/commands.md` 的 4 条 `grep -nF ...` 校验文档存在性
+     - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-12（Standard Models：班组切换确认弹窗取消不改下拉 + 下拉展示短ID）
+  - 产物（前端）：
+    - 班组切换弹窗点击“取消”时：不更新班组选择、不写入 `team_id`（用户要求：取消=不变更）
+    - 班组下拉选项展示改为：`班组名 · <短ID>`，避免重名时误选导致工资归属错误
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的 4 条 `grep -nF ...` 校验文档存在性
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-12（Standard Models：班组归属改为 team_id 主键）
+  - 产物（前端）：
+    - 工序行“班组”下拉选择的 value 改为 taxonomy `team.id`（稳定主键），保存到 `process_row.metadata_json.team_id`
+    - 同时保留 `team_name` 仅用于展示/兼容历史；历史仅有 `team_name` 的行会在 UI 层尝试映射出对应 `team_id`
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的 4 条 `grep -nF ...` 校验文档存在性
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-12（Standard Models：班组默认单价回填无变化问题修复）
+  - 产物（前端）：
+    - 班组默认单价 `rate_per_minute` 解析增强：支持从字符串中提取数值（如 `0.8元/分`），并兼容旧单价落在 `row.metadata_json.rate_per_minute` 的情况
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的 4 条 `grep -nF ...` 校验文档存在性
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-12（Standard Models：工序组“班组→默认分钟单价”回填）
+  - 产物（前端）：
+    - 标准模型管理（`/costing/standard-models`）→ 清单编辑 → 工序组“班组”下拉：切换班组时读取“分类管理→班组管理”的 `默认单价(元/分)`，弹窗提示“原价→新价”，确认后自动回填到该工序行 `rate_per_minute`（调参面板同口径）
+    - 取消确认：仅更新班组，不强改单价（仍可在调参面板手动改）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的 4 条 `grep -nF ...` 校验文档存在性
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-12（Sample Models：新增版本默认“版本名称”）
+  - 产物（前端）：
+    - 打样管理（`/costing/sample-models`）在“新增版本/复制版本”弹窗中，**版本名称输入框默认预填**（写入 `metadata_json.ui_label`，并在前端优先展示），用户可直接编辑再提交
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的 4 条 `grep -nF ...` 校验文档存在性
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-12（Structure Standards：code 收口 + 历史中文 code 改码入口）
+  - 产物（前端）：
+    - 结构标准 `code` 强约束：仅允许 `a-z0-9_` 且需以字母开头（长度 3~64）；输入会自动规范化（中文会转拼音）
+    - 编辑结构标准新增 **“改 code（危险）”**：走 taxonomy PATCH name，用于把历史中文 code（如“印染地毯”）改为英文/拼音
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的 4 条 `grep -nF ...` 校验文档存在性
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+  - 备注/风险：
+    - `code` 作为下游引用字符串键（版本/模块可能直接存 code），改码不会自动迁移历史引用；建议仅用于“刚建错/尚未被引用”的条目，或配套做数据迁移
+
+- **最近校对（北京时间 GMT+8）**：2026-01-12（Frontend Agent 接力：恢复包校验 + 防误提交）
+  - 产物：
+    - 防误提交：`.gitignore` 精确忽略本地临时大表单（`DOC/基础表单/绮妙1-10平台商品列表.xlsx`、`DOC/基础表单/ERP品商品下载原始列表.xlsx`），不影响仓库中已版本化的 fixtures/chunks 表单
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的 4 条 `grep -nF ...` 校验文档存在性
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+  - 下一步：
+    - 若确需把上述两个 `.xlsx` 纳入版本化：先确认是否需要“chunk 化”/脱敏，再移除 `.gitignore` 精确忽略并以单独 commit 提交
+
+- **最近校对（北京时间 GMT+8）**：2026-01-11（Integration/Factory：手机端“商品查询/生产扫码看板”闭环）
+  - 产物（前端）：
+    - 新增页面：`/costing/production-scan`（`frontend/src/pages/costing/ProductionScanPage.tsx`）
+    - 手机端体验：输入条码/拍照扫码→展示规格图片、交易规格、解析尺寸、网店SKU维度信息、物料清单（扣库口径）
+    - 物料清单：单行展示（序号 + 编码胶囊 + 名称 + `用量：x 单位`），虚拟/真实分色（VM* 兜底），点击行弹窗查看物料图片（真实物料用 `Material.images[]`，虚拟物料展示 bindings 图片）
+    - “绑定模型”展示收口：不显示版本号；显示淡绿胶囊（追溯仍以 SKU 主档绑定为准，计算口径以“模型最新已发布标准版”做 preview）
+    - 品牌：浏览器标题与布局标题统一为 `饰家如画©智慧工厂`
+  - 产物（后端/集成补强，本轮已落地到代码与文档）：
+    - SKU 主档导入字段映射补强：`规格编码（网店）/匹配方式/生产工艺` 等写入 `metadata_json`
+    - 引入平台SKU维度映射表（ShopSkuMapping）以支持“同一货品条码关联多个平台规格Id”
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的 4 条 `grep -nF ...` 校验文档存在性
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+  - 下一步（建议）：
+    - 若生产要严格“只用发布标准版计算”，建议后端提供按 `model_code` 取最新 published standard 的专用接口（避免前端二次搜索与歧义）
+    - 扫码页可选：把“规格尺寸”改为同时展示面积/周长（若业务需要），并把“用量”按显示口径做可切换（含损耗/不含损耗）
+
+- **最近校对（北京时间 GMT+8）**：2026-01-11（SKU 主档：人工审核“一键跑完（循环绑定）”）
+  - 产物（前端）：
+    - `/costing/sku-master` → 左侧“人工审核”新增按钮：**一键跑完（人工审核循环绑定）**
+    - 行为：对当前勾选的 SKU 按 **200 条/轮**循环执行 `bind-by-model`，支持 **停止**，并展示进度心跳（轮次/本轮绑定/累计绑定/已处理/错误累计/最后更新时间）
+  - 产物（前端服务层）：
+    - `frontend/src/services/planner.ts`：`bindSkuMastersByModel(payload, opts?)` 支持可选 `timeoutMs/signal`（用于长任务超时保护与可取消）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q && ./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_binding_workbench_mvp.py -q`
+  - 备注：
+    - 若系统 python 无 pytest（如 `/opt/aiext/bin/python: No module named pytest`），请使用项目 venv：`./backend/venv/bin/python -m pytest ...`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-11（SKU 主档：人工审核“按筛选条件全选（跨页）”一键跑完）
+  - 产物（前端）：
+    - `/costing/sku-master` → 人工审核新增两种模式：
+      - **当页勾选模式（默认）**：完全手动勾选，执行仅作用于当前勾选项
+      - **所有页勾选模式（跨页）**：按筛选条件视为全选，取消勾选=加入排除列表，可“一键跑完”
+    - 行为：右侧列表在 `未绑定 + 筛选条件` 下，默认视为“全选”；取消勾选会加入“排除列表”；点“一键跑完”将按筛选条件在服务端每轮最多 200 条循环绑定
+    - 防呆：执行前弹窗要求**输入模型名称二次确认**（确认输入会做空格归一化，避免“多空格/换行”导致误判）
+    - 体验：点击“开始执行”后**确认弹窗会立刻关闭**，后台继续执行；进度与“停止”在页面内展示
+
+- **最近校对（北京时间 GMT+8）**：2026-01-11（SKU 主档：自动识别“一键跑完”弹窗体验）
+  - 变更：
+    - 自动识别的“一键跑完（自动循环执行）”确认弹窗：点击“开始执行”后**立刻关闭**，后台继续循环；进度与“停止”在页面内展示
+
+- **最近校对（北京时间 GMT+8）**：2026-01-11（SKU 主档列表默认排序：ERP 原始最后更新时间）
+  - 变更：
+    - `/api/planner/sku-master` 列表默认排序改为：`source_updated_at`（ERP 原始最后更新时间）**倒序**，空值排最后；其次按 `updated_at` 倒序
+
+- **最近校对（北京时间 GMT+8）**：2026-01-11（SKU 主档图片：按需代理 + 本地缓存兜底）
+  - 背景：扫码看图目前直连天猫 `img.alicdn.com`，存在防盗链/网络抖动/链接变更等风险
+  - 产物：
+    - 后端新增图片代理：`GET /api/planner/sku-master/{sku_id}/images/{kind}`（kind=spec|product）
+    - 行为：首次访问拉取远端图片并落盘到 `PLANNER_MEDIA_DIR/sku_master_images/`，后续直接读本地；支持 `force_refresh=1`
+    - 清理：按 TTL（天）+ 最大文件数做 best-effort 清理（LRU-ish by mtime）
+    - 前端：扫码页与 SKU 主档详情抽屉图片统一改为走同源代理 URL（不再直连第三方）
+  - 配置（环境变量）：
+    - `PLANNER_PERSIST_SKU_IMAGES=true|false`
+    - `PLANNER_SKU_IMAGE_CACHE_TTL_DAYS=365`
+    - `PLANNER_SKU_IMAGE_CACHE_MAX_FILES=100000`
+  - 验收命令：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_image_proxy_mvp.py -q`
+  - 产物（后端）：
+    - 新接口：`POST /api/planner/sku-master/bind-by-model/bulk`（按筛选条件批量绑定，支持 `excluded_sku_master_ids`）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Backend：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_binding_workbench_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-05（Planner：接力清理崩溃遗留的跨域未提交改动，恢复干净工作区；已硬验收 `npm -C frontend run build` 通过）
+- **最近校对（北京时间 GMT+8）**：2026-01-05（Frontend：行级变体“替换物料”选择器新增“同单位置顶 + 仅同单位筛选”，通过 `baseUnit` 透传，减少单位不一致返工；验收 `npm -C frontend run build`）
+- **最近校对（北京时间 GMT+8）**：2026-01-05（Backend：spec/parse 增补短语 token（白名单，先覆盖“背面纯色”），使 TOKEN(any) 规则可命中；验收 `./backend/venv/bin/python -m pytest backend/tests/planner/test_spec_parser_code_tokens.py -q`）
+- **最近校对（北京时间 GMT+8）**：2026-01-05（Ops-ish：按强制流程重构并原子发布前端静态资源：`cd /home/admin/ai-costing-system/frontend && npm run build` + `PLANNER_STATIC_DIR=/var/www/html/ai-costing/dist ./scripts/deploy_static.sh`）
+- **最近校对（北京时间 GMT+8）**：2026-01-05（Frontend：新增“产品上架（测试台）”页：`/costing/product-listing`，支持输入交易规格→spec/parse→bom/generate 只读诊断（解析结果/命中情况/最终BOM）；验收 `npm -C frontend run build`）
+- **最近校对（北京时间 GMT+8）**：2026-01-05（Frontend：产品上架（测试台）版本选择支持“显示全部标准版本（含 draft/archived）”，默认仍仅 published，便于未发布版本先测试；验收 `npm -C frontend run build`）
+- **最近校对（北京时间 GMT+8）**：2026-01-05（Frontend：产品上架（测试台）在最终BOM下追加“工序明细”与成本汇总：合计=物料+工序+制造费30%，金额保留2位；验收 `npm -C frontend run build`）
+- **最近校对（北京时间 GMT+8）**：2026-01-05（Frontend：产品上架（测试台）补齐“扣库清单（真实物料展开）”展示：读取 `trace.inventory.inventory_lines`（用于库存/对账口径）；验收 `npm -C frontend run build`）
+- **最近校对（北京时间 GMT+8）**：2026-01-05（Frontend：产品上架（测试台）“命中情况”Tab 增强：展示触发条件表达式 + 基准物料 + 替换物料（通过版本清单 + line-variants 查询拼装），便于运营一眼排错；验收 `npm -C frontend run build`）
+- **最近校对（北京时间 GMT+8）**：2026-01-05（Frontend：标准模型管理清单编辑防呆：仅 draft 版本允许“新增/替换物料、工序”；非 draft 直接禁用入口并提示先复制版本，避免误以为“没落库”；验收 `npm -C frontend run build`）
+- **最近校对（北京时间 GMT+8）**：2026-01-05（Frontend：标准模型管理清单编辑稳定性修复：版本清单查询 `linesQuery` 禁止 focus/reconnect 自动 refetch，避免覆盖本地未保存新增/调参；新增行改为函数式 setState 防止闭包旧值；验收 `npm -C frontend run build`）
+- **最近校对（北京时间 GMT+8）**：2026-01-05（Frontend：结构标准 slots 扩展元数据：每个 slot 支持“驱动量/备注”字段（落在 taxonomy.metadata.slot_defs），并在“选择工艺模块”弹窗内展示模块对应 slot 的驱动量/备注，辅助防漂移；验收 `npm -C frontend run build`）
+- **最近校对（北京时间 GMT+8）**：2026-01-05（Frontend：结构标准 slots 编辑体验优化：单行 4 输入框（中文/短码缩为约 2/3 宽度），删除整行字段；抽屉宽度 +50px；验收 `npm -C frontend run build`）
+- **最近校对（北京时间 GMT+8）**：2026-01-05（Frontend：结构标准 slots 编辑体验优化：抽屉宽度加宽（890），并优化 slot 行布局（不换行 + 备注最小宽度下调）保证“删除”按钮停留在第一行；验收 `npm -C frontend run build`）
+- **最近校对（北京时间 GMT+8）**：2026-01-05（Backend：修复 `GET /api/planner/process-modules?structure_code=...` 500（兼容性：结构筛选改为 Python 过滤，避免 Postgres JSONPath 不兼容）；验证：`curl -sS "http://127.0.0.1:8800/api/planner/process-modules?page=1&page_size=10&structure_code=baozhen"`；验收：`./backend/venv/bin/python -m pytest backend/tests/planner/test_structure_tag_filters_mvp.py -q`）
+
+- **最近校对（北京时间 GMT+8）**：2026-01-06（Planner-Optimization：结构标准口径沉淀：抱枕/桌布）
+  - 产物：
+    - `DOC/costing/blueprints/structure_standards/pillow_structure_standard_v1.md`
+    - `DOC/costing/blueprints/structure_standards/tablecloth_structure_standard_v1.md`
+  - 口径要点：
+    - slot 只做“实物区位”，不做虚拟区位、不做重叠区位
+    - “折边/包边/锁边/滚边”属于 `edge_finish` 的不同工艺模块实现，不在结构标准里做二级
+    - “印染/印花/热转印/刺绣”属于 `body` 的工艺模块（作用在主体面上），不是独立区位
+  - 验收命令（必须，1条）：`grep -nF "结构标准（v1）— 抱枕/靠垫（PILLOW_V1）" DOC/costing/blueprints/structure_standards/pillow_structure_standard_v1.md && grep -nF "结构标准（v1）— 桌布/桌旗/桌垫同构（TABLECLOTH_V1）" DOC/costing/blueprints/structure_standards/tablecloth_structure_standard_v1.md`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-10（Planner-Optimization：新增 Integration Agent 入职简报：店铺对接）
+  - 产物：
+    - `DOC/agents/briefings/integration_shop_connector_onboarding_mvp.md`
+  - 目标：以“SKU 主档（商品关联）→ 发货导入（xlsx）→ spec 解析 → BOM 快照/异常队列”为最小闭环，支撑低成本验证单店对接
+  - 验收命令（必须，1条）：`grep -nF "Integration Agent 入职简报：店铺对接（以“商品关联/SKU 主档”为中心）" DOC/agents/briefings/integration_shop_connector_onboarding_mvp.md`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-12（Planner-Optimization：POD 个性化定制 Phase0 蓝图（先印布））
+  - 产物：
+    - `DOC/costing/blueprints/pod_personalization_print_pipeline_phase0.md`
+    - `DOC/agents/briefings/pod_personalization_phase0_briefing.md`
+    - `DOC/agents/handoff_pod.md`
+  - 备注（重要）：
+    - POD 目前 **不是当前执行主线**，仅为本次讨论的方案沉淀与接力准备；后续正式推进时再按任务单拆分执行。
+    - 预备（后端闭环任务单草案）：`DOC/agents/briefings/backend_pod_personalization_phase0_mvp.md`
+  - 口径要点：
+    - “设计稿/印刷稿”必须快照化（确稿后不可回写历史）
+    - “先印布”必须版本化 PrintTemplate（出血/安全区/裁切线/定位标/ICC/镜像规则）
+    - 小程序接入前提：公网 HTTPS 合法域名；内网“本地服务器”不可直连小程序
+  - 验收命令（必须，1条）：`grep -nF "POD 个性化定制（先印布）— Phase0 落地蓝图（以抱枕为例）" DOC/costing/blueprints/pod_personalization_print_pipeline_phase0.md`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-13（Planner-Optimization：Rules Agent（规则/培训）接力准备）
+  - 产物：
+    - `DOC/agents/handoff_rules.md`
+    - `DOC/costing/manuals/rules_training_handbook_v1.md`
+  - 目标：
+    - 将测试过程形成的规则沉淀为可培训教程（新人入口 + 规则条目模板）
+    - 将口径变更统一记入 `DOC/agents/task_log.md`，避免后续越做越乱
+  - 验收命令（必须，1条）：`grep -nF "## Rules Agent 接力包（规则/培训专用）" DOC/agents/handoff_rules.md && grep -nF "## 规则与培训手册（v1）— 新人必读入口" DOC/costing/manuals/rules_training_handbook_v1.md`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-13（Models：打样/标准入口强隔离（不再互相“自动出现在对方列表”））
+  - 产物（前端）：
+    - `/costing/standard-models`：只展示“标准入口”或“存在标准版本”的模型（只有推导/创建过标准版本才会出现）
+    - `/costing/sample-models`：只展示“打样入口”或“存在打样版本”的模型
+    - `/costing/materials` → 物料详情 → “模型版本清单引用”：按 `version_kind` 正确跳转（sample→打样页，standard→标准页），避免“打样版本在标准入口打开”
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档 grep/test -d 校验
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-13（Sample Lines：本品用量/附加量/总用量口径修正（总用量不含损耗））
+  - 产物（前端）：
+    - `/costing/sample-models` → 打样管理 → 清单编辑：三列口径对齐业务定义
+      - 本品用量：主体用量（用于推导标准主体）
+      - 附加量：总用量 - 本品用量（由调参带来的增量，不含损耗折算）
+      - 总用量：本品用量 + 附加量（不含损耗；损耗仅在“小计/含损耗汇总”中体现）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：`grep -nF "## 标准模型：行级变体（Overlay）运营/实施规范（v0.1）" DOC/costing/manuals/standard_model_variants_ops_rules.md`
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-13（Sample Lines：附加量/总用量改为“含损耗”（方案A），小计口径同步）
+  - 产物（前端）：
+    - `/costing/sample-models` / `/costing/standard-models` → 清单编辑：
+      - 附加量：`总用量(含损耗) - 本品用量`
+      - 总用量：显示为 `总用量(含损耗)=总用量(不含损耗)×(1+损耗%)`
+      - 小计：改为 `总用量(含损耗)×单价`（避免重复计损耗）
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：`grep -nF "## 标准模型：行级变体（Overlay）运营/实施规范（v0.1）" DOC/costing/manuals/standard_model_variants_ops_rules.md`
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-13（Docs：对齐“用量计算说明”到当前页面三列口径（含损耗））
+  - 产物（文档）：
+    - `DOC/costing/manuals/guides/usage_calculation_guide.md`：三列口径改为“总用量/附加量按含损耗展示”，并补齐桌布示例可复算步骤
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：`grep -nF "title: 计算说明（计量方式/本品用量/调参）（v1）" DOC/costing/manuals/guides/usage_calculation_guide.md`
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-13（Product Listing：新增“利润推演”Tab（测试台，专业版定价模型））
+  - 产物（前端）：
+    - `/costing/product-listing`：左侧“测试台模式”新增 Tab **利润推演**（与 模型测试/套装测试/规格生成 并列；不放在右侧诊断Tabs）
+      - 输入（专业版）：平台、产品档位（引流/利润/形象）、目标净利%、广告费%、平台扣点%、快递费%、支付费%、固定成本%、退货率%、不可售占比%、增值税%及附加税比例%、活动折扣%、固定费用（运费/包装/售后）
+      - **新增模式（利润诊断）**：可直接输入 **券后成交价(含税)** 与 **优惠前标价(含税)**，输出 **实际净利额/实际净利率** 与成本拆解（用于低客单价商品按真实售价校验是否赚钱，避免只用“反推售价”得到离谱价格）
+      - 输出：建议**含税成交价（GMV）/建议标价**，并拆解：不含税收入、增值税及附加、退货价值损失、各项费率成本、目标净利额等
+      - 关键假设（可调）：退货价值损失≈`退货率×不可售占比×产品成本`；税金按一般纳税人“含税→不含税收入→销项增值税→附加税”估算
+      - 反推公式：`GMV = (产品成本 + 固定费用 + 退货价值损失) / (1 − 平台费% − 广告费% − 快递费% − 支付费% − 固定成本% − 税金等效% − 目标净利%)`
+  - 验收命令（必须，全部 0 退出码）：
+    - Frontend：`npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的文档 grep/test -d 校验
+    - Backend（最小）：`./backend/venv/bin/python -m pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：工艺模块新建提醒：在“结构适用范围”规则说明区块下方，展示当前所选 slot 的“驱动量/备注”（来自结构标准 slot_defs），用于提醒新建工艺模块的人；验收 `npm -C frontend run build`）
+- **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：标准模型清单编辑：删除工艺模块不再触发 `sync-from-modules`（避免覆盖版本层已替换物料/调参导致“占位回滚”错觉）；改为仅删除该模块关联行并保存版本清单；验收 `npm -C frontend run build`）
+- **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend+Backend：版本图片支持删除：新增 `DELETE /api/planner/product-model-versions/{version_id}/images/{image_index}`；标准模型/打样模型“基础信息”Tab 的版本图片缩略图增加删除按钮；验收 `npm -C frontend run build`）
+- **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：修复删除版本图片后出现破图：hydrate `version_images` 时跳过 null 槽位（后端删除会置空以保持 index）；验收 `npm -C frontend run build`）
+- **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：标准模型/打样管理抽屉标题追加“编码:名称”，避免不知道当前正在编辑哪个模型；验收 `npm -C frontend run build`）
+- **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend+Backend：物料“同步宜搭”后即时同步图片：后端 material image proxy 补齐从 raw_form_data 提取图片源并回写 metadata.images；前端同步完成后自动预拉取所有图片以触发本地缓存；验收 `npm -C frontend run build`）
+- **最近校对（北京时间 GMT+8）**：2026-01-06（Backend：修复宜搭物料多图只显示1张：MaterialRead 图片源提取改为从 raw_form_data 自动扫描 imageField_* 并支持 ossFileHandle/fileUrl，确保 images[] 生成完整；需重启后端生效） 
+- **最近校对（北京时间 GMT+8）**：2026-01-06（Backend：进一步修复“宜搭有3张但系统只显示1张”：MaterialRead 图片源提取不再对 metadata.images 早返回，改为合并 metadata.images + raw_form_data 扫描结果并去重保序；已重启后端生效）
+- **最近校对（北京时间 GMT+8）**：2026-01-06（Backend：修复“多图空位/追加成4张”：图片源以 raw_form_data 的 imageField_* 为准（有则覆盖 metadata.images），base-config 图片代理每次按该规则重算并覆盖 metadata.images，确保索引与 UI 一致；已重启后端生效）
+- **最近校对（北京时间 GMT+8）**：2026-01-06（Backend：进一步修复“多图重复/缺图”：解析 raw_form_data 同时兼容 attachmentField_* 与嵌套 value/fileList，补齐 mediaId，并对 ossFileHandle/URL 进行去重归一化（去掉签名/过期参数）；已重启后端生效）
+- **最近校对（北京时间 GMT+8）**：2026-01-06（Backend：兜底修复“图片位占着没替换”：当根据 raw_form_data 重算并覆盖 metadata.images 时，同步清空 metadata.local_images 本地缓存，强制按新索引重新下载/缓存，避免重复/错图；已重启后端生效）
+- **最近校对（北京时间 GMT+8）**：2026-01-06（Backend+Frontend：强制刷新物料图片：material image proxy 支持 `force_refresh=1` 跳过本地缓存并重新下载覆盖；物料详情“同步宜搭”后预拉取图片时带 force_refresh，避免缓存占位导致重复/缺图；已重启后端并发布前端）
+- **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：发布/归档标准版本的“清单编辑→工艺模块”禁用：添加/同步/删除/勾选同步均禁止（避免触发 sync-from-modules 导致右侧清单重置/自动保存）；验收 `npm -C frontend run build`）
+- **最近校对（北京时间 GMT+8）**：2026-01-06（Backend：修复 Product Listing 里工序告警误报：当版本工序行缺失 `metadata_json.cost_type` 时，BOM 核算默认按计时(time)兼容处理（若存在 piece_rate 则推断为计件），不再提示“未配置工序计价类型”；已重启后端生效）
+- **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：修复标准模型管理“复制版本”未复制行级变体（Overlay）：补齐 createLineVariant 必需的 `version_id`，并按后端 LineVariantCreateRequest 契约修正字段/去除无效字段，复制时即可连同清单一起复制变体；验收 `npm -C frontend run build`）
+- **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：修复标准模型管理“新增工序”未从工序库带入默认计价字段：以工序库 `standard_rate` 作为分钟单价（计时）/计件单价（计件），并从 `process.metadata_json` 读取 cost_type/base_minutes/unit_minutes（缺省 base=0, unit=1），写回版本清单行；验收 `npm -C frontend run build` 并已发布静态资源）
+- **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：标准模型列表新增“匹配模块”列：展示 `metadata_json.recognition_keywords`（关键词维护-列表式）的关键词，用彩色胶囊展示，超出3个以 Tooltip 展开；验收 `npm -C frontend run build` 并已发布静态资源）
+- **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：标准模型列表 UI 优化：品类列缩窄并移到模型名前；模型名列缩窄；“匹配模块”改名“货品映射”并加宽；隐藏状态/入口列；“当前发布标准”改为更小的带边框标签显示；验收 `npm -C frontend run build` 并已发布静态资源）
+- **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：标准模型列表增加“货品映射（关键词）”筛选框：在当前列表数据中按 `metadata_json.recognition_keywords` 进行过滤（支持空格/逗号分隔的任意命中）；验收 `npm -C frontend run build` 并已发布静态资源）
+- **最近校对（北京时间 GMT+8）**：2026-01-06（Backend+Frontend：套装壳（方案A）MVP：新增后端 `/api/planner/bom/generate-bundle`（组件尺寸/数量显式输入，不从交易规格解析；支持 tokens 触发行级变体；输出单件结果+合并BOM/成本/扣库）；前端“产品上架（测试台）”新增套装模式组件录入与“套装：预演BOM（合并器）”按钮；验收 `npm -C frontend run build`，已发布静态并重启后端）
+- **最近校对（北京时间 GMT+8）**：2026-01-06（Frontend：套装模板组件清单增强：在组件 `label` 列增加“命中”按钮，可基于当前 `lexicon_rules` 对该组件做命中测试（输入片段→判断是否会分配到该 label，并展示将注入的 tokens），防止 label 填错/未被规则引用。验收：`npm -C frontend run build`、静态发布）
+- **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：套装模板组件清单“操作”列补齐“命中”按钮（与 +行/删除 同列），复用 label 命中测试逻辑；已硬验收 `npm -C frontend run build` 并原子发布 `PLANNER_STATIC_DIR=/var/www/html/ai-costing/dist ./scripts/deploy_static.sh`）
+- **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：套装模板“命中”测试打通到模型变体：命中字符映射后自动调用 `/bom/generate-multi-bundle`（仅传 tokens，不传 spec_text）并弹窗展示 matched=true 的变体列表，便于验证新增 TOKEN(any): 棉麻 等规则是否真正生效；已硬验收 `npm -C frontend run build` 并原子发布）
+- **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend+Backend：去掉套装模板组件清单的 label 输入（避免被误解为触发词）；套装字符映射“目标组件”改为选择组件行（下拉展示 `PI5:印花抱枕` 等模型名）；后端 lexicon 支持 `target_component_index` 按组件索引分配并兼容旧 `target_label`；已硬验收 `npm -C frontend run build` 并原子发布）
+- **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：套装字符映射交互收口：将“命中”按钮移到“词”输入框右侧；命中时联动模型变体预演，命中>0 标记“已验证”，命中=0 自动清空该词避免留下无效规则；已硬验收 `npm -C frontend run build` 并原子发布）
+- **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：套装字符映射 UI 精修：目标组件列宽缩小、词列加宽；“已验证/未通过”改为更小更精致的胶囊标签样式；已硬验收 `npm -C frontend run build` 并原子发布）
+- **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：套装模板在字段映射下新增“可变词列表（可复制）”：自动汇总所选模型版本启用变体规则的 TOKEN(any/all) 候选词，并支持一键复制/点击单词复制，供运营直接拼装交易规格；已硬验收 `npm -C frontend run build` 并原子发布）
+- **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend+Backend：套装字符映射“词”收口为严格下拉（候选来自可变词列表，禁止手输），移除命中/验证绕圈；后端变体匹配兼容历史 token 合并写法（`雪尼尔，WB02339` 按逗号/顿号拆分参与匹配）；已硬验收 `npm -C frontend run build` 并原子发布）
+- **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend+Backend：新增“短语预设（推荐）”：按“包含命中+更长优先”把常见对客片段直接映射到组件并注入 tokens，可覆盖组件数量（短语中含“2个/3个”会自动解析，亦可手填覆盖）；并在 `/bom/generate-by-spec` trace 中回传 `phrase_presets` 命中信息用于排错；已硬验收 `npm -C frontend run build`、后端 pytest `test_bundle_templates_center.py`、已原子发布并重启 `planner-costing.service`）
+- **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend+Backend：短语预设升级为二级结构：一级为运营短语；二级为该短语的“字段映射组”（字段/词（严格选择）/目标组件），命中短语后仅执行该短语映射组（全局字段映射仅在无短语命中时兜底），避免规则越配越活；已硬验收 `npm -C frontend run build`、后端 pytest `test_bundle_templates_center.py`、已原子发布并重启 `planner-costing.service`）
+- **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：短语预设交互防迷路：新增明显的“新增短语”按钮；每条短语展开的映射组新增“新增映射行”按钮；并优化空态文案指引；已硬验收 `npm -C frontend run build` 并原子发布）
+- **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：套装模板页面继续去说明化：移除“短语预设/组件清单”两段说明文案；移除“公共触发词(shared_trigger_text)”输入项（保留后端兼容，不影响历史数据）；已硬验收 `npm -C frontend run build` 并原子发布）
+- **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：将“公共触发词”以底部“备注/描述框”形式恢复，读写 `metadata.shared_trigger_text`（仅备注，不参与解析）；已硬验收 `npm -C frontend run build` 并原子发布）
+- **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：底部备注框文案调整：“公共触发词（备注，可选）”→“描述备注”；并用 `npm -C frontend run build` 做了干净度校验（无未使用/残留报错）；已原子发布）
+- **最近校对（北京时间 GMT+8）**：2026-01-07（Backend：套装选择器 `(B:CODE:A/B/…)` 支持新结构：当 `metadata.phrase_presets[n].components` 存在时，直接以该组件行清单生成 BOM（支持同模型多尺寸/多数量）；并放开套装模板顶层 components 允许为空（用于“模型池+短语组件行”新流程）；验收 `./backend/venv/bin/python -m pytest backend/tests/planner/test_bom_generate_by_spec_bundle_selector.py -q`）
+- **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：套装模板“照片墙模式”UI落地：新增顶部“模型选择(多选)”作为候选范围；短语预设展开改为“组件行清单（模型/宽/高/数量/触发词/筛选）”，废弃旧“映射组/组件清单”；保存到 `metadata.phrase_presets[n].components`，筛选状态保存到 `metadata.phrase_variant_presets`；验收 `npm -C frontend run build` + 原子发布）
+- **最近校对（北京时间 GMT+8）**：2026-01-07（修复线上保存失败：前端新流量发送 `components: []`，线上后端仍要求 `components >= 1` 导致 422/前端显示 400。已重启 `planner-costing.service` 使其加载最新代码后恢复正常；复测 `POST /api/planner/bundle-templates` 返回 201）
+- **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：套装模板子项UI优化：移除子项“触发词”输入框（仍由“筛选”自动填充内部数据用于命中变体），并加宽“模型版本”下拉列；验收 `npm -C frontend run build` + 原子发布）
+- **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：套装模板列表与口径优化：示例规格去掉分隔符“；”（变为 `短语(B:CODE:A)`）；列表列调整为“编码/名称/分类/解析短码/运营短语/标签/模型/更新时间/状态/操作”，并将解析短码与运营短语按 A/B/C… 打散展示；搜索支持“短码/名称/运营短语”；验收 `npm -C frontend run build` + 原子发布）
+- **最近校对（北京时间 GMT+8）**：2026-01-07（Frontend：测试台 `/costing/product-listing` 的“套装测试”优化：新增短语选择器(A/B/…)与“一键生成 spec_text（无；）”，并展示所选短语的组件行预览（模型/宽高/数量）；预演时按选择器拼接 `B:CODE:A` 调用 `bom/generate-by-spec`；验收 `npm -C frontend run build` + 原子发布）
+- **最近校对（北京时间 GMT+8）**：2026-01-08（修复套装测试 400：后端 `bom/generate-by-spec` 支持输入直接为 `B:CODE:A` 时正确识别 CODE（不再按 `CODE:A` 查模板）；前端套装测试在文本框里直接写 `B:CODE:A` 时会保留 selector，并把后端 `detail` 直接显示出来；验收：后端 pytest + 前端 build + 原子发布）
+- **最近校对（北京时间 GMT+8）**：2026-01-08（套装短码升级为最终规范：默认对外生成/展示 `B-XXXXAA`（4 位 CODE + 2 位 selector）；后端解析兼容 `B:CODE:A/AA` / `BUNDLE:CODE:A/AA` / `B-CODE-A/AA` / `B-XXXXAA`，并在 `spec/parse` 里统一产出规范 token `B:CODE` + `B:CODE:A/AA` 供内部使用；套装模板 code 生成改为 4 位，降低长度且避免与 3 位模型码混淆；同时短语预设 selector 作为稳定字段保存，删除改停用避免错位）
+- **最近校对（北京时间 GMT+8）**：2026-01-08（测试台套装测试进一步优化：允许不选择套装下拉，只要在大输入框里包含 `B-LPYJK9-A`/`B:LPYJK9:A` 即可自动识别套装编码与 selector 并预演 BOM；验收 `npm -C frontend run build` + 原子发布）
+- **最近校对（北京时间 GMT+8）**：2026-01-08（套装模板列表体验优化：列表“运营短语”列每条短语新增复制图标（复制纯短语文本）；验收 `npm -C frontend run build` + 原子发布）
+- **最近校对（北京时间 GMT+8）**：2026-01-08（线上偶发切换栏目白屏兜底：捕获动态 import chunk / vite preloadError，自动刷新一次避免用户多次手动刷新；验收 `npm -C frontend run build` + 原子发布）
+- **最近校对（北京时间 GMT+8）**：2026-01-08（修复切换栏目白屏根因：发布脚本调整为保留旧 `/assets/*`（不再 `--delete`），仅最后原子替换 `index.html`，避免“旧页面仍在运行时动态 import 404”；已重新执行发布脚本）
+- **最近校对（北京时间 GMT+8）**：2026-01-08（套装短码最终落地：套装模板 code 改为 4 位；对外短码默认 `B-XXXXAA`；后端 spec/parse 与 generate-by-spec 支持新短码并兼容旧 `B:CODE(:A/:AA)` / `B-CODE(-A/-AA)`；前端“套装模板/测试台”默认展示/生成新短码；验收：pytest + 前端 build + 原子发布）
+- **最近校对（北京时间 GMT+8）**：2026-01-08（Frontend：套装模板编辑抽屉进一步专业化为“短语工作台”：左侧改为卡片式短语列表（仅展示/选择 + 复制/上移/下移/启停图标按钮，不在列表内编辑）；右侧为当前短语编辑区（短语输入框 + “保存当前短语” + 组件行表格），模型版本下拉仅显示“模型编码:名称”（不显示版本号）；同时保留右上角“保存模板”用于保存模板级字段。验收 `npm -C frontend run build`）
+- **最近校对（北京时间 GMT+8）**：2026-01-08（Frontend：测试台 `/costing/product-listing` 套装测试 UX 增强：新增“套装短码输入框”（可直接输入 `B-XXXXAA`/`B:CODE:AA`）自动联动套装模板与短语 selector；短语展示改为按 selector 精确匹配（修复 `AD` 被误当 `A` 的 bug），并在短语选择器下方显示 `AD: <短语>`；验收 `npm -C frontend run build`，并已原子发布静态资源）
+- **最近校对（北京时间 GMT+8）**：2026-01-08（Frontend：套装模板编辑页强化“短语管结构、变体词管替换”的可视化：在每条组件行的展开区新增 TOKEN chips 展示，并把筛选结果按“兜底物料 → 替换物料”格式列出（含结构位/基准物料/替换物料），便于运营不再为材质组合建大量短语；验收 `npm -C frontend run build`，并已原子发布静态资源）
+- **最近校对（北京时间 GMT+8）**：2026-01-08（Frontend：套装模板编辑页“替换明细”增加默认兜底提示：组件行展开区第一条显示 `默认（未命中 TOKEN 时）：兜底物料=<...>`，避免运营误以为“不写TOKEN会少一行物料”；验收 `npm -C frontend run build`，并已原子发布静态资源）
+- **最近校对（北京时间 GMT+8）**：2026-01-08（Frontend：套装模板短语进一步收口为自动生成：右侧短语输入改为只读自动拼接（`{兜底物料}{TOKEN}宽*高*数量` 按组件用 `+` 拼接），并新增彩色预览（绿=兜底物料、红=TOKEN 锁定、黑=尺寸数量随表格改动）。保存时 enabled preset 自动写入 phrase，不再依赖手填；验收 `npm -C frontend run build` 并已原子发布静态资源）
+- **最近校对（北京时间 GMT+8）**：2026-01-08（Frontend：应运营反馈回退“自动拼接长串”：短语恢复为可选“备注输入”（黑色可编辑），不再强制自动拼接；红色 TOKEN 仍只通过筛选器展示与变更；绿色兜底物料名改为可编辑输入并持久化到 `metadata.fallback_display_overrides`（仅显示名，不影响真实物料/扣库）。验收 `npm -C frontend run build`，并已原子发布静态资源）
+- **最近校对（北京时间 GMT+8）**：2026-01-08（Frontend：默认兜底行与替换明细对齐展示：展开区第一条改为 `TOKEN：<输入框> 兜底物料：<slot>:<原始物料全名>`（用于维护对客词，保存到 `metadata.fallback_token_overrides`，并兼容旧 `fallback_display_overrides`）；替换明细行恢复展示兜底物料原始全名，TOKEN 用红色胶囊只读。验收 `npm -C frontend run build`，并已原子发布静态资源）
+- **最近校对（北京时间 GMT+8）**：2026-01-08（Frontend：筛选器新增“变体/指定(强制命中)”模式：变体模式仍填充 `spec_text` 供交易规格解析命中；指定模式把所选规则的 TOKEN 写入 `metadata.phrase_presets[*].components[*].tokens`（后端 `generate_bom_bundle` 已支持 `component.tokens` 注入 runtime_tokens），从而无需交易规格解析也能强制替换。验收 `npm -C frontend run build`，并已原子发布静态资源）
+- **最近校对（北京时间 GMT+8）**：2026-01-08（Frontend：抽屉列表的替换明细样式优化：按组件行判断是“变体/指定”并分别渲染；“变体/指定”用深色底白字高反差标签（变体蓝、指定黑+棕）提升可读性。验收 `npm -C frontend run build`，并已原子发布静态资源）
+- **最近校对（北京时间 GMT+8）**：2026-01-08（Frontend：指定模式 UI 再收口：将“指定”标签改为大红底白字；当组件行处于指定模式（存在 tokens 注入）时，隐藏第一条默认兜底行（TOKEN 输入 + 兜底物料）避免重复干扰。验收 `npm -C frontend run build`，并已原子发布静态资源）
+- **最近校对（北京时间 GMT+8）**：2026-01-08（Frontend：替换明细标签统一口径：将“变体”改为 `TOKEN` 标签；真实 token 词（如“雪尼尔”）改为淡红胶囊样式；将“指定”改为英文 `FORCE`（大红底白字），“强制替换”改为淡橙底。验收 `npm -C frontend run build`，并已原子发布静态资源）
+- **最近校对（北京时间 GMT+8）**：2026-01-08（Frontend：筛选器弹窗 UI 收口：移除说明 Alert；将“变体/指定”模式开关移到弹窗顶部独立一行，保留一条简短提示。验收 `npm -C frontend run build`，并已原子发布静态资源）
+- **最近校对（北京时间 GMT+8）**：2026-01-08（Frontend：视觉优化：明细中的 `TOKEN` / `FORCE` 标签底色改为更淡的浅色背景（配深色字与边框），降低刺眼感。验收 `npm -C frontend run build`，并已原子发布静态资源）
+- **最近校对（北京时间 GMT+8）**：2026-01-08（Frontend：编辑套装模板抽屉左侧短语列表新增“删除”按钮（带二次确认与风险提示：若线上已用该 selector 编码建议先停用），删除会同步清理 `presetSelectedByIdx` 并修正当前选中项。验收 `npm -C frontend run build`，并已原子发布静态资源）
+- **最近校对（北京时间 GMT+8）**：2026-01-08（Frontend：模型变体规则编辑器增强：新增触发类型“尺寸（宽+高，cm）”，允许同一条规则同时配置 token(any/all)+width_between+height_between，并保持替换物料在同一行选择；用于落地“材质用 TOKEN、尺寸用条件”的写法。验收 `npm -C frontend run build`，并已原子发布静态资源）
+- **最近校对（北京时间 GMT+8）**：2026-01-08（Frontend：变体规则编辑器进一步统一为“一级 TOKEN（可空）+ 二级单类型指标条件”：在 width/height/area/perimeter/size 模式下也可填写 token(any/all) 并写入 conditions；同一指标多段区间用“新增多行规则”（每行=一段，表示 OR）。验收 `npm -C frontend run build`，并已原子发布静态资源）
+
+### 关键口径备忘（避免回滚/重构改坏）
+
+- **物料图片（YiDa→本地落盘）链路**：
+  - **图片源以 `metadata_json.raw_form_data` 为准**：后端 `MaterialRead._extract_image_sources` 会从 `imageField_* / attachmentField_*` 及其嵌套结构提取 `ossFileHandle/fileUrl/mediaId/...`，并生成 `MaterialRead.images[]`（对外为 `/base-config/materials/{id}/images/{idx}` 代理 URL）。
+  - **不要依赖旧的 `metadata_json.images`**：历史数据可能只有 1 张，会导致“3 张变 1 张 / 空位 / 重复”。现在口径是：raw_form_data 有图则**覆盖** images，保持索引一致。
+  - **本地缓存与落盘**：`GET /base-config/materials/{id}/images/{idx}` 会在 `PLANNER_PERSIST_MATERIAL_IMAGES=true` 时把图片落到 `PLANNER_MEDIA_DIR/material_images/{material_id}/...` 并写入 `metadata_json.local_images`，后续优先读本地。
+  - **强制刷新**：支持 `force_refresh=1` 跳过 `local_images` 直接从钉钉重新下载覆盖；前端物料详情抽屉“同步宜搭”完成后预拉取图片默认带该参数，用于避免缓存占位导致错图/重复/缺图。
+
+- **最近校对（北京时间 GMT+8）**：2025-12-30 19:20（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_backend.md`）
+- **最近校对（北京时间 GMT+8）**：2025-12-30 20:27（Frontend：关联引用直达编辑 + 列宽收口）
+- **最近校对（北京时间 GMT+8）**：2025-12-30 21:03（Backend：关联引用过滤已归档/删除记录）
+- **最近校对（北京时间 GMT+8）**：2026-01-03 11:53（Frontend：发货异常重试 + SKU_NOT_BOUND 去绑定 CTA）
+- **最近校对（北京时间 GMT+8）**：2026-01-03 11:57（Frontend：Shipments 静态资源原子发布到 47.99.89.206）
+- **最近校对（北京时间 GMT+8）**：2026-01-03 12:39（Frontend：工艺模块结构筛选 + 结构标签维护 MVP）
+- **最近校对（北京时间 GMT+8）**：2026-01-03 13:10（Frontend：标准版本结构标准 code + 模块候选按结构过滤 MVP）
+- **最近校对（北京时间 GMT+8）**：2026-01-03 14:02（Frontend：结构标准字典页 MVP）
+- **最近校对（北京时间 GMT+8）**：2026-01-03 14:35（Frontend：工艺模块“适用类型 + 自动结构标签” MVP）
+- **最近校对（北京时间 GMT+8）**：2026-01-03 14:56（Frontend：结构标准/slot 下拉防呆收口 MVP）
+- **最近校对（北京时间 GMT+8）**：2026-01-03 15:18（Frontend：结构标准字典页支持删除（归档））
+- **最近校对（北京时间 GMT+8）**：2026-01-03 15:55（Frontend：结构标准 slots 列表式编辑（中文+自动拼音短码）+ 工艺 slot 下拉中文显示）
+- **最近校对（北京时间 GMT+8）**：2026-01-03 16:05（Frontend：工艺模块抽屉补“global/slot/assembly 选择规则”说明）
+- **最近校对（北京时间 GMT+8）**：2026-01-03 16:25（Backend：structure_code 过滤自动包含 GLOBAL 通用模块）
+- **最近校对（北京时间 GMT+8）**：2026-01-03 16:40（Frontend：选工艺模块候选标注 GLOBAL 通用模块）
+- **最近校对（北京时间 GMT+8）**：2026-01-03 16:52（Frontend：工艺模块结构适用范围保存强校验防呆）
+- **最近校对（北京时间 GMT+8）**：2026-01-03 17:05（Frontend：global 隐藏结构标准下拉 + 自动清空）
+- **最近校对（北京时间 GMT+8）**：2026-01-03 17:30（Frontend：工艺模块删除高难度确认 + AI生成去数值污染；Backend：AI describe 支持结构字段）
+- **最近校对（北京时间 GMT+8）**：2026-01-03 17:45（AI生成：描述统一追加“无默认数值”声明）
+- **最近校对（北京时间 GMT+8）**：2026-01-03 18:00（Frontend：工艺模块查看模式也可点 AI生成）
+- **最近校对（北京时间 GMT+8）**：2026-01-03 18:28（Frontend：结构标准 slots 支持“启用/可选位”（默认启用，取消则不进工艺下拉））
+- **最近校对（北京时间 GMT+8）**：2026-01-03 18:45（Frontend：标准模型展示所选结构标准的结构骨架预览）
+- **最近校对（北京时间 GMT+8）**：2026-01-04（Frontend：新接力验收通过：`npm -C frontend run build` + Docs grep + Backend curl smoke）
+- **最近校对（北京时间 GMT+8）**：2026-01-04（Frontend：工艺模块复制后保存误报“未选择工序行”修复：保存时忽略纯占位空工序行）
+- **最近校对（北京时间 GMT+8）**：2026-01-04（Frontend：工艺模块步骤 process_id 兜底修复：保存/校验兼容 step.process.id 与 metadata_json.process_snapshot.id）
+- **最近校对（北京时间 GMT+8）**：2026-01-04（Frontend：工艺模块复制后步骤缺失 process_id：保存时按 process_code 自动反查并回填（唯一命中则自动修复，否则提示重选））
+- **最近校对（北京时间 GMT+8）**：2026-01-04（Frontend：修复后端步骤快照字段名不一致：process_snapshot.process_id 也视为已选工序，避免复制后保存被拦截）
+- **最近校对（北京时间 GMT+8）**：2026-01-04（Frontend：复制工艺模块保存仍误报：在抽屉 hydrate 时将 process_snapshot.process_id 回填到 step.process_id（避免 Form store 丢快照字段）；并修复跳转 state 传 null 导致 /process-modules/null 404）
+- **最近校对（北京时间 GMT+8）**：2026-01-04（Frontend：补强护栏：process-modules 详情查询仅允许 UUID，清理非法 openProcessModuleId，彻底阻断 /process-modules/null 404）
+- **最近校对（北京时间 GMT+8）**：2026-01-01（Backend：发货异常队列“按批次重试未解决异常（Retry Exceptions）”MVP）
+
+- **最近校对（北京时间 GMT+8）**：2025-12-25 04:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
+- **最近校对（北京时间 GMT+8）**：2025-12-25 06:08（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
+- **最近校对（北京时间 GMT+8）**：2025-12-25 14:40（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
+- **最近校对（北京时间 GMT+8）**：2025-12-25 16:40（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
+- **最近校对（北京时间 GMT+8）**：2025-12-25 17:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
+- **最近校对（北京时间 GMT+8）**：2025-12-26 10:20（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_frontend.md`）
+- **最近校对（北京时间 GMT+8）**：2025-12-30 12:30（接力入口：`DOC/agents/handoff_planner.md` / `DOC/agents/handoff_backend.md`）
+- **最近校对（北京时间 GMT+8）**：2026-01-01 17:05（Planner：环境文件治理（真实 .env 不进 Git））
+- **分支**：`backup/20251214-1535`
+
+- **最近校对（北京时间 GMT+8）**：2026-01-09（Frontend：LineVariantDrawer token 模式父子二级（按运营口径修正）：**一级 token 可空**（无二级时可直接替换并配置 β/α/覆盖率/损耗%）；若存在二级，则一级自动关闭不启用且禁用替换参数，仅作为 token 门槛（可空=无条件）。二级类型仅允许三选一：**尺寸（宽+高，cm）/面积（m²）/周长（m）**，同一一级下二级类型互斥；二级多行表示 OR，使用“+行”新增；子规则保存写入 `metadata_json.parent_variant_id` 以回显分组。UI 改造为**左右二栏工作台**：左侧仅展示一级 token 列表（只读）+ 启用/删除；右侧为选中一级的编辑区（token+替换参数）+ 二级表格（类型三选一、+行、删除）。验收：`npm -C frontend run build`；发布：`cd /home/admin/ai-costing-system/frontend && PLANNER_STATIC_DIR=/var/www/html/ai-costing/dist ./scripts/deploy_static.sh`）
+
+- **本轮闭环产物（Frontend / LineVariants - 替换物料选择器验收修复）**：
+  - 产物：`LineVariantDrawer` 的“替换物料”选择器链路可用（打开→搜索→选择→回填），并修复缩进错位导致的构建失败；启用时补齐“单位缺失/不一致”红字提示（不改后端口径）。
+  - 验收命令（必须）：`npm -C frontend run build`
+  - 下一步（建议下一轮再做）：在选择器中支持“同单位优先/筛选”，进一步减少启用时才发现单位不一致的返工。
+
+- **本轮闭环产物（Frontend / ProductModelEditorDrawer - 清单编辑“结构”列（MVP））**：
+  - 入口：`清单编辑 → 版本选择` 已支持选择并保存 `结构标准`（sample/standard 均可；仅 draft 可改）。
+  - 物料/工序明细表新增列：**结构**（slot）。
+    - 模块同步行：默认只读展示（整结构/slots/或行上已有 `metadata_json.structure_slot`）。
+    - 通用模块（GLOBAL）或手动新增行：可下拉选择当前结构标准的 slots，保存到 `metadata_json.structure_slot`。
+  - 验收命令（必须）：`npm -C frontend run build`
+  - 更新（北京时间 GMT+8 2026-01-04）：模块同步行也支持下拉选择结构 slots；同步完成后若模块范围唯一命中 1 个 slot，会自动回填 `metadata_json.structure_slot`（多 slot 保持空让人选）。
+  - 更新（北京时间 GMT+8 2026-01-04）：打样模型（sample）也显示“结构标准”下拉并可保存；工艺模块候选也会按结构标准过滤。
+  - 更新（北京时间 GMT+8 2026-01-04）：结构列交互收口为“点击编辑”：默认只读展示，不占用列宽；点击单元格才弹出下拉选择，避免把列表挤乱。
+  - 更新（北京时间 GMT+8 2026-01-04）：结构 slot 展示口径收口：优先只显示中文名（不显示短码）；缺中文名时兜底显示短码。
+  - 更新（北京时间 GMT+8 2026-01-04）：打样管理抽屉加宽 50px；并将左侧“工艺模块”栏固定为 330px，让新增宽度全部让给右侧清单区域（不挤乱模块区）。
+  - 更新（北京时间 GMT+8 2026-01-04）：打样版本“生成标准模型”默认不再每次 `create_new` 新建标准草稿；若已存在 `standard draft`，则默认 `overwrite_draft` 覆盖最新草稿（并增加按钮 loading/防连点），避免出现多个标准草稿导致“两个打样版本都到标准模型里”的误解。
+  - 下一步（建议下一轮再做）：后端在“从工艺同步”落库时直接回填每行 `structure_slot`（统一口径），并可选支持“模块按 slots 拆行”（若业务确认需要）。
+
+- **本轮闭环产物（Frontend / VirtualMaterials - 添加真实物料卡顿与关闭后仍持续请求修复）**：
+  - 现象：虚拟物料抽屉“添加物料（真实物料）”打开很慢；关闭抽屉后仍感觉卡顿持续。
+  - 根因：物料查询与“补齐绑定物料信息”的循环请求不可取消（关闭弹窗/抽屉后仍在跑）。
+  - 修复：
+    - `fetchMaterials` 支持 `AbortSignal`；选择器查询与补齐循环接入 signal，关闭时会 abort in-flight 请求。
+    - `VirtualMaterialsPage` 的补齐循环在 cleanup 中停止并 `abort()`，避免拖慢主线程/页面交互。
+  - 关键文件：
+    - `frontend/src/services/planner.ts`
+    - `frontend/src/pages/costing/VirtualMaterialsPage.tsx`
+    - `frontend/src/components/costing/MaterialPickerDrawer.tsx`
+  - 验收命令（必须）：`npm -C frontend run build`
+
+- **备注（重要口径：打样模型 / 标准模型“删除”互不误伤）**：
+  - 两个入口是“管理视图”独立：打样侧与标准侧的版本可分别归档删除，但不会互相连坐。
+  - “删除打样”（SampleModelsPage）：仅归档 `sample` 版本（`POST /product-models/{id}/archive-sample`），不影响 `standard` 版本。
+  - “删除标准”（StandardModelsPage）：仅归档 `standard` 版本（`POST /product-models/{id}/archive-standard`），不影响 `sample` 版本。
+  - 打样列表可见性口径：**只要模型存在 `sample` 版本就应显示**（即便 `entry_context=standard`），避免“删了标准后看起来打样也没了”（实际是列表过滤导致不可见）。
+  - 说明：推导标准版本时会在标准版本 `metadata_json.derived_from_version_id` 记录来源打样版本，用于追溯；但删除/归档口径按入口隔离，确保“推导后可独立管理”。
+
+- **更新（北京时间 GMT+8 2026-01-04）：变体规则“跨模型误触发”护栏（后端）**：
+  - 背景：物料可跨品类复用（例如同一面料用于抱枕/桌布），若只用 `spec_text` token 匹配，存在跨模型误触发风险。
+  - 修复口径：`parse_spec(spec_text)` 仍保持“只从交易规格提取 token”（用于审计/回放）；但在 `bom/generate` 进行变体匹配时注入运行时上下文 token（不要求出现在 spec_text）：
+    - `MODEL:<model_code>`（三位码，如 `MODEL:PI5`）
+    - `BOUND_VERSION:<version_id>`
+    - `SKU:<sku_code>`
+  - 备用能力：`spec/parse` 额外支持从交易规格中识别三位模型编码并输出为 `MODEL:<code>`（用于导入/排错/自动绑定候选，不依赖图案码 Qxxxxxx）。
+  - 关键文件：
+    - `backend/src/planner/services/bom_generation_service.py`
+    - `backend/src/planner/services/spec_parser_service.py`
+    - `backend/tests/planner/test_bom_runtime_tokens_guardrail.py`
+    - `backend/tests/planner/test_spec_parser_code_tokens.py`
+
+- **更新（北京时间 GMT+8 2026-01-04）：模型列表“都能看见”便于回收清理**：
+  - 标准模型页/打样模型页：不再按 `entry_context/版本数` 过滤列表（避免“看不见就删不了/以为被删”）。
+  - 两页新增开关：**显示已归档**（`GET /product-models?include_archived=true`），用于把历史误删/误归档的模型也拉出来核对。
+
+ - **最近校对（北京时间 GMT+8）**：2026-01-04（Frontend：打样管理允许占位物料保存清单（汇总成本按 0），但推导标准/发布标准前硬拦截：存在占位则不允许推导/发布）
+ - **最近校对（北京时间 GMT+8）**：2026-01-04（Backend：版本清单保存占位型虚拟物料校验按 version_kind 拆分：sample 允许临时保存，standard 继续禁止）
+ - **最近校对（北京时间 GMT+8）**：2026-01-04（Frontend：保存清单后不再跳回旧版本：versionsQuery 刷新时保留当前 selectedVersionId，仅在首次/当前不存在时自动选版本）
+ - **最近校对（北京时间 GMT+8）**：2026-01-04（Frontend：打样清单编辑增强：物料/工序行显示来源工艺模块标识（胶囊+更抗撞色），并新增“汇总视图”（只读合并，用于扫读，不影响编辑与保存））
+ - **最近校对（北京时间 GMT+8）**：2026-01-04（Frontend：打样清单编辑字号按 A/B/C 调整：物料/工序表头与正文= A；物料组/工序组标题= B；工艺模块列表表头= A、名称= C）
+ - **最近校对（北京时间 GMT+8）**：2026-01-04（Frontend：工艺模块卡片头部布局：将“保留调参”开关移动到“同步”按钮同一行）
+ - **最近校对（北京时间 GMT+8）**：2026-01-04（Frontend：工艺模块列表行底色与右侧清单来源底色对齐：左侧模块行也使用同一模块色背景，便于一眼对应）
+ - **最近校对（北京时间 GMT+8）**：2026-01-04（Frontend：工艺模块列表底色增强为单元格着色+左侧色条，确保与编码色一致可分辨；含占位型物料时汇总金额强制按0显示并提示）
+ - **最近校对（北京时间 GMT+8）**：2026-01-04（Frontend：移除“含占位：合计按0”提示；统一用竖色条标识模块来源：左侧工艺模块列表去胶囊、物料/工序明细行前加竖色条（手动新增为白色））
+ - **最近校对（北京时间 GMT+8）**：2026-01-04（Frontend：恢复右侧物料/工序“打散底色”（来源模块浅底、手动新增灰底），同时保留竖色条标识模块来源）
+ - **最近校对（北京时间 GMT+8）**：2026-01-04（Frontend：修复“新建虚拟物料保存无响应→连点导致重复创建”的问题：保存按钮增加本地 in-flight 锁，覆盖生成编码阶段并禁用按钮）
+
+- **本轮闭环产物（Planner / 下一轮：模型结构化落点派单）**：
+  - 新增派单：`DOC/agents/briefings/backend_structure_tagging_and_filtering_mvp.md`
+  - 目标：用 `metadata_json` 落 `structure_standard_code`（版本）与 `structure_tags[]`（工艺模块），并给列表接口加筛选参数，支持“按结构找模块/按结构找版本”
+  - 验收命令（文档存在性）：`grep -nF "模型结构化落点（结构标准/工艺模块标签）+ 列表筛选 MVP" DOC/agents/briefings/backend_structure_tagging_and_filtering_mvp.md`
+
+- **本轮闭环产物（Planner / 下一轮：标准版本结构标准选择 + 模块候选过滤派单）**：
+  - 新增派单：`DOC/agents/briefings/frontend_standard_version_structure_code_and_module_filter_mvp.md`
+  - 目标：标准版本保存 `metadata_json.structure_standard_code`；模型侧选工艺模块候选默认带 `structure_code=<该值>` 过滤
+  - 验收命令（文档存在性）：`grep -nF "标准模型版本结构标准选择 + 按结构过滤模块候选（MVP）" DOC/agents/briefings/frontend_standard_version_structure_code_and_module_filter_mvp.md`
+
+- **本轮闭环产物（Planner / 下一轮：结构标准字典页派单）**：
+  - 新增派单：`DOC/agents/briefings/frontend_structure_standards_management_mvp.md`
+  - 目标：结构标准作为主数据（像分类字典）：维护 `code/name/slots/status`，供模型/工艺模块引用，避免手填 code 漂移
+  - 验收命令（文档存在性）：`grep -nF "结构标准管理（字典页）MVP" DOC/agents/briefings/frontend_structure_standards_management_mvp.md`
+
+- **本轮闭环产物（Planner / 下一轮：工艺模块适用类型收口派单）**：
+  - 新增派单：`DOC/agents/briefings/frontend_process_modules_applicability_mode_and_auto_tags_mvp.md`
+  - 目标：在工艺模块抽屉新增“内用/组合/global”语义与 slot 选择，并自动生成/维护 `metadata_json.structure_tags[]`
+  - 验收命令（文档存在性）：`grep -nF "工艺模块“适用类型（内用/组合/global）”+ 结构标签自动生成（MVP）" DOC/agents/briefings/frontend_process_modules_applicability_mode_and_auto_tags_mvp.md`
+
+- **本轮闭环产物（Planner / 下一轮：防呆收口派单（结构标准/slot 下拉））**：
+  - 新增派单：`DOC/agents/briefings/frontend_structure_selection_dropdowns_guardrails_mvp.md`
+  - 目标：将“结构标准 code/slot(s)”从自由输入收口为下拉选择（来源结构标准字典），避免填错与 code 漂移
+  - 验收命令（文档存在性）：`grep -nF "结构标准/slot 下拉收口（防呆）MVP" DOC/agents/briefings/frontend_structure_selection_dropdowns_guardrails_mvp.md`
+
+- **本轮闭环产物（Planner / 下一轮：slot 双语展示派单（拼音短码+中文名））**：
+  - 新增派单：`DOC/agents/briefings/frontend_structure_slots_bilingual_display_mvp.md`
+  - 目标：slot 存“拼音短码”做稳定键（如 `lalian`），UI 显示中文名（如“拉链位”），结构标签不要求人工读懂
+  - 验收命令（文档存在性）：`grep -nF "slot “拼音短码 + 中文名”双语展示（MVP）" DOC/agents/briefings/frontend_structure_slots_bilingual_display_mvp.md`
+
+- **本轮闭环产物（Frontend / 结构标准字典页：删除（归档））**：
+  - 位置：`/costing/structure-standards` 列表“操作”列新增“删除（归档）”
+  - 防呆：必须先停用再删除；删除前二次确认
+  - 底层：复用 taxonomy `DELETE /taxonomy/items/{id}`（需要管理员密钥）
+  - 本轮验收命令（必须）：`npm -C frontend run build`
+
+- **本轮闭环产物（Frontend / 结构标准 slots：列表式（中文+拼音短码） + 工艺 slot 下拉中文展示）**：
+  - 结构标准编辑抽屉：slots 从 tags 输入改为“中文名 + 自动拼音短码”逐行编辑
+  - 落库：`metadata.slots` 存短码数组（如 `["lalian"]`），`metadata.slot_display_names` 存短码→中文名（如 `{ "lalian": "拉链位" }`）
+  - 工艺模块“结构适用范围”：slot/slots 下拉优先显示中文名（格式：`中文（短码）`），但结构标签预览/落库仍为短码 tag（如 `PILLOW_V1:lalian`）
+  - 本轮验收命令（必须）：`npm -C frontend run build`
+
+- **本轮闭环产物（Backend / 模型结构化落点（结构标准/工艺模块标签）+ 列表筛选 MVP）**：
+  - 产品模型版本结构标准（写入/读取）：
+    - 位置：`product_model_versions.metadata_json.structure_standard_code`
+    - 列表筛选：`GET /api/planner/product-model-versions?structure_standard_code=...`
+  - 工艺模块结构标签（写入/读取）：
+    - 位置：`process_modules.metadata_json.structure_tags`（List[str]，默认空数组）
+    - 支持两种字符串约定：
+      - `<structure_standard_code>`
+      - `<structure_standard_code>:<slot>`（slot 不解析，仅字符串筛选）
+    - 列表筛选：
+      - `GET /api/planner/process-modules?structure_tag=...`（精确匹配）
+      - `GET /api/planner/process-modules?structure_code=...`（命中 `code` 与 `code:*`）
+  - 数据库兼容：
+    - Postgres：使用 JSONB 查询（避免全量拉取后 Python 过滤）
+    - SQLite：测试环境 fallback 为 Python 过滤（保证口径一致）
+  - 最小单测：`backend/tests/planner/test_structure_tag_filters_mvp.py`
+  - 本轮验收命令（必须）：`python -m pytest backend/tests/planner/test_structure_tag_filters_mvp.py -q`
+  - 最近校对（北京时间 GMT+8）：2026-01-03
+
+- **本轮闭环产物（Planner / 环境文件治理：真实 .env 不进 Git）**：
+  - 目的：避免“切分支/拉代码后文件看不见/误提交密钥”，同时保留可复现性
+  - 规则：
+    - 仓库只保留模板：`.env.sample`、`frontend/env.production.example`
+    - 真实环境文件由机器自行提供：`.env`、`frontend/.env.production`（加入 `.gitignore`，从 Git 追踪移除但保留在磁盘）
+  - 验收命令：
+    - `git status --porcelain`（应无 .env/.env.production 被追踪的变更）
+
+- **本轮闭环产物（Frontend / 接力恢复包 + 强制验收）**：
+  - 更新接力包：`DOC/agents/handoff_frontend.md` 刷新“最近校对”时间戳（用于新 Frontend 接力入口）
+  - 硬验收（全部 0 退出码）：
+    - `cd frontend && npm ci`
+    - `npm -C frontend run build`
+    - Docs：按 `DOC/agents/commands.md` 的 4 条 `grep -nF ...` 校验文档存在性
+    - Backend smoke：`curl -sS "http://127.0.0.1:8800/api/planner/product-model-versions?version_kind=standard&page=1&page_size=20" | python -m json.tool`
+  - 下一步（Frontend 建议闭环）：
+    - 按 `DOC/agents/state.md` 既有规划，在“停用/删除/改单位/改换算/改单价”等高风险操作前调用 `GET /api/planner/base-config/materials/{material_id}/references` 做影响范围提示与确认/拦截
+
+- **本轮闭环产物（Frontend / Materials - MaterialReferencesPanel（真实物料详情：引用关系区块 MVP））**：
+  - UI：`/costing/materials` 物料详情抽屉新增 Tab：**“关联引用”**，展示三类引用（均为 `count + 最近10条`）并提供跳转入口：
+    - 虚拟物料绑定引用 → `/costing/virtual-materials`
+    - 工艺模块引用 → `/costing/process-modules`
+    - 模型版本清单引用 → `/costing/standard-models`
+  - 性能收口：
+    - 仅在用户切到“关联引用”Tab 时才触发请求（默认不会读库，避免每次进抽屉改价格都查一次）
+    - 不在列表页做 N+1 预取
+  - 交互收口：Tab 顺序调整为 **基础信息 / 成本参数 / 图片附件 / 关联引用**
+  - Fail-open：请求失败或 `errors[]` 非空时，仅在引用区块提示“部分数据不可用”，不阻塞其它功能
+  - 关键改动文件：
+    - `frontend/src/services/planner.ts`（新增 `fetchMaterialReferences`）
+    - `frontend/src/types/planner.ts`（新增 `MaterialReferencesResponse` 等类型）
+    - `frontend/src/pages/costing/MaterialMasterPage.tsx`（新增“引用”Tab）
+  - 本轮验收命令（必须）：`npm -C frontend run build`（已通过）
+
+- **本轮闭环产物（Frontend / Materials - 列表缩略图卡顿修复（最小））**：
+  - 现象：强刷后进入 `/costing/materials` 列表加载很慢，期间点击其它栏目不响应（需等缩略图渲染完）
+  - 修复：列表缩略图从 AntD `Image`（带 preview）改为原生 `<img loading="lazy" decoding="async">`，仅用于扫读；大图预览仍在抽屉“图片附件”Tab（`PreviewGroup`）
+  - Fail-open：缩略图加载失败不影响页面交互
+  - 关键文件：`frontend/src/pages/costing/MaterialMasterPage.tsx`
+  - 本轮验收命令（必须）：`npm -C frontend run build`（已通过）
+
+- **本轮闭环产物（Frontend+Backend / SampleModels 缩略图性能：B 方案（后端聚合字段，前端去 N+1））**：
+  - 背景：`/costing/sample-models` 列表原实现为每行 `fetchProductModelVersions(modelId)` 获取缩略图 → 50 行即 50 个请求（N+1），强刷后易卡顿/切换不灵
+  - 后端：`GET /api/planner/product-models` 响应新增 `latest_sample_version_id`（优先选择有 `metadata_json.version_images` 的最新 sample 版本），供列表直接渲染缩略图
+  - 前端：`SampleModelsPage` 移除每行版本请求；缩略图直接用 `latest_sample_version_id` 拼接 `/api/planner/product-model-versions/{id}/images/0`，并使用 `<img loading="lazy" decoding="async">` 降载
+  - 文档：补回 `DOC/costing/reviews/erp_guardrails_addendum_20251222.md` 的 **§9 主数据不同频治理策略**，使 `DOC/agents/commands.md` 的 grep 验收命令可执行
+  - 本轮验收命令（必须）：`npm -C frontend run build`（已通过）
+  - 后端 smoke（示例）：`curl -sS "http://127.0.0.1:8800/api/planner/product-models?page=1&page_size=3" | python -m json.tool`
+
+- **本轮闭环产物（Frontend / Materials - 关联引用：直达编辑 + 列宽收口）**：
+  - 关联引用跳转：
+    - 虚拟物料：点击“打开”→ 进入 `/costing/virtual-materials` 并直接打开对应虚拟物料抽屉
+    - 工艺模块：点击“打开”→ 进入 `/costing/process-modules` 并直接打开对应工艺模块抽屉
+    - 模型版本：点击“打开”→ 进入 `/costing/standard-models` 并直接打开对应标准模型版本抽屉
+  - 表格列宽/展示收口：
+    - 工艺模块引用：ID 列加宽、名称列变窄且字号更小
+    - 模型版本清单引用：版本列加宽；模型/状态列变窄
+    - 物料主列表：物料编码列加宽约 1/3
+  - 本轮验收命令（必须）：`npm -C frontend run build`（已通过）
+
+- **本轮闭环产物（Backend / BaseConfig - MaterialReferences（真实物料引用关系查询 MVP））**：
+  - 新增接口：`GET /api/planner/base-config/materials/{material_id}/references`
+  - 返回结构要点：
+    - `material_id`
+    - `virtual_materials.count/items`（最近 10 条，含 `id/virtual_code/name/virtual_kind/status`）
+    - `process_modules.count/items`（最近 10 条，含 `id/name`）
+    - `product_model_versions.count/items`（最近 10 条，含 `version_id/model_id/model_name/version_label/version_kind/version_status`）
+    - `errors[]`：任一引用源查询失败时，接口仍返回 200，但该块返回空并记录错误（用于前端高风险操作前的影响评估）
+  - 性能收口：仅返回“计数 + 最近 N 条”（N=10），不返回大 payload
+  - 验收命令：
+    - `curl -sS "http://127.0.0.1:8800/api/planner/base-config/materials/<material_id>/references" | python -m json.tool`
+  - 下一步（前端）：
+    - 在“停用/删除/改单位/改换算/改单价”等高风险操作前调用该接口，展示影响范围并做确认/拦截
+
+- **本轮闭环产物（Backend / BaseConfig - MaterialReferences：过滤已归档/删除记录）**：
+  - 背景：用户反馈“关联引用”列表会出现已删除（归档）的虚拟物料/工艺模块/模型版本清单项（例如 `version_status=archived` 的版本仍被展示）。
+  - 修复：`GET /api/planner/base-config/materials/{material_id}/references` 在三类引用查询中额外过滤：
+    - 虚拟物料：`virtual_materials.status != archived`
+    - 工艺模块：`process_modules.status != archived`
+    - 模型版本：`product_model_versions.version_status != archived`，并同时过滤已归档模型（`product_models.is_archived=false`）
+  - 口径：`count` 与 `items` 使用同一过滤口径（避免“计数包含归档，但列表不包含/或相反”）。
+  - 本轮验收命令（必须）：`npm -C frontend run build`（已通过）
+  - 后端 smoke（可选）：按 `DOC/agents/commands.md` 执行 curl 示例（已通过）
+
+- **本轮闭环产物（Frontend / Shipments - retry exceptions + bind CTA MVP）**：
+  - 页面：`/costing/shipments`
+  - 异常队列新增按钮：**“重试本批未解决异常”**
+    - 调用：`POST /api/planner/shipments/exceptions/retry`
+    - 行为：对当前 `batch_id` 的未解决异常逐条重试；成功后自动刷新异常列表，并刷新 BOM 快照缓存
+  - 异常行新增 CTA：当 `reason=SKU_NOT_BOUND` 时展示 **“去绑定”**，跳转 `/costing/sku-master?search=<sku_code>`
+  - 关键改动文件：
+    - `frontend/src/pages/costing/ShipmentMonitorPage.tsx`
+    - `frontend/src/services/planner.ts`
+    - `frontend/src/types/planner.ts`
+  - 本轮验收命令（必须）：`npm -C frontend run build`（已通过）
+
+- **本轮闭环产物（Frontend / Shipments - 原子发布到 47.99.89.206）**：
+  - 发布方式：仅发布前端静态资源（不改后端），使用 `frontend/scripts/deploy_static.sh` 原子切换到：
+    - `PLANNER_STATIC_DIR=/var/www/html/ai-costing/dist`
+  - 发布步骤（执行记录）：
+    - `git pull --ff-only`（已 up-to-date，包含 `f35569e`/`feat(shipments): ...`）
+    - `cd frontend && npm ci && npm run build`（已通过）
+    - `PLANNER_STATIC_DIR=/var/www/html/ai-costing/dist ./scripts/deploy_static.sh`（已完成原子切换）
+  - 线上验收命令（只给 1 条）：`curl -sS http://47.99.89.206/ | head -n 5`（已通过，返回 index.html）
+  - 点验项（浏览器）：
+    - `/costing/shipments` 可见“重试本批未解决异常”按钮
+    - `SKU_NOT_BOUND` 行可见“去绑定”按钮，跳转 `/costing/sku-master?search=<sku_code>`
+    - 控制台无 `Failed to load module script (MIME text/html)` 报错
+
+- **本轮闭环产物（Frontend / ProcessModules - StructureFiltersAndTags MVP）**：
+  - 列表筛选区新增：
+    - 结构标准 code → query `structure_code`
+    - 结构标签（如 `pillowcase_v1:zipper`）→ query `structure_tag`
+  - 列表新增列：**结构标签**（读取 `metadata_json.structure_tags`，展示前 3 个 + `…+N`）
+  - 编辑抽屉新增字段：**结构标签（Tags）**
+    - 保存到 `metadata_json.structure_tags: string[]`（默认空数组，支持增删）
+  - 关键改动文件（严格按 workset）：
+    - `frontend/src/pages/costing/ProcessModulesPage.tsx`
+    - `frontend/src/types/planner.ts`
+    - `frontend/src/services/planner.ts`（仅透传 query params，无额外改动）
+  - 本轮验收命令（必须）：`npm -C frontend run build`（已通过）
+
+- **本轮闭环产物（Frontend / StandardModels - VersionStructureCode + ModuleFilter MVP）**：
+  - 标准模型编辑抽屉（`ProductModelEditorDrawer`）：
+    - 新增字段：**结构标准 code**（可空，自由输入）
+    - 保存位置：`product_model_versions.metadata_json.structure_standard_code`
+  - 模块候选过滤：
+    - 打开“选择工艺模块”弹窗时，若当前标准版本存在 `structure_standard_code`，则候选请求自动带 `structure_code=<该值>`
+    - 若为空：不加筛选（兼容历史模型）
+  - 后端依赖（本轮补齐最小接口）：
+    - 新增 `PATCH /api/planner/product-model-versions/{version_id}`：合并更新版本 `metadata_json`（用于保存结构标准 code）
+  - 关键改动文件：
+    - `frontend/src/components/costing/ProductModelEditorDrawer.tsx`
+    - `frontend/src/services/planner.ts`
+    - `frontend/src/types/planner.ts`
+    - `backend/src/planner/routers/product_model_versions.py`
+    - `backend/src/planner/schemas.py`
+  - 本轮验收命令（必须）：`npm -C frontend run build`（已通过）
+
+- **本轮闭环产物（Frontend / StructureStandards - management MVP）**：
+  - 新增页面：`/costing/structure-standards`（结构标准：列表 + 抽屉）
+  - 新增菜单：成本核算 → 结构标准
+  - 列表能力：search(code/name)、状态筛选（全部/启用/停用）、slots 前 3 个 + `…+N`、编辑/启用停用
+  - 抽屉能力：新增/编辑（编辑时锁定 code），slots 用 Tags 输入；最小校验（code 3~64，slots 去重）
+  - 后端落点（专业折中）：当前后端未提供 `/structure-standards` 接口，MVP 复用 taxonomy：
+    - domain=`structure_standard`
+    - taxonomy.name 作为 code（唯一键）
+    - taxonomy.metadata.display_name 作为 name，metadata.slots 作为 slots[]
+  - 关键改动文件：
+    - `frontend/src/pages/costing/StructureStandardsPage.tsx`
+    - `frontend/src/App.tsx`
+    - `frontend/src/components/layout/AppLayout.tsx`
+    - `frontend/src/services/planner.ts`
+    - `frontend/src/types/planner.ts`
+  - 本轮验收命令（必须）：`npm -C frontend run build`（已通过）
+
+- **本轮闭环产物（Frontend / ProcessModules - ApplicabilityMode + AutoTags MVP）**：
+  - 编辑抽屉新增区块：**结构适用范围**
+    - 结构标准 code（可选，自由输入）
+    - 适用类型（三选一）：`slot_internal / assembly / global`
+    - slots：`slot_internal` 仅保留 1 个；`assembly` 支持多选；`global` 不展示 slots
+  - 自动生成并维护：
+    - `metadata_json.structure_tags: string[]`（只读预览，保存时写入）
+    - 可选辅助字段：`metadata_json.structure_standard_code / structure_applicability_mode / structure_slots`
+  - 生成规则（MVP）：
+    - slot_internal：`CODE:slot`
+    - assembly：`CODE` + `CODE:slot...`
+    - global：固定 `GLOBAL`
+  - 关键改动文件：
+    - `frontend/src/pages/costing/ProcessModulesPage.tsx`
+  - 本轮验收命令（必须）：`npm -C frontend run build`（已通过）
+
+- **本轮闭环产物（Frontend / Guardrails - 结构标准/slot 下拉收口 MVP）**：
+  - 工艺模块编辑抽屉：
+    - “结构标准 code”由输入框改为下拉选择（数据源：结构标准字典 taxonomy domain=`structure_standard`）
+    - `slot_internal`：slot 单选下拉（选项=当前结构标准的 `slots[]`）
+    - `assembly`：slots 多选下拉（选项=当前结构标准的 `slots[]`）
+    - 未选结构标准时：slot/slots disabled，并提示“请先选择结构标准”
+  - 标准模型版本编辑：
+    - “结构标准 code”由输入框改为下拉选择（同一数据源），保存链路不变（仍 PATCH version.metadata_json）
+  - 关键改动文件（严格按任务单范围）：
+    - `frontend/src/pages/costing/ProcessModulesPage.tsx`
+    - `frontend/src/components/costing/ProductModelEditorDrawer.tsx`
+  - 本轮验收命令（必须）：`npm -C frontend run build`（已通过）
+
+- **本轮闭环产物（Backend / 修复 Task Center 500：Postgres SSL）**：
+  - 现象：前端 `GET /api/planner/task-center/recent?limit=5` 轮询报 500
+  - 根因：环境链路对 Postgres SSL 协商支持不一致（可能出现 `no encryption` 或 `server does not support SSL`），需要用 `sslmode` 明确策略
+  - 修复：
+    - `backend/src/database.py`：Postgres URL 默认补齐 `sslmode=prefer`；若设置 `PLANNER_PG_SSLMODE` 则强制覆盖 URL 内 sslmode
+    - `backend/src/planner/routers/jobs.py`：task-center 查询失败时 fail-open（避免角标轮询拖垮页面）
+  - 当前阻塞（重要）：若 **Postgres 未续费/不可用**（或链路被替换成不支持 SSL 的实例），则依赖 DB 的页面接口仍会 500（例如 `/api/planner/processes`、`/api/planner/taxonomy/items`）；task-center 之所以能 200 是因为做了 fail-open。
+  - 验收命令：
+    - `curl -sS -D - "http://127.0.0.1:8800/api/planner/task-center/recent?limit=5" -o /tmp/task_center_recent.json && cat /tmp/task_center_recent.json`
+
+- **本轮闭环产物（Planner-Optimization / 方案评审稿）**：
+  - `DOC/costing/reviews/shipment_time_parse_review_phase0_phase1_20251222.md`（回答：SKU_NOT_BOUND 根因与治理、spec_hash+解析版本化、幂等与重试/重跑语义、UI按Excel展示）
+  - 验收命令：`grep -nF "发货时再解析（spec_hash 缓存）+ SKU→已发布标准版本绑定：优化方案评审稿（Phase0/Phase1）" DOC/costing/reviews/shipment_time_parse_review_phase0_phase1_20251222.md`
+  - 路线决策：先跑通“发货导入→SKU绑定→解析→BOM快照/异常→可重试/可重跑”，再扩展“模型套模型+自动编码”解决 30% 复杂产品
+  - ERP口径补强清单：`DOC/costing/reviews/erp_guardrails_addendum_20251222.md`（版本为最小核算单元、重跑语义、编码定位、解析版本化、异常工作台、成本口径）
+  - 验收命令：`grep -nF "ERP 口径补强清单（Guardrails Addendum）— 发货时再解析主链优先" DOC/costing/reviews/erp_guardrails_addendum_20251222.md`
+  - VM策略：已在 ERP Guardrails 增补页 §8 固化（推荐混合模式：VM用于表达/复用，发货/扣库必须展开到真实物料并落快照；绑定变更不回写历史快照）
+  - 主数据不同频策略：已在 ERP Guardrails 增补页 §9 固化（宜搭同步物料↔本地模型引用：唯一键/选择器防错/发布校验/健康检查/去重归并）
+
+- **本轮闭环产物（Frontend / 行级变体收口：ERP 最稳第一步）**：
+  - 标准入口（`entryContext="standard"`）“清单编辑”Tab：物料行新增 **“变体（Overlay）”** 按钮
+  - 点击按钮打开 `LineVariantDrawer`：管理 version-scoped `line-variants`（不修改基准清单）
+  - Drawer 内支持 `spec_text` 预演：`POST /api/planner/spec/parse`（tokens） + `POST /api/planner/bom/generate`（最终 BOM + trace）
+  - **收口（最稳形态）**：
+    - action **固定** `replace_self`（UI 隐藏其它动作）
+    - items **限制 1→1**（只允许 1 行目标物料，禁止新增第 2 行）
+    - **同单位校验**：目标单位与基准行单位不一致 → 禁止启用并提示（单位缺失提示先补齐主数据/先保存清单）
+    - **启用门槛**：启用前必须预演成功，并在 UI 显示最近预演时间/结果摘要（配置变更会标记“预演已过期”）
+    - **条件增强（已接入 UI）**：在 token 基础上，额外支持 `width_between/height_between/area_between/perimeter_between`（可选）。若配置了这些条件，启用前要求预演样例能解析出对应数值（避免没测过就启用）。
+    - **数量/个数条件（缺口）**：后端 `LineVariantCondition` 暂无 `quantity_between` 等字段；如业务必须支持“个数”，需要下一轮后端补字段或通过 token 离散化临时承载。
+
+- **本轮闭环产物（Frontend / 打样管理：清单编辑 UI 修复）**：
+  - 位置：`/costing/sample-models` → 打开抽屉 → `清单编辑`
+  - 修复点：
+    - 工序组“计量方式”右侧圆感叹号 tooltip：文本改为白色（深色 tooltip 背景可读）
+    - 新增物料/新增工序：手动新增的行统一灰底（不再使用彩色模块背景）
+    - 工序组列收口：将“替换”列更名为“操作”，并把 `α`（调参面板）按钮移入“操作”列与“替换”合并（宽度与物料组操作列一致）
+    - 避免“打开抽屉/切版本”时尺寸联动重算覆盖已保存的本品用量/用时：仅当用户实际修改尺寸输入框时才触发联动重算
+  - 关键文件：`frontend/src/components/costing/ProductModelEditorDrawer.tsx`
+  - 本轮验收命令：`npm -C frontend run build`（已通过）
+
+- **本轮闭环产物（Standard Models / 标准版本 → 克隆为新标准模型）**：
+  - 需求：在“标准模型管理 → 标准版本”中，从某个标准版本生成一个**全新的标准模型**（新编码 + 新版本号），用于大量相似型号的快速复用
+  - 前端：
+    - 标准版本列表：将“复制”更名为“复制版”，并新增按钮“克隆模型”
+    - 点击“克隆模型”：调用后端 `POST /api/planner/product-model-versions/{version_id}/clone-model`，成功后跳转到 `/costing/standard-models` 自动打开新模型抽屉并定位新标准版本
+  - 后端：
+    - 新接口：`POST /api/planner/product-model-versions/{version_id}/clone-model`
+    - 行为：从源 standard version 克隆出新 ProductModel（model_code 自动生成）+ 新 standard draft version（version_label 自动生成）+ 复制版本清单；可选复制 line-variants（overlay）并按行序映射 base_line_id
+  - 关键文件：
+    - `backend/src/planner/routers/product_model_versions.py`
+    - `backend/src/planner/schemas.py`
+    - `frontend/src/components/costing/ProductModelEditorDrawer.tsx`
+    - `frontend/src/services/planner.ts`
+    - `frontend/src/types/planner.ts`
+  - 验收命令：
+    - Backend：`./backend/venv/bin/python -m pytest backend/tests/planner/test_clone_model_from_standard_version.py -q`
+    - Frontend：`npm -C frontend run build`
+
+- **重要修复（Backend / 使 between 条件可落库）**：
+  - 修复 `line-variants` 在写入 JSON 列时 `Decimal`/`tuple` 不可序列化导致 500：将 `conditions/metadata` 递归转为 JSON-safe（Decimal→字符串、tuple→list）。
+  - 补齐缺失模块以恢复 `planner-costing.service` 可重启（恢复 `codes/processes/process_modules/product_models/product_model_versions` 路由与相关 service/utils）。
+
+- **关键实现文件**：
+  - `frontend/src/components/costing/ProductModelEditorDrawer.tsx`
+  - `frontend/src/components/costing/LineVariantDrawer.tsx`
+  - `frontend/src/services/planner.ts`
+  - `frontend/src/types/planner.ts`
+  - `frontend/src/pages/costing/ShipmentMonitorPage.tsx`
+  - `frontend/src/pages/costing/SkuMasterWorkspacePage.tsx`
+  - `frontend/src/pages/costing/ProcessModulesPage.tsx`
+  - `backend/src/planner/routers/shipments.py`
+  - `backend/src/planner/services/shipment_import_service.py`
+  - `backend/src/planner/schemas.py`
+
+- **本轮闭环产物（BOM 成本展示 + 工序明细 + 历史快照回填）**：
+  - 动态 BOM 成本口径：
+    - `POST /api/planner/bom/generate` 返回每条物料行 `bom_unit_price/line_cost`
+    - `trace.costing` 返回 `material_cost_total/process_cost_total/overhead_cost(默认30%)/total_cost/unit_cost`
+    - 并补充 `trace.costing.process_lines`（工序明细，含计价参数/行成本/警告）
+  - 发货监控页（`/costing/shipments`）抽屉重构：
+    - 解析队列 BOM 预览抽屉、BOM 快照详情抽屉统一为 Tabs：汇总 / 物料 / 工序 / Trace
+  - 新增“历史快照回填”：
+    - 后端：`POST /api/planner/shipments/bom-snapshots/{snapshot_id}/recompute`
+    - 前端：BOM 快照列表新增“回填”按钮（回填后刷新并打开详情）
+
+- **盘点/扣库模式确认（待后续实现）**：
+  - 当前业务走“发货触发标准回冲（Backflush）按 BOM 标准比例扣真实物料”，月底盘点对真实物料做差异调整；虚拟物料不作为盘点库存对象。
+
+- **本轮补充（扣库清单：虚拟物料→真实物料展开）**：
+  - 背景：BOM 快照/预览的“物料”表可能主要是虚拟物料（VM），但库存扣减必须落在真实物料（Material）。
+  - 实现：`POST /api/planner/bom/generate` 的 `trace.inventory.inventory_lines` 返回“真实物料扣库清单”（把 virtual 行按 `virtual_material_bindings` 展开并聚合）。
+  - 前端：`/costing/shipments` 的 BOM 预览抽屉 / 快照详情抽屉新增 Tab：**扣库清单（真实物料）**，用于对账与后续扣库/盘点闭环。
+  - 提示：历史快照若缺失该字段，可用“回填”重算后补齐。
+
+- **下一阶段（真实数据实测 + UI 整理规划）**：
+  - 线上直接跑：`47.99.89.206`
+  - 首批真实文件：由业务侧上传（平台商品列表 / 发货单）
+  - 目标覆盖：约 200 行
+  - 成本口径阶段性固定：物料 + 工序 + 制造费 30%
+  - 验收清单（可勾选）：`DOC/costing/manuals/real_data_uat_checklist_20251225.md`
+
+- **本轮补充（确定性工艺余量：扎口/封边等固定长度）**：
+  - 背景：宽度不固定，但扎口固定（例如两边各 +10cm），属于“确定性尺寸修正”，不应使用损耗%硬凑。
+  - 后端：BOM 计算支持物料行 `metadata_json.extra_width_mm/extra_height_mm`（单位mm），计量时使用 `(width_mm+extra_width_mm, height_mm+extra_height_mm)`。
+  - 前端：标准模型清单物料行增加列 **工艺余量(mm)**（+宽 / +高），录入后会联动重算本品用量/标准用量。
+
+- **本轮补充（计量方式扩展：长边/短边，单位=米）**：
+  - 背景：编织袋/包装类材料存在“宽度不固定，但用料沿长边/短边卷”的口径；仅靠 width/height 无法表达“取最长边/最短边”。
+  - 后端：`_measure_qty` 新增 `long_side/short_side`（分别取 `max(width,height)` / `min(width,height)`，并乘以数量）。
+  - 前端：
+    - 物料详情（`/costing/materials`）“计算方式”支持 **长边/短边**，并校验其 BOM 单位只能为“米”。
+    - 模型清单“计量方式”下拉补充 **长边/短边**（仅单位=米时允许选择）。
+
+- **本轮验收命令（必须）**：
+  - Frontend：`npm -C frontend run build`
+  - Backend（快速 smoke）：`curl -sS "http://127.0.0.1:8800/api/planner/shipments/bom-snapshots?limit=1" | python -m json.tool`
+  - Backfill API（示例）：`curl -sS -X POST "http://127.0.0.1:8800/api/planner/shipments/bom-snapshots/<snapshot_id>/recompute" -H "Content-Type: application/json" -d '{"operator_id":"planner_user"}' | python -m json.tool`
+
+- **本轮补充（Frontend / 模型清单：替换物料自动回填口径统一）**：
+  - 问题：替换物料后，`unit_of_measure` / `metadata_json.bom_unit` / `calculation_method` / `bom_unit_price` 未同步更新，导致“计量方式与 BOM 单位不配套”、且表现为“所有行看起来都像同一种计量方式”。
+  - 修复：
+    - `ProductModelEditorDrawer` 在“替换物料”时强制同步回填：`unit_of_measure`、`metadata_json.bom_unit`、`calculation_method`，并尽量从主数据/换算推导 `bom_unit_price`。
+    - `ProcessModulesPage` 在替换物料时不再沿用旧 `calculation_method`，改为以新物料主数据为准（避免回归）。
+    - **补充（虚拟物料）**：替换虚拟物料时同样回填 `metadata_json.bom_unit_price`（优先用虚拟物料详情的 `bom_unit_price`；为空时按 bindings×真实物料 BOM 单价汇总推导），避免出现“VM00023 → VM00022 但 BOM 单价/单位不更新”。
+  - 防回归：在关键函数旁加了“单位口径/计量方式必须匹配 normalizeUnit”的硬备注（禁止改回 `㎡/m` 作为 value）。
+  - 本轮验收命令：`npm -C frontend run build`（已通过）
+
+- **本轮补充（Materials / 宜搭同步分模式 + 前端按钮拆分）**：
+  - 背景：物料页原“同步宜搭”属于全量 upsert，用户需要更安全/更快的同步方式（只拉新、只更新价格关键字段）。
+  - 后端：`POST /api/planner/base-config/materials/sync-yida` 新增 `mode`：
+    - `full`：全量同步（默认，raw_form_data 全量覆盖）
+    - `new_only`：仅新增新物料（已存在的不更新）
+    - `core_fields`：仅更新关键字段（入库单价/单位、采购单价/单位、采购→入库换算、采购规格），并且 raw_form_data 只 merge 对应字段
+  - 前端：`/costing/materials` 顶部按钮拆分为 **同步新物料 / 更新原价格 / 全量同步宜搭**（均会打开同步日志抽屉便于跟踪）
+  - 新增“推导BOM价格”：
+    - 入口：`/costing/materials` 刷新按钮右侧
+    - 后端接口：`POST /api/planner/base-config/materials/derive-bom-prices`（后台任务，写入 `metadata_json.bom_unit_price`）
+    - 推导口径：\(BOM单价 = 入库单价 \div 入库→BOM换算\)，用于算价/扣库；无法推导时列表以红字提示原因
+    - 自动化：三种宜搭同步任务完成后会自动触发一次 BOM 价格推导
+  - 本轮验收命令：`npm -C frontend run build`（已通过）；Backend smoke：用 curl 触发 `mode=new_only/core_fields` 与 `derive-bom-prices` 均可成功落库
+
+- **已确认正确版本快照（请勿覆盖）**：
+  - `DOC/index/extracted/ProductModelEditorDrawer_confirmed_20251221T042643Z.tsx`
+  - 校验和：`DOC/index/extracted/ProductModelEditorDrawer_confirmed_20251221T042643Z.sha256`
+
+- **本轮验收命令（必须）**：`npm -C frontend run build`（已通过）
+
+---
+
+- **本轮闭环产物（Virtual Materials / 虚拟物料列表&抽屉体验 + 分类治理）**：
+  - 前端：`/costing/virtual-materials`
+    - 列表默认展示“子物料逐行明细”（编码/名称/配比或每套数量/损耗率）
+    - 操作列对齐工序管理：图标化按钮（启用/停用/删除归档等，带安全约束与二次确认）
+    - 筛选增强：类型（占位/配方/套件）+ 绑定物料搜索（按子物料编码/名称）
+    - 分类来源：虚拟物料分类使用 taxonomy `virtual_material_category`
+    - “同步数据”增强：同步后提示哪些子物料 BOM 单价缺失/为 0，避免误判“没更新”
+  - 后端：
+    - `GET /api/planner/base-config/virtual-materials` 新增筛选参数：
+      - `virtual_kind`（占位/配方/套件）
+      - `binding_search`（按绑定子物料编码/名称过滤）
+  - 关键文件：
+    - `frontend/src/pages/costing/VirtualMaterialsPage.tsx`
+    - `frontend/src/types/planner.ts`
+    - `backend/src/planner/routers/base_config.py`
+  - 本轮验收命令：
+    - `npm -C frontend run build`
+    - `python -m compileall backend/src/planner/routers/base_config.py`
+  - 最近校对（北京时间 GMT+8）：2025-12-28
+
+---
+
+- **本轮闭环产物（Pickers / 统一“添加物料/添加工序”弹窗体验）**：
+  - 目标：统一虚拟物料/工艺模块的“添加物料/选择工序”弹窗交互，减少各页各造一套导致的不一致与学习成本。
+  - 前端：
+    - `frontend/src/components/costing/MaterialPickerDrawer.tsx`：统一物料选择器 Drawer
+      - 顶部 Tabs：真实物料 / 虚拟物料
+      - 真实物料筛选区：关键词 + 分类（taxonomy `material_category`）+ **默认勾选“仅 BOM 物料”**
+      - 虚拟物料筛选区：关键词 + 分类（taxonomy `virtual_material_category`）
+    - `frontend/src/pages/costing/ProcessModulesPage.tsx`：
+      - 物料选择入口不再走“二级选择（真实/BOM/虚拟）”，统一打开 `MaterialPickerDrawer`
+      - 选择工序弹窗新增“分类”筛选（taxonomy `process_category`）
+  - 后端：
+    - `GET /api/planner/processes/references` 支持 `category` 过滤（与主列表一致），用于前端工序选择器。
+  - 本轮验收命令：
+    - `npm -C frontend run build`
+    - `python -m compileall backend/src/planner/routers/processes.py`
+  - 最近校对（北京时间 GMT+8）：2025-12-28
+
+- **本轮闭环产物（Frontend / 工艺模块列表页：对齐“工序管理”两行风格 + 操作图标化）**：
+  - 目标：让“工艺模块”列表可扫读（两行信息密度）并与“工序管理”视觉一致。
+  - 变更点：
+    - 列表列改造（`ProcessModulesPage`）：
+      - “工艺模块”列：第一行名称（加粗）；第二行显示 `分类/版本/引用次数` + 胶囊标签（最多 3 个，超出显示 +N）
+      - “描述”列：两行省略（ellipsis rows=2 + tooltip）
+      - “操作”列：图标按钮（带边框 + Tooltip）→ 查看/编辑/AI/复制/启用/停用
+  - 关键文件：
+    - `frontend/src/pages/costing/ProcessModulesPage.tsx`
+    - `frontend/src/guides/table_list_style_two_line_cells.md`
+  - 本轮验收命令：
+    - `npm -C frontend run build`
+    - `grep -nF \"title: '描述'\" frontend/src/pages/costing/ProcessModulesPage.tsx`
+  - 最近校对（北京时间 GMT+8）：2025-12-27 18:10
+
+- **本轮闭环产物（Frontend / Chrome“页面无响应”卡死：任务角标轮询降载）**：
+  - 现象：页面内交互（悬停 Tooltip/点击）都卡住，Chrome 弹“页面无响应”。这通常是前端主线程被长任务占满。
+  - 根因假设（高概率）：`AppLayout` 顶部任务角标在后台轮询 `task-center`，返回 payload/result 可能很大；有运行中任务时频率更高，导致频繁 JSON 解析与 React 更新，拖死主线程。
+  - 修复（最小）：`frontend/src/components/layout/AppLayout.tsx`
+    - 探针请求 `limit` 从 30 降到 5
+    - `select` 将缓存数据压缩为 `{statuses, runningCount}`（不保留大 payload）
+    - 页面不可见时停止轮询（`document.visibilityState==='hidden'`）
+    - 轮询频率降低：运行中 5s / 空闲 15s；并关闭 `refetchOnWindowFocus`
+  - 本轮验收命令：
+    - `npm -C frontend run build`
+    - `grep -nF \"任务角标探针（性能敏感）\" frontend/src/components/layout/AppLayout.tsx`
+  - 最近校对（北京时间 GMT+8）：2025-12-27 18:25
+
+- **本轮闭环产物（Ops-ish / 彻底解决：静态资源原子发布，避免 chunk 404→HTML 回退导致白屏/卡死）**：
+  - 现象：前端报 `Failed to load module script (MIME text/html)` / `Failed to fetch dynamically imported module`，页面随即白屏或“点不了/无响应”。
+  - 根因：静态资源发布非原子 +（或）Nginx 对 `/assets/*` 发生错误回退，导致 chunk 丢失却返回 HTML。
+  - 修复：
+    - `frontend/scripts/deploy_static.sh` 改为**原子发布**：同步到临时目录 → 一次性 `mv` 切换，避免线上半发布状态。
+    - `DOC/agents/known_issues.md` 补充“Failed to load module script（MIME text/html）”的根因与 Nginx 必要配置。
+  - 本轮验收命令：
+    - `npm -C frontend run build`
+    - `bash -n frontend/scripts/deploy_static.sh`
+    - `grep -nF \"原子发布\" frontend/scripts/deploy_static.sh`
+  - 下一步（需要有权限的人做）：按 `DOC/agents/known_issues.md` 调整 Nginx 的 `/assets` try_files 与缓存头。
+  - 最近校对（北京时间 GMT+8）：2025-12-27 18:40
+
+- **本轮闭环产物（Frontend / RESULT_CODE_HUNG：移除 render 内自动纠偏导致的渲染循环）**：
+  - 现象：Chrome 报 `RESULT_CODE_HUNG`，页面鼠标悬停/点击都卡住。
+  - 根因假设（高概率）：在表格单元格 `render` 过程中触发 `queueMicrotask()+setFieldValue/setState`，导致渲染-微任务-渲染循环，最终主线程被占满。
+  - 修复（最小）：
+    - `frontend/src/pages/costing/ProcessModulesPage.tsx`：移除 render 内 `queueMicrotask()+form.setFieldValue` 的自动纠偏；改为保存时规范化 `calculation_method/measure_unit`。
+    - `frontend/src/components/costing/ProductModelEditorDrawer.tsx`：移除 render 内 `queueMicrotask()+setMaterials` 的自动纠偏；保存清单前统一规范化非法 `calculation_method` 并重算用量。
+  - 本轮验收命令：
+    - `npm -C frontend run build`
+  - 最近校对（北京时间 GMT+8）：2025-12-27 19:05
+
+- **本轮闭环产物（Process Modules / 列表删除（归档））**：
+  - 需求：工艺模块列表增加“删除”功能（归档删除），与工序管理一致。
+  - 后端：
+    - 新增：`DELETE /api/planner/process-modules/{module_id}`（204）
+    - 口径：启用中不可删；若仍被模型引用（`model_process_modules`）则阻止删除并提示引用数。
+  - 前端：
+    - `ProcessModulesPage` 操作列新增“删除”图标按钮（仅非 active 显示，带二次确认）
+    - `frontend/src/services/planner.ts` 新增 `deleteProcessModule()`
+  - 验收命令：
+    - `npm -C frontend run build`
+    - `grep -n \"@router.delete\" backend/src/planner/routers/process_modules.py`
+  - 最近校对（北京时间 GMT+8）：2025-12-27 19:25
+
+- **本轮闭环产物（Processes / 列表删除按钮可见性增强）**：
+  - 反馈：工序管理列表“删除功能看不到”。
+  - 说明：后端删除口径要求先停用（active 不允许删除）。
+  - 前端改造：`frontend/src/pages/costing/ProcessesPage.tsx`
+    - 删除按钮**始终显示**；当工序为 active 时，“删除”按钮置灰并提示“需先停用”。
+  - 验收命令：
+    - `npm -C frontend run build`
+  - 最近校对（北京时间 GMT+8）：2025-12-27 19:45
+
+- **本轮闭环产物（Standard Models / “直接新建标准（高级）”误报失败修复）**：
+  - 现象：点击“直接新建标准（高级）”创建成功（模型已生成），但 UI 仍提示“新建标准模型失败”。
+  - 根因：创建成功后，后续步骤（取 `current_draft_version_id` / 列表 refetch）任一异常会被 catch，当成创建失败误报。
+  - 修复：`frontend/src/pages/costing/StandardModelsPage.tsx`
+    - `current_draft_version_id` 读取兼容 `metadata_json` / `metadata`
+    - 若未返回 draft id：兜底 `fetchProductModelVersions(model.id)` 自动选取 standard draft
+    - 列表 `refetch` 失败不再覆盖“创建成功”反馈（改为忽略）
+  - 验收命令：
+    - `npm -C frontend run build`
+  - 最近校对（北京时间 GMT+8）：2025-12-27 20:05
+
+- **本轮闭环产物（Frontend / 工艺模块 AI 语义抽屉重构：自动汇总为主、步骤级补丁、手工不覆盖）**：
+  - 目标：让员工看懂“这个工艺模块怎么做”，并让模块级 AI 字段主要来自工序库 ai_spec 自动汇总，避免重复手填。
+  - 变更点：
+    - `AI 语义（工艺模块）` 抽屉新增按钮：
+      - “从工序自动汇总（只填空）”：按模块已选工序拉取工序库 `metadata_json.ai_spec`，汇总到模块级字段，仅填空。
+      - “从工序自动汇总（覆盖）”：覆盖未锁定字段（不会覆盖手工锁定字段）。
+    - 新增手工锁定：保存时把人工编辑过的字段写入 `metadata_json.ai_spec._manual_overrides`，后续汇总默认不覆盖。
+    - 步骤级区块增加解释文案，并把按钮文案改为“引用工序AI→步骤”（步骤级用于少量差异化补丁）。
+  - 关键文件：
+    - `frontend/src/components/costing/ProcessModuleAIDrawer.tsx`
+    - `frontend/src/pages/costing/ProcessModulesPage.tsx`
+  - 本轮验收命令：
+    - `npm -C frontend run build`
+    - `grep -nF "从工序自动汇总（只填空）" frontend/src/components/costing/ProcessModuleAIDrawer.tsx`
+  - 下一步（可选，不在本轮范围）：对“AI生成写入 narrative_long”加“手工锁定字段覆盖确认”提示（尊重 `_manual_overrides.narrative_long`）。
+  - 最近校对（北京时间 GMT+8）：2025-12-27 17:30
+
+- **本轮闭环产物（Frontend / 只读：发货批次列表 + 异常队列 + BOM 快照查询）**：
+  - 新增页面：`/costing/shipments`（只读）
+  - 页面顶部新增：上传发货单（xlsx 导入）→ 调用 `POST /api/planner/shipments/import`，导入成功后自动选中 batch 并刷新列表/异常/快照
+  - 页面包含 3 块：
+    - 发货批次列表（分页，点击行设置当前 batch_id）
+    - 异常队列（支持 batch_id/解决状态/limit 过滤）
+    - BOM 快照查询（支持 batch_id/SKU/发货单号/spec_hash/limit 过滤，支持抽屉查看 trace + 最终 BOM 行摘要）
+  - 依赖接口（后端已补齐最小查询能力）：
+    - `GET /api/planner/shipments/import-batches?page=1&page_size=20`
+    - `GET /api/planner/shipments/exceptions?batch_id=...&resolved=...&limit=...`
+    - `GET /api/planner/shipments/bom-snapshots?batch_id=...&sku_code=...&shipment_no=...&spec_hash=...&limit=...`
+  - 本轮验收命令（补充）：
+    - Docs：`grep -nF "## 标准模型：行级变体（Overlay）运营/实施规范（v0.1）" DOC/costing/manuals/standard_model_variants_ops_rules.md`
+    - Backend smoke：`curl -sS "http://127.0.0.1:8800/api/planner/product-model-versions?version_kind=standard&page=1&page_size=1" | python -m json.tool`
+
+- **本轮补充（Frontend / 替换物料选择器 MVP）**：
+  - 位置：`LineVariantDrawer` 编辑弹窗的“替换物料”列
+  - 行为：不再手输 `material_ref_id`；改为 **打开选择器 → 搜索（编码/名称）→ 选择**
+  - 选择后回填：`material_ref_id + material_code/material_name/unit_of_measure`（用于可读展示 + 同单位校验）
+  - 组件：新增 `frontend/src/components/costing/MaterialSelectModal.tsx`（复用 `/base-config/materials` 搜索接口，默认仅 BOM 物料）
+- **本轮补充（Frontend / 变体规则录入体验收口）**：
+  - `LineVariantDrawer` 的“编辑”弹窗改为 **多条规则表格**（同一触发类型下批量维护）：列为 启动/条件表达式/替换物料/β/α/覆盖率/损耗% + 新增/删除
+  - 启用拦截：未预演成功或预演已过期时，不允许打开“启动”（前端直接提示）
+  - 说明：当前版本仍按“同一触发类型”批量维护；若未来要允许每行触发类型不同，需要单独迭代 UI/保存/门槛（本轮暂停）
+
+- **本轮补充（Backend / 缩略图恢复）**：
+  - 恢复图片代理接口：`GET /api/planner/base-config/materials/{id}/images/{idx}`
+  - 行为：优先读取 `metadata_json.local_images` 的本地文件；若缺失则从钉钉下载并落盘到 `PLANNER_MEDIA_DIR`，并回写 `metadata_json.local_images`
+  - 纠偏：钉钉 `temporaryUrls` 在当前环境为 **GET** 且 `appType` 在路径里（非 POST）
+  - 本地媒体目录默认：`backend/media`（已加入 `.gitignore`，避免误提交）
+
+- **本轮补充（Backend / 行级变体 replace_self 用量兜底）**：
+  - 修复历史规则“替换物料 β=0/计量方式默认 count”导致 `variant_item computed_quantity=0`
+  - `bom/generate` 在 `replace_self` 下：若替换行未正确填写，则 **继承基准行的计量方式/β/单位**（避免用户必须重录旧规则）
+
+- **下一步（不在本轮范围）**：
+  - 若要允许“每行不同触发类型（token/宽/高/面积/周长混合）”并保持启用门槛正确：需要把触发类型下放到每行，并按行计算维度缺失/单位回填/预演样例覆盖
+  - 如需更易用的物料选择（从物料/虚拟物料列表挑选并回填 material_ref_id），再开下一轮单独闭环。
+
+- **下一步闭环任务单（运维/上线）**：`DOC/agents/briefings/ops_deploy_line_variants_to_4799.md`
+- **验收命令（派单文件存在）**：`grep -nF "# Ops/Backend Ops 闭环任务单：部署“行级变体（overlay）”到 47.99.89.206" DOC/agents/briefings/ops_deploy_line_variants_to_4799.md`
+- **下一步闭环任务单（运维/上线：发货单导入→BOM快照）**：`DOC/agents/briefings/ops_deploy_shipment_import_bom_snapshots_to_4799.md`
+- **验收命令（派单文件存在）**：`grep -nF "# Ops/Backend Ops 闭环任务单：部署“发货单导入→spec_cache→BOM快照”到 47.99.89.206（MVP）" DOC/agents/briefings/ops_deploy_shipment_import_bom_snapshots_to_4799.md`
+- **下一步闭环任务单（运维/上线：前端发货单上传入口）**：`DOC/agents/briefings/ops_deploy_frontend_shipments_upload_to_4799.md`
+- **验收命令（派单文件存在）**：`grep -nF "# Ops 闭环任务单：部署前端“发货单上传导入入口”到 47.99.89.206（/costing/shipments）" DOC/agents/briefings/ops_deploy_frontend_shipments_upload_to_4799.md`
+- **最新部署（2025-12-23 10:10 CST）**：
+  - `47.99.89.206` 已执行 `git pull --ff-only`、`alembic upgrade heads`（存在 `0016_line_variants_mvp` 与 `0754ad7d6c3f` 双 head，采用 `heads` 选项同步）
+  - `systemctl --user restart planner-costing.service`（需要 `export XDG_RUNTIME_DIR=/run/user/$(id -u)`）后，`curl http://127.0.0.1:8800/api/planner/health` 返回 `{"status":"ok"}`
+  - OpenAPI 校验：`/api/planner/shipments/import` / `/api/planner/shipments/exceptions` / `/api/planner/shipments/bom-snapshots` → `True`
+  - 目标机验收：`pytest backend/tests/planner/test_shipment_import_bom_snapshots_mvp.py -q` → `1 passed`
+  - **本轮新增上线（SKU 主档工作台）**：
+    - 后端：`alembic upgrade heads` 已运行 `0017 -> 0018_sku_master_import_mvp`，并重启 `planner-costing.service`
+    - OpenAPI 校验：`/api/planner/sku-master` 与 `/api/planner/sku-master/import` → `True`
+    - API 校验：`GET http://127.0.0.1:8800/api/planner/sku-master?page=1&page_size=10` → 200（`total=0, items=[]`）
+    - 前端：静态资源已发布至 `/var/www/html/ai-costing/dist`
+
+- **本轮闭环产物（Docs / 运营规范）**：`DOC/costing/manuals/standard_model_variants_ops_rules.md`（行级变体：token/尺寸边界/预演留痕/变更控制/扣库口径）
+- **本轮验收命令（Docs）**：`grep -nF "## 标准模型：行级变体（Overlay）运营/实施规范（v0.1）" DOC/costing/manuals/standard_model_variants_ops_rules.md`
+
+- **接力准备（新 Frontend Agent）**：已刷新 `DOC/agents/handoff_frontend.md`，补齐行级变体 Overlay（`LineVariantDrawer`）与运营规范口径入口。
+
+- **提炼件（禁止直读导出全文）**：`DOC/index/extracted/variants_discussion_extracted_20251221T200250+0800.md`（变体收口：同单位 1→1 平替、规则上限、启用门槛等）
+- **本轮验收命令（提炼件）**：`grep -nF "# 提炼：变体收口讨论（从 Cursor 导出记录提炼）" DOC/index/extracted/variants_discussion_extracted_20251221T200250+0800.md`
+
+- **下一步闭环任务单（前端 UX 细化）**：`DOC/agents/briefings/frontend_line_variants_material_picker_mvp.md`（替换物料选择器：替代手输ID）
+- **验收命令（派单文件存在）**：`grep -nF "# Frontend 闭环任务单：行级变体“替换物料”不再手输ID（选择器 + 自动回填 + 同单位校验）" DOC/agents/briefings/frontend_line_variants_material_picker_mvp.md`
+
+- **下一步闭环任务单（SKU→库存扣料清单）**：`DOC/agents/briefings/backend_sku_binding_inventory_mvp.md`
+- **验收命令（派单文件存在）**：`grep -nF "# Backend 闭环任务单：SKU 绑定 + 规格解析尺寸/条件 + 生成库存扣料清单（BOM 快照）MVP" DOC/agents/briefings/backend_sku_binding_inventory_mvp.md`
+- **下一步闭环任务单（发货单导入→BOM快照）**：`DOC/agents/briefings/backend_shipment_import_bom_snapshots_mvp.md`
+- **验收命令（派单文件存在）**：`grep -nF "# Backend 闭环任务单：发货单 Excel 导入 → spec_hash 缓存解析 → BOM 快照生成 + 异常队列（MVP）" DOC/agents/briefings/backend_shipment_import_bom_snapshots_mvp.md`
+ - **下一步闭环任务单（SKU 主档导入/回写）**：`DOC/agents/briefings/backend_sku_master_import_and_autobind_mvp.md`
+ - **验收命令（派单文件存在）**：`grep -nF "# Backend 闭环任务单：SKU 主档导入（ERP 平台商品列表）+ 发货导入自动回写（MVP）" DOC/agents/briefings/backend_sku_master_import_and_autobind_mvp.md`
+ - **下一步闭环任务单（前端 SKU 主档工作台）**：`DOC/agents/briefings/frontend_sku_master_workspace_mvp.md`
+ - **验收命令（派单文件存在）**：`grep -nF "# Frontend 闭环任务单：SKU 主档工作台（导入/查询/命中率）MVP" DOC/agents/briefings/frontend_sku_master_workspace_mvp.md`
+
+- **补充迭代（已完成）：SKU 主档“预解析缓存 + 规格差异标记”**：
+  - 目标：在 SKU 主档中前置沉淀 `spec_hash/解析版本/尺寸/tokens/model_code_hint`，并在发货触发时记录“ERP规格 vs 最近发货规格”差异，避免重复解析、便于前端复核。
+  - 前端展示：`/costing/sku-master` 列表显示 **对接状态 + 规格差异**，详情抽屉显示 `model_code_hint / erp_spec_hash / last_shipment_spec_text/hash / erp_dimensions/tokens`。
+  - 后端实现：导入/回写时写入 `metadata_json`，并在 `GET /api/planner/sku-master` 列表/详情回传 computed 字段（避免前端 N+1）。
+  - 验收命令：`pytest backend/tests/planner/test_sku_master_import_mvp.py -q && npm -C frontend run build`
+
+- **方案产出（ERP回传工艺/生产规格）**：
+  - `DOC/costing/blueprints/erp_writeback_process_spec_mvp.md`（把“可生产的工艺/规格 + 追溯ID”回写到ERP的最小口径/字段清单/幂等治理）
+- **对外谈判资料（吉客云/ERP API需求表单）**：
+  - `DOC/costing/blueprints/jky_api_requirements_form_v1.md`（一页式：读接口+写回接口+限流/幂等/字段字典要求）
+  - `DOC/costing/blueprints/jky_after_sales_returns_requirements_form_v1.md`（售后/退货/作废/换货/补发：冲销与对账所需字段/接口/主键要求）
+
+- **本轮闭环产物（Backend / 发货单导入→spec_hash缓存→BOM快照 + 异常队列 MVP）**：
+  - 新增落库表：`shipment_import_batches`、`shipment_lines`、`spec_parse_snapshots`、`bom_snapshots`、`shipment_exception_queue`
+  - 新增接口：
+    - `POST /api/planner/shipments/import`（xlsx 导入→标准化→幂等→生成快照/入异常）
+    - `GET /api/planner/shipments/import-batches/{batch_id}`
+    - `GET /api/planner/shipments/exceptions?batch_id=...`
+    - `GET /api/planner/shipments/bom-snapshots?batch_id=...`
+  - 幂等口径：
+    - 文件级：`file_hash=sha1(xlsx_bytes)`（同文件重复导入直接返回已成功 batch）
+    - 行级：`external_line_key_hash=sha1(shipment_no|sku_code|spec_text|qty|revenue_amount)`（跨批次重复不重复生成 shipment_line/bom_snapshot）
+  - 关键输出：`bom_snapshots.trace` 中回填 `bound_version_id + spec_hash + batch_id + shipment_line_id`
+  - 本轮验收命令（必须）：`pytest backend/tests/planner/test_shipment_import_bom_snapshots_mvp.py -q`
+
+- **本轮闭环产物（Backend / 发货异常队列：按批次重试未解决异常（Retry Exceptions）MVP）**：
+  - 新增接口：`POST /api/planner/shipments/exceptions/retry`
+  - 请求字段（JSON）：`batch_id`、`only_unresolved=true`、`limit?`、`operator_id`、`reason`
+  - 行为（写死口径，MVP）：
+    - 仅选择 `shipment_exception_queue.batch_id==batch_id` 且 `resolved_at is null` 的异常（`only_unresolved` 必须为 true）
+    - 对每条异常关联 `shipment_line` 重新执行：SKU 绑定校验 → 规格解析（复用 `spec_hash` 缓存）→ 生成 **新** `bom_snapshots` 记录（不覆盖历史快照）
+    - 成功：将原异常标记 resolved（写 `resolved_at`），并在 `payload_json.resolution` 中记录 `action=retry/resolved_by/resolved_bom_snapshot_id/retry_reason`
+    - 失败：保持 unresolved，并在 `payload_json.retry` 记录 `count/last_at/last_by/last_reason/last_error`，同时更新 `message`
+  - 最小单测：`backend/tests/planner/test_shipment_exception_retry_mvp.py`
+  - 本轮验收命令（必须）：`pytest backend/tests/planner/test_shipment_exception_retry_mvp.py -q`
+  - 下一步（不在本轮范围）：区分“重跑整批（Rerun Batch）”与父子批次链路；补审计日志落 `audit_logs`（如需要）
+
+- **本轮运维闭环（Backend Ops / 上线 Retry Exceptions 到 47.99.89.206）**：
+  - 最近校对（北京时间 GMT+8）：2026-01-01 17:33
+  - 结果：**已上线**（`git pull --ff-only` + `alembic upgrade heads` + `systemctl --user restart planner-costing.service`）
+  - 最小证据（必须）：
+    - OpenAPI 校验输出：`True`
+    - pytest 输出：`2 passed`
+  - 目标机验收命令（复用口径，留档）：
+    - OpenAPI：`curl -sS http://127.0.0.1:8800/openapi.json | python -c 'import json,sys; s=json.load(sys.stdin)[\"paths\"]; print(\"/api/planner/shipments/exceptions/retry\" in s)'`
+    - pytest：`cd /home/admin/ai-costing-system/backend && . venv/bin/activate && python -m pytest tests/planner/test_shipment_exception_retry_mvp.py -q`
+
+- **本轮闭环产物（Backend / SKU 主档导入 + 发货导入自动回写 MVP）**：
+  - 新增落库表：`sku_master`（以 `erp_sku_barcode=货品条码（系统）` 为唯一键）
+  - 新增接口：
+    - `POST /api/planner/sku-master/import`（导入 `ERP 理 平台商品列表.xlsx` 过滤字段，按 barcode upsert）
+    - `GET /api/planner/sku-master?search=&channel=&match_status=&page=&page_size=`
+    - `GET /api/planner/sku-master/{id}`
+  - 发货导入增强：`POST /api/planner/shipments/import` 若 barcode 未命中 `sku_master`，则创建最小主档（`metadata.source="shipment_autobackfill"`；不覆盖已存在主档）
+  - 本轮验收命令（必须）：`pytest backend/tests/planner/test_sku_master_import_mvp.py -q`
+
+- **本轮闭环产物（Frontend / SKU 主档工作台 MVP）**：
+  - 新增页面：`/costing/sku-master`（成本核算菜单下新增入口：SKU 主档 / 商品关联）
+  - 功能（MVP）：
+    - 上传导入：调用 `POST /api/planner/sku-master/import`（xlsx + requested_by）
+    - 列表分页：调用 `GET /api/planner/sku-master`（search/channel/match_status/page/page_size）
+    - 详情抽屉：调用 `GET /api/planner/sku-master/{id}`（展示原始字段 + 图片预览 URL + metadata_json）
+
+- **补充迭代（已完成）：SKU 主档绑定工作台（只选模型→唯一在线发布标准版本）**：
+  - 手工绑定（不覆盖已有绑定）：
+    - 右侧列表勾选 SKU 主档 → 左侧选择“已发布标准模型” → 一键绑定（自动落到该模型唯一 `published standard` 版本）
+    - 后端接口：`GET /api/planner/sku-master/published-standard-models`、`POST /api/planner/sku-master/bind-by-model`
+  - 自动绑定（确定性规则，带预览/执行）：
+    - 仅对 `model_code_hint` 唯一命中“已发布标准模型”的未绑定 SKU 自动绑定
+    - 后端接口：`POST /api/planner/sku-master/auto-bind/preview`、`POST /api/planner/sku-master/auto-bind/execute`
+  - 验收命令：
+    - Backend：`cd backend && . venv/bin/activate && pytest tests/planner/test_sku_master_binding_workbench_mvp.py -q`
+    - Frontend：`npm -C frontend run build`
+
+- **补充迭代（已完成）：自动绑定预览→右侧候选列表→默认全选→仅绑定选中**：
+  - 预览后：右侧列表自动切换为“命中候选视图”（只显示命中候选并默认全选），新增列展示匹配模型/命中词/命中方式
+  - 执行：仅对“命中候选”中被勾选的记录执行绑定；未勾选则不绑定
+  - 后端：`POST /api/planner/sku-master/auto-bind/execute` 支持 `sku_master_ids` 入参
+  - 验收命令：
+    - Backend：`cd backend && . venv/bin/activate && pytest tests/planner/test_sku_master_binding_workbench_mvp.py -q`
+    - Frontend：`npm -C frontend run build`
+
+- **补充迭代（已完成）：标准模型“型号识别规则”（用于自动绑定识别）**：
+  - 入口：标准模型编辑抽屉（`entryContext="standard"`）新增 Tab：**型号识别规则**
+  - 规则：在模型 `metadata_json.recognition_keywords` 维护关键词（如 OZU：`丝圈地垫`、`丝圈`），用于从交易规格 `spec_text` 识别模型
+  - 护栏：关键词在“已发布标准模型集合”内 **必须全局唯一**（保存时后端校验，避免歧义）
+  - 自动链路：`sku-master auto-bind preview/execute` 优先按关键词命中模型，其次才用 `model_code_hint` 兜底
+  - 验收命令：
+    - Backend：`cd backend && . venv/bin/activate && pytest tests/planner/test_sku_master_binding_workbench_mvp.py -q`
+    - Frontend：`npm -C frontend run build`
+
+- **补充迭代（已完成）：型号识别规则 UI 列表化（新增/删除/校验/保存）**：
+  - 交互：新增关键词→列表展示→可删除；提供“校验”按钮（不落库）与“保存”按钮（落库）
+  - 后端：新增校验接口 `POST /api/planner/product-models/{id}/recognition/validate`
+  - 验收命令：
+    - Backend：`cd backend && . venv/bin/activate && pytest tests/planner/test_product_model_recognition_validate.py -q`
+    - Frontend：`npm -C frontend run build`
+    - 命中率/字段齐全（MVP）：在页面按“当前页”聚合展示
+  - 本轮验收命令（必须）：`npm -C frontend run build`（已通过）
+
+- **本轮方案产物（SKU→BOM→发货/扣库/核算对账）**：`DOC/costing/blueprints/sku_binding_bom_shipment_plan.md`
+- **本轮提炼件（发货单样例）**：`DOC/index/extracted/shipment_xlsx_extracted_20251222T000000+0800.md`
+- **本轮验收命令（提炼件/方案）**：
+  - `grep -nF "# 提炼：发货单-理.xlsx（表头/前几行样例，基于xlsx-xml解析）" DOC/index/extracted/shipment_xlsx_extracted_20251222T000000+0800.md`
+  - `grep -nF "SKU 绑定 → 规格解析 → 动态 BOM → 发货/扣库/核算对账" DOC/costing/blueprints/sku_binding_bom_shipment_plan.md`
+  - `grep -nF "external_line_key" DOC/costing/blueprints/sku_binding_bom_shipment_plan.md`
+  - `grep -nF "交易规格（spec_text）变更" DOC/costing/blueprints/sku_binding_bom_shipment_plan.md`
+
+- **本轮闭环产物（Backend / 套装 B-解析：严格 TOKEN 口径，禁止模板注入触发变体）**：
+  - 最近校对（北京时间 GMT+8）：2026-01-28
+  - 背景：`B-DB9EAE` 的 BOM 预览中出现 `WB02339 1012本白雪尼尔` 错误命中；根因是模板/预设把 `{雪尼尔}` 等 token 注入 `runtime_tokens`，从而绕过“交易规格出现触发词才命中”的口径。
+  - 变更（严格口径 / 推荐）：
+    - 当套装为 **B-解析型**（`prefix_letter == 'B'`）时：**仅允许使用交易规格 `spec_text` 解析出的 tokens** 参与 `line_variant_service.evaluate_conditions()`；
+    - 模板级 `shared_trigger_text`、组件级 `tokens/spec_text`、预设/词典映射产生的“注入 token”不再参与匹配；
+    - 同时禁用“别名注入”（`variant_token_alias_overrides` 将 alias→orig token 注入共享 tokens），避免出现“规格里只有黄金绒/别名但被注入雪尼尔”的绕口径问题（仅 Z-指定型仍可通过强制规则命中）。
+    - 同时禁用“预设强制命中”（`phrase_presets[*].components[*].force_variant_by_base_line(_stable)`）在 B-解析型下的生效，避免“即使交易规格没写毛球/雪尼尔也被强制替换”的绕口径（Z-指定型仍保留强制能力）。
+  - 结果：不会再出现“规格里没写雪尼尔但命中雪尼尔物料”的情况；示例中 `runtime_tokens` 不再包含 `雪尼尔`，`WB02339` 不再命中。
+  - 关联文件：`backend/src/planner/services/bom_generation_service.py`
+  - 补充：将 `spec_parser_service` 增加保守白名单（`毛球`/`雪尼尔`），使“中文触发词”能被抽成独立 token；否则会被当作整段文本 token，导致规则 `spec_contains_any/all` 无法命中。
+  - 本轮验收命令（必须，均已通过）：
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_shop_analytics_mvp.py -q`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_bundle_as_model.py -q`
+    - `npm -C frontend run build`
+
+- **本轮补强（Frontend / 套装测试台：展示“实际请求 spec_text” + 自动剥离属性规格词 DSL）**：
+  - 最近校对（北京时间 GMT+8）：2026-01-28
+  - 背景：运营在 `/costing/product-listing`（套装测试）里粘贴“属性规格词/公式”（含 `[]/{}`/`0*0*0`），导致右侧诊断出现 `毛球/雪尼尔` 等 token，看起来像“解析没生效/口径不一致”。
+  - 变更：
+    - 新增“请求/输入”Tab：**展示本次实际请求给后端的 `spec_text`**，诊断口径一眼可核对；
+    - 对套装测试输入做 sanitize：自动剥离 `[]/{}` 与 `0*0*0` 等 DSL 片段，仅保留“对客短语/自然语言规格”，并在 UI 以 Warning 提示已剥离。
+  - 关联文件：`frontend/src/pages/costing/ProductListingPage.tsx`
+  - 本轮验收命令（必须）：`npm -C frontend run build`
+
+- **本轮补强（Tests / SQLite 测试库改用 /tmp，避免 readonly 抖动）**：
+  - 最近校对（北京时间 GMT+8）：2026-01-28
+  - 背景：部分环境在仓库目录创建 sqlite 文件会间歇触发 `sqlite3.OperationalError: attempt to write a readonly database`，导致 pytest 偶发失败。
+  - 变更：planner 测试 DB 改为写入 `/tmp/planner_test_<pid>_<uuid>.db`（session 级创建 + teardown 清理）。
+  - 关联文件：`backend/tests/planner/conftest.py`
+
+- **本轮信息架构调整（Frontend / 运营“商品信息”只读页 + 技术“自动化”入口拆分）**：
+  - 最近校对（北京时间 GMT+8）：2026-01-28
+  - 背景：运营查看与技术操作混在 `sku-master/spec-matching` 两个工作台，导致同一商品需要多处来回查、口径不清晰。
+  - 变更：
+    - 新增运营只读页：`/costing/products-info`（菜单：货品管理 → 商品信息）
+      - 展示：商品基本信息 + 模型/套装关联 + 规格解析（预解析尺寸/TOKEN）+ “用于解析的规格”（含回退标识）
+      - 筛选：目标类型（模型/套装）+ 一级（模型/套装模板）+ 二级（套装 selector / 模型发布版本开关）
+    - 将技术操作页移入自动化栏目（菜单：自动化/作业中心）：
+      - `商品关联（SKU 主档）`：`/costing/sku-master`
+      - `规格解析（工作台）`：`/costing/spec-matching`
+  - 关联文件：
+    - `frontend/src/pages/costing/ProductInfoPage.tsx`
+    - `frontend/src/components/layout/AppLayout.tsx`
+    - `frontend/src/App.tsx`
+  - 本轮验收命令（必须）：`npm -C frontend run build`
+
+- **本轮补强（发货作业中心 / 异常队列口径：已绑定/已解析不再误显示“未绑定/全已解析”）**：
+  - 最近校对（北京时间 GMT+8）：2026-01-28
+  - 背景：
+    - 运营在 sku-master 已完成绑定、spec-matching 已完成预解析，但作业中心“待处理（异常）”仍显示 `SKU_NOT_BOUND`/“未绑定”，且“规格解析”几乎全部显示“已解析”，造成口径混乱。
+    - 事实：异常队列的 `reason` 是**产生异常当时**的原因；即使后续绑定/补齐解析，异常仍需要一次“重试/生成快照”才能自动标记为已解决。
+  - 变更：
+    - 后端异常列表 enrichment：**规格解析优先读取 sku-master 的预解析缓存**（`preparse_spec_hash/preparse_dimensions`），仅在缺失时才回退到发货链路 `SpecParseSnapshot`。
+    - 前端原因展示：当异常原因为 `SKU_NOT_BOUND` 但当前已能读到绑定时，显示为 **“已绑定待重试”**；当原因为 `SPEC_EMPTY/SPEC_PARSE_FAILED` 但当前已能读到解析时，显示为 **“已补齐待重试”**，并提示点击“批量重试/处理所选”即可消除异常。
+  - 关联文件：
+    - `backend/src/planner/services/shipment_import_service.py`
+    - `frontend/src/pages/costing/shipment-ops/components/BatchWorkbench.tsx`
+  - 本轮验收命令（必须，均已通过）：
+    - `npm -C frontend run build`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+
+- **本轮补强（发货规格属性名前缀剥离：颜色分类/尺寸/组合形式… 不再污染解析与对比）**：
+  - 最近校对（北京时间 GMT+8）：2026-01-28
+  - 背景：发货规格常见形态 `颜色分类:xxx;尺寸:xxx;组合形式:xxx`；这些“属性名:”会导致：
+    - 发货规格 vs 网店规格对比出现“规格不一致”（实际上只是多了属性名）
+    - TOKEN 被 `颜色分类/尺寸/组合形式` 等无意义词污染，影响规则命中
+  - 变更：
+    - 后端：新增 `normalize_tx_spec_text()`（仅剥离**包含中文**的 `xxx:` 前缀，避免破坏 `BUNDLE:XXXX` 等内部 token），并用于：
+      - `spec_parser_service.parse_spec()` 的预处理
+      - 发货导入/落库的 `spec_hash` 计算与 `SpecParseSnapshot` upsert（用剥离后的文本做 hash 与解析）
+    - 前端：规格解析工作台（`/costing/spec-matching`）展示/默认解析/规格不一致对比时，发货规格默认显示为“已剥离属性名”的文本
+  - 关联文件：
+    - `backend/src/planner/services/spec_parser_service.py`
+    - `backend/src/planner/services/shipment_import_service.py`
+    - `frontend/src/pages/costing/SkuSpecMatchingPage.tsx`
+  - 本轮验收命令（必须，均已通过）：
+    - `npm -C frontend run build`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+
+- **本轮补强（发货作业中心：异常队列支持后端真筛选，避免 limit 截断导致“搜不到”）**：
+  - 最近校对（北京时间 GMT+8）：2026-01-28
+  - 背景：单批次异常量可达 1w+；此前前端用“拉取前 N 条 + 本地过滤”的方式，容易出现“目标条码在最早的异常里 → 即使 limit=10000 仍筛不到”的情况。
+  - 变更：
+    - 后端 `GET /shipments/exceptions` 新增筛选参数：`sku_code` / `channel` / `spec_text`（按发货行字段 LIKE 匹配），可直接命中任意位置的异常。
+    - 前端异常队列筛选改为**服务端查询**（输入条码/渠道/交易规格后直接请求后端过滤结果）。
+  - 关联文件：
+    - `backend/src/planner/routers/shipments.py`
+    - `backend/src/planner/services/shipment_import_service.py`
+    - `frontend/src/pages/costing/shipment-ops/components/BatchWorkbench.tsx`
+    - `frontend/src/services/planner.ts`
+  - 本轮验收命令（必须，均已通过）：
+    - `npm -C frontend run build`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+
+- **本轮修复（套装=模型版本：绑定套装 SKU 生成快照不再要求交易规格包含 B-套装码）**：
+  - 最近校对（北京时间 GMT+8）：2026-01-28
+  - 背景：部分套装 SKU（如 `6001402915761`）交易规格只有 `Q...;枕套` 等对客文本，不包含 `B-DB9EAE`；但 SKU 已绑定到套装模型版本（bundle-as-model）。此前生成快照时报错：`交易规格未包含套装编码`，导致“处理所选（生成快照）”全失败。
+  - 变更：
+    - `generate_bom_by_spec()` 支持在缺少套装 token 时，**通过 `bundle_template_version_id`（来自绑定的套装模型版本）兜底**，不再强制要求交易规格携带 `B-...`。
+    - 同时把绑定的 `bundle_preset_selector` 透传进套装 BOM 生成，确保落到正确的二级预设。
+    - `compute_snapshot_for_shipment_line` 失败时返回最新异常 `reason/message`，便于前端直接定位失败原因。
+  - 关联文件：
+    - `backend/src/planner/services/bom_generation_service.py`
+    - `backend/src/planner/services/shipment_import_service.py`
+
+- **本轮补强（发货台账：交易规格搜索 + 模型/套装（一级/二级）筛选 + 抽屉展示规格图）**：
+  - 最近校对（北京时间 GMT+8）：2026-01-28
+  - 变更：
+    - 台账筛选新增“模型/套装(全部/标准模型/套装)”与“一级/二级”：
+      - 标准模型：一级=模型，二级=已发布标准版本（按当前 SKU 绑定过滤）
+      - 套装：一级=套装模板，二级=selector（组合成 `B-模板码selector` 过滤）
+    - 台账列表列精简：`SKU` 改名为 **货品条码**；把批次/链接ID/商家编码等移入抽屉
+    - 新增“发货行详情”抽屉：展示批次、链接ID、商家编码、平台规格Id、套装锚点、spec_hash、快照ID，并通过 SKU 主档展示**规格图/商品图**
+  - 后端：`GET /shipments/lines` 增加筛选参数 `bound_target_kind/bound_model_code/bound_version_label`，并返回 `bound_version_label`
+  - 关联文件：
+    - `backend/src/planner/routers/shipments.py`
+    - `backend/src/planner/services/shipment_import_service.py`
+    - `backend/src/planner/schemas.py`
+    - `frontend/src/pages/costing/ShipmentLedgerPage.tsx`
+    - `frontend/src/services/planner.ts`
+    - `frontend/src/types/planner.ts`
+  - 本轮验收命令（必须，均已通过）：
+    - `npm -C frontend run build`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+
+- **本轮补强（发货台账列表：订单号回归 + 版本胶囊 + 成本/毛利展示）**：
+  - 最近校对（北京时间 GMT+8）：2026-01-28
+  - 变更：
+    - 列表：订单号恢复显示在“货品条码”后；“模型/套装”“标准版本”列宽各加大约 1/3
+    - 标准版本：按指定胶囊风格展示版本号
+    - 成本/毛利：列表新增“成本/毛利/毛利率”（基于 `shipment_costing_results.cost_total` 轻量读取；避免依赖大快照 trace_json）
+  - 关联文件：
+    - `backend/src/planner/services/shipment_import_service.py`
+    - `backend/src/planner/schemas.py`
+    - `frontend/src/types/planner.ts`
+    - `frontend/src/pages/costing/ShipmentLedgerPage.tsx`
+  - 本轮验收命令（必须，均已通过）：
+    - `npm -C frontend run build`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+
+- **本轮补强（台账成本兜底 + 订单号列加宽 + 毛利显示口径）**：
+  - 最近校对（北京时间 GMT+8）：2026-01-28
+  - 变更：
+    - 成本兜底：若 `shipment_costing_results.cost_total` 为空，则对当前页记录按 `bom_snapshot_id` 回查快照 `trace.costing.total_cost` 填充（只影响单页，避免全表慢）。
+    - 毛利/毛利率：当成本显示为 `-` 时，毛利与毛利率也强制显示为 `-`。
+    - 订单号列：列表列宽加宽约 1/4，保证完整可读。
+  - 关联文件：
+    - `backend/src/planner/services/shipment_import_service.py`
+    - `frontend/src/pages/costing/ShipmentLedgerPage.tsx`
+  - 本轮验收命令（必须，均已通过）：
+    - `npm -C frontend run build`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+
+- **本轮补强（发货台账抽屉：直接展示 BOM 物料/扣库/成本拆分，避免“盲盒”）**：
+  - 最近校对（北京时间 GMT+8）：2026-01-28
+  - 变更：
+    - 抽屉新增 Tab：`BOM物料 / 成本拆分 / 扣库行`，可直接核对解析是否正确（不再只能看结果字段）
+    - 台账列表“交易规格”改为完整换行展示（不截断）
+    - 后端新增只读接口：
+      - `GET /shipments/bom-snapshots/{snapshot_id}`：获取单条快照（含 `final_material_lines` 与 trace）
+      - `GET /shipments/lines/{shipment_line_id}/costing`：获取计价结果（成本拆分）
+      - `GET /shipments/lines/{shipment_line_id}/deductions`：获取扣库行
+  - 关联文件：
+    - `backend/src/planner/routers/shipments.py`
+    - `backend/src/planner/services/shipment_import_service.py`
+    - `backend/src/planner/schemas.py`
+    - `frontend/src/pages/costing/ShipmentLedgerPage.tsx`
+    - `frontend/src/services/planner.ts`
+    - `frontend/src/types/planner.ts`
+  - 本轮验收命令（必须，均已通过）：
+    - `npm -C frontend run build`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_after_sales_import_mvp.py -q`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+
+- **本轮补强（发货台账抽屉：补齐工序明细；列表列宽收紧）**：
+  - 最近校对（北京时间 GMT+8）：2026-01-28
+  - 变更：
+    - 抽屉新增“工序明细”Tab：按发货行的最新 BOM 快照（尺寸/数量）+ 当前版本工序配置，生成工序计价明细，便于核对工序成本口径
+    - 台账列表列宽收紧：数量约缩 1/3；金额/成本/毛利/毛利率约缩 1/5
+  - 新增接口：`GET /shipments/lines/{shipment_line_id}/processes`
+  - 本轮验收命令（必须，均已通过）：
+    - `npm -C frontend run build`
+    - `source backend/.venv/bin/activate && python -m pytest backend/tests/planner/test_profit_analytics_mvp.py -q`
+
+### 本轮评审结论（2026-02-10 — 《BOM系统优化完整方案_最终版》）
+
+- **方案定位**：`DOC/基础表单/BOM系统优化完整方案_最终版.md` 作为“30% 复杂产品（多幅套装/非规则型）”的**扩展路线蓝图**，不改变当前已上线的“发货时再解析 + SKU→已发布标准版本 + BOM 快照/异常队列”主线；主线仍以 `DOC/costing/blueprints/sku_binding_bom_shipment_plan.md` 与 `DOC/costing/reviews/erp_guardrails_addendum_20251222.md` 为唯一口径。
+- **与现状对齐**：截止 2026-02-10，代码中尚未实现文档中的“子模型表/组合型产品模型表/编码提取日志表/产品模型编码 #SxVxFx 嵌入电商字段”等设计；生产环境只有 `spec_parse_snapshots/bom_snapshots/shipment_exception_queue` 这一套发货主链路，请在实施/培训中明确说明“编码方案目前仅是设计方案，尚未落地”。
+- **后续演进建议（供后续派单用）**：
+  - 当发货主链路（SKU 绑定工作台 + spec 预解析工作台 + 发货导入/异常重试 + 成本/利润/退货洞察）稳定运行后，再开启“组合型产品模型 + 自动编码”Phase，优先支持文档中的 **类型三：多幅套装（规则型）**，类型四（非规则型）仍通过人工 BOM 或模板化占位物料处理。
+  - 编码方案真正落地时，必须与 `spec_parse_snapshots/bom_snapshots` 打通：编码提取写入解析 trace，产品模型匹配结果写入 BOM 快照 trace，严格遵守“快照不回写、重跑产出新快照”的 Guardrails。
+  - 任意试点店铺在电商字段内嵌 `#SxVxFx` 编码前，需先完成“产品模型配置 UI + 编码自动生成 + 运营操作手册”，禁止人工随意造码；试点范围与回滚方案需单独由 Hub/Planner 评审后再派 Backend/Frontend 闭环任务单。
+
+### 2026-05-09 Cost Rate Hub MVP 完成快照（v1.3 落地，U5+U6 合并交付）
+
+- **任务来源**：`DOC/agents/briefings/cost_rate_hub_mvp.md`（U5/U6 合并的全栈大任务单）；新规则首次落地实践。
+- **完成日期（北京时间 GMT+8）**：2026-05-09 21:30
+- **执行 Agent**：`@Fullstack Agent`（按 `task_distribution_standard.md` v2.0 §3.1 自主完成 5~8 天工作量；中间过程未回 Hub 汇报）。
+- **最近一次已确认快照**：本快照即是。
+
+#### 落地内容
+
+1. **Migration 0038 — `cost_rate_master`（PG 生产 + SQLite 测试双兼容）**：
+   - 文件：`backend/migrations/versions/0038_cost_rate_master.py`
+   - 在 `long_tail_cogs_rate_strategies` 表加 11 字段后改名为 `cost_rate_master`：`rate_type` / `scope_type` / `scope_id` / `rate_basis` / `source` / `effective_from` / `effective_to` / `data_quality` / `cost_center_id` / `legal_entity_id` / `production_unit_id`。
+   - 老 long-tail 行 UPDATE 回填：`rate_type='cogs'` / `scope_type='category'` / `scope_id=category` / `rate_basis='pct_of_revenue'` / `source='long_tail_legacy'`。
+   - 兼容视图 `CREATE VIEW long_tail_cogs_rate_strategies AS SELECT * FROM cost_rate_master WHERE rate_type='cogs'`，老 SQL 0 改动。
+   - 双向跑通：`alembic upgrade head` + `alembic downgrade -1`（数据完好）+ `alembic upgrade head` 全部 0 退出码。
+
+2. **ORM 模型升级**（`backend/src/planner/models.py`）：
+   - 新增 `CostRateMaster` 类（`__tablename__ = 'cost_rate_master'`），保留 `LongTailCogsRateStrategy = CostRateMaster` 别名兼容老代码。
+
+3. **Service 层** （`backend/src/planner/services/long_tail_strategy_service.py`）：
+   - 新增 `resolve_overhead_rate(db, *, model_id, category, cost_center_id, as_of) -> ResolvedOverheadRate` — Hub v1.3 §5.1 4 层 resolve 链：`model > category > cost_center > global > 硬兜底 0.30`；返回 `(rate, hit_layer, scope_type, scope_id, source, data_quality, strategy_id)`。
+   - `list_strategies` 新增 `rate_type` 参数（默认 `'cogs'` 兼容老 long-tail UI）。
+   - `create_strategy` / `update_strategy` 接收 11 个 Hub 字段；`rate_type != 'cogs'` 时自动合成 `category = '__<rate_type>__<scope_type>__<scope_id>'`，让现有 `UNIQUE(category)` 约束转为"一 scope 一行"的天然守卫。
+
+4. **bom_generation_service 接入**（`backend/src/planner/services/bom_generation_service.py:2009-2080`）：
+   - `_resolve_overhead_rate` 优先级：① Hub 4 层 resolve → ② version.metadata_json → ③ model.metadata_json → ④ 硬兜底 0.30。
+   - 任一 Hub 层命中即直接返回该层 rate；都没命中时回退到 `metadata_json` 老逻辑，**老模型行为完全不变**。
+
+5. **Router 层**（`backend/src/planner/routers/long_tail_strategies.py`）：
+   - `GET /api/planner/long-tail-strategies?rate_type=cogs|overhead_rate|...|all` — 默认 `cogs` 兼容旧前端。
+   - `POST` / `PATCH` 接收 11 字段，`rate_type='overhead_rate'` 时校验 `scope_type` + `scope_id`（global 除外）。
+   - `POST /resolve-preview` 加 `rate_type='overhead_rate'` 模式，返回 `hit_layer / hit_scope_type / hit_scope_id / data_quality` 给前端徽章。
+
+6. **前端**（`frontend/src/pages/costing/admin/LongTailCogsRatePage.tsx`）：
+   - 改为顶部 Tabs：①`长尾成本兜底（cogs）`（原逻辑不变）+ ②`制造费率治理（overhead_rate）`（新）。
+   - Tab2 表格列：`scope_type` / `scope_id` / `rate` / `rate_basis` / `data_quality`（🟢🟡🔴 徽章）/ `source` / `effective_from` / `enabled`。
+   - Tab2 编辑表单：`scope_type` 下拉（model/category/cost_center/global）+ 动态 `scope_id` 提示 + `rate` + `data_quality` + `source` + `effective_from`。
+   - Tab2 试算面板：填 `model_id / category / cost_center_id` 看命中哪一层。
+   - URL 同步：`?tab=cogs|overhead_rate`（`useSearchParams`，刷新保留）。
+   - 老路由 `/costing/admin/long-tail-cogs-rate` 保留；新增 `/costing/admin/cost-rate-hub` → 重定向 `?tab=overhead_rate`。
+
+#### KB8 端到端验收数据
+
+| 步骤 | 命令/操作 | 结果 |
+|---|---|---|
+| 1. 预查 | `resolve_overhead_rate(model_id=KB8)` 无 Hub 行 | `hard_fallback` rate=0.30 ✓ |
+| 2. POST | `create_strategy(rate_type='overhead_rate', scope_type='model', scope_id=KB8_uuid, rate=0.25)` | id=`7c83bc7b-096e-431b-a266-9ed78a661d74` ✓ |
+| 3. resolve | 同 step 1 重新 resolve | `hit_layer='model'` rate=0.25 ✓ |
+| 4. bom 接入 | `bom_generation_service._resolve_overhead_rate` over KB8 published version | 返回 0.25（不再是 0.30）✓ |
+| 5. KB8 模拟 | 物料 26.93 + 人工 7.34 + 制造费 8.5675 = 合计 42.84 | 折算占比 **20.00%**（旧 23.08%）✓ |
+
+#### 影响范围
+
+- **正向影响**：KB8 + 任何配了 Hub 行的模型（按 4 层链命中），实时核价 / 发货台账"成本拆分" / `cost_overhead_total` 都会反映 Hub 设置的真实费率。
+- **零回归**：未配 Hub 行的模型完全沿用老 `metadata_json + 0.30 兜底` 链路，行为不变；老 long-tail 27 单测全过（`pytest backend/tests/planner/test_long_tail_strategy.py backend/tests/planner/test_long_tail_auto_suggest.py -q` → 27 passed）。
+- **新单测**：`backend/tests/planner/test_cost_rate_hub.py` 17/17 全过（covers 4 层 resolve / scope_id 校验 / data_quality 枚举 / metadata_json 回退 / 硬兜底 / API 往返 / 老 cogs 兼容）。
+- **API 契约**：`?rate_type=cogs` 默认兼容旧前端调用；新 `?rate_type=overhead_rate` 给 Hub UI；body 11 个 Hub 字段全 optional 默认。
+
+#### 下一步派单候选（按优先级）
+
+1. **U7：4 个 Insights 看板加成本可信度徽章 + 三视图切换**（最直接：Hub 数据已落地，`shipment_costing_results.metadata_json` 已留 `cost_quality` 入口）→ 派单文件名建议 `frontend_insights_quality_badges_mvp.md`。
+2. **`cost_center` 主数据表新建** + 6 个班组初稿数据（H4 决策点）→ 让 Hub 第 3 层 cost_center 真正可用；派单文件名建议 `cost_center_master_mvp.md`。
+3. **Stage 2 物料端 4 字段**（`materials.purchase_entity_id` / `tax_rate` / `tax_included_flag` / `effective_from`）— 物料成本固化的入口。
+4. **U1/U2/U3/U4 v1.3 同步**（按需触发 — 用户启动相关功能时再做，避免跨文件风暴）。
+
+#### 已知遗留 / v2 优化空间
+
+- `cost_rate_master.category` 仍带 `UNIQUE` 约束；overhead_rate 行靠合成 `__overhead_rate__<scope_type>__<scope_id>` 兜底（一 scope 一行的硬约束）。多版本目前走"老 archive + 新 create"模式；v2 新建独立 `cost_rate_history` 表后可移除合成 + 改用 `(rate_type, scope_type, scope_id, effective_from)` 复合 unique。
+- `cost_center_id` / `legal_entity_id` / `production_unit_id` 是 `String(36)` 留位字段（v1 全 NULL）；接入 Stage 2 时要看 `cost_center` 主数据是否需要双向 FK。
+- 4 个 Insights 看板尚未读 `cost_quality`（U7 单独派）。
+- `bom_generation_service.py:1129/1487` 两处 `Decimal("0.3")` accumulator（与本任务无关，未动；属 bundle merge 默认值，按设计保留）。
+
+---
+
+## 2026-05-09 22:00 — U7-A Insights 看板成本可信度徽章 MVP 完成快照
+
+### 任务范围
+
+承接 `briefings/insights_quality_badges_mvp.md`（约 280 行任务单），实现 4 个 Insights 看板（Profit / Shop / Sales / AfterSales）每行展示 🟢真实命中 / 🟡默认兜底 / 🔴长尾 hard fallback 三色「成本可信度」徽章，hover 显示命中层级 + 来源 + 更新时间。前置 Hub MVP（commit `8c7349cd`）已落地 `cost_rate_master` 表 + `resolve_overhead_rate` 4 层链 + Tab UI。
+
+### 5 条用户验收标准对勾
+
+| # | 验收标准 | 结果 | 证据 |
+|---|---|---|---|
+| 1 | 4 个 Insights 看板每行有「成本可信度」列（🟢/🟡/🔴）| ✅ | 4 张 Page 主表 columns 都加了 `key:'cost_quality'` 列；frontend `npm run build` 通过 |
+| 2 | hover Tag 显示 tooltip：命中层级 + 来源 + 更新时间 | ✅ | `CostQualityBadge.tsx` 用 Tooltip 渲染，含 hit_layer 中文映射 + source 中文映射 + 北京时间格式化 |
+| 3 | KB8（已配 model 级 0.25）显示 🟢「模型级精确」 | ✅ | 端到端测脚本：seed KB8 + 0.25 strategy → `profit_by_model` 返回 `{level:'green', hit_layer:'model', source:'manual'}` |
+| 4 | 没配的模型显示 🔴「全局兜底」或「硬编码 0.30」 | ✅ | `cost_quality_service.derive_badge_for_model(model_id=None)` 落到 `hard_fallback` → red；单测 `test_hard_fallback_when_no_rows` 覆盖 |
+| 5 | 5 个 endpoint 性能未明显退化（≤ 之前 + 200ms）— 批量查 dict 方案 | ✅ | `build_overhead_quality_lookup` 1 次 SELECT 全量 cost_rate_master + Python 端 4 桶 dict（model/category/cost_center/global）+ `_model_ids_per_period_channel_sku` 1 次 SELECT 拿 SKU→model 反查；item-level loop 全是 dict.get，零 N+1 |
+
+### 关键变更（11 个文件）
+
+**后端（4 个）**：
+- `backend/src/planner/services/cost_quality_service.py`（新）：`build_overhead_quality_lookup` / `derive_badge_for_model` / `aggregate_quality`，把 4 层 resolve 从 SQL 全部搬到 in-memory dict（性能关键）。
+- `backend/src/planner/services/analytics_service.py`（改）：7 个函数（profit_by_model / profit_by_sku / profit_by_channel / returns_rate_by_sku / returns_rate_by_channel / model_insights_summary / sales_lines）每行透传 `cost_quality` dict。新增 `_model_ids_per_period_channel_sku` helper 解决 SKU/Channel 聚合粒度的 model_id 反查。
+- `backend/src/planner/schemas.py`（改）：新增 `CostQualityLevel / CostQualityHitLayer / CostQualityBadge` Pydantic 模型；7 类 item schema 加 `cost_quality: Optional[CostQualityBadge] = None`（向后兼容，老前端忽略字段不崩）。
+- `backend/tests/planner/test_analytics_quality.py`（新）：8 个单测（model/category/global/hard_fallback/aggregate worst-level/aggregate all green/empty/pydantic round-trip）全过。
+
+**前端（5 个）**：
+- `frontend/src/components/costing/CostQualityBadge.tsx`（新）：可复用 React 组件 `<CostQualityBadge badge={...} size="small" />`；3 色 Tag + Tooltip 渲染（Color: success/warning/error，label: 高/中/低，hit_layer 中文映射 6 层，source 中文映射）。
+- `frontend/src/types/planner.ts`（改）：补 `CostQualityLevel / CostQualityHitLayer / CostQualityBadge` 类型；7 类 item interface 加 `cost_quality?: CostQualityBadge | null`。
+- `frontend/src/pages/costing/ProfitInsightsPage.tsx`（改）：主表 columns 加「成本可信度」列；`scroll.x` 980 → 1090。
+- `frontend/src/pages/costing/ShopInsightsPage.tsx`（改）：profit / returns 两 Tab 主表都加「成本可信度」列；scroll.x 同步。
+- `frontend/src/pages/costing/SalesInsightsPage.tsx`（改）：明细表加「成本可信度」列。
+- `frontend/src/pages/costing/AfterSalesInsightsPage.tsx`（改）：SKU 退货率表加「成本可信度」列。
+
+### 性能验证
+
+性能要求：5 个 endpoint 请求时间 ≤ 之前 + 200ms，禁止 N+1。
+
+实现：
+1. `build_overhead_quality_lookup(db)` → 1 次 SELECT `cost_rate_master WHERE rate_type='overhead_rate' AND enabled=true` → 内存里按 priority + effective_from 排序后桶分（4 桶：by_model / by_category / by_cost_center / global）。
+2. SKU/Channel 聚合粒度：`_model_ids_per_period_channel_sku(db, ..., by_sku=True/False)` → 1 次 JOIN SELECT 拿 `(period, channel, sku) → [model_id]`；item-level loop 全是 dict.get，零数据库 round-trip。
+3. `derive_badge_for_model(lookup, model_id=...)` → 纯 Python 4-层 if-elif 走 dict，O(1)。
+4. `aggregate_quality(badges)` → Python max by level rank（red > yellow > green）。
+
+### 端到端验证证据
+
+```bash
+# 1. 后端单测
+python -m pytest backend/tests/planner/test_analytics_quality.py -q     # 8 passed
+python -m pytest backend/tests/planner/test_profit_analytics_mvp.py \
+                  backend/tests/planner/test_shop_analytics_mvp.py \
+                  backend/tests/planner/test_analytics_quality.py -q     # 10 passed (零回归)
+
+# 2. 端到端 sanity（seed KB8 + model-level 0.25 + sku KB8-001）
+=== profit/model: 1 items ===
+   KB8 -> level=green hit_layer=model source=manual
+=== profit/sku: 1 items ===
+   KB8-001 -> level=green hit_layer=model source=manual
+=== profit/channel: 1 items ===
+   天猫旗舰店 -> level=green hit_layer=model source=manual
+=== returns-rate/sku: 1 items ===
+   KB8-001 -> level=green hit_layer=model source=manual
+=== returns-rate/channel: 1 items ===
+   天猫旗舰店 -> level=green hit_layer=model source=manual
+=== models/summary: 1 items ===
+   KB8 -> level=green hit_layer=model source=manual
+=== sales/lines: 1 items ===
+   KB8-001 -> level=green hit_layer=model source=manual
+
+# 3. 前端 build
+npm -C frontend run build      # ✓ built in 8.94s
+```
+
+### 影响范围
+
+- **新增字段，零行为变更**：5 个 endpoint 的 query / 数值列含义 / 排序逻辑全部未动；只在每行末尾追加 optional `cost_quality` dict。老前端忽略未知字段不崩，新前端拿到 undefined 就显示占位 `-`。
+- **零回归**：现有 `test_profit_analytics_mvp.py` + `test_shop_analytics_mvp.py` 一字未改全过；老 long-tail 27 单测 + Hub MVP 17 单测继续通过。
+- **API 契约**：`/profit/sku` / `/profit/channel` / `/profit/model` / `/returns-rate/sku` / `/returns-rate/channel` / `/models/summary` / `/sales/lines` 响应每个 item 多一个 optional 字段 `cost_quality`，结构如：
+
+```json
+{
+  "level": "green",
+  "hit_layer": "model",
+  "source": "manual",
+  "updated_at": "2026-05-09T21:30:00+08:00"
+}
+```
+
+### 不在本次范围
+
+- **U7-B 三视图切换（Tax/Mgmt/Group）** — 任务单 §8 明确不做，因依赖 `cost_center_master` 主表 + 4 店铺 `legal_entity` 录入，主数据未就绪。等主数据就绪后另派 `frontend_insights_three_views_mvp.md`。
+- **`cost_rate_master` 表本身的修改** — 已在 Hub MVP 中落地，本任务只消费它。
+
+### 已知遗留 / v2 优化空间
+
+- `aggregate_quality` 当前是「最差 level 胜出」（保守显示），后续如需按 SKU 占比加权（例如 80% green + 20% red 不应该直接显示 red），需要改为 weighted aggregation。
+- `cost_quality_service` 内部 `_LEVEL_RANK / HIT_LAYER_TO_LEVEL` 是硬编码 dict；后续如需"运营手动调级"（例如某品类临时 yellow → green）可引入 `cost_quality_override` 表，但 MVP 阶段不需要。
+- `aggregate_quality` 聚合后的 `hit_layer` / `source` / `updated_at` 取的是「最差 level 的第一条 badge」；如多张 badge 都是同一最差 level，可能不是用户最关心的那一条。MVP 阶段够用。
+- 如发货数据中 SKU 对多个 model 都做过绑定（历史绑定迁移），`_model_ids_per_period_channel_sku` 会拿到多个 model_id；当前用 `aggregate_quality` 处理（取最差），符合"保守显示"语义。
+
+### 下一步派单候选
+
+1. **U7-B Insights 三视图切换**（Tax/Mgmt/Group）— 等 `cost_center_master` 主表 + 4 店铺 `legal_entity` 录入主数据就绪后启动。
+2. **`cost_center` 主数据表新建** + 6 个班组初稿数据（H4 决策点）。
+3. **U2/U1 文档校准**（finance_analyzer / sku_portfolio v1.1 → v1.2）按需启动。
+
+---
+
+## 2026-05-09 22:30 — 仓库 Dirty 清理 + Push 完成快照（DevOps Agent）
+
+> 承接 Hub 派单 `DOC/agents/briefings/repo_dirty_cleanup_and_push.md`（v1.0，2026-05-09 19:30）。
+> 任务范围：把累积的 51 modified + 102 untracked = 153 dirty 文件按主题分类 commit + 把本地领先 origin 的 825+11 commit 全部 push。
+
+### 完成情况
+
+- **5 条用户验收标准全过**：
+  - ✅ `git status` 完全干净（"无文件要提交，干净的工作区"）
+  - ✅ `git log @{u}..HEAD` 为空（836 commits 已全部 push 至 `origin/backup/20251214-1535`）
+  - ✅ 所有新 commit 都用 `feat/fix/ui/docs/chore + 中文 scope` 风格 + HEREDOC 多行中文 message
+  - ✅ 8 个 migration 0030~0037 全部进入 commit `16c754b2`（无遗漏）
+  - ✅ 没有违反任何禁令（无 force / amend / reset / rebase / git config / 新分支 / secret commit）
+
+### 11 个新 commit（按时间顺序）
+
+| # | hash | 主题 |
+|---|------|---|
+| 1 | `16c754b2` | chore(db): 补提 0030-0037 历史 migration（补 git 追踪，本地 PG 已 upgrade） |
+| 2 | `d932d319` | feat(integrations): 引入吉客云/宜搭/POD 通用集成层 + IntegrationsHub 入口 |
+| 3 | `fe1631bd` | feat(governance): data_quality_service 雏形 + 长尾治理策略测试补全 |
+| 4 | `9c5e22a3` | feat(governance): SKU 治理 4 态状态机 + ShopSpecCode 工坊 + 长尾兜底面板 |
+| 5 | `bfdb8b82` | feat(sku): binding_targets API + TargetPicker 通用绑定目标选择器（阶段 1） |
+| 6 | `e362bc47` | feat(shipment): shipment_import_worker + 异常队列 bulk resolve + 快照补扫 |
+| 7 | `289a89ca` | feat(tmall): SKU 模板生成器持久化主表 + 自定义销售属性 |
+| 8 | `4d0a20f8` | feat(model): 标准建模 / 变体编码 / 物料工序工坊全套增强 |
+| 9 | `ac9d6698` | chore(frontend): 全局布局/拦截器/服务层 + biz 占位 + 部署脚本 + MD→PDF 工具 |
+| 10 | `1ebd96f3` | docs(costing): PnL/Hub Phase0 全文档体系 + 基础表单评审材料归档 |
+| 11 | `469fee9b` | docs(agents): known_issues §0.0a-§0.0j 累积更新 + 仓库 dirty 清理任务单归档 |
+
+### 自主决策点
+
+- **大致按建议拆法 A 的 8~12 个 commit 范围内，落到 11 个**（合并任务单建议的 #9 「前端 pages 跨主题」+ #10 「前端 utils + 占位页」为一个 chore(frontend) commit，因这些都是基建类跨主题修改归一类更合理）。
+- **modified 文件未拆 hunks**：`router.py` / `config.py` 的 diff 跨多个主题（integrations + shipment retry + long-tail fallback），按 commit 8c7349cd 的先例整体放入 commit 2 `feat(integrations)` 并在 message 里标注"顺带含 …"。理由：避免拆 hunk 工具复杂度 + 保证后续 commit 引用这些路由/配置时不会有"未注册"中间态。
+- **后端 service 大文件（sku_master_service.py +1756 行 / shipment_import_service.py +2700 行）整体放入对应主题 commit**：内部多个子主题在同一 service 文件协同，拆 hunk 性价比低。
+- **scripts 大量小文件按主题归到对应 feature commit**（diag/probe/reset 归 SKU 治理；backfill/cron 归对应 service 主题），不单独拆"杂项 scripts" commit。
+- **前端 layout / planner.ts / utils 跨主题修改集中到 commit 9 `chore(frontend)`** — 这些是为前几个 feat commit 提供的"基建配套"（菜单挂入口 / service 端点封装 / 拦截器修复），用 chore 强调"无独立行为变更"。
+
+### Push 输出
+
+```
+To github.com:antgit2024/ai-costing-system.git
+   9d9f961e..469fee9b  backup/20251214-1535 -> backup/20251214-1535
+```
+
+- push 耗时约 127 秒（1 次成功，无重试，无冲突，无鉴权问题）。
+- 推送总量：836 个 commit（825 历史 + 9bd42648 + 11 本批 = 837 减 1 已在远程的 base）。
+- `git fetch` 后 `git status` 显示「您的分支与上游分支 'origin/backup/20251214-1535' 一致」+「干净的工作区」。
+
+### 已扫描确认无敏感信息
+
+- `.env.sample` diff 只新增 7 个 JACKYUN_* placeholder（值全为空字符串），是模板文件。
+- 全仓 grep `(BEGIN.*PRIVATE.*KEY|sk-...|AKIA...|AIza...|ghp_...)` 无任何匹配。
+- `backend/src/integrations/` 子树所有 `(api[_-]?key|secret|password|token|私钥|密钥)\s*[:=]\s*['"][^'"\s]{8,}` grep 无匹配（仅 settings.jackyun_app_key/secret 字段定义，无真实值）。
+- `.gitignore` 已正确忽略 `__pycache__/` / `*.pyc` / `.env` / `*.sqlite*` 等敏感/本地产物。
+
+### 没有任何文件被判定"不该 commit"被保留 dirty
+
+所有 51 modified + 102 untracked 都进入了某个 commit。任务单 §1.1 列举的所有文件（含 8 个 migration + known_issues.md + 12 个 PnL 文档 + 14 个基础表单 + integrations 整目录）都已交付。
+
+### 未触发任何 hook / 告警
+
+- `.git/hooks/` 仅有 `.sample` 模板，无活跃 hook。
+- 所有 commit 一次成功，无 hook 报错。
+
+### 遗留 / 建议
+
+- **本任务自身的归集 commit**（state.md / task_log.md 这两行追加）作为下一轮的 dirty 保留，由下次任务统一清理 — 避免本批结束又留 1 个新 dirty commit。
+- 后续 Agent 若做"大批量 service 文件改造"建议尽早分主题 commit，避免再次累积到 1700+ 行 diff 难拆。
+- `backend/src/upstream_actions.py` 的 LLM agent 接 `semantic_search` 端点目前依赖外部 `VECTOR_SEARCH_URL=http://127.0.0.1:8810`，部署时需要确认该服务存在或加 feature flag。
+- `frontend/src/utils/http.ts` 的 `installAuthInterceptors` 修复了关键 bug（axios.create 不继承拦截器），但任何 plannerClient/services 之外的 axios.create 实例如果有，仍需要手动调一次该函数 — 建议下次扫一遍 `axios.create` 全引用。
+
+---
+
+## 2026-05-10 07:50 — Materials Stage 2 字段扩展完成快照（Cost Rate Hub v1.3 §4.5 第 1 步）
+
+**任务**：`DOC/agents/briefings/material_stage2_fields_mvp.md` —— `materials` 表加 6 个税务/采购/效期字段（purchase_entity_id / tax_included_flag / tax_rate / price_source / effective_from / effective_to），让物料成本从"近似"变"坐实"，把 Hub 物料治理底座搭起来。
+
+### 5 条完成标准 ✅ 全过
+
+1. ✅ Migration 0039 跑通（PG 三向 upgrade head → downgrade -1 → upgrade head；老物料 6 字段全 NULL/默认 False；现有 BOM/同步零回归）
+2. ✅ `PATCH /api/planner/base-config/materials/{id}` + `GET /materials/{id}` + `GET /materials` 全部暴露 6 新字段，向后兼容（老前端不传新字段零改动；新前端可读可写可清空）
+3. ✅ `/costing/materials` 编辑抽屉「成本参数」Tab 末尾新增「税务/采购/效期 (Stage 2)」Card，6 字段（采购主体 / 含税标志 / 税率% / 价格来源 / 生效期 / 失效期）可填可保存可读回
+4. ✅ `/costing/materials` 列表新增「采购主体」+「税率」2 列；老物料显示 `-`
+5. ✅ 宜搭同步 3 种 mode（full/new_only/core_fields）测试覆盖：6 个本地手填字段任何 mode 下都不被覆盖（`yida_sync.py` 已有逻辑天然兼容；新增 4 个参数化测试守住）
+
+### 关键技术决策
+
+- `purchase_entity_id` v1 用枚举字符串（一般纳税人 / 小规模A / 小规模B），DB 列类型 `VARCHAR(36)` 已为 Phase 2 UUID 留位，不需要再改类型
+- 6 字段全 nullable，`tax_included_flag` 唯一 NOT NULL（默认 FALSE，最保守；用户后续可批量 PATCH 修正）
+- Migration 0039 partial index `WHERE effective_to IS NULL`（不能用 `CURRENT_DATE`，PG 在 index predicate 里要求 IMMUTABLE）
+- 前端税率 UI 用百分比 0~100，提交时 ÷100 落库为 `Numeric(6,4)`（如 13% → 0.1300）
+- BOM 计算 v1 不动（仍直读 `materials.unit_price`），按 `effective_from` 取价是 Stage 3 后续派单
+- 宜搭同步无字段映射 → 3 种 mode 都不写入这 6 字段；未来宜搭加映射后只需在 `yida_materials.json` 加 fieldId
+
+### 关键 commit
+
+- `feat(materials): Stage 2 加 6 个税务/采购/效期字段（Cost Rate Hub v1.3 §4.5）` ← 本次
+  - Migration 0039 + ORM Material + Pydantic schemas + base_config router + yida_sync 注释 + 前端 MaterialMasterPage + types/planner.ts + 12 条参数化测试
+
+### 验收命令实跑结果
+
+```
+# Migration 三向（PG）
+$ python -m alembic upgrade head      # 0038 → 0039 ✓
+$ python -m alembic downgrade -1      # 0039 → 0038 ✓
+$ python -m alembic upgrade head      # 0038 → 0039 ✓
+
+# 新测试
+$ python -m pytest tests/planner/test_materials_stage2_fields.py -v
+... 12 passed ...
+
+# 现有 material 测试零回归
+$ python -m pytest tests/planner/test_material_endpoints.py tests/planner/test_materials.py \
+    tests/planner/test_virtual_material_endpoints.py \
+    tests/planner/test_bom_fills_missing_units_from_material_master.py -v
+... 11 passed ...
+
+# 前端 build
+$ npm -C frontend run build           # ✓ built in 9.16s
+
+# Live PG 读 → 写 → 还原
+... before: 全 None/False / after: 一般纳税人/True/0.1300/manual/2026-05-10/2026-12-31 / reverted ✓
+```
+
+### 不在本次 scope（Stage 2 后续 / Stage 3）
+
+- 月度加权平均价 worker（拉 PO 平均价填 `materials.unit_price`）
+- Hub Tab 1「物料价格治理」卡片
+- BOM 按 `effective_from` 取历史价（Stage 3）
+- 接采购系统/ERP 拉 PO 数据
+- 把 `purchase_entity_id` 字符串迁移到 cost_center_master 真实 UUID（A 路径完成后单独派单）
+
+### 遗留 / 建议
+
+- 设计文档 §13.1 任务能力清单可加一行 U#（Stage 2 物料字段 = 已 ✅）
+- 整个 planner 测试集有 8 条**预先存在**失败（migrations 0031 ALTER COLUMN/ SQLite 不兼容、bom_generate_by_spec_bundle_selector 等），与本次改动无关；`git stash` 验证过同样失败
+- 宜搭如未来加 6 字段映射，只需在 `backend/config/yida_materials.json` 添加 fieldId 后，去 `yida_sync.py:_upsert_material` 的 `full mode` 块追加显式赋值（已留中文 TODO 注释）

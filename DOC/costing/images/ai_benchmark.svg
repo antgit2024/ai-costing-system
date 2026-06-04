@@ -1,0 +1,15 @@
+<svg width="1200" height="675" viewBox="0 0 1200 675" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="675" fill="#fff7ed" />
+  <rect x="40" y="40" width="1120" height="120" fill="none" stroke="#ea580c" stroke-width="4" rx="12" />
+  <text x="60" y="110" font-family="Inter,Arial" font-size="44" fill="#9a3412">AI Benchmark 建议（生产版）</text>
+  <g font-family="Inter,Arial" font-size="30" fill="#7c2d12">
+    <text x="100" y="220">1. 选择场景 + Top-N → POST /benchmarks/suggest（真实接口）</text>
+    <text x="100" y="280">2. 每条记录带有供应商、币种、置信度、数据时间</text>
+    <text x="100" y="340">3. 收藏按钮调用 /benchmarks/favorites，刷新后仍保持</text>
+    <text x="100" y="400">4. “数据时间”标签可判断缓存是否过期</text>
+    <text x="100" y="460">5. 收藏项同步到 Scenario Builder 与场景列表</text>
+  </g>
+  <rect x="80" y="500" width="1040" height="120" fill="#ffedd5" stroke="#fdba74" stroke-width="2" rx="16" />
+  <text x="110" y="560" font-family="Inter,Arial" font-size="28" fill="#c2410c">前端：ScenarioBuilderPage → handleFetchBenchmarks + favorites</text>
+  <text x="110" y="600" font-family="Inter,Arial" font-size="28" fill="#c2410c">后端：benchmarks router + ai_benchmark_client 缓存 5 分钟</text>
+</svg>

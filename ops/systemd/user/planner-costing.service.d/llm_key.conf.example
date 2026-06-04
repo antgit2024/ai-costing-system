@@ -1,0 +1,5 @@
+# Template for ~/.config/systemd/user/planner-costing.service.d/llm_key.conf
+# Copy to llm_key.conf and fill in real key; that file is .gitignored.
+# Owned by root (chmod 0600 root:root) for restricted read access.
+[Service]
+Environment="PLANNER_LLM_API_KEY=sk-..."

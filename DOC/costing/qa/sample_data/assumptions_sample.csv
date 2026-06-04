@@ -1,0 +1,5 @@
+initiative_id,name,type,value,unit,effective_date,source,metadata
+INIT-NEO-2025,USD/CNY FX,fx,7.12,rate,2025-12-01,Finance Export,{"volatility":"medium"}
+INIT-NEO-2025,Inflation 2025,inflation,0.025,ratio,2025-11-15,Finance Forecast,{"notes":"Electronics"}
+INIT-NEO-2025,Tooling Utilization,utilization,0.82,ratio,2025-12-05,PM Input,{"line":"MFG-03"}
+INIT-NEO-2025,AI Benchmark Adjustment,custom,0.95,ratio,2025-12-06,AI Assistant,{"applied_to":"materials"}

@@ -1,0 +1,15 @@
+<svg width="1200" height="675" viewBox="0 0 1200 675" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="675" fill="#fdf4ff" />
+  <rect x="60" y="60" width="1080" height="120" rx="12" fill="#fae8ff" stroke="#d946ef" stroke-width="3" />
+  <text x="80" y="130" font-family="Inter,Arial" font-size="44" fill="#86198f">Planner Job Drawer（Phase 4）</text>
+  <g font-family="Inter,Arial" font-size="30" fill="#701a75">
+    <text x="110" y="230">1. Import / Clone / Diff / Export / Benchmark 统一生成 job_id</text>
+    <text x="110" y="290">2. Drawer 轮询 GET /jobs/{id}，显示状态、进度、错误、Result</text>
+    <text x="110" y="350">3. 每个任务附带 trace_id、executor_reference、外部 payload</text>
+    <text x="110" y="410">4. 支持关键字搜索错误、复制 payload/result、导出 JSON</text>
+    <text x="110" y="470">5. 关闭仅隐藏 UI，状态保存在 usePlannerStore，可再次打开</text>
+  </g>
+  <rect x="80" y="500" width="1040" height="120" rx="16" fill="#fce7f3" stroke="#f472b6" stroke-width="2" />
+  <text x="110" y="560" font-family="Inter,Arial" font-size="28" fill="#831843">前端：PlannerJobDrawer + usePlannerJob</text>
+  <text x="110" y="600" font-family="Inter,Arial" font-size="28" fill="#831843">后端：jobs router 查询 planner_import_jobs（含 trace_id/external refs）</text>
+</svg>

@@ -1,0 +1,19 @@
+[Unit]
+Description=Hourly workspace health check (silent-deletion early warning)
+
+[Timer]
+# Every hour at :05. Choices:
+#   - Hourly cadence: balances detection latency (max 1h gap) vs disk IO.
+#   - :05 (not :00): avoids contention with other top-of-the-hour cron jobs.
+#   - Persistent=true: if host was off, runs immediately on boot.
+#   - Also runs 5min after boot — so if Cursor/IDE start triggers a sync delete,
+#     the next check catches it within minutes.
+OnBootSec=5min
+OnUnitActiveSec=1h
+OnCalendar=*-*-* *:05:00
+Persistent=true
+RandomizedDelaySec=30
+Unit=costing-workspace-health.service
+
+[Install]
+WantedBy=timers.target

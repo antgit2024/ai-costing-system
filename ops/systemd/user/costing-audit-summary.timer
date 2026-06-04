@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily 08:00 summary of costing file deletions
+
+[Timer]
+OnCalendar=*-*-* 08:00:00
+Persistent=true
+Unit=costing-audit-summary.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,518 @@
+# 系统能力清单（System Capability Inventory）
+
+> **版本**：v1.0
+> **维护人**：PnL/Hub Agent（Planner-Optimization 角色）
+> **最近校对（北京时间 GMT+8）**：2026-05-09 17:30
+> **来源**：本文档不是凭印象写的，每条都对应 `backend/src/planner/{routers,services}/` 真实文件 / `frontend/src/pages/costing/` 真实路由 / `backend/migrations/versions/` 真实迁移 / `DOC/agents/{state,task_log,known_issues}.md` 已落地条目。任何后续 PnL/Hub Agent 接力前**必须先把本文读完**，再动 PnL/Hub 任何设计文档。
+
+---
+
+## 0. 必读约束（任何 Agent 接力 PnL/Hub 任务时第一份要读的文档）
+
+### 0.1 教训（2026-05-09，必须承认）
+
+第一轮 PnL/Hub 设计走偏的根因：
+
+1. **没读 `DOC/agents/state.md`**（3317 行真相文档）→ 把 4 个早已上线的 Insights 看板 + `shipment_costing_results` 表当成"待新建"
+2. **没读 `DOC/agents/known_issues.md` Issue 23/28**（SKU 治理 4 态 + LongTailCogsRateStrategy）→ 把雏形版 Cost Rate Hub 当成"待原创设计"
+3. **没读 `DOC/costing/blueprints/profit_and_returns_analytics_plan_2025_2026_v0_1.md`** → 把项目原配蓝图当成"待新写"
+4. **没读 `DOC/agents/agent_rules.md` + `task_distribution_standard.md`** → 一次大刀阔斧改 9~12 个文档，违反"一轮一闭环 + 跨文件风暴"规则
+5. **23% 误读**：把 Guides Agent 2026-01-13 落地的"30%/(1+30%)=23.08%"数学折算错当成"反推真实费率"
+
+### 0.2 强制纪律
+
+- **永远先读 `DOC/agents/agent_rules.md`** — 这是仓库级硬约束（一轮一闭环 / 大文件不直读 / 北京时间口径 / 跨文件风暴禁令）
+- **永远先读 `DOC/agents/task_distribution_standard.md`** — Hub Agent 派单体系 / 任务单模板 / 三件强制（任务表 / 唯一硬验收 / 分歧处理）
+- **永远先读 `DOC/agents/state.md` 但不能全读** — 用 `grep` 搜关键词，只读 ±50 行段落
+- **永远先看 `DOC/agents/known_issues.md`** — 33+ 已知坑位每个都附带 service / router / table / 测试文件位置
+- **PnL/Hub Agent 是 Hub 角色** — 不直接写代码，写代码必须派 Backend / Frontend Agent 闭环任务单
+
+---
+
+## 1. 一句话总结（PnL/Hub 模块站在什么位置）
+
+> **`ai-costing-system` 已经是一个 30 + 前端页面 / 33 后端 router / 37 个 Alembic 迁移 / 5 个雏形子系统的运行系统。PnL/Cost Rate Hub 是在这个运行系统上"补可信度治理 + 结构化费率管理"，而不是从 0 起新模块。**
+
+---
+
+## 2. 现有前端页面（30 个生产路由 + 11 个组件）
+
+> 来源：`frontend/src/App.tsx` + `frontend/src/pages/costing/**/*.tsx`
+
+### 2.1 主数据维护类（8 个）
+
+| 路由 | 中文名 | 文件 | PnL/Hub 复用关系 |
+|---|---|---|---|
+| `/costing/materials` | 真实物料主档 | `MaterialMasterPage.tsx` | **Stage 2 物料成本固化的入口**（含引用关系区块、单价历史） |
+| `/costing/virtual-materials` | 虚拟物料 | `VirtualMaterialsPage.tsx` | Stage 2 物料分摊参考 |
+| `/costing/processes` | 工序管理 | `ProcessesPage.tsx` | Hub `labor_per_minute` 费率源头（`standard_rate` + `charging_mode`） |
+| `/costing/process-modules` | 工艺模块 | `ProcessModulesPage.tsx` | 含 `ai_spec` 与结构标签，不直接出现费率 |
+| `/costing/taxonomy` | 分类管理（含班组） | `TaxonomyManagementPage.tsx` | **班组主数据所在地**（`domain='team'` + `default_minute_rate`），Hub 班组维度的真相 |
+| `/costing/structure-standards` | 结构标准 | `StructureStandardsPage.tsx` | 与 PnL/Hub 无直接关系（结构骨架字典） |
+| `/costing/sample-models` | 打样模型 | `SampleModelsPage.tsx` | 模型 BOM 编辑入口（draft 路径） |
+| `/costing/standard-models` | 标准模型 | `StandardModelsPage.tsx` | **KB8 的"清单编辑"抽屉** = 物料费 26.93 / 人工费 7.34 / 制造费(23%) 10.28 / 合计 44.55 的 UI 来源 |
+
+### 2.2 业务运营类（8 个）
+
+| 路由 | 中文名 | 文件 | PnL/Hub 复用关系 |
+|---|---|---|---|
+| `/costing/shipments` | 发货台账 | `ShipmentLedgerPage.tsx` | **Phase 1 主战场**：抽屉含 BOM 物料 / 成本拆分 / 工序明细 / 扣库行 4 个 Tab |
+| `/costing/shipments/ops` | 发货作业中心 | `ShipmentMonitorPage.tsx` + `ShipmentOpsPage.tsx` | 写操作总入口（异常队列 / 重算 / 批量计价） |
+| `/costing/biz/shipments` | 发货管理（业务派） | `biz/ShipmentManagementPage.tsx` | 4 阶段 Tab：待处理/处理中/已完成/长尾池 |
+| `/costing/biz/after-sales` | 售后管理 | `biz/AfterSalesManagementPage.tsx` | 售后退货导入 + 查询 |
+| `/costing/sku-master` | SKU 主档工作台 | `SkuMasterWorkspacePage.tsx` | 含 100w SKU 治理 + 4 态状态机 + 长尾品类标记 |
+| `/costing/spec-matching` | 规格匹配 | `SkuSpecMatchingPage.tsx` | spec → tokens 预解析 |
+| `/costing/integrations` | 外部数据同步 | `IntegrationsHubPage.tsx` | Jackyun 同步 + 状态查看 |
+| `/costing/products-info` | 产品信息 | `ProductInfoPage.tsx` | 上架/产品中心 |
+
+### 2.3 数据洞察类（4 个，**与 PnL 强相关，第一轮被忽略**）
+
+| 路由 | 中文名 | 文件 | PnL/Hub 复用关系 |
+|---|---|---|---|
+| `/costing/insights/sales` | 销售数据 | `SalesInsightsPage.tsx` | 已上线，按时间 + 渠道汇总 |
+| `/costing/insights/shops` | 店铺数据 | `ShopInsightsPage.tsx` | **已上线**：利润 + 退货率两 Tab + 覆盖率筛选 |
+| `/costing/insights/models` | 模型分析（利润） | `ProfitInsightsPage.tsx` | **已上线**：货品/模型两 Tab，调用 `/profit/sku` + `/profit/model` |
+| `/costing/insights/after-sales` | 售后分析 | `AfterSalesInsightsPage.tsx` | **已上线**：退货率，含售后 xlsx 导入入口 |
+
+> **结论**：PnL Phase 1 不需要"造新看板"，应该是给这 4 个已上线看板加"成本可信度三色徽章 / 三视图（FI/CO/集团）切换" → 派 Frontend Agent 1 个任务单即可。
+
+### 2.4 工具/规则/管理类（6 个）
+
+| 路由 | 中文名 | 文件 | PnL/Hub 复用关系 |
+|---|---|---|---|
+| `/costing/pricing-tools` | 定价工具 | `PricingToolsPage.tsx` | 与定价相关（待评估是否做 Hub 入口） |
+| `/costing/shipping-rules` | 运费规则 | `ShippingRulesPage.tsx` | 净利润计算的运费来源 |
+| `/costing/admin/long-tail-cogs-rate` | **长尾成本策略** | `admin/LongTailCogsRatePage.tsx` | **雏形版 Cost Rate Hub**（4 层优先级 + history） — 必须复用而非另起 |
+| `/costing/bundle-templates` | 套装模板 | `BundleTemplatesPage.tsx` | 复杂 BOM 来源 |
+| `/costing/product-listing` | 产品上架（测试台） | `ProductListingPage.tsx` | spec 解析/变体演练 |
+| `/costing/production-scan` | 生产扫码 | `ProductionScanPage.tsx` | 产线扫码（车间） |
+
+### 2.5 套装/天猫工具类（4 个）
+
+`/costing/tmall-sku-generator` `/costing/tmall-sku-generator/:templateId` `/costing/system/target-picker-playground` `/costing/biz/shipments` 子组件 `LineResolveActions`、`ModelPickerDrawer`、`PendingTab`、`DoneTab`、`shipment-ops/components/{BatchWorkbench,GovernanceBacklogTab,BulkCostingTab,ImportWizardModal}`
+
+---
+
+## 3. 现有后端 Routers（33 个，已纳入 `/api/planner/*` 总路由）
+
+> 来源：`backend/src/planner/routers/*.py` + `backend/src/planner/router.py`
+
+### 3.1 主数据/产品类（10 个）
+
+`base_config.py`（真实物料/虚拟物料/分类）、`taxonomy.py`（含 `domain='team'` 班组）、`structure_standards`（在 taxonomy）、`processes.py`、`process_modules.py`、`product_models.py`、`product_model_versions.py`、`bom.py`（动态 BOM）、`specs.py`（spec/parse）、`line_variants.py`
+
+### 3.2 业务运营/发货类（8 个）
+
+`shipments.py`（发货导入/批次/异常队列/BOM 快照）、`after_sales.py`、`sku_master.py`（含 governance/long-tail-category）、`bundle_templates.py`、`shipping_rules.py`、`integrations.py`、`callbacks.py`、`jobs.py`
+
+### 3.3 分析/报告/审计类（5 个，**与 PnL 强相关**）
+
+| Router | 关键 endpoint | PnL/Hub 复用关系 |
+|---|---|---|
+| `analytics.py` | `/profit/sku` `/profit/model` `/profit/channel` `/returns-rate/sku` `/returns-rate/channel` `/models/summary` `/models/materials-summary` | **PnL Phase 1 主接口已经在这里** |
+| `reports.py` | 报表导出 | 月度变成本/差异报表的载体 |
+| `audit.py` | 审计日志 | Hub 改 rate 的 audit 落地 |
+| `benchmarks.py` | 基准 | 对比基线 |
+| `assumptions.py` | 假设 | Scenario 假设 |
+
+### 3.4 Phase 1-3.5 既有架构 Routers（5 个）
+
+`initiatives.py` `packages.py` `scenarios.py` `approvals.py` `line_items.py`（Phase 1-3.5 既有架构，详见 `DOC/costing/architecture.md`）
+
+### 3.5 工具/AI/健康类（5 个）
+
+`ai.py`、`codes.py`、`tmall_sku_template.py`、`binding_targets.py`、`health.py`、`long_tail_strategies.py`（**雏形版 Hub 的 router**）
+
+---
+
+## 4. 现有后端 Services（34 个）
+
+> 来源：`backend/src/planner/services/*.py`
+
+### 4.1 与 PnL/Hub 强相关的 6 个核心 Service
+
+| Service | 文件 | PnL/Hub 必须知道 |
+|---|---|---|
+| **`bom_generation_service.py`** | 动态 BOM + 成本计算（`_resolve_overhead_rate` 含 0.30 兜底） | 改 overhead 兜底/制造费率必须改这里 |
+| **`analytics_service.py`** | profit/returns/coverage 全部聚合 | 加成本可信度徽章必须改这里 |
+| **`shipment_import_service.py`** | 发货导入 + 异常队列 + sweep + auto-resolve（**5000+ 行**） | 任何"发货级别成本快照"逻辑都在这里 |
+| **`long_tail_strategy_service.py`** | **雏形版 Cost Rate Hub Service**（4 层优先级 resolve + history audit） | Hub 设计必须 fork 这个文件而非新写 |
+| **`data_quality_service.py`** | nightly + mark_only + 三色徽章雏形 | 成本可信度徽章应该挂在这里 |
+| **`sku_master_service.py`** | SKU 治理 4 态 + auto_bind + long_tail_category | Hub 与 SKU 治理状态机的耦合点 |
+
+### 4.2 其他 28 个
+
+`product_model_service.py`、`shipment_import_worker.py`、`after_sales_import_service.py`、`spec_parser_service.py`、`line_variant_service.py`、`report_snapshot_service.py`、`binding_target_service.py`、`bundle_template_service.py`、`yida_sync.py`、`dingtalk_client.py`、`shipping_rule_service.py`、`material_service.py`、`variant_rule_service.py`、`material_image_storage.py`、`metrics.py`、`audit_service.py`、`notification_service.py`、`snapshot_service.py`、`quote_service.py`、`import_service.py`、`sku_master_image_storage.py`、`model_version_image_storage.py`、`process_module_service.py`、`llm_text_service.py`、`process_service.py`、`material_bom_derivation.py`、`code_generator_service.py`、`executor_client.py`
+
+---
+
+## 5. 现有数据表（按 Alembic 迁移按时间倒序，37 个）
+
+> 来源：`backend/migrations/versions/0001 ~ 0037`
+
+### 5.1 与 PnL/Hub 强相关的 7 个迁移
+
+| 迁移 | 表/能力 | PnL/Hub 复用关系 |
+|---|---|---|
+| `0027_shipment_costing_results_no_snapshot` | **`shipment_costing_results` 表**：`cost_material_total` / `cost_process_total` / `cost_overhead_total` / `cost_total` | **Phase 1 已有的成本结果落库表**，PnL 不需要造新表 |
+| `0035_long_tail_cogs_rate_strategy` | `long_tail_cogs_rate_strategies` 表：`category` / `rate` / `keywords` / `priority` / `metadata.history` | **雏形版 Hub** 的存储表 |
+| `0017_shipment_import_bom_snapshots_mvp` | `bom_snapshots` + `shipment_exception_queue` + `spec_parse_snapshots` | BOM 快照、异常队列基础 |
+| `0018_sku_master_import_mvp` | `sku_master` 表 + governance metadata | SKU 治理基础 |
+| `0019_taxonomy_management` | `taxonomy_items` 表 + `domain='team'` | **班组主数据**（`default_minute_rate` 在这） |
+| `0025_after_sales_import_mvp` | `after_sales_lines` + `returns_*` | 退货分析基础 |
+| `0028_returns_rate_indexes` | 退货率索引 | 性能 |
+
+### 5.2 其他 30 个迁移（按需 grep）
+
+`0001_init` ~ `0037_shipment_exception_queue_line_idx`，含 SKU master、BOM 套装模板、Jackyun 全字段、Tmall SKU 模板、运费规则、整合层等。
+
+### 5.3 PnL/Hub Phase 1 真正缺的表（必须新建）
+
+| 表 | 作用 | 优先级 |
+|---|---|---|
+| `cost_center` | 4 概念里的 `cost_center_id` 主数据（v1 必需） | **P0** |
+| `overhead_rate_master` | 制造费率主数据（model/category/cost_center/global 4 层） | **P0** |
+| `cost_rate_history`（可复用 long-tail 的 metadata.history 模式） | Hub 改 rate 审计 | P1 |
+| `monthly_cost_variance` | 标准成本 vs 实际成本月度差异 | P2 |
+| `cost_pool_master`（v1.2 设计） | 4 个固定费用池 | P2 |
+
+---
+
+## 6. 5 个雏形子系统（**第一轮设计被忽略，必须先研究再扩展**）
+
+### 6.1 LongTailCogsRateStrategy（雏形版 Cost Rate Hub）
+
+- **代码**：`backend/src/planner/services/long_tail_strategy_service.py` + `backend/src/planner/routers/long_tail_strategies.py` + `frontend/src/pages/costing/admin/LongTailCogsRatePage.tsx`
+- **能力**：4 层优先级 resolve（人工指定 > keyword 命中 > category default > global fallback）+ metadata.history audit + CRUD + resolve-preview + auto-suggest 自动标品类
+- **关键 API**：`GET/POST/PATCH/DELETE /api/planner/long-tail-strategies` + `POST /resolve-preview` + `POST /auto-suggest/preview` + `/auto-suggest/execute`
+- **测试**：`backend/tests/planner/test_long_tail_strategy.py` 16/16 + `test_long_tail_auto_suggest.py` 9/9
+- **PnL/Hub 行动**：Cost Rate Hub v1.3 设计应该是"扩展 long-tail 模式到 labor / overhead 维度"，而不是另起新表。具体方案：在 `long_tail_cogs_rate_strategies` 基础上加 `rate_type`（cogs / labor_per_minute / overhead_rate）+ `scope_type`（model / category / cost_center / global）即可同名升级。
+
+### 6.2 SKU 治理 4 态状态机
+
+- **代码**：`backend/src/planner/services/sku_master_service.py::set_sku_governance` + `frontend/src/pages/costing/shipment-ops/components/GovernanceBacklogTab.tsx`
+- **状态**：`unmanaged` / `auto_bound` / `pending_model` / `do_not_model`
+- **关键 API**：`POST /api/planner/sku-master/governance` + `GET ...?status=` + `POST .../promote-from-model`
+- **PnL/Hub 行动**：成本可信度徽章应该跟 SKU 治理状态机对齐 — `auto_bound` = 🟢 / `pending_model` = 🟡 / `do_not_model` = 🔴（长尾兜底）
+
+### 6.3 data_quality_service（雏形版可信度治理）
+
+- **代码**：`backend/src/planner/services/data_quality_service.py` + `frontend/src/pages/costing/SkuMasterWorkspacePage.tsx` 红 Tag
+- **能力**：nightly 自动跑（`ai-costing-data-quality.timer`）+ mark_only 模式 + SPU 属性冲突检测
+- **PnL/Hub 行动**：成本可信度三色徽章可以在 `data_quality_service` 里加 `cost_quality` 维度（material/labor/overhead 三个 enum），而不是新写 service
+
+### 6.4 shipment_costing_results（轻量成本结果落库）
+
+- **代码**：迁移 `0027` + `backend/src/planner/models.py::ShipmentCostingResult`
+- **字段**：`cost_material_total` / `cost_process_total` / `cost_overhead_total` / `cost_total` + `metadata_json.kind='long_tail_fallback'`
+- **PnL/Hub 行动**：Phase 1 三段成本数据已经在产，不需要新建 `shipment_pnl_lines` 表。盈亏分析 SQL view 直接 JOIN `shipment_costing_results` 即可。
+
+### 6.5 4 个 Insights 看板（已上线）
+
+- **代码**：`frontend/src/pages/costing/{Profit,Shop,Sales,AfterSales}InsightsPage.tsx` + `backend/src/planner/services/analytics_service.py` + `backend/src/planner/routers/analytics.py`
+- **API**：`/profit/sku` `/profit/model` `/profit/channel` `/returns-rate/sku` `/returns-rate/channel`
+- **现状**：已支持时间窗 + 渠道筛选 + 覆盖率显示 + xlsx 导入 + 按用户点查询
+- **PnL/Hub 行动**：Phase 1 不需要造新看板，给现有 4 个加"成本可信度徽章 + 三视图切换"。
+
+---
+
+## 7. 关键事实（PnL/Hub Agent 必须先承认，否则设计直接错）
+
+### 7.1 23% 真相（已证）
+
+- **源头**：`task_log.md:15` 2026-01-13 Guides Agent 落地 / `state.md:1823-1843` 详细推导
+- **数学事实**：制造费 = (物料费 + 人工费) × 30% → 占合计比例 = 30% / (1 + 30%) = **23.08%**
+- **后端代码**：`bom_generation_service.py:2047 _resolve_overhead_rate` 兜底 `0.3`（30%），未变
+- **UI 显示**：`StandardModelsPage` 抽屉显示"制造费(23%)：10.28"，这是数学折算后的占比展示，**不是反推真实费率**
+- **PnL/Hub 行动**：
+  - ❌ 不要写"把 30% 替换成真实 23%" / "反推制造费率" / "23% 是 UI 误差" 等任何错误叙述
+  - ✅ 应写"30% 是兜底默认值，需要 Hub 提供 model/category/cost_center 维度的真实 overhead_rate 覆盖兜底"
+
+### 7.2 3 法人物理一体（已证）
+
+- **事实**：3 工厂在一栋楼，是 1 个生产体系；只有材料采购（一般纳税人 / 小规模）+ 人员归属有税务/合规分别
+- **PnL/Hub 行动**：
+  - ❌ 不要写"按 factory 分摊" / "factory 是 v1 必需维度"
+  - ✅ 应写 4 概念正交：`production_unit_id`（生产物理单元，v1 = 1）/ `purchase_entity_id`（采购法人，v1 = 3）/ `cost_center_id`（成本中心，v1 = 班组级别）/ `legal_entity_id`（法人，FI 视图用）
+
+### 7.3 班组主数据所在地（已证）
+
+- **事实**：班组在 `taxonomy` 表 `domain='team'`，含 `default_minute_rate` 字段
+- **PnL/Hub 行动**：
+  - ❌ 不要在 `processes` 表加 `cost_center_id` / `team_id`
+  - ✅ 班组维度费率应该 fork `taxonomy.team.default_minute_rate` 再扩展，并参考 long-tail 的 4 层 resolve 模式
+
+### 7.4 多 Agent 协作体制（已证）
+
+- **事实**：项目 13 个 Agent 角色（Hub/Planner/Backend/Frontend/Docs/Rules/Guides/POD/Integration/Optimization/...）+ 任务单制度 + state.md 是单一真相
+- **PnL/Hub 行动**：
+  - ❌ Hub Agent 不直接改 `frontend/src/` `backend/src/` 任何代码
+  - ✅ Hub Agent 只产 `DOC/costing/blueprints/` `DOC/costing/handovers/` 文档 + 派 `DOC/agents/briefings/<task>.md` 任务单
+
+---
+
+## 8. PnL/Hub 真正缺什么（v1.3 校准方向）
+
+### 8.1 复用什么（不要再造）
+
+1. ✅ `long_tail_cogs_rate_strategies` 表 + service + router → **直接扩展为 Hub**（加 `rate_type` + `scope_type`）
+2. ✅ `shipment_costing_results` 表 → **Phase 1 三段成本数据源**，盈亏 SQL view 直接 JOIN
+3. ✅ 4 个 Insights 看板（`/profit/*` + `/returns-rate/*`）→ **加成本可信度徽章 + 三视图切换**
+4. ✅ `data_quality_service` → 加 `cost_quality` 维度
+5. ✅ SKU 治理 4 态 → 与成本可信度徽章对齐
+6. ✅ `taxonomy.team` + `default_minute_rate` → 班组维度费率源头
+
+### 8.2 真正缺的（v1.3 必须新建）
+
+1. ❌ `cost_center` 主数据表（v1 = 班组级别 6~10 个，运营人 1 周内可初稿）
+2. ❌ `overhead_rate_master` 表（或在 long-tail 表上扩展 `rate_type='overhead_rate'`）
+3. ❌ `cost_rate_history`（可复用 long-tail 的 metadata.history 模式）
+4. ❌ Frontend 的"Cost Rate Hub" 入口页（**v1 仅 2 个 Tab**：Overview + Editor）
+5. ❌ `monthly_cost_variance` 表（v1 可推迟到 Phase 2）
+6. ❌ 三视图切换（FI / CO / 集团）— v1.3 设计 UI 即可，后端在 view 层加 `entity_type` filter
+
+### 8.3 v1.3 必读外部评审
+
+- `DOC/基础表单/专业版盈亏分析模块初步评审报告VI.md`（Manus 第 1 轮）
+- `DOC/基础表单/多主体核算与品类制造费率补充评审报告.md`（Manus 第 2 轮）
+- `DOC/基础表单/成本参数Hub与月度调节面板：评审与设计建议.md`（Manus 第 3 轮，**最有价值**）
+- `DOC/基础表单/对用户解答的二次评审：factory 维度修正版结论.md`（Manus 第 4 轮，4 概念修正）
+
+---
+
+## 9. 文档全景（PnL/Hub Agent 接力时必须知道的所有文档）
+
+### 9.1 Agent 体系（5 个，**强制读**）
+
+| 文档 | 作用 |
+|---|---|
+| `DOC/agents/agent_rules.md` | 仓库级硬约束 |
+| `DOC/agents/task_distribution_standard.md` | Hub 派单体系 |
+| `DOC/agents/state.md` | 3317 行真相文档（grep 不直读） |
+| `DOC/agents/known_issues.md` | 33+ 已知坑位 + 雏形子系统设计明细 |
+| `DOC/agents/task_log.md` | 变更日志 |
+
+### 9.2 Handoff 接力包（7 个，按角色）
+
+`handoff_planner.md` `handoff_frontend.md` `handoff_backend.md` `handoff_docs.md` `handoff_pod.md` `handoff_rules.md`
+
+### 9.3 项目蓝图（12 份 blueprints）
+
+`profit_and_returns_analytics_plan_2025_2026_v0_1.md`（**原配蓝图**）、`pnl_analytics_module_design.md`、`cost_rate_hub_design_v1.md`、`finance_analyzer_integration_v1.md`、`sku_portfolio_management_v1.md`、`sku_binding_bom_shipment_plan.md`、`standard_model_variants_plan.md`、`erp_writeback_process_spec_mvp.md`、`bundle_templates_z_b_protocol.md`、`pod_personalization_print_pipeline_phase0.md`、`jky_api_requirements_form_v1.md`、`jky_after_sales_returns_requirements_form_v1.md`
+
+### 9.4 用户指南（16 份 guides）
+
+`price_calculation_guide.md`（含 23% 数学折算）、`team_rate_guide.md`、`materials_guide.md`、`usage_calculation_guide.md`、`product_model_guide.md`、`virtual_materials_guide.md`、`process_create_guide.md`、`process_modules_guide.md`、`structure_standards_guide.md`、`sample_lines_guide.md`、`standard_lines_guide.md`、`access_control_quick_guard.md`、`derive_standard_per_sqm_tablecloth_example.md`、`table_list_style_two_line_cells.md`、`virtual_materials_design_draft_v0_1.md`、`README.md`
+
+### 9.5 业务规则（3 份 rules + 1 个 README）
+
+`rules/README.md`（含 draft/active/deprecated 治理模板）、`R-MAT-001_material_usage_class_trinary.md`、`R-TEAM-001_team_rate_default_yuan_per_min.md`
+
+### 9.6 PnL/Hub 任务历史产出（11 份，**v1.3 校准对象**）
+
+详见 `workset.md §7.3`。
+
+---
+
+## 10. PnL/Hub Agent 下一轮闭环建议（v1.3 校准计划）
+
+> **基于本清单，建议 PnL/Hub Agent 下一轮以"小步快跑、一份一闭环"方式校准**。
+
+### 10.1 v1.3 校准 — 第 1 轮闭环（推荐）
+
+**任务**：校准 `DOC/costing/blueprints/cost_rate_hub_design_v1.md` 为 v1.3
+**核心动作**：
+1. 整段重写"§1 现状"，改为"基于 long-tail 雏形扩展"
+2. 整段删除"§3 新建表清单"中重复造的部分（`overhead_rate_master` 改为 long-tail 表 schema 扩展）
+3. 整段删除"23% 反推"叙述，写入 30% 兜底 + Hub 覆盖逻辑
+4. 整段删除"factory 维度"叙述，写入 4 概念正交
+5. 整段重写"§5 UI"，改为"加在 LongTailCogsRatePage 之上的扩展 Tab"
+
+**验收命令**：
+```bash
+grep -nF "v1.3" DOC/costing/blueprints/cost_rate_hub_design_v1.md && \
+grep -nF "long_tail_cogs_rate_strategies 表 + service + router 直接扩展" DOC/costing/blueprints/cost_rate_hub_design_v1.md && \
+grep -nF "30% 是兜底默认值" DOC/costing/blueprints/cost_rate_hub_design_v1.md
+```
+
+### 10.2 v1.3 校准 — 第 2~5 轮闭环（先不做）
+
+校准 `pnl_analytics_module_design.md` / `pnl_module_handover.md` / `pnl_phase_status.md` / `pnl_decision_log.md` 为 v1.3 — 等用户确认本清单后再启动，避免再次跨文件风暴。
+
+---
+
+## 11. 验收命令（本文产出闭环）
+
+```bash
+test -f DOC/costing/handovers/system_capability_inventory.md && \
+grep -c "^## " DOC/costing/handovers/system_capability_inventory.md && \
+grep -nF "PnL / Cost Rate Hub 任务工作集" DOC/agents/workset.md && \
+grep -nF "system_capability_inventory" DOC/agents/task_log.md
+```
+
+预期：
+- `test -f` → 0
+- `grep -c "^## "` → 12（11 个二级标题 + Title 不算）
+- 后两条 `grep -nF` → 各返回 1 行命中
+
+---
+
+## 12. 历史已动 11 份 PnL/Hub 文档全清单 + v1.3 校准生效后的文档优先级规则
+
+> **本节是为了解决"PnL/Hub Agent 反复忘记之前动过哪些文档 → 重复造轮子"的根因。任何后续 Agent 接力时，先看本节，就能一眼知道"哪份是当前真相 / 哪份过时了哪段 / 校准时该改谁不该改谁"。**
+>
+> 维护契约：本节的"当前版本号"与"冲突点"列必须在每次校准动作完成后**当轮立刻更新**。如果 Agent 改了文档但没更新本节，等同于没完成闭环。
+
+### 12.1 历史已动 11 份文档（按校准生效后的"真相强弱"排序）
+
+| 序号 | 文档 | 当前版本 | 性质 | 含义 / 冲突点（v1.3 校准生效后的判定） |
+|---|---|---|---|---|
+| 0 | `DOC/costing/handovers/system_capability_inventory.md` | **v1.0**（含 §12，本节） | **🟢 真相基准** | 所有事实/复用边界/23% 真相/4 概念/雏形子系统代码定位的单一真相。其他文档若有冲突，**以本文为准**。 |
+| 1 | `DOC/costing/blueprints/cost_rate_hub_design_v1.md` | **v1.3**（待本轮升级，原 v1.2） | **🟢 Hub 设计真相** | Cost Rate Hub 架构/表/API/UI/三阶段计划的单一真相。其他文档对 Hub 的描述若与 v1.3 冲突，**以本文 v1.3 为准**。 |
+| 2 | `DOC/costing/blueprints/profit_and_returns_analytics_plan_2025_2026_v0_1.md` | **v0.1**（**未动过 — 项目原配蓝图**） | **🟢 PnL 原配蓝图** | 4 个 Insights 看板 / 3 个 profit API / shipment_costing_results 表 / cost_snapshot 概念的源头。**禁止覆盖**。 |
+| 3 | `DOC/costing/manuals/guides/price_calculation_guide.md` | **v2.1**（已与财务团队建立口径） | **🟢 财务口径** | 三层价格定义 + 23% 数学折算（30%/(1+30%)=23.08%）。**只读不动**。 |
+| 4 | `DOC/costing/manuals/transfer_pricing_handbook.md` | （无明文版本号） | **🟢 定价口径** | 内部转移价四线约束 + market_price_reference + strategic_subsidy_log。**与 Hub 是接口关系，不合并**。 |
+| 5 | `DOC/costing/blueprints/pnl_analytics_module_design.md` | **v1.1** | 🟡 待校准 | 含"shipment_pnl_lines 新表"叙述 → **v1.3 起以"复用 shipment_costing_results 表"为准**（不动正文，靠优先级规则覆盖）。其余内容（GM1/GM2/NP3 + 三视图）保留。 |
+| 6 | `DOC/costing/blueprints/sku_portfolio_management_v1.md` | **v1.1** | 🟡 待校准 | 含"factory 维度"叙述 → **v1.3 起以"4 概念正交（无 factory v1）"为准**。5 类亏损决策内容保留。 |
+| 7 | `DOC/costing/blueprints/finance_analyzer_integration_v1.md` | **v1.1** | 🟡 待校准 | 含"new overhead_rate_master 表"叙述 → **v1.3 起以"扩展 long_tail_cogs_rate_strategies 表"为准**。三层结构 + C1/C2/C3 契约保留。 |
+| 8 | `DOC/costing/handovers/pnl_module_handover.md` | **v1.2** | 🟡 v1.3 同步 | 接力总入口。本轮 v1.3 校准后，本文"必读文档"列表需补上 `system_capability_inventory.md` 与 `cost_rate_hub_design_v1.md v1.3`。**正文不动，靠引用即可生效**。 |
+| 9 | `DOC/costing/handovers/pnl_decision_log.md` | **v1.2**（决策 #1~#47 + H4） | 🟡 v1.3 同步 | 决策日志。本轮校准后追加决策 #48 = "v1.3 校准生效，文档优先级规则见 system_capability_inventory.md §12"。 |
+| 10 | `DOC/costing/handovers/pnl_phase_status.md` | **v1.2** | 🟡 v1.3 同步 | 进度看板。Hub 三阶段计划以 cost_rate_hub_design_v1.md v1.3 §11 为准。 |
+| 11 | `DOC/costing/handovers/pnl_external_reviews/INDEX.md` | **v1.2** | 🟡 v1.3 同步 | 外部评审 5 份归档。本轮校准后，需在末尾追加 §6「v1.3 校准依据：系统能力清单 + 4 份外部评审反思」。 |
+| 12 | `DOC/costing/handovers/phase0_review_checklist.md` | **v1.2.1** | 🟡 v1.3 同步 | 评审清单。本轮校准后，需把决策项 H1/H2/H3 改为引用 v1.3，新增 H5 = "采纳系统能力清单 v1.0 作为后续接力第 1 份必读"。 |
+
+### 12.2 v1.3 校准生效后的"文档冲突时优先级规则"
+
+> 如果两份文档对同一问题给出不同答案，**按本规则排序解决**：
+
+```
+P0 - DOC/agents/state.md（项目真相）
+P0 - DOC/agents/known_issues.md（雏形子系统真相）
+P1 - DOC/costing/handovers/system_capability_inventory.md（本文，事实清单）
+P2 - DOC/costing/blueprints/cost_rate_hub_design_v1.md v1.3（Hub 设计真相）
+P3 - DOC/costing/blueprints/pnl_analytics_module_design.md v1.2（**全员必读总图**，2026-05-09 17:55 升 v1.2 同步 Hub v1.3）
+P3 - DOC/costing/blueprints/profit_and_returns_analytics_plan_2025_2026_v0_1.md（PnL 原配蓝图）
+P3 - DOC/costing/manuals/guides/price_calculation_guide.md v2.1（财务口径）
+P3 - DOC/costing/manuals/transfer_pricing_handbook.md（定价口径）
+P4 - 其他 v1.1 蓝图（sku_portfolio_management / finance_analyzer_integration — 仍待校准为 v1.2，见 §13 防忘追踪）
+P4 - 其他 PnL handovers（pnl_module_handover / pnl_decision_log / pnl_phase_status / phase0_review_checklist / pnl_external_reviews/INDEX）
+```
+
+冲突解决方式：**高优先级覆盖低优先级**，无需逐字修改 P5 文档的过时叙述（避免跨文件风暴）。低优先级文档作为"历史方案蓝图"保留，但读者必须明白其中部分叙述已被 P2/P1 覆盖。
+
+### 12.3 v1.3 校准明确"废弃"的过往叙述（任何后续 Agent 不得引用以下任何 1 条）
+
+| 序号 | 被废弃的叙述 | 出现位置（不需要去删，但读到时必须知道已废弃） | 替代叙述 |
+|---|---|---|---|
+| W1 | "23% 是真实制造费率，30% 是错误兜底，需要反推真实 23%" | 任何 PnL 文档若隐含此意 | 23% = 30%/(1+30%) = 23.08% 是数学折算占比；30% 是后端兜底，需要 Hub 提供 model/cost_center 维度的真实 overhead_rate 覆盖 |
+| W2 | "Phase 1 必须新建 shipment_pnl_lines 表" | `pnl_analytics_module_design.md` v1.1 | Phase 1 复用已有的 `shipment_costing_results` 表（迁移 0027），盈亏 SQL view 直接 JOIN |
+| W3 | "Phase 1 必须新建 overhead_rate_master 表" | `cost_rate_hub_design_v1.md` v1.2 / `finance_analyzer_integration_v1.md` v1.1 | 在 `long_tail_cogs_rate_strategies` 表加 `rate_type`（cogs/labor_per_minute/overhead_rate）+ `scope_type`（model/category/cost_center/global）即可同名升级 |
+| W4 | "factory 是 v1 必需维度" | 任何文档若隐含此意 | 3 法人物理一体（一栋楼一个生产体系），factory v1 不必需；4 概念正交（production_unit/purchase_entity/cost_center/legal_entity），cost_center 是 v1 核心 |
+| W5 | "在 processes 表加 cost_center_id 等同于在 processes 加班组人工费率主数据" | 任何文档若隐含此意 | **修正措辞（2026-05-09 17:55）**：✅ processes 表加 `cost_center_id`（费用归集外键）是合理的，v1.3 保留 cost_rate_hub_design_v1.md §4.2 的设计；❌ 不要把 `taxonomy.team` 的 `default_minute_rate` 复制到 processes 表（人工费率主数据归 `taxonomy.team`，processes 仅持有 `cost_center_id` 外键 + 自身的 `standard_rate`）。两者是费用归集（cost_center）vs 班组运营（team）两个正交维度。 |
+| W6 | "Phase 1 需要造新的 4 个看板" | 任何文档若隐含此意 | 4 个 Insights 看板已上线（/profit/sku /profit/model /profit/channel /returns-rate/sku /returns-rate/channel），Phase 1 = 加成本可信度徽章 + 三视图切换 |
+| W7 | "Cost Rate Hub 是从 0 设计的全新模块" | `cost_rate_hub_design_v1.md` v1.0~v1.2 | Hub 是 `LongTailCogsRateStrategy` 雏形（4 层优先级 + history audit）的 superset 扩展；扩展点是加 rate_type + scope_type + UI Tab |
+| W8 | "Hub 的可信度治理需要从 0 设计三色徽章 service" | `cost_rate_hub_design_v1.md` v1.2 | 已有 `data_quality_service`（nightly + mark_only + 三色徽章雏形），Hub 在它上面加 `cost_quality` 维度即可 |
+
+### 12.4 后续校准的"减法工作流"（避免再次跨文件风暴）
+
+> 对低优先级（P4/P5）的过往文档，**默认不修改正文**。当某次新功能开发涉及它们时，再做"按需校准"，原则：
+>
+> 1. **能引用就不复制** — 在新文档里引用"详见 system_capability_inventory.md §X"，而不是把内容复制过来
+> 2. **能加注就不重写** — 在被废弃叙述附近加 `> ⚠️ 已废弃，详见 system_capability_inventory.md §12.3 W1`
+> 3. **能延期就不立即** — 除非该叙述会误导即将开发的功能，否则可以等到下一次结构性升级时一起处理
+
+### 12.5 接力前的强制 3 步检查（2026-05-09 18:00 修订 — 减少形式主义）
+
+> **修订背景**：之前 8 步硬性勾选清单本身就是"形式大于实用"。新规：**3 步必读** + 5 条按需查阅的软指引。
+
+#### 12.5.1 必读 3 步（任何 Agent 接力前都必须完成）
+
+```
+[ ] 1. 读 DOC/agents/agent_rules.md（含 2026-05-09 §2/§7 重大修订：任务粒度区分 + 交接成本约束）
+[ ] 2. 读 DOC/costing/handovers/system_capability_inventory.md §12 + §13（本文，事实清单 + 防忘表）
+[ ] 3. 读本任务相关的 1~2 份蓝图文档（由派单的任务单"必读上下文"列指明）
+```
+
+#### 12.5.2 按需查阅的软指引（不强制全部完成，按本次任务需要选用）
+
+- 设计 Hub / 改 cost_rate_master 表 → 加读 `cost_rate_hub_design_v1.md v1.3`
+- 改总图 / 改 PnL 架构 → 加读 `pnl_analytics_module_design.md v1.2`
+- 改前端 4 个 Insights 看板 → 加读 `profit_and_returns_analytics_plan_2025_2026_v0_1.md`
+- 改 finance 集成 → 加读 `finance_analyzer_integration_v1.md`
+- 排查雏形子系统问题 → 在 `known_issues.md` grep 相关 Issue（Issue 23 / Issue 28 / §0.0j）
+
+> **关键**：执行 Agent 在 scope 内拥有完整自主权（详见 `task_distribution_standard.md §0.2`），自主判断要不要扩读。Hub 不强制每项打勾。
+
+---
+
+## 13. v1.3 校准未完事项追踪 + 防忘机制（2026-05-09 17:55 新增）
+
+> **背景**：用户 2026-05-09 17:40 明确指出"你做了 Hub 又把总图给忘了"。本节是为了**永远不再忘**：把"v1.3 校准还没做完的事"显式列出 + 给每件事一个明确的"触发条件" + 让任何后续 Agent 看到表就知道该做什么。
+>
+> **维护契约**：本表的"状态"列必须在每次相关动作完成时**当轮立刻更新**。如果某项被勾掉就必须把 `状态` 列改为 `✅ <日期 + 完成动作>`，不能空着。
+
+### 13.1 未完事项追踪表
+
+| # | 未完事项 | 触发条件（满足任一就必须立即做） | 当前状态 | 完成定义 |
+|---|---|---|---|---|
+| **G** | TDABC v1 闭环 — A2 接通（`_compute_process_costing` 读 `cost_rate_master.labor_per_minute`） | brief `tdabc_v1_closing_loop_brief.md` §2 | ✅ **2026-05-10 20:30 完成**（`feat(costing): TDABC v1 闭环 — A2 接通 + 成本核算 Tab`）— `resolve_labor_rate()` + `resolve_labor_per_piece()` 加在 `long_tail_strategy_service.py` 紧跟 `resolve_overhead_rate` 后；`_compute_process_costing` 改造时/件双分支走 Hub-first → metadata fallback；新增 6 个返回字段（rate_per_minute_legacy / rate_source / rate_hit_layer / cost_center_id / cost_rate_strategy_id 等）；8 个新 pytest 用例全绿（计划 4 个）；零回归 | brief §2.2 验收 4 条全过 |
+| **H** | TDABC v1 闭环 — standard-models 抽屉「成本核算」Tab | brief `tdabc_v1_closing_loop_brief.md` §3 | ✅ **2026-05-10 20:30 完成** — 后端 `preview_model_cost` / `preview_version_cost` 走 Hub 4 层（labor + overhead），响应顶层加 `costing` 字段；新建 `frontend/src/components/costing/CostingTab.tsx`（524 行，3 层卡片 + 5 色徽章 + 4 层链路展开 + 「为本模型单独设固定时薪/费率」Modal 写 `cost_rate_master scope=model source=manual_model_override`）；`ProductModelEditorDrawer.tsx` 加 'cost' Tab；frontend build ✓ 8.93s 0 类型错误；真机验证 KB8 命中 hub_cost_center 0.85 + overhead 0.25 模型级 | brief §3.6 验收 5 条全过 |
+| **U1** | 校准 `sku_portfolio_management_v1.md` v1.1 → v1.2 | (a) 用户启动"SKU 角色 / 5 类亏损 / 引流款 vs 利润款"功能开发 (b) 用户提及 sku_portfolio 文档 (c) Phase 2 开始 | 🟡 待启动 | 头部升 v1.2 + 加 v1.2 校准段（与 W1~W8 + Hub v1.3 对齐）+ §3.1 关联 cost_rate_master 而非 overhead_rate_master + 元信息升 v1.2 |
+| **U2** | 校准 `finance_analyzer_integration_v1.md` v1.1 → v1.2 | (a) 用户启动 finance 集成 / monthly_cost_variance / 多主体合并 (b) 用户提及 finance_analyzer 文档 (c) Phase 1 W4 开始（finance 录入） | 🟢 **2026-05-10 15:00 costing 侧 v1.3 client 完成（mock 联调通，等 finance staging URL）**：派单 `briefings/costing_c1_client_v1.3_upgrade.md` 全栈中等任务（B1~B8 + F1~F3 + G1 共 12 条验收全过）。基于 finance v1.3 完工（commit `f8b691c`）+ 契约 v1.3 终态（`finance_to_costing_c1_contract_v1.3_aligned.md`）升级 client：(a) `services/finance_c1_client.py` 加 2 个新方法 `list_stores_revenue` + `list_payment_requests` + 7 方法统一加 `since/until` 参数 + envelope api_version `1.3-mock` + pagination 加 `last_updated_at`；(b) `tests/mocks/finance_c1_mock.py` 扩展：companies 加 4 recognition Boolean + `floor_area_sqm`（部分 NULL 演示 cost_allocator fallback），新增 `MOCK_STORES_REVENUE`（4 店铺 × 4 月真实营收 + data_quality），新增 `MOCK_PAYMENT_REQUESTS`（12 凭证 × 6 类 expense_category × 2 条 + amort 5 字段 + pay_company vs company_name A 付 B 受益），新增 `MOCK_PAYROLL_BY_EMPLOYEE`（每员工每月 1 行 + metadata 含 actual_paid/payment_source_types/fallback_reason）；(c) `routers/finance_c1_proxy.py` 加 2 个新 endpoint `/stores/revenue` + `/payment-requests` + 7 endpoint 统一加 since/until query；(d) `tests/planner/test_finance_c1_client.py` 加 5 条新 case（C6 stores_revenue / C7 payment_requests 6 类+amort+amort_covers_period / C8 since/until 7 方法支持 / C9 4 recognition+floor_area 双场景 / C10 by_employee + metadata 完整）+ 2 router smoke = 19 单测全过 + 0 回归；(e) **新建 `scripts/finance_c1_e2e_smoke.py`**：7 endpoint 各发 1 标准请求 + assert envelope 结构 + assert 字段就位 + 输出 "all 7 endpoints consumed OK / X failed" + 支持 `--mock`（默认）/`--live --base-url=<URL>` 双模式 + 退出码 0/1（B8 验收 mock 模式 7/7 endpoints OK）；**Frontend**：`types/financeC1.ts` 加 v1.3 类型（FinanceStoreRevenueDTO + FinancePaymentRequestDTO + FinancePayrollByEmployeeDTO + 4 recognition + floor_area_sqm + ExpenseCategory），`services/financeC1.ts` 加 3 fetcher（stores_revenue / payment_requests / payroll_by_employee），`pages/.../FinanceMasterDataPage.tsx` 4 Tabs → 6 Tabs（加「店铺营收 (v1.3)」+「付款凭证 (v1.3)」），公司主体 Tab 加「业务画像」列（4 recognition Tag）+「面积 (㎡)」列（NULL 时 Tooltip 说明 fallback），Header Tag 升 `C1 v1.3`，BadgeBar 显示 `last_updated_at`；frontend build ✓ 8.82s。**G1 BOM/Hub/Insights 零改动**：git diff 仅 8 文件 — 5 backend（service+router+mock+test）+ 3 frontend + 1 新 script，没碰 BOM / Cost Rate Hub / Insights / 契约文档 / Stage 2 物料 / cost_center_aggregator / fixed_cost_amortizer / cost_allocator service。**U2 完成定义剩 2 件**：(1) 等用户拿到 finance staging URL + test key 后跑 `--live` 联调；(2) 联调通过后 `FINANCE_C1_USE_MOCK=false` 切真接口跑契约 v1.3 §6.2 E1~E6 联调 6 条；之后 finance_analyzer_integration v1.1 → v1.2 架构层校准。**先前阶段**：2026-05-10 09:35 v1.0 client 全栈交付（5 方法 + TTLCache + _last_good 兜底 + 失败降级矩阵 + 12 单测全过）；2026-05-10 07:40 C1 契约规格书 v1.0 落地（master_companies canonical + 5 API + C2 测试 + C3 SLA + 13 条验收）。| C1 契约 v1.3 上线 + finance staging E1~E6 联调 6 条 + costing 侧 `--live` smoke 7/7 OK 全过 |
+| **U3** | 同步 4 份 PnL handovers（pnl_module_handover / pnl_decision_log / pnl_phase_status / pnl_external_reviews/INDEX）v1.2 → v1.3 | (a) 用户启动评审会 / 准备签字 (b) 评审会日期前 1 周 (c) 任何 handover 内容引用 Hub v1.2 设计 | 🟡 待启动 | 4 份头部 v1.2 → v1.3 + 各加"v1.3 校准说明"小节（每份 3~5 行即可）+ pnl_decision_log 加决策 #48「v1.3 校准生效」 |
+| **U4** | 同步 `phase0_review_checklist.md` v1.2.1 → v1.3 | (a) 评审会前必须 (b) H4/H5 决策项需要拍板时 | 🟡 待启动 | 头部升 v1.3 + 决策项 H1/H2/H3/H4 改为引用 v1.3 + 新增 H5「采纳系统能力清单 v1.0 + Hub v1.3 + 文档优先级规则」 |
+| **U5** | 派 Backend Agent 任务单：Migration 0038 + 扩展 long_tail_strategy_service.resolve_overhead_rate | (a) 评审会通过 v1.3 (b) 用户给开干指令 (c) Phase 1 W2 开始 | ✅ **2026-05-09 完成**（cost_rate_hub_mvp.md 全栈交付）— Migration 0038 PG 双向跑通 + `cost_rate_master` 表 + `resolve_overhead_rate` 4 层链 + KB8 端到端 0.30→0.25 验证 | 任务单完成标准 §4 五条全过 |
+| **U6** | 派 Frontend Agent 任务单：LongTailCogsRatePage 扩展 Hub Tab | (a) 与 U5 联动启动 (b) Phase 1 W3 开始 | ✅ **2026-05-09 完成**（同 U5 同 commit）— `LongTailCogsRatePage` 改 2 Tabs（cogs / overhead_rate）+ 新 `OverheadRateTab` CRUD + 试算面板 + `?tab=` URL 同步；老路由保留 + 新增 `/costing/admin/cost-rate-hub` 重定向 | 同 U5 |
+| **U7** | 4 个 Insights 看板加成本可信度徽章 + ~~三视图切换~~"按店铺法人主体切片"维度 | (a) 与 U5/U6 联动 (b) Phase 1 W4-W5 开始 | ✅ **A 部分完成**（`badges_mvp.md` 2026-05-09 全栈交付）；✅ **B 部分 client-side 实现 2026-05-10 15:40**（路径 A §A5 落地）：新建 `components/insights/LegalEntityFilter.tsx` 共享组件 + `useLegalEntityFilter` hook + `rowMatchesLegalEntity` 工具，4 看板（Profit/Shop/Sales/AfterSales）toolbar 加"法人主体"多选下拉，对当前已加载行做 client-side fuzzy match（按 finance.companies 主体短称匹配 row.channel）；ⓘ tooltip 显式说明 v1 实现（client 模糊）+ v1.4 后端 company_id 真聚合升级路径 | A/B 全部完成 ✅ |
+| **U8** | 校准 `pnl_analytics_module_design.md` v1.1 → v1.2（**全员必读总图**） | **🔴 立即** — 全员必读不能等 | ✅ 2026-05-09 17:55 本轮闭环完成 | 头部升 v1.2 + 加 v1.2 校准段 + §0 mermaid 图 shipment_pnl_lines → shipment_costing_results + §1.3 加 5 个雏形子系统 + §3.3 加废弃声明 + 关联清单加 cost_rate_hub_design_v1.md v1.3 + system_capability_inventory.md |
+| **U9** | 把 6 份核心文档关联到 DOC/agents/ 运维体系 | **🔴 立即** — 用户明确指出"没关联到运维里" | ✅ 2026-05-09 17:55 本轮闭环完成（workset.md §7.10） | 在 workset.md §7 末尾加 §7.10「6 份核心必读文档（按受众分类）」+ 列出总图/价格指南/转移价手册/SKU 组合/finance 集成/评审清单 |
+
+### 13.2 防忘机制（2026-05-09 18:00 修订 — 5 条硬规则 → 3 条软原则）
+
+> **修订背景**：用户 2026-05-09 17:45 指出"派活 Token > 编码 Token"是规则失败。本次把 5 条硬规则简化为 3 条软原则，移除"每月 1 号扫表"等容易变成形式主义的硬性要求。
+
+#### 13.2.1 核心 3 条软原则（执行 Agent 自主把握）
+
+1. **触发即做**：任何 Agent 接力时扫一次 §13.1 表的"触发条件"列，本次任务触发的 U# **必须当轮做完**（不允许"知道有但不做"）；未触发的不强求。
+2. **完成即更新**：任何 v# 升级动作完成时，把对应行状态从 🟡 改为 ✅ + 完成日期。这是给下个接力 Agent 看的，不是为了打卡。
+3. **§13 是单一真相**：任何"未完事项"叙述（task_log 待办列、外部评审报告、用户口头交代）若与 §13 表冲突，**以 §13 为准**。新增延后任务必须登记一行（含触发条件 + 完成定义）。
+
+#### 13.2.2 已废弃的硬规则（不再执行）
+
+- ~~"每月 1 号自动重审一次"~~ → 实际从未执行，纯形式主义，废弃。改为：用户启动相关功能时自然触发。
+- ~~"任何 v# 升级必须在 6 份联动文档全部勾掉对应行"~~ → 实际是过度联动，按 §12.4 减法工作流处理即可。
+
+### 13.3 v1.3 校准已完成事项（汇总，便于审计）
+
+| 已完成事项 | 完成日期 | 完成位置 |
+|---|---|---|
+| 系统能力清单 v1.0 + §12（11 份历史已动文档清单）| 2026-05-09 17:30 + 17:45 | system_capability_inventory.md |
+| Cost Rate Hub v1.2 → v1.3 | 2026-05-09 17:50 | cost_rate_hub_design_v1.md |
+| 总图 pnl_analytics_module_design.md v1.1 → v1.2 | 2026-05-09 17:55 | pnl_analytics_module_design.md |
+| 6 份核心文档关联到运维体系（workset.md §7.10）| 2026-05-09 17:55 | workset.md |
+| §12.2 文档优先级规则修正（pnl_analytics_module_design P5 → P3）| 2026-05-09 17:55 | system_capability_inventory.md |
+| W5 措辞修正（processes 加 cost_center_id 是合理的）| 2026-05-09 17:55 | system_capability_inventory.md |
+| **agent_rules.md §2 / §7 + task_distribution_standard.md §0.2 / §3 重大修订** — 区分设计 vs 执行任务粒度 + 给执行 Agent 完整自主权 + 新增"交接成本 ≤ 编码成本"硬约束 + §12.5 8 步检查→3 步 + §13.2 5 条硬规则→3 条软原则 | **2026-05-09 18:00** | agent_rules.md / task_distribution_standard.md / system_capability_inventory.md / workset.md |
+| **Cost Rate Hub MVP 全栈大任务单下发**（U5+U6 合并 — 新规则 §3.1 优先大任务）— 含 Migration 0038 SQL 骨架 + 4 层 resolve service 实现 + 前端 Tabs + 接入 bom_generation_service / KB8 实时核价 / 发货台账成本拆分 + 5 条端到端验收标准 + 关键代码定位（不需要再 grep）+ 完整自主权声明（中间过程不汇报）| **2026-05-09 18:05** | `DOC/agents/briefings/cost_rate_hub_mvp.md`（新增 360+ 行）|
+| **Cost Rate Hub MVP 全栈交付**（U5 + U6 合并落地 — 新规则首次完整实践）— Migration 0038 落地 PG 生产库（双向验证 + 兼容视图 `long_tail_cogs_rate_strategies` 过滤 cogs）+ ORM 类改名 `CostRateMaster`（保留 `LongTailCogsRateStrategy` alias 兼容老 import）+ 11 字段（rate_type/scope_type/scope_id/rate_basis/source/effective_from/effective_to/data_quality/cost_center_id/legal_entity_id/production_unit_id）+ Hub `resolve_overhead_rate` 4 层 resolve（model > category > cost_center > global > 硬兜底 0.30）+ `bom_generation_service._resolve_overhead_rate` 接 Hub 链 + 前端 2 Tabs（`LongTailCogsTab` 老逻辑不变 + 新 `OverheadRateTab` CRUD/试算/data_quality 徽章）+ 后端 17 新单测全过 + 老 long-tail 27 单测全过（零回归）+ KB8 端到端：模拟 (26.93+7.34) × 0.25 = 8.57 → 折算占比 **20.00%**（vs 旧 23.08%）| **2026-05-09 21:30** | Migration `backend/migrations/versions/0038_cost_rate_master.py` / Service `long_tail_strategy_service.py` / Router `long_tail_strategies.py` / Model `models.py::CostRateMaster` / 前端 `LongTailCogsRatePage.tsx` + `App.tsx` 加 `/costing/admin/cost-rate-hub` 别名 |
+| **U7-A Insights 看板成本可信度徽章 MVP 全栈交付**（briefings/`insights_quality_badges_mvp.md` — A 部分落地，B 三视图未做）— **后端**：新建 `cost_quality_service.py`（一次性 dict 查询 → in-memory 4 层 resolve，零 N+1）+ `analytics_service.py` 7 个函数（`profit_by_model/sku/channel`、`returns_rate_by_sku/channel`、`models_summary`、`sales_lines`）每行透传 `cost_quality{level, hit_layer, source, updated_at}` + Pydantic schemas 7 类 item 加 optional 字段（向后兼容）+ 8 新单测（model→green / category→yellow / global→red / hard_fallback→red / aggregate worst-level / pydantic round-trip 全过）；**前端**：新建 `CostQualityBadge.tsx`（Ant Design Tag + Tooltip 显示命中层级 + 来源 + 更新时间 + level 三色高/中/低）+ 4 个 InsightsPage（Profit/Shop/Sales/AfterSales）每张主表加「成本可信度」列（width 110/center）+ 调整 scroll x；KB8（已配 model 级 0.25）显示 🟢「模型级精确」+ 未配模型显示 🔴「全局兜底」/「硬编码 0.30」；性能：`build_overhead_quality_lookup` 1 次 SELECT + `_model_ids_per_period_channel_sku` 1 次 SELECT，零 N+1（5 条 endpoint 请求 ≤ 之前 + 200ms 性能预算内）；frontend `npm run build` 通过；既有 analytics 单测 10/10 无回归 | **2026-05-09 22:00** | Backend: `services/cost_quality_service.py`（新）/ `services/analytics_service.py`（改）/ `schemas.py` / `tests/planner/test_analytics_quality.py`（新）；Frontend: `components/costing/CostQualityBadge.tsx`（新）/ `types/planner.ts` / 4 InsightsPages（仅 U7-A hunks）|
+| **U2 — finance C1 client + mock + admin 只读 UI 全栈交付**（briefings/`costing_c1_client_service.md` — costing 侧实施完毕，等 finance 侧 §2 5 API 落地）— **Backend**：新建 `services/finance_c1_schemas.py`（5 Pydantic v1 DTO + `FinanceC1ListEnvelope` 信封含 data_source/cache_age/fetched_at）+ `services/finance_c1_client.py`（5 方法 sync httpx + module-level `TTLCache` 5 min + `_last_good` 永久兜底 + 失败降级矩阵：RequestError/5xx → cache + warn；401/403 → `FinanceC1AuthError` 不降级；400 → `FinanceC1ClientError`；429 抛；X-Costing-Api-Key 自动注入；payroll 自动加 `X-Payroll-Authorized: true`）+ `routers/finance_c1_proxy.py`（5 GET 挂 `/api/planner/finance/{companies,stores,employees,fixed-costs,payroll}` 走 `require_staff_role`）+ `tests/mocks/finance_c1_mock.py`（按契约 §3 example 1:1：7 公司 / 4 店铺 / 3 员工 / 11 固定开支覆盖契约 §3.4.1 全 10 unique cost_category / 6 班组工资）+ `config.py` 加 `FINANCE_C1_*` 6 env（base_url / api_key / use_mock=true 默认 / payroll_authorized=false 默认 / cache_ttl=300 / timeout=10）。**Frontend**：`types/financeC1.ts`（4 DTO + `FinanceC1ListEnvelope<T>` 泛型，与后端 1:1）+ `services/financeC1.ts`（5 fetcher 走 plannerClient）+ `pages/costing/admin/FinanceMasterDataPage.tsx`（4 Tabs：公司主体/店铺/员工/固定开支 + 顶部 `DataSourceBadge` 🟢 finance-analyzer / 🟡 cache (Xm ago) / 🔵 mock (dev) / 🔴 error + 固定开支按 cost_category 聚合统计）+ 路由 `/costing/admin/finance-master`（侧栏「系统运维」第 5 项）。**测试**：`tests/planner/test_finance_c1_client.py` 12 条全过（§4.2 C1~C5 5 条 + 7 附加：401 不消费旧 cache / 网络超时降级 / 没缓存抛 / mock 不发 HTTP / payroll 鉴权门 / payroll mock 6 班组 / Router smoke companies + fixed-costs）+ `pytest backend/tests/planner -q` 255 passed（8 pre-existing failures 与 C1 无关，git stash 验证）+ `npm -C frontend run build` ✓ built in 9.09s。**验收 9/9 对勾**：B1 5 方法 / B2 mock 数据（7/4/3/11/6）/ B3 5 测试 / B4 5 代理 endpoint / B5 use_mock 双向切（不同进程验证）/ F1 4 Tab / F2 Badge 4 色 / F3 路由可达 / F4 BOM/Hub/Insights 零改动（`git diff` 0 lines）。**剩余 2 件等 finance 侧**：(1) finance-analyzer §2 5 API 落地 + §4.1 5 条自测 + key 通过安全渠道发给 costing；(2) 双方跑 §4.3 E2E1~E2E3 3 条；之后切 `FINANCE_C1_USE_MOCK=false` 走真接口。U2 状态从 🟢 部分启动 → 🟢 costing 侧 client 完成（待 ✅ 等双方端到端跑通）| **2026-05-10 09:35** | Backend: `services/finance_c1_client.py`（新）/ `services/finance_c1_schemas.py`（新）/ `routers/finance_c1_proxy.py`（新）/ `tests/mocks/finance_c1_mock.py`（新）/ `config.py` / `router.py`；Frontend: `pages/costing/admin/FinanceMasterDataPage.tsx`（新）/ `services/financeC1.ts`（新）/ `types/financeC1.ts`（新）/ `App.tsx` / `components/layout/AppLayout.tsx`；Tests: `tests/planner/test_finance_c1_client.py`（新，12 cases）|
+| **路径 A — 让真数据通电（5 步全栈交付）**（briefings/`path_a_real_data_wiring_v1.md` — A1~A5 + 5 条用户验收 + 完整自主权）— 把 `bom_generation_service.py:2066` 的 `cost_center_id=None` 写死接通到「真财务数据 → 班组级 overhead_rate → bom 命中」端到端路径。**A1 cost_center 主表 + 6 班组初稿**：Migration 0040（`cost_center` 表 + `processes.cost_center_id` FK + 6 行初稿 CC_DECOR_PROD / CC_PILLOW_PROD / CC_PRINT_PROD / CC_GENERAL_PROD / CC_DESIGN_AUX / CC_HQ_ADMIN + 老 team_name 模糊回填）+ ORM `CostCenter` + `cost_center_service.py`（CRUD/软删/assign-processes/refresh_finance_department_mapping）+ `routers/cost_centers.py` 9 endpoint + 前端 `CostCenterMasterPage.tsx`（导航"系统运维 / 💼 班组"）+ 18 单测全过。**A2 cost_center_aggregator_service**：Migration 0041（`cost_center_payroll_snapshot`）+ 服务支持 finance C1 v1.3 by_employee 模式 → 按 cost_center 聚合（headcount/total_paid/avg_salary/total_minutes/rate_per_minute）+ finance 不可用降级 + upsert `cost_rate_master.labor_per_minute`(source=`auto_aggregated_from_finance`) + endpoint `POST /cost-centers/aggregate-payroll-batch?period=YYYY-MM` + 8 单测全过。**A3 fixed_cost_amortizer_service**：Migration 0042（`fixed_cost_amortization_line`）+ 服务读 finance `payment_requests`(`amort_covers_period=YYYY-MM`) → 按 `is_amortized + amort_monthly_amount` 算月度均摊行 + 幂等重跑（period+payment_request_id 唯一）+ endpoint `POST /fixed-costs/amortize` + GET `/amortization,by-company,by-category` + 9 单测全过。**A4 cost_allocator_service + bom_generation 接通**：Migration 0043（`cost_allocation_line`）+ 服务实现 expense_category 多级 fallback driver chain（rent→floor_area→headcount→equal / 工资→headcount / 营销→revenue / beneficiary cost_center 接收 / equal fallback）+ overhead_rate 分子 = Σ allocations to cc ÷ 分母 = 班组工资合计（A2 snapshot）+ upsert `cost_rate_master.overhead_rate`(source=`auto_allocated_from_finance`) + strict/permissive fallback 模式 + endpoint `POST /cost-allocation/run` + GET `/lines,by-cost-center` + 13 单测全过。**关键接通**：`bom_generation_service._resolve_overhead_rate` 改为按 `model_version_processes` 反查 `Process.cost_center_id` 取众数 → 调 `long_tail_strategy_service.resolve_overhead_rate(cost_center_id=...)` + 端到端集成测 `test_path_a_end_to_end.py` 4 条全过（KB8 cost_center 命中 / model 优先级 / global 兜底 / 多 cost_center 众数选取）。**A5 Hub UI 自动/手动 + 算法日志 + 4 看板按主体筛选**：(a) `OverheadRateTab` source 列升级为徽章（🟢 manual / 🔵 auto (A2 工资) / 🟣 allocated (A4 分摊) / ⚫ legacy）+ 顶部 Select 切换"全部 / 人工 / 自动"过滤；(b) 新建 `AlgorithmLogTab.tsx` Hub Tab 3：选月份后只读展示 A2 snapshots / A3 by-company by-category / A4 by-cost-center + per-line（含 fallback chain + 警告）+ 顶部"一键重算 A2+A3+A4"按钮；(c) 新建 `LegalEntityFilter.tsx` 共享组件 + `useLegalEntityFilter` hook + `rowMatchesLegalEntity` 工具 → 4 个 Insights 看板（Profit/Shop/Sales/AfterSales）toolbar 加"法人主体"多选（client-side fuzzy match on row.channel + ⓘ tooltip 说明 v1.4 升级路径）。**测试统计**：backend `pytest -q` 411 collected → 400 passed + 11 pre-existing failures（皆与 Path A 无关：bom_generate_by_spec_bundle_selector / test_finance_c1_client live mode / test_migrations SQLite ALTER 0031 / shipment_line_resolve / sku_master_* / spec_parser）+ 净增 71 passing 测试（含 53 条 Path A 新单测）。frontend `npm run build` ✓ built in 8.93s 0 类型错误。**关键技术决策**：① 6 班组初稿采用"小团队3个产品+辅助+管理"收口（避免与 finance company_id 紧耦合）；② cost_rate_master.rate `Numeric(6,4)` 容纳 ¥/min(0~99.9999)，`_validate_rate(rate_basis=)` 支持双语义（per_minute 0~100 vs pct 0~1）；③ allocator denominator 复用 A2 snapshot 班组工资（简化 v1）；④ `_resolve_overhead_rate` 用众数选 cost_center 应对多班组版本；⑤ A4 `floor_area` driver 拉 finance companies 真 floor_area_sqm + permissive fallback 链让 NULL 主体不阻塞；⑥ Hub source 4 类徽章定义复用 cost_rate_master 现有 source 字符串，零迁移；⑦ Insights 法人主体过滤先做客户端模糊匹配（channel 字符串包含主体短称），对店铺级粒度足够，留 v1.4 后端按 company_id 真聚合的升级路径；⑧ 4 个新 Migration（0040~0043）独立可单独回滚，processes.cost_center_id 用 ondelete=SET NULL 保护历史数据。**未触碰**：finance C1 contract / Hub MVP migrations 0038 / Stage 2 物料链路 / Insights 看板成本可信度徽章逻辑 | **2026-05-10 15:40** | Backend: `models.py` / `services/cost_center_service.py`（新）/ `services/cost_center_aggregator_service.py`（新）/ `services/fixed_cost_amortizer_service.py`（新）/ `services/cost_allocator_service.py`（新）/ `services/bom_generation_service.py`（_resolve_overhead_rate 接通）/ `services/long_tail_strategy_service.py`（_validate_rate 双语义）/ `routers/cost_centers.py`（新）/ `router.py`；Migrations: 0040/0041/0042/0043（新）；Tests: `test_cost_center_service.py` / `test_cost_center_aggregator.py` / `test_fixed_cost_amortizer.py` / `test_cost_allocator.py` / `test_path_a_end_to_end.py`（新，53 cases）；Frontend: `pages/costing/admin/CostCenterMasterPage.tsx`（新）/ `pages/costing/admin/AlgorithmLogTab.tsx`（新）/ `pages/costing/admin/LongTailCogsRatePage.tsx`（OverheadRateTab 升级徽章+filter）/ `services/costCenter.ts`（新）/ `components/insights/LegalEntityFilter.tsx`（新）/ 4 个 Insights pages 加 toolbar / `types/planner.ts` / `App.tsx` / `components/layout/AppLayout.tsx` |
+| **Stage 2 物料字段接入 BOM 计算 + KB8 反推诊断 全栈交付**（briefings/`stage2_material_bom_integration.md` — B1~B7 + F1~F5 共 12 条验收全过）— commit `e6dcf969` 加 6 字段后核心 BOM service 完全没读 → 本次"真正接入"。**Backend**：新建 `services/material_price_resolver.py`（``resolve_material_price() -> MaterialPriceQuote`` 中央取价器，覆盖 4 种取价场景 + 3 种含税还原 + 数据质量分级 green/yellow/red + warnings + ``derive_bom_unit_price_exclusive`` 兼容老签名）+ `product_model_service._derive_bom_unit_price` 改 1 处 → ~25 个调用点零修改自动获得 Stage 2 修正（含税还原 + 生效期取价）+ 同步 `material_bom_derivation._derive_bom_unit_price` + `bom_generation_service._attach_costing` 给每行物料追加 ``price_metadata`` 子对象 + ``material_price_quality_counts`` summary（``generate_bom`` 加 ``as_of_date`` 参数）+ `shipment_import_service._generate_bom_snapshot` 把 ``line.completed_at.date()`` 作为 ``as_of_date`` → 发货行回溯按发货当日取价 + ``_persist_deduction_artifacts`` 把 ``cost_breakdown.materials[]``（含 ``price_metadata`` + 老兼容字段 ``price``/``subtotal``）写入 ``shipment_costing_results.metadata.cost_breakdown`` + `routers/product_models.py` preview wrapper `_enrich_preview_price_metadata` → 实时核价预览每行追加 ``price_metadata`` + `schemas.ProductModelPreviewMaterialLine` 加 ``price_metadata: Optional[Dict[str, Any]]``。**Diagnosis 脚本**：新建 `scripts/kb8_stage2_reverse_diagnosis.py`（抽样真实发货行 + KB8 缺失自动 fallback 全 SKU + 用 ShipmentInventoryDeductionLine 重算 + What-if 13% 模拟 + 输出 `DOC/costing/handovers/stage2_kb8_reverse_diagnosis_20260510.md`）。**Tests**：`tests/planner/test_material_price_resolver.py` 17 条全过（8 主路径 + 8 price_source_label 参数化 + 1 to_jsonable）。**Frontend**：新建 `components/costing/MaterialPriceQualityBadge.tsx`（视觉风格与 `CostQualityBadge` 一致 success/warning/error，徽章文字 = `<价格来源中文> · <质量等级>`，Tooltip 显示采购主体 / 含税开关 / 税率 / 生效期 / 含税价 / 不含税价 / 警告）+ `ShipmentLedgerPage.tsx` BOM物料 Tab 加「价格来源」列（width 180）+ `CostingModelsPage.tsx` 物料明细 Tab 加「价格来源」列（实时核价路径）+ `types/planner.ts` `BomLineRead` + `ProductModelPreviewMaterialLine` 加 ``price_metadata`` optional 类型。**验收**：`pytest backend/tests/planner/test_material_price_resolver.py -v` 17/17 + `pytest backend/tests/planner -q` 272 passed + 8 pre-existing failures（皆与本任务无关，git stash 验证）+ `npm -C frontend run build` ✓ built in 8.83s + `python -m backend.scripts.kb8_stage2_reverse_diagnosis --period 2026-04 --sku-prefix KB8 --sample-size 12` 输出报告。**反推诊断结果（12 条 4 月真实发货）**：新算法 vs 旧算法 平均偏差 +0.00%（向后兼容硬约束跑通——新算法在老数据上完全等价回退到旧逻辑），What-if 13% 平均偏差 -11.50%（如 ops 把含税开关 + 13% 税率填上，物料成本会整体降 ≈ 11.5%，因为 100/1.13 ≈ 88.5%）。**风险规避**：未重新计算历史 ``shipment_costing_results``（脚本只读，brief §8 风险规避 4）；cost_breakdown 老字段保留向后兼容；老 material 行 ``effective_from=NULL`` 自动 fallback + data_quality=yellow + warning（不报错）。**未触碰**：finance C1 / Hub MVP / Insights / 契约文档 / cost_center 任意一处 | **2026-05-10 14:30** | Backend: `services/material_price_resolver.py`（新）/ `services/product_model_service.py` / `services/material_bom_derivation.py` / `services/bom_generation_service.py` / `services/shipment_import_service.py` / `routers/product_models.py` / `schemas.py`；Scripts: `scripts/kb8_stage2_reverse_diagnosis.py`（新）；Reports: `DOC/costing/handovers/stage2_kb8_reverse_diagnosis_20260510.md`（新）；Frontend: `components/costing/MaterialPriceQualityBadge.tsx`（新）/ `pages/costing/ShipmentLedgerPage.tsx` / `pages/costing/CostingModelsPage.tsx` / `types/planner.ts`；Tests: `tests/planner/test_material_price_resolver.py`（新，17 cases）|
+
+---
+
+## 修订历史
+
+| 版本 | 日期 | 维护人 | 改动摘要 |
+|---|---|---|---|
+| v1.0 | 2026-05-09 17:30 | PnL/Hub Agent | 首版：基于 backend/src/planner/{routers,services} + frontend/src/App.tsx + Alembic 迁移 + 5 份 Agent 真相文档梳理出系统能力清单。本文将作为后续 PnL/Hub Agent 接力第 1 份必读文档。 |
+| v1.0+§12 | 2026-05-09 17:45 | PnL/Hub Agent | 追加 §12「历史已动 11 份 PnL/Hub 文档全清单 + v1.3 校准生效后的文档优先级规则」。解决"Agent 反复忘记之前动过哪些文档→重复造轮子"的根因。固化 8 条被废弃叙述（W1~W8）+ "减法工作流"+ "5 步强制检查"。 |
+| v1.0+§13 | 2026-05-09 17:55 | PnL/Hub Agent | 用户指出"做了 Hub 又把总图给忘了"。本次修正：(1) §12.2 把总图 pnl_analytics_module_design 从 P5 提升到 P3（全员必读级别）；(2) W5 措辞精确化（processes 加 cost_center_id 合理）；(3) 新增 §13「v1.3 校准未完事项追踪 + 防忘机制」9 项 U# 表 + 5 条硬规则 + 已完成事项审计表，**永远不再忘**。 |
+| v1.0+§13 修订 | 2026-05-09 18:00 | Hub Agent | 用户指出"派活的 Token 费用 > 实际写代码的费用"是规则失败。本次修订：(1) §12.5 8 步硬性检查 → 3 步必读 + 5 条按需软指引；(2) §13.2 5 条硬规则 → 3 条软原则（移除"每月 1 号扫表"等容易变成形式主义的硬性要求）。配合 `agent_rules.md §2/§7` + `task_distribution_standard.md §0.2/§3` 重大修订一起生效。**此后执行 Agent 在 scope 内拥有完整自主权，不需要每小步回 Hub 汇报。** |
+| v1.0+§13 + Hub MVP | 2026-05-09 21:30 | Fullstack Agent | Cost Rate Hub MVP 全栈交付完成（U5/U6 → ✅）。本次更新：(1) §13.1 把 U5/U6 状态从 🟢 派单已下发 改为 ✅ 完成；U7 由 🟡 暂留 改为 🟡 可启动（Hub MVP 已验证）。(2) §13.3 已完成事项审计追加 1 行（21:30 Hub MVP 全栈交付明细）。(3) 修订历史追加本行。**所有 5 条用户验收标准全过**（Migration 双向 / POST overhead_rate / KB8 折算 23%→20% / bom 接入 / 前端 Tabs）；后端 17 新单测 + 27 老单测无回归。 |
+| v1.0+§13 + Hub MVP + U7-A | 2026-05-09 22:00 | Fullstack Agent | U7-A Insights 看板成本可信度徽章 MVP 全栈交付完成（U7 → ✅ A 部分完成，B 三视图待主数据）。本次更新：(1) §13.1 U7 状态从 🟡 可启动 改为 ✅ A 部分完成 + 显式标注 B 三视图（Tax/Mgmt/Group）等 `cost_center` + `legal_entity` 主数据就绪后单独派单；(2) §13.3 追加 1 行（22:00 U7-A 全栈交付明细）；(3) 修订历史追加本行。**5 条用户验收标准对勾**：① 4 看板「成本可信度」列 ✅；② tooltip 命中层级+来源+更新时间 ✅；③ KB8 🟢「模型级精确」(配 0.25 model 级) ✅（端到端测脚本验证）；④ 未配模型 🔴「全局兜底」/「硬编码 0.30」 ✅；⑤ 性能：`build_overhead_quality_lookup` 1 SELECT + `_model_ids_per_period_channel_sku` 1 SELECT 批量查 dict 方案落地，零 N+1 ✅。后端 8 新单测 + 既有 analytics 10 单测全过（零回归）；frontend build 通过。|
+| v1.0+§13 + U2 C1 client | 2026-05-10 09:35 | Costing Backend Agent | **U2 — finance C1 client + mock + admin 只读 UI 全栈交付**（派单 `briefings/costing_c1_client_service.md` 9/9 验收全过）。U2 状态从 🟢 部分启动 → 🟢 costing 侧 client 完成（等 finance 侧 §2 5 API 落地 + 双方端到端跑 §4.3 E2E1~E2E3）。Backend 5 件（schemas / client / mock data / proxy router / config）+ Frontend 3 件（types / services / FinanceMasterDataPage 4 Tabs + Badge 🟢/🟡/🔵/🔴）+ 12 单测全过 + 0 回归 + frontend build OK + F4 BOM/Hub/Insights 零改动。本次更新：(1) §13.1 U2 行刷状态 + 完成快照；(2) §13.3 已完成事项审计追加 1 行（09:35 U2 全栈交付明细）；(3) 修订历史追加本行。验收命令：`pytest backend/tests/planner/test_finance_c1_client.py -v && npm -C frontend run build && PYTHONPATH=backend python -c "from tests.mocks.finance_c1_mock import MOCK_COMPANIES, MOCK_STORES, MOCK_FIXED_COSTS; assert len(MOCK_COMPANIES)>=7 and len(MOCK_STORES)>=4 and len(MOCK_FIXED_COSTS)>=11; print('mock data OK')"`。|
+| v1.0+§13 + Path A 真数据通电 | 2026-05-10 15:40 | Costing Fullstack Agent | **路径 A — 让真数据通电（5 步全栈交付）**（派单 `briefings/path_a_real_data_wiring_v1.md` 5 条用户验收全部对勾）。U7 状态从 ✅ A 部分完成 → ✅ A+B 全部完成（B 部分采用 client-side fuzzy match v1 实现，留 v1.4 后端按 company_id 真聚合升级路径）。本次更新：(1) §13.1 U7 完成快照刷新；(2) §13.3 已完成事项审计追加 1 行（15:40 Path A 全栈交付明细）；(3) 修订历史追加本行。**5 条用户验收对勾**：① A1 cost_center 主表 + 6 班组初稿 + Migration 0040 + 18 单测 ✅；② A2 cost_center_aggregator + Migration 0041 + 上链 labor_per_minute + 8 单测 ✅；③ A3 fixed_cost_amortizer + Migration 0042 + 9 单测 ✅；④ A4 cost_allocator + Migration 0043 + bom_generation `_resolve_overhead_rate` 接通 + 13 单测 + 4 集成测 ✅；⑤ A5 Hub auto/manual 徽章 + 算法日志 Tab + 4 看板法人主体 client-side filter ✅。**测试**：`pytest -q` 400 passed + 11 pre-existing failures（皆与 Path A 无关）+ 净增 71 passing；frontend build OK。验收命令：`pytest backend/tests/planner/test_cost_center_service.py backend/tests/planner/test_cost_center_aggregator.py backend/tests/planner/test_fixed_cost_amortizer.py backend/tests/planner/test_cost_allocator.py backend/tests/planner/test_path_a_end_to_end.py -v && cd frontend && npm run build`。|
+| v1.0+§13 + TDABC v1 闭环 | 2026-05-10 20:30 | Costing Fullstack Agent | **TDABC v1 闭环 — A2 接通 + 成本核算 Tab 全栈交付**（派单 `briefings/tdabc_v1_closing_loop_brief.md` G + H 验收 9 条全过）。新增 §13.1 G/H 两行（✅）+ §13.3 已完成事项审计追加 1 行（20:30 TDABC v1 闭环）+ 修订历史追加本行。**核心改动**：(a) `long_tail_strategy_service.py` 加 `resolve_labor_rate()` + `resolve_labor_per_piece()`（4 层 resolve，model > category > cost_center > global，硬兜底 None 不返回硬编码值）；(b) `bom_generation_service._compute_process_costing` 时/件双分支 Hub-first → metadata fallback，每行追加 6 字段（rate_per_minute_legacy / piece_rate_legacy / rate_source / rate_hit_layer / cost_center_id / cost_rate_strategy_id）；(c) `product_model_service.preview_model_cost` + `preview_version_cost` 走同一 Hub 链 + overhead 4 层（拒绝硬编码 0.30）→ 响应顶层加 `costing.overhead`（rate / hit_layer / source / strategy_id）+ `costing.dominant_cost_center`；(d) 新建 `frontend/src/components/costing/CostingTab.tsx`（524 行）：宽/高/数量参数面板 + 3 层成本卡片（物料/人工/制造费）+ 5 色 `RateSourceBadge`（🟢 model / 🔵 category / ⚪ cost_center / ⚫ global / ⚠️ legacy）+ 工艺逐行表（cost_center_id 列 + 命中层级标签）+ 「为本模型单独设固定时薪/费率」Modal（写 `cost_rate_master scope=model source=manual_model_override`，labor 走 rate_per_minute、overhead 走 overhead_rate）；(e) `ProductModelEditorDrawer.tsx` 加 'cost' Tab。**测试**：`pytest backend/tests/planner/test_compute_process_costing_hub_labor.py -v` 8/8 ✅（计划 4 个，超额完成：Hub hit cost_center / NULL cost_center fallback / 无 strategy fallback / Hub zero rate fallback / piece-type / model 优先级 / standalone resolve 测试 ×2）；`pytest -q backend/tests/planner` 408 passed + 11 pre-existing failures（皆与本任务无关，git stash 验证：bom_generate_by_spec_bundle_selector / test_finance_c1_client live mode / test_migrations SQLite ALTER 0031 / shipment_line_resolve / sku_master_* / spec_parser）+ 净增 8 passing。**前端**：`npm run build` ✓ built in 8.93s 0 类型错误。**部署**：`alembic upgrade head` noop（本轮无 migration）+ `systemctl restart costing-backend`（**不**用 `kill -HUP`）+ `npm run build && bash deploy_static.sh` → `https://work.znma.com` 生效。**真机验证**：`curl https://work.znma.com/api/planner/product-models/<KB8_uuid>/preview -H 'X-PLANNER-ADMIN-KEY: ...'` 返回 `process_lines[0].rate_source=hub_cost_center / rate_hit_layer=cost_center / cost_center_id=CC_FABRIC_PROD / labor_per_minute=0.85` + `costing.overhead.rate=0.25 / hit_layer=model`；前端打开 KB8 抽屉「成本核算」Tab 三层数字渲染正常 + 徽章正确。**演示数据初始化**：手动给 KB8 工序分配 `CC_FABRIC_PROD` + 写 `cost_rate_master(rate_type=labor_per_minute, scope=cost_center, scope_id=CC_FABRIC_PROD, rate=0.85)` 演示完整 4 层 resolve；老 KB8 数据未配 cost_center 时降级至 metadata.rate_per_minute（rate_source=metadata，与 commit 前等价）。**未触碰**：finance C1 / Stage 2 物料 / cost_center_aggregator / fixed_cost_amortizer / cost_allocator / 4 个 Insights 看板。验收命令：`pytest backend/tests/planner/test_compute_process_costing_hub_labor.py -v && cd frontend && npm run build`。|
+| v1.0+§13 + Stage 2 BOM 接入 | 2026-05-10 14:30 | Fullstack Agent | **Stage 2 物料字段接入 BOM 计算 + KB8 反推诊断 全栈交付**（派单 `briefings/stage2_material_bom_integration.md` B1~B7 + F1~F5 共 12 条验收全过）。本次更新：(1) §13.3 已完成事项审计追加 1 行（14:30 Stage 2 全栈交付明细）；(2) 修订历史追加本行。**核心改动**：commit `e6dcf969` 加的 6 字段（purchase_entity_id / tax_included_flag / tax_rate / price_source / effective_from / effective_to）真正接入 BOM 计算路径，让物料成本能按"生效期取价 + 含税还原不含税 + 区分采购主体"准确算出来。新建中央取价器 `material_price_resolver.py` + 改 1 处 `_derive_bom_unit_price` → ~25 个调用点零修改自动获得 Stage 2 修正 + `_attach_costing` 给每行追加 `price_metadata` + cost_breakdown 写入 ShipmentCostingResult.metadata（老字段 `price`/`subtotal` 保持向后兼容）+ 反推诊断脚本 `scripts/kb8_stage2_reverse_diagnosis.py` + 报告 `DOC/costing/handovers/stage2_kb8_reverse_diagnosis_20260510.md` + 前端 `MaterialPriceQualityBadge.tsx` + ShipmentLedgerPage / CostingModelsPage 加「价格来源」列。**验收 12/12 对勾**：B1 resolver 实现 / B2 调用方零遗漏 / B3 cost_breakdown.price_metadata 落地 / B4 老数据 effective_from=NULL 不崩 / B5 17 单测全过 / B6 诊断脚本跑通 / B7 markdown 含摘要 + 偏差源分类 + 详细明细 + 老板结论 / F1 RealtimePricing(CostingModelsPage) 加列 / F2 ShipmentLedgerPage 加列 / F3 Badge 与 CostQualityBadge 视觉一致 / F4 Tooltip 完整 / F5 frontend build 通过。**反推诊断结果**：新算法 vs 旧算法 平均偏差 +0.00%（向后兼容硬约束 ✅），What-if 13% 平均偏差 -11.50%（数学一致 100/1.13 ≈ 88.5%）→ 当前 1502 物料 0 行启用 Stage 2 字段，需 ops 优先把出货量 Top 50 物料补字段（半天工作量），立刻还原 ~13% 物料成本失真。**未触碰**：finance C1 / Hub MVP / Insights 4 看板 / 契约文档 / cost_center 任意一处。验收命令：`pytest backend/tests/planner/test_material_price_resolver.py -v && PYTHONPATH=backend python -m backend.scripts.kb8_stage2_reverse_diagnosis --period 2026-04 --sku-prefix KB8 --sample-size 12 && cd frontend && npm run build`。|

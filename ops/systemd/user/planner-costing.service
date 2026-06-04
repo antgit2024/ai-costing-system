@@ -1,0 +1,15 @@
+[Unit]
+Description=AI Costing Planner API (user scope)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/admin/ai-costing-system/backend
+EnvironmentFile=/home/admin/ai-costing-system/.env
+ExecStart=/home/admin/ai-costing-system/backend/.venv/bin/uvicorn src.main:app --host 127.0.0.1 --port 8800 --workers 2
+KillMode=control-group
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

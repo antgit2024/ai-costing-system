@@ -1,0 +1,23 @@
+[Unit]
+Description=AI-Costing nightly snapshot sweep — backfill BomSnapshot for bound shipment lines that the bind-time hook missed
+Documentation=file:///home/admin/ai-costing-system/backend/scripts/cron_snapshot_sweep.py
+After=planner-costing.service network.target
+# Don't fail loudly if backend is restarting at trigger time — sweep uses
+# its own DB session and doesn't need the API to be up.
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/admin/ai-costing-system/backend
+EnvironmentFile=/home/admin/ai-costing-system/.env
+ExecStart=/home/admin/ai-costing-system/backend/.venv/bin/python scripts/cron_snapshot_sweep.py --lookback-days 30 --limit 1000
+StandardOutput=journal
+StandardError=journal
+# 1 hour ceiling — 1000 lines × ~2.5s/line ≈ 40 min worst case (when lots
+# of bound-but-uncomputable lines need to be re-evaluated). Beyond an hour
+# something's wrong (DB lock / runaway query) and we let the next nightly
+# run retry rather than holding the slot.
+TimeoutStartSec=3600
+
+[Install]
+# Wanted by the timer, not by default.target — we don't run on boot.
+WantedBy=default.target

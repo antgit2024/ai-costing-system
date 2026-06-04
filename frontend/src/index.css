@@ -1,0 +1,608 @@
+:root {
+  font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont,
+    sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  /* Prefer dark surfaces to reduce eye strain */
+  color-scheme: dark;
+
+  /**
+   * Cursor Dashboard-style vars（你贴的原版 CSS 命名）
+   * 说明：Cursor 的 CSS 里大量使用 --color-theme-* / --dashboard-* 变量做统一风格控制。
+   * 我们在这里补齐一套等价变量，方便未来继续按 Cursor 的写法扩展。
+   */
+  --inactive-selection-background: #ffffff10;
+  --list-hover-background: #2a2a2a99;
+
+  /**
+   * 语义色（更中性/更压亮度的调性）
+   * 参考你贴的 Mapbox/系统类 CSS：色彩存在但更“灰”、更克制，避免高饱和刺眼。
+   */
+  --terminal-ansi-green: #8fb5a3;
+  --terminal-ansi-yellow: #d6c08a;
+  --terminal-ansi-red: #c07a7a;
+  --terminal-ansi-blue: #8da6c2;
+
+  /* Error 主背景（用于极少数“强危险操作”）也压住一点亮度 */
+  --dashboard-bg-error-primary: #c94a4a;
+  --dashboard-bg-error-primary-hover: #b13f3f;
+  --dashboard-text-error-prominent: #e06c75;
+  --dashboard-text-error-on-primary: #ffffff;
+
+  /* Theme core */
+  --color-theme-bg: #0b0b0c;
+  --color-theme-bg-secondary: #111113;
+  --color-theme-bg-tertiary: rgba(255, 255, 255, 0.04);
+  --color-theme-bg-quaternary: rgba(255, 255, 255, 0.02);
+  --color-theme-bg-card: #111113;
+  --color-theme-bg-card-hover: rgba(255, 255, 255, 0.04);
+
+  --color-theme-fg: #ffffff;
+
+  --color-theme-text-primary: rgba(244, 244, 245, 0.92);
+  --color-theme-text-secondary: rgba(244, 244, 245, 0.7);
+  --color-theme-text-tertiary: rgba(244, 244, 245, 0.55);
+  --color-theme-text-quaternary: rgba(244, 244, 245, 0.35);
+  --color-theme-text-inverted: #0b0b0c;
+
+  --color-theme-border-primary: rgba(255, 255, 255, 0.22);
+  --color-theme-border-secondary: rgba(255, 255, 255, 0.14);
+  --color-theme-border-tertiary: rgba(255, 255, 255, 0.1);
+  --color-theme-border-quaternary: rgba(255, 255, 255, 0.08);
+
+  /* Cursor 风格：主按钮更克制（中性灰），避免高饱和亮色刺眼 */
+  --color-theme-bg-button: #2f2f33;
+  --color-theme-bg-button-hover: #3a3a3f;
+  --color-theme-button-text: var(--color-theme-text-inverted);
+
+  /* App-level aliases（项目内部用 --app-*，但值完全对齐 Cursor 变量） */
+  --app-bg: var(--color-theme-bg);
+  --app-bg-elevated: var(--color-theme-bg-card);
+  --app-surface: rgba(255, 255, 255, 0.03);
+  --app-border: var(--color-theme-border-tertiary);
+  --app-text: var(--color-theme-text-secondary);
+  --app-text-strong: var(--color-theme-text-primary);
+  --app-text-muted: var(--color-theme-text-tertiary);
+  --app-shadow: none;
+
+  color: var(--color-theme-text-primary);
+  background-color: var(--app-bg);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/**
+ * 全局 90% 缩放（整体变小：字体/间距/表格/弹窗一起缩）
+ *
+ * - Chromium/Edge 支持 zoom（最稳定）
+ * - Firefox 不支持 zoom：用 transform 做降级（固定 0.9）
+ *
+ * 如需关闭：把 0.9 改成 1
+ */
+html {
+  zoom: 0.9;
+}
+@supports not (zoom: 1) {
+  body {
+    transform: scale(0.9);
+    transform-origin: top left;
+    width: 111.111%;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background-color: var(--app-bg);
+  color: var(--app-text);
+}
+
+#root {
+  min-height: 100vh;
+}
+
+a {
+  color: inherit;
+}
+
+.app-layout {
+  min-height: 100vh;
+}
+
+.app-header {
+  background: var(--app-bg-elevated);
+  border-bottom: 1px solid var(--app-border);
+  display: flex;
+  align-items: center;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--app-text-strong);
+  padding: 0 20px;
+}
+
+.app-header-inner {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+@keyframes taskBadgePulse {
+  0% {
+    filter: brightness(1);
+    transform: scale(1);
+  }
+  50% {
+    filter: brightness(1.15);
+    transform: scale(1.03);
+  }
+  100% {
+    filter: brightness(1);
+    transform: scale(1);
+  }
+}
+
+.task-badge-blink .ant-badge-count {
+  animation: taskBadgePulse 1.2s ease-in-out infinite;
+}
+
+/* Dark theme: make Switch "on" state visible but restrained. */
+.ant-switch.ant-switch-checked {
+  background: #2f4f73 !important;
+  box-shadow: 0 0 0 1px rgba(120, 150, 185, 0.22);
+}
+
+.ant-switch.ant-switch-checked:hover:not(.ant-switch-disabled) {
+  background: #3a5f87 !important;
+}
+
+.ant-switch.ant-switch-checked .ant-switch-handle::before {
+  background: #ffffff;
+}
+
+.app-content {
+  padding: 16px 20px 28px;
+  background: var(--app-bg);
+  min-height: calc(100vh - 64px);
+}
+
+/* Mobile / full-screen mode (e.g. production scan page): remove desktop paddings/height assumptions */
+.app-layout--mobile .app-content {
+  padding: 12px 12px 20px;
+  min-height: 100vh;
+}
+
+.production-scan-page {
+  max-width: 860px;
+  margin: 0 auto;
+}
+
+/* Mobile-friendly spacing/typography */
+@media (max-width: 768px) {
+  .production-scan-page h3.ant-typography {
+    font-size: 18px;
+    margin-bottom: 0;
+  }
+  .production-scan-page .ant-card {
+    border-radius: 12px;
+  }
+  .production-scan-page .ant-descriptions-item-label,
+  .production-scan-page .ant-descriptions-item-content {
+    padding: 10px 12px;
+  }
+  .production-scan-page .ant-table {
+    font-size: 12px;
+  }
+}
+
+.sidebar-logo {
+  height: 55px; /* -8px：让分隔线与顶部栏底线对齐 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--app-text-strong);
+  font-weight: 600;
+  font-size: 13px;
+  background: var(--color-theme-bg-card);
+  position: relative;
+  /* 用 border-bottom 统一口径，避免 ::after 造成“看起来不齐” */
+  border-bottom: 1px solid var(--app-border);
+}
+
+.sidebar-logo img {
+  height: 37px; /* +1/3 */
+  max-width: 200px;
+  width: auto;
+  display: block;
+  /* LOGO 是黑色填充：暗色背景下需要反色，否则看不见 */
+  filter: invert(1) brightness(1.05);
+  opacity: 0.95;
+}
+
+/* 只保留一条线：避免 Menu 自带边线/阴影叠加成“两条灰线” */
+.app-layout .ant-layout-sider .ant-menu {
+  border-top: 0 !important;
+  box-shadow: none !important;
+}
+
+.app-header-brand {
+  display: flex;
+  align-items: center;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-theme-text-primary);
+  letter-spacing: 0.2px;
+}
+
+/* ===== Cursor-like left menu (Sider + Menu) ===== */
+.app-layout .ant-layout-sider {
+  background: var(--color-theme-bg-card) !important;
+  border-inline-end: 1px solid var(--color-theme-border-tertiary);
+}
+.app-layout .ant-layout-sider .ant-layout-sider-children {
+  background: transparent;
+}
+.app-layout .ant-menu.ant-menu-dark,
+.app-layout .ant-menu-dark .ant-menu-sub,
+.app-layout .ant-menu-dark .ant-menu-submenu-title {
+  background: transparent !important;
+}
+.app-layout .ant-menu-dark .ant-menu-item,
+.app-layout .ant-menu-dark .ant-menu-submenu-title {
+  color: var(--color-theme-text-secondary);
+  border-radius: 6px;
+  margin-inline: 8px;
+  width: auto;
+}
+.app-layout .ant-menu-dark .ant-menu-item {
+  padding-inline: 12px !important;
+}
+.app-layout .ant-menu-dark .ant-menu-submenu-title {
+  padding-inline: 12px !important;
+}
+.app-layout .ant-menu-dark .ant-menu-item .ant-menu-title-content,
+.app-layout .ant-menu-dark .ant-menu-submenu-title .ant-menu-title-content {
+  font-weight: 500;
+}
+.app-layout .ant-menu-dark .ant-menu-item:hover,
+.app-layout .ant-menu-dark .ant-menu-submenu-title:hover {
+  background-color: var(--list-hover-background) !important;
+  color: var(--color-theme-text-primary);
+}
+.app-layout .ant-menu-dark .ant-menu-item-selected {
+  background-color: var(--inactive-selection-background) !important;
+  color: var(--color-theme-text-primary);
+}
+.app-layout .ant-menu-dark .ant-menu-item-selected a {
+  color: var(--color-theme-text-primary);
+}
+/* 去掉 AntD Menu 选中态默认的“竖线/after”指示（更贴近 Cursor） */
+.app-layout .ant-menu-dark .ant-menu-item::after {
+  border-inline-end: 0 !important;
+}
+.app-layout .ant-menu-dark .ant-menu-submenu-arrow {
+  color: var(--color-theme-text-tertiary);
+}
+.app-layout .ant-menu-dark .ant-menu-submenu-title:hover .ant-menu-submenu-arrow {
+  color: var(--color-theme-text-secondary);
+}
+
+/* ===== Drawer background + left separator line ===== */
+.ant-drawer .ant-drawer-content {
+  background: var(--color-theme-bg-card);
+}
+.ant-drawer .ant-drawer-header {
+  background: var(--color-theme-bg-card);
+  border-bottom: 1px solid var(--color-theme-border-tertiary);
+}
+.ant-drawer .ant-drawer-body {
+  background: var(--color-theme-bg-card);
+}
+.ant-drawer .ant-drawer-footer {
+  background: var(--color-theme-bg-card);
+  border-top: 1px solid var(--color-theme-border-tertiary);
+}
+.ant-drawer .ant-drawer-close {
+  color: var(--color-theme-text-secondary);
+}
+.ant-drawer .ant-drawer-close:hover {
+  background: var(--color-theme-bg-tertiary);
+  color: var(--color-theme-text-primary);
+}
+.ant-drawer-right .ant-drawer-content-wrapper {
+  border-left: 1px solid var(--color-theme-border-tertiary);
+}
+.ant-drawer-left .ant-drawer-content-wrapper {
+  border-right: 1px solid var(--color-theme-border-tertiary);
+}
+/* Drawer 内 Tabs：避免和“左侧灰线/底色”打架 */
+.ant-drawer .ant-tabs-nav::before {
+  border-bottom: 1px solid var(--color-theme-border-tertiary) !important;
+}
+.ant-drawer .ant-tabs-tab {
+  color: var(--color-theme-text-secondary);
+}
+.ant-drawer .ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: var(--color-theme-text-primary) !important;
+}
+.ant-drawer .ant-tabs-ink-bar {
+  background: var(--color-theme-text-primary) !important;
+}
+
+/* ===== Modal (弹窗) 黑灰风格：适用于 confirm/info 等 ===== */
+.ant-modal,
+.ant-modal-confirm {
+  /**
+   * AntD v5 modal 使用 CSS 变量控制背景（默认是白色：--ant-modal-content-bg: #fff）。
+   * 线上“仍是白色”多数是因为该变量在 modal scope 内被注入为 #fff。
+   * 这里在 modal 作用域内覆写变量（只影响弹窗，不影响全站 token）。
+   */
+  --ant-modal-content-bg: var(--color-theme-bg-card) !important;
+  --ant-modal-header-bg: var(--color-theme-bg-card) !important;
+  --ant-modal-footer-bg: var(--color-theme-bg-card) !important;
+  --ant-modal-title-color: var(--color-theme-text-primary) !important;
+  --ant-color-text: var(--color-theme-text-primary) !important;
+  --ant-color-text-secondary: var(--color-theme-text-secondary) !important;
+  --ant-color-bg-elevated: var(--color-theme-bg-card) !important;
+  --ant-color-bg-container: var(--color-theme-bg-card) !important;
+  --ant-color-border: var(--color-theme-border-quaternary) !important;
+  --ant-color-split: var(--color-theme-border-quaternary) !important;
+  --ant-box-shadow: none !important;
+}
+
+.ant-modal .ant-modal-content,
+.ant-modal-confirm .ant-modal-content {
+  background: var(--color-theme-bg-card) !important;
+  background-color: var(--color-theme-bg-card) !important;
+  border: 1px solid var(--color-theme-border-quaternary) !important;
+  box-shadow: none !important;
+}
+
+.ant-modal .ant-modal-header,
+.ant-modal-confirm .ant-modal-header {
+  background: var(--color-theme-bg-card) !important;
+  background-color: var(--color-theme-bg-card) !important;
+  border-bottom: 1px solid var(--color-theme-border-quaternary) !important;
+}
+
+.ant-modal .ant-modal-body,
+.ant-modal-confirm .ant-modal-body {
+  background: var(--color-theme-bg-card) !important;
+  background-color: var(--color-theme-bg-card) !important;
+  color: var(--color-theme-text-secondary) !important;
+}
+
+.ant-modal .ant-modal-footer,
+.ant-modal-confirm .ant-modal-footer {
+  background: var(--color-theme-bg-card) !important;
+  background-color: var(--color-theme-bg-card) !important;
+  border-top: 1px solid var(--color-theme-border-quaternary) !important;
+}
+
+/* 弹窗内容里常见“白底面板”来源：Card/Descriptions/Table 默认 container bg */
+.ant-modal .ant-card,
+.ant-modal .ant-card-body,
+.ant-modal .ant-card-head,
+.ant-modal .ant-descriptions-view,
+.ant-modal .ant-table,
+.ant-modal .ant-table-container,
+.ant-modal .ant-table-thead > tr > th,
+.ant-modal .ant-table-tbody > tr > td,
+.ant-modal-confirm .ant-card,
+.ant-modal-confirm .ant-card-body,
+.ant-modal-confirm .ant-card-head,
+.ant-modal-confirm .ant-descriptions-view,
+.ant-modal-confirm .ant-table,
+.ant-modal-confirm .ant-table-container,
+.ant-modal-confirm .ant-table-thead > tr > th,
+.ant-modal-confirm .ant-table-tbody > tr > td {
+  background: var(--color-theme-bg-card) !important;
+  background-color: var(--color-theme-bg-card) !important;
+  border-color: var(--color-theme-border-quaternary) !important;
+  color: var(--color-theme-text-secondary) !important;
+}
+
+.ant-modal-content {
+  /* AntD Modal/Confirm 是 portal 到 body；直接覆盖 content，避免出现“外壳白底” */
+  background: var(--color-theme-bg-card) !important;
+  /* 边框再压暗一档，避免看起来像“白框” */
+  border: 1px solid var(--color-theme-border-quaternary) !important;
+  box-shadow: none !important;
+}
+.ant-modal-header {
+  background: var(--color-theme-bg-card) !important;
+  border-bottom: 1px solid var(--color-theme-border-quaternary) !important;
+}
+.ant-modal-body {
+  background: var(--color-theme-bg-card) !important;
+  color: var(--color-theme-text-secondary) !important;
+}
+.ant-modal-footer {
+  background: var(--color-theme-bg-card) !important;
+  border-top: 1px solid var(--color-theme-border-quaternary) !important;
+}
+.ant-modal .ant-modal-content {
+  background: var(--color-theme-bg-card) !important;
+  /* 边框再压暗一档，避免看起来像“白框” */
+  border: 1px solid var(--color-theme-border-quaternary) !important;
+  box-shadow: none !important;
+}
+.ant-modal .ant-modal-header {
+  background: var(--color-theme-bg-card) !important;
+  border-bottom: 1px solid var(--color-theme-border-quaternary) !important;
+}
+.ant-modal .ant-modal-title {
+  color: var(--color-theme-text-primary) !important;
+}
+.ant-modal .ant-modal-close {
+  color: var(--color-theme-text-secondary) !important;
+}
+.ant-modal .ant-modal-close:hover {
+  background: var(--color-theme-bg-tertiary) !important;
+  color: var(--color-theme-text-primary) !important;
+}
+.ant-modal .ant-modal-body {
+  color: var(--color-theme-text-secondary) !important;
+}
+.ant-modal .ant-modal-footer {
+  background: var(--color-theme-bg-card) !important;
+  border-top: 1px solid var(--color-theme-border-quaternary) !important;
+}
+/* Confirm 弹窗：图标/提示文字也跟随暗色 */
+.ant-modal-confirm .ant-modal-confirm-title {
+  color: var(--color-theme-text-primary) !important;
+}
+.ant-modal-confirm .ant-modal-confirm-content {
+  color: var(--color-theme-text-secondary) !important;
+}
+
+/* 弹窗底部按钮：统一暗色按钮体系（避免仍是亮色） */
+.ant-modal .ant-modal-footer .ant-btn {
+  background: rgba(255, 255, 255, 0.06) !important;
+  border-color: rgba(255, 255, 255, 0.14) !important;
+  color: var(--color-theme-text-primary) !important;
+}
+.ant-modal .ant-modal-footer .ant-btn:hover {
+  background: rgba(255, 255, 255, 0.10) !important;
+  border-color: rgba(255, 255, 255, 0.16) !important;
+}
+.ant-modal .ant-modal-footer .ant-btn-primary {
+  background: rgba(255, 255, 255, 0.10) !important;
+  border-color: rgba(255, 255, 255, 0.18) !important;
+  color: var(--color-theme-text-primary) !important;
+}
+.ant-modal .ant-modal-footer .ant-btn-primary:hover {
+  background: rgba(255, 255, 255, 0.14) !important;
+  border-color: rgba(255, 255, 255, 0.22) !important;
+}
+.ant-modal .ant-modal-footer .ant-btn-dangerous {
+  background: rgba(201, 74, 74, 0.14) !important;
+  border-color: rgba(201, 74, 74, 0.28) !important;
+  color: var(--dashboard-text-error-prominent) !important;
+}
+.ant-modal .ant-modal-footer .ant-btn-dangerous:hover {
+  background: rgba(201, 74, 74, 0.18) !important;
+  border-color: rgba(201, 74, 74, 0.34) !important;
+}
+
+/* Confirm 类型弹窗没有 footer：按钮在 .ant-modal-confirm-btns */
+.ant-modal-confirm .ant-modal-confirm-body-wrapper {
+  background: var(--color-theme-bg-card) !important;
+  /* confirm 弹窗 body wrapper 也补一圈更暗的边框，避免“白框”来自该层 */
+  border: 1px solid var(--color-theme-border-quaternary) !important;
+  border-radius: 8px;
+}
+.ant-modal-confirm .ant-modal-confirm-body {
+  color: var(--color-theme-text-secondary) !important;
+}
+.ant-modal-confirm .ant-modal-confirm-btns .ant-btn {
+  background: rgba(255, 255, 255, 0.06) !important;
+  border-color: rgba(255, 255, 255, 0.14) !important;
+  color: var(--color-theme-text-primary) !important;
+}
+.ant-modal-confirm .ant-modal-confirm-btns .ant-btn:hover {
+  background: rgba(255, 255, 255, 0.10) !important;
+  border-color: rgba(255, 255, 255, 0.16) !important;
+}
+.ant-modal-confirm .ant-modal-confirm-btns .ant-btn-primary {
+  background: rgba(255, 255, 255, 0.10) !important;
+  border-color: rgba(255, 255, 255, 0.18) !important;
+  color: var(--color-theme-text-primary) !important;
+}
+.ant-modal-confirm .ant-modal-confirm-btns .ant-btn-primary:hover {
+  background: rgba(255, 255, 255, 0.14) !important;
+  border-color: rgba(255, 255, 255, 0.22) !important;
+}
+.ant-modal-confirm .ant-modal-confirm-btns .ant-btn-dangerous {
+  background: rgba(201, 74, 74, 0.14) !important;
+  border-color: rgba(201, 74, 74, 0.28) !important;
+  color: var(--dashboard-text-error-prominent) !important;
+}
+.ant-modal-confirm .ant-modal-confirm-btns .ant-btn-dangerous:hover {
+  background: rgba(201, 74, 74, 0.18) !important;
+  border-color: rgba(201, 74, 74, 0.34) !important;
+}
+
+/* ===== Top filter cards border (like SampleModelsPage) ===== */
+.costing-filter-card {
+  border: 1px solid var(--color-theme-border-tertiary) !important;
+  background: var(--color-theme-bg-card) !important;
+}
+.costing-filter-card > .ant-card-head {
+  background: var(--color-theme-bg-card) !important;
+  border-bottom: 1px solid var(--color-theme-border-tertiary) !important;
+}
+.costing-filter-card .ant-card-body {
+  background: var(--color-theme-bg-card) !important;
+}
+
+/* ===== Standard model: line variants (Overlay) indicator button ===== */
+.line-variant-btn--active.ant-btn {
+  /* 深黑黄（避免淡黄刺眼），同时保持“已配置”可读性 */
+  background: rgba(43, 33, 0, 0.88) !important;
+  border: 1px solid rgba(255, 214, 102, 0.22) !important;
+  border-radius: 6px !important;
+  color: rgba(255, 214, 102, 0.95) !important;
+}
+.line-variant-btn--active.ant-btn:hover {
+  background: rgba(56, 42, 0, 0.92) !important;
+  border-color: rgba(255, 214, 102, 0.32) !important;
+  color: rgba(255, 214, 102, 0.98) !important;
+}
+
+/* ===== Product listing testbench tabs: active color should be readable ===== */
+.product-listing-tabs {
+  --product-listing-active-tab-color: var(--ant-color-info, var(--ant-color-primary, #1677ff));
+}
+.product-listing-tabs .ant-tabs-tab.ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: var(--product-listing-active-tab-color) !important;
+}
+.product-listing-tabs .ant-tabs-ink-bar {
+  background: var(--product-listing-active-tab-color) !important;
+}
+
+.planner-toolbar {
+  margin-bottom: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.planner-section {
+  background: var(--app-bg-elevated);
+  border: 1px solid var(--app-border);
+  border-radius: 10px;
+  padding: 14px;
+  box-shadow: var(--app-shadow);
+}
+
+.initiative-list-card,
+.initiative-detail-card,
+.package-tree-card,
+.line-items-card {
+  height: 100%;
+}
+
+.status-tag-bold {
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+/* Hide horizontal scrollbar for AntD tables while preserving horizontal scrolling (trackpad/shift+wheel). */
+.hide-x-scrollbar .ant-table-body {
+  scrollbar-width: none; /* Firefox */
+}
+.hide-x-scrollbar .ant-table-body::-webkit-scrollbar {
+  height: 0; /* WebKit */
+}

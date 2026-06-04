@@ -1,0 +1,22 @@
+[Unit]
+Description=YiDa Materials Sync (Planner API trigger)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment="PLANNER_API=http://127.0.0.1:8800/api/planner/base-config/materials/sync-yida"
+Environment="PAYLOAD={\"requested_by\":\"systemd\",\"limit\":500}"
+ExecStart=/bin/bash -c '\
+  mkdir -p /home/admin/ai-costing-system/logs && \
+  /usr/bin/curl -sS -X POST "$PLANNER_API" \
+    -H "Content-Type: application/json" \
+    -d "$PAYLOAD" \
+    >> /home/admin/ai-costing-system/logs/yida_material_sync.log'
+StandardOutput=append:/home/admin/ai-costing-system/logs/yida_material_sync.log
+StandardError=append:/home/admin/ai-costing-system/logs/yida_material_sync.log
+Restart=no
+
+[Install]
+WantedBy=multi-user.target
+

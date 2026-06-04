@@ -1,0 +1,8 @@
+[Unit]
+Description=Costing workspace health check (detect & auto-restore silently deleted tracked files)
+
+[Service]
+Type=oneshot
+ExecStart=/home/admin/ai-costing-system/ops/audit/workspace-health.sh --quiet
+StandardOutput=journal
+StandardError=journal

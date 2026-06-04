@@ -1,0 +1,8 @@
+[Unit]
+Description=Costing audit deletion summary (daily)
+
+[Service]
+Type=oneshot
+ExecStart=/home/admin/ai-costing-system/ops/audit/daily_summary.sh
+StandardOutput=journal
+StandardError=journal

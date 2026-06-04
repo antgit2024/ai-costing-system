@@ -1,0 +1,15 @@
+<svg width="1200" height="675" viewBox="0 0 1200 675" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="675" fill="#f0f9ff" />
+  <rect x="60" y="60" width="1080" height="120" rx="12" fill="#e0f2fe" stroke="#0ea5e9" stroke-width="3" />
+  <text x="80" y="130" font-family="Inter,Arial" font-size="44" fill="#0369a1">场景克隆（Scenario Clone）</text>
+  <g font-family="Inter,Arial" font-size="30" fill="#0f172a">
+    <text x="120" y="230">1. 选择基线场景 ID → 填写新 code/name</text>
+    <text x="120" y="290">2. 可填写 `line_item_ids`，逗号分隔限定克隆范围</text>
+    <text x="120" y="350">3. 点击「克隆基线」→ POST /scenarios/{id}/clone</text>
+    <text x="120" y="410">4. Planner Job Drawer 显示 snapshot 进度</text>
+    <text x="120" y="470">5. 完成后在场景列表中看到新卡片</text>
+  </g>
+  <rect x="80" y="500" width="1040" height="120" rx="16" fill="#bae6fd" stroke="#38bdf8" stroke-width="2" />
+  <text x="110" y="560" font-family="Inter,Arial" font-size="28" fill="#0c4a6e">前端：ScenarioBuilderPage → handleClone()</text>
+  <text x="110" y="600" font-family="Inter,Arial" font-size="28" fill="#0c4a6e">后端：snapshot_service.clone_scenario_with_snapshots + audit_service</text>
+</svg>

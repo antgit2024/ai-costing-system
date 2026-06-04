@@ -1,0 +1,130 @@
+[2025-12-14 11:33 CST] Baseline query
+curl -G 'http://47.99.89.206:8800/api/planner/scenarios' \
+  --data-urlencode 'baseline_flag=true' \
+  --data-urlencode 'status=approved' \
+  --data-urlencode 'page=1' \
+  --data-urlencode 'page_size=5'
+→ total=1, id=90ae42f9-b74f-4ac9-9933-c64c92db2bb6 (SC-LOAD)
+
+[Clone]
+curl -X POST 'http://47.99.89.206:8800/api/planner/scenarios/90ae42f9-b74f-4ac9-9933-c64c92db2bb6/clone' \
+  -H 'Content-Type: application/json' \
+  -d '{"code":"SCN-SMOKE-CLONE","name":"SCN-SMOKE-CLONE","requested_by":"planner_user"}'
+→ job_id=6d6000c6-5e33-40c7-b21c-d77ddf14fa12, scenario_id=bd57e323-d2ae-4e2f-af83-66ccecd6bc41
+→ GET /jobs/6d6000c6-... status=completed, total_rows=6
+
+[Submit]
+curl -X POST 'http://47.99.89.206:8800/api/planner/approvals/submit' \
+  -H 'Content-Type: application/json' \
+  -d '{"scenario_id":"bd57e323-d2ae-4e2f-af83-66ccecd6bc41","actor_id":"planner_user","actor_role":"planner","comment":"Smoke submit"}'
+→ scenario_status=in_review
+
+[Approve]
+curl -X POST 'http://47.99.89.206:8800/api/planner/approvals/approve' \
+  -H 'Content-Type: application/json' \
+  -d '{"scenario_id":"bd57e323-d2ae-4e2f-af83-66ccecd6bc41","actor_id":"approver_user","actor_role":"approver","comment":"Smoke approve","set_baseline":false}'
+→ scenario_status=approved
+
+[Export]
+curl -X POST 'http://47.99.89.206:8800/api/planner/scenarios/bd57e323-d2ae-4e2f-af83-66ccecd6bc41/export' \
+  -H 'Content-Type: application/json' \
+  -d '{"requested_by":"planner_user","comment":"Smoke export"}'
+→ job_id=52def228-19c7-457c-9b16-3b793b9b9ca8, executor_reference=MOCK-bd57e323-d2ae-4e2f-af83-66ccecd6bc41
+→ GET /jobs/52def228-... status=completed
+
+[Benchmark Favorite]
+curl 'http://47.99.89.206:8800/api/planner/benchmarks/suggest?category=materials&metric=unit_cost'
+→ source=mock, values=4.5/5.1
+curl -X POST 'http://47.99.89.206:8800/api/planner/benchmarks/favorites' \
+  -H 'Content-Type: application/json' \
+  -d '{"benchmark_key":"materials:unit_cost:mock-20251214","user_id":"planner_user","payload":{"category":"materials","metric":"unit_cost","value":4.5,"confidence":0.66,"source":"mock"}}'
+→ favorite_id=0b3a69d9-398c-463a-b35a-5f0752e3667b
+curl 'http://47.99.89.206:8800/api/planner/benchmarks/favorites?user_id=planner_user'
+→ contains ids 0b3a69d9-... & 23022470-...
+
+[Audit Drawer check]
+curl -G 'http://47.99.89.206:8800/api/planner/audit' \
+  --data-urlencode 'target_id=bd57e323-d2ae-4e2f-af83-66ccecd6bc41' \
+  --data-urlencode 'page=1' \
+  --data-urlencode 'page_size=5'
+→ 404 Not Found (backend build未包含 audit router)，UI 仍显示 fallback。
+[Audit API]
+curl -G 'http://127.0.0.1:8800/api/planner/audit' \
+  --data-urlencode 'target_type=scenario' \
+  --data-urlencode 'target_id=bd57e323-d2ae-4e2f-af83-66ccecd6bc41' \
+  --data-urlencode 'page=1' \
+  --data-urlencode 'page_size=5'
+→ 200 OK, total=3，actions=[submit, approve, scenario_export]，trace_ids=293cd0fa-..., e310e6f7-..., 2e3718d9-...
+==== 2025-12-14 12:50:57 CLI smoke restart ====
+\n$ curl -sS -X POST http://127.0.0.1:8800/api/planner/scenarios/90ae42f9-b74f-4ac9-9933-c64c92db2bb6/clone -d {"code":"SCN-SMOKE-CLONE-UI","name":"SCN SMOKE CLONE UI","requested_by":"planner_user"}
+{"job_id":"79c47946-87e5-42c6-82cf-4136f9aaa469","scenario_id":"c5772118-684e-4d3a-a6e2-57de7939fb64"}
+[Submit UI smoke]
+$ curl -sS -X POST http://127.0.0.1:8800/api/planner/approvals/submit -d {"scenario_id":"c5772118-684e-4d3a-a6e2-57de7939fb64","actor_id":"planner_user","actor_role":"planner","comment":"UI smoke submit"}
+{"scenario_id":"c5772118-684e-4d3a-a6e2-57de7939fb64","scenario_status":"in_review","initiative_status":"review","baseline_flag":false}
+[Approve UI smoke]
+$ curl -sS -X POST http://127.0.0.1:8800/api/planner/approvals/approve -d {"scenario_id":"c5772118-684e-4d3a-a6e2-57de7939fb64","actor_id":"approver_user","actor_role":"approver","comment":"UI smoke approve","set_baseline":false}
+{"scenario_id":"c5772118-684e-4d3a-a6e2-57de7939fb64","scenario_status":"approved","initiative_status":"approved","baseline_flag":false}
+[Export UI smoke]
+$ curl -sS -X POST http://127.0.0.1:8800/api/planner/scenarios/c5772118-684e-4d3a-a6e2-57de7939fb64/export -d {"requested_by":"planner_user","comment":"UI smoke export"}
+{"job_id":"0641fb72-a9ff-49df-8bb2-39feb7dc675c","scenario_id":"c5772118-684e-4d3a-a6e2-57de7939fb64","executor_reference":"MOCK-c5772118-684e-4d3a-a6e2-57de7939fb64"}
+[Job status UI smoke]
+$ curl -sS http://127.0.0.1:8800/api/planner/jobs/0641fb72-a9ff-49df-8bb2-39feb7dc675c
+{"id":"0641fb72-a9ff-49df-8bb2-39feb7dc675c","initiative_id":"78de0bf0-2cd4-4ad2-8627-17a5d6a4f804","file_name":"export-SCN-SMOKE-CLONE-UI","status":"completed","requested_by":"planner_user","total_rows":1,"processed_rows":1,"error_rows":0,"errors":[],"job_type":"scenario_export","payload":{"scenario_id":"c5772118-684e-4d3a-a6e2-57de7939fb64"},"result":{"status":"accepted","reference_id":"MOCK-c5772118-684e-4d3a-a6e2-57de7939fb64"},"created_at":"2025-12-14T12:51:48.333376","updated_at":"2025-12-14T12:51:48.336351"}
+[Benchmark favorite UI smoke]
+$ curl -sS -X POST http://127.0.0.1:8800/api/planner/benchmarks/favorites -d {"benchmark_key":"materials:unit_cost:mock-ui","user_id":"planner_user","payload":{"category":"materials","metric":"unit_cost","note":"UI smoke"}}
+{"benchmark_key":"materials:unit_cost:mock-ui","user_id":"planner_user","payload":{"category":"materials","metric":"unit_cost","note":"UI smoke"},"id":"3cfbf935-3605-4b93-bff0-45025990e7e9","created_at":"2025-12-14T12:51:59.769956"}
+[Audit API UI smoke]
+$ curl -sS -G http://127.0.0.1:8800/api/planner/audit --data-urlencode target_type=scenario --data-urlencode target_id=c5772118-684e-4d3a-a6e2-57de7939fb64 --data-urlencode page=1 --data-urlencode page_size=10
+{"total":3,"page":1,"page_size":10,"items":[{"id":"838abf67-ff61-4da7-b13a-dd96400454bb","target_type":"scenario","target_id":"c5772118-684e-4d3a-a6e2-57de7939fb64","action":"scenario_export","actor_id":"planner_user","payload":{"job_id":"0641fb72-a9ff-49df-8bb2-39feb7dc675c","executor_reference":"MOCK-c5772118-684e-4d3a-a6e2-57de7939fb64"},"trace_id":"305ba462-6dba-4776-a373-6567c7f993b7","created_at":"2025-12-14T12:51:48.334539"},{"id":"bbb86e18-5568-4472-917a-994f62d8024e","target_type":"scenario","target_id":"c5772118-684e-4d3a-a6e2-57de7939fb64","action":"approve","actor_id":"approver_user","payload":{"baseline":false,"comment":"UI smoke approve"},"trace_id":"10a14a7f-d1dd-40df-a552-23b4dd67e7e5","created_at":"2025-12-14T12:51:40.151791"},{"id":"5649ad5e-d023-4ad9-9701-2d3cd0d4aa7b","target_type":"scenario","target_id":"c5772118-684e-4d3a-a6e2-57de7939fb64","action":"submit","actor_id":"planner_user","payload":{"comment":"UI smoke submit"},"trace_id":"429bb8d5-096f-449d-8a97-3b7f861223a3","created_at":"2025-12-14T12:51:31.327677"}]}
+[2025-12-14 13:18] UI flow reset
+Clone job 46469e05-38c7-44fc-9222-a6b5e7515227 → scenario ee3492b2-29bd-4761-8cef-4ca56a5456ff (SCN-SMOKE-CLONE-UI2)
+[2025-12-14 15:36 CST] System-level audit health (post-restart request)
+# curl -s -w '\nSTATUS:%{http_code}\n' 'http://47.99.89.206:8800/api/planner/audit?page=1&page_size=5'
+{"total":531,"page":1,"page_size":5,"items":[{"id":"ce7a81a4-4dba-4f4b-a2a3-cc9531be2e18","target_type":"scenario","target_id":"ee3492b2-29bd-4761-8cef-4ca56a5456ff","action":"scenario_diff","actor_id":"system","payload":{"job_id":"8d007b0b-ee80-4c54-9087-338503c4d78b","target_scenario_id":"ee3492b2-29bd-4761-8cef-4ca56a5456ff"},"trace_id":"3e709950-d401-44b1-92ca-da56b29b5310","created_at":"2025-12-14T14:59:16.443442"},{"id":"53134bda-e002-4f17-8d2d-e9ad25e717a7","target_type":"scenario","target_id":"ee3492b2-29bd-4761-8cef-4ca56a5456ff","action":"scenario_export","actor_id":"planner-ui","payload":{"job_id":"903575d4-5e83-4250-a465-f1640d79ec09","executor_reference":"MOCK-ee3492b2-29bd-4761-8cef-4ca56a5456ff"},"trace_id":"d9839887-2789-42b2-88f7-56367257c431","created_at":"2025-12-14T14:58:51.663326"},{"id":"0f36f6e8-11e5-4817-9e96-851830978166","target_type":"scenario","target_id":"ee3492b2-29bd-4761-8cef-4ca56a5456ff","action":"scenario_export","actor_id":"planner-ui","payload":{"job_id":"4e73aa96-d6dc-4e2e-9f63-df195024c73e","executor_reference":"MOCK-ee3492b2-29bd-4761-8cef-4ca56a5456ff"},"trace_id":"366dc9bf-e2d7-4aa3-b948-f0e1ca886a52","created_at":"2025-12-14T14:57:48.900603"},{"id":"8ba1c236-2605-472a-bc69-9d35383565d1","target_type":"scenario","target_id":"ee3492b2-29bd-4761-8cef-4ca56a5456ff","action":"approve","actor_id":"approver_user","payload":{"baseline":true,"comment":null},"trace_id":"efbd8c9a-afb5-47bc-8e27-40cd04dc880c","created_at":"2025-12-14T14:55:49.050988"},{"id":"ea8c5ecc-1e7f-42bf-a786-6e6eae58c52a","target_type":"scenario","target_id":"ee3492b2-29bd-4761-8cef-4ca56a5456ff","action":"submit","actor_id":"planner_user","payload":{"comment":null},"trace_id":"fd2c037a-b455-4afc-aa95-ff3076dec5bb","created_at":"2025-12-14T14:55:08.650313"}]}
+STATUS:200
+
+[2025-12-14 15:45 CST] Continuous audit/metrics check（systemd 8800）
+# curl -s -w '\nSTATUS:%{http_code}\n' 'http://47.99.89.206:8800/api/planner/audit?page=1&page_size=5'
+{"total":535,"page":1,"page_size":5,"items":[{"id":"123057d6-6d43-4188-8d40-a2b6de86ac7c","target_type":"scenario","target_id":"147a332e-621b-4eb8-9514-b987accb7a84","action":"scenario_export","actor_id":"planner_user","payload":{"job_id":"2cf6f3ac-c915-4d50-ad81-689422981f2e","executor_reference":"MOCK-147a332e-621b-4eb8-9514-b987accb7a84"},"trace_id":"9ef3e804-dfa1-4870-86bf-ba45576cf319","created_at":"2025-12-14T15:18:12.740849"},{"id":"d2fca32a-234f-4c0a-b202-8f3b72b251b9","target_type":"scenario","target_id":"147a332e-621b-4eb8-9514-b987accb7a84","action":"approve","actor_id":"approver_user","payload":{"baseline":false,"comment":"UI smoke approve 20251214"},"trace_id":"c8b6f363-b2d3-4ba0-8872-c623945695b8","created_at":"2025-12-14T15:18:07.213373"},{"id":"4bf2951a-32c1-47da-a61f-223cbf03a213","target_type":"scenario","target_id":"147a332e-621b-4eb8-9514-b987accb7a84","action":"submit","actor_id":"planner_user","payload":{"comment":"UI smoke submit 20251214"},"trace_id":"fa43d0de-9505-4b81-a2d9-414979d14c2a","created_at":"2025-12-14T15:17:44.442037"},{"id":"fe096739-f192-448e-bcc5-34e5bdd18079","target_type":"scenario","target_id":"ee3492b2-29bd-4761-8cef-4ca56a5456ff","action":"scenario_clone","actor_id":"planner_user","payload":{"job_id":"08f9e8c3-087b-4746-b09f-09f940dad707","new_scenario_id":"147a332e-621b-4eb8-9514-b987accb7a84"},"trace_id":"9902552e-6820-44da-9da3-b70542462e65","created_at":"2025-12-14T15:17:35.347218"},{"id":"ce7a81a4-4dba-4f4b-a2a3-cc9531be2e18","target_type":"scenario","target_id":"ee3492b2-29bd-4761-8cef-4ca56a5456ff","action":"scenario_diff","actor_id":"system","payload":{"job_id":"8d007b0b-ee80-4c54-9087-338503c4d78b","target_scenario_id":"ee3492b2-29bd-4761-8cef-4ca56a5456ff"},"trace_id":"3e709950-d401-44b1-92ca-da56b29b5310","created_at":"2025-12-14T14:59:16.443442"}]}
+STATUS:200
+# curl -s 'http://47.99.89.206:8800/metrics' | grep -E 'planner_message_bus_events_total|planner_executor_requests_total'
+# planner_executor_requests_total{status=\"attempt\"}=4, {status=\"success\"}=4
+# planner_message_bus_events_total labels: SCENARIO_CLONED=4, SCENARIO_SUBMITTED=4, SCENARIO_APPROVED=3, SCENARIO_EXPORTED=4, SCENARIO_DIFF_READY=1
+
+[2025-12-14 15:26 CST] System-level audit health（systemd 服务恢复后）
+# journalctl 显示 ModuleNotFoundError: 'src.api'，已补充 PYTHONPATH；服务状态：
+# sudo systemctl status planner-api.service --no-pager
+# → Active: active (running) since 15:26:09 CST, PID 3283548
+# curl -s -w '\nSTATUS:%{http_code}\n' 'http://47.99.89.206:8800/api/planner/audit?page=1&page_size=5'
+{"total":535,"page":1,"page_size":5,"items":[{"id":"123057d6-6d43-4188-8d40-a2b6de86ac7c","target_type":"scenario","target_id":"147a332e-621b-4eb8-9514-b987accb7a84","action":"scenario_export","actor_id":"planner_user","payload":{"job_id":"2cf6f3ac-c915-4d50-ad81-689422981f2e","executor_reference":"MOCK-147a332e-621b-4eb8-9514-b987accb7a84"},"trace_id":"9ef3e804-dfa1-4870-86bf-ba45576cf319","created_at":"2025-12-14T15:18:12.740849"},{"id":"d2fca32a-234f-4c0a-b202-8f3b72b251b9","target_type":"scenario","target_id":"147a332e-621b-4eb8-9514-b987accb7a84","action":"approve","actor_id":"approver_user","payload":{"baseline":false,"comment":"UI smoke approve 20251214"},"trace_id":"c8b6f363-b2d3-4ba0-8872-c623945695b8","created_at":"2025-12-14T15:18:07.213373"},{"id":"4bf2951a-32c1-47da-a61f-223cbf03a213","target_type":"scenario","target_id":"147a332e-621b-4eb8-9514-b987accb7a84","action":"submit","actor_id":"planner_user","payload":{"comment":"UI smoke submit 20251214"},"trace_id":"fa43d0de-9505-4b81-a2d9-414979d14c2a","created_at":"2025-12-14T15:17:44.442037"},{"id":"fe096739-f192-448e-bcc5-34e5bdd18079","target_type":"scenario","target_id":"ee3492b2-29bd-4761-8cef-4ca56a5456ff","action":"scenario_clone","actor_id":"planner_user","payload":{"job_id":"08f9e8c3-087b-4746-b09f-09f940dad707","new_scenario_id":"147a332e-621b-4eb8-9514-b987accb7a84"},"trace_id":"9902552e-6820-44da-9da3-b70542462e65","created_at":"2025-12-14T15:17:35.347218"},{"id":"ce7a81a4-4dba-4f4b-a2a3-cc9531be2e18","target_type":"scenario","target_id":"ee3492b2-29bd-4761-8cef-4ca56a5456ff","action":"scenario_diff","actor_id":"system","payload":{"job_id":"8d007b0b-ee80-4c54-9087-338503c4d78b","target_scenario_id":"ee3492b2-29bd-4761-8cef-4ca56a5456ff"},"trace_id":"3e709950-d401-44b1-92ca-da56b29b5310","created_at":"2025-12-14T14:59:16.443442"}]}
+STATUS:200
+[2025-12-14 16:05 CST] Baseline query
+$ curl -s "http://47.99.89.206:8800/api/planner/scenarios?baseline_flag=true&status=approved&page=1&page_size=5"
+{"total":1,"page":1,"page_size":5,"items":[{"id":"ee3492b2-29bd-4761-8cef-4ca56a5456ff","code":"SCN-SMOKE-CLONE-UI2","name":"SCN SMOKE CLONE UI 2","status":"approved","baseline_flag":true}]}
+[Clone 2025-12-14 16:10 CST]
+$ curl -s -X POST http://47.99.89.206:8800/api/planner/scenarios/ee3492b2-29bd-4761-8cef-4ca56a5456ff/clone -d '{"code":"SCN-SMOKE-UI-20251214-03","name":"Smoke UI 20251214 03","requested_by":"planner_user"}'
+{"job_id":"51234a47-4200-4371-a078-441075e0354b","scenario_id":"ff71964c-dae4-4a02-95d9-ba732d07885d"}
+$ curl -s http://47.99.89.206:8800/api/planner/jobs/51234a47-4200-4371-a078-441075e0354b
+{"id":"51234a47-4200-4371-a078-441075e0354b","status":"completed","result":{"scenario_id":"ff71964c-dae4-4a02-95d9-ba732d07885d"}}
+[Submit]
+$ curl -s -X POST http://47.99.89.206:8800/api/planner/approvals/submit -d '{"scenario_id":"ff71964c-dae4-4a02-95d9-ba732d07885d","actor_id":"planner_user","actor_role":"planner"}'
+{"scenario_status":"in_review"}
+[Approve]
+$ curl -s -X POST http://47.99.89.206:8800/api/planner/approvals/approve -d '{"scenario_id":"ff71964c-dae4-4a02-95d9-ba732d07885d","actor_id":"approver_user","actor_role":"approver","set_baseline":false}'
+{"scenario_status":"approved"}
+[Export]
+$ curl -s -X POST http://47.99.89.206:8800/api/planner/scenarios/ff71964c-dae4-4a02-95d9-ba732d07885d/export -d '{"requested_by":"planner_user","format":"xlsx"}'
+{"job_id":"4f2ce768-9e54-4204-ae97-8b4d9b78846e"}
+$ curl -s http://47.99.89.206:8800/api/planner/jobs/4f2ce768-9e54-4204-ae97-8b4d9b78846e
+{"status":"completed","executor_reference":"MOCK-ff71964c-dae4-4a02-95d9-ba732d07885d"}
+[Benchmark favorite]
+$ curl -s -X POST http://47.99.89.206:8800/api/planner/benchmarks/favorites -d '{"benchmark_key":"materials-unit_cost-ui-smoke-03","user_id":"planner_user","payload":{"scenario_id":"ff71964c-dae4-4a02-95d9-ba732d07885d","notes":"UI smoke favorite"}}'
+{"id":"6f5bcb79-1a17-4b0d-95d2-5fb17820ccf0"}
+[Audit]
+$ curl -s "http://47.99.89.206:8800/api/planner/audit?target_type=scenario&target_id=ff71964c-dae4-4a02-95d9-ba732d07885d&page=1&page_size=5"
+{"total":3,"items":[{"action":"scenario_export","trace_id":"39eac04b-e461-4cfc-8fa9-66a66d7bc03c"},...]}
+
+[2025-12-14 16:12 CST] Metrics spot-check（executor/message_bus）
+# curl -s 'http://47.99.89.206:8800/metrics' | grep -E 'planner_executor_requests_total|planner_message_bus_events_total'
+# planner_executor_requests_total{status="attempt"}=5, {status="success"}=5
+# planner_message_bus_events_total: SCENARIO_CLONED=5, SCENARIO_SUBMITTED=5, SCENARIO_APPROVED=4, SCENARIO_EXPORTED=5, SCENARIO_DIFF_READY=1（无 fallback 告警）

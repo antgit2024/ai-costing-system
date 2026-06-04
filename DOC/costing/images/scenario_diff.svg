@@ -1,0 +1,15 @@
+<svg width="1200" height="675" viewBox="0 0 1200 675" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="675" fill="#fef2f2" />
+  <rect x="60" y="60" width="1080" height="120" rx="12" fill="#fee2e2" stroke="#f87171" stroke-width="3" />
+  <text x="80" y="130" font-family="Inter,Arial" font-size="44" fill="#b91c1c">差异分析（Scenario Diff）</text>
+  <g font-family="Inter,Arial" font-size="30" fill="#7f1d1d">
+    <text x="120" y="230">1. 选择来源/对比场景，可选类型过滤</text>
+    <text x="120" y="290">2. 提交表单 → GET /scenarios/{id}/diff</text>
+    <text x="120" y="350">3. Summary 展示来源、目标、差异、差异%</text>
+    <text x="120" y="410">4. 表格分页浏览行级差异，含数量/单价/合计</text>
+    <text x="120" y="470">5. Job Drawer 记录 diff 任务历史，便于审计</text>
+  </g>
+  <rect x="80" y="500" width="1040" height="120" rx="16" fill="#fee2e2" stroke="#fca5a5" stroke-width="2" />
+  <text x="110" y="560" font-family="Inter,Arial" font-size="28" fill="#7f1d1d">前端：ScenarioBuilderPage → runDiff()</text>
+  <text x="110" y="600" font-family="Inter,Arial" font-size="28" fill="#7f1d1d">后端：snapshot_service.calculate_scenario_diff + audit_service</text>
+</svg>

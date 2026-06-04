@@ -1,0 +1,3059 @@
+import {
+  Alert,
+  Button,
+  Card,
+  Checkbox,
+  Col,
+  Descriptions,
+  Drawer,
+  Image,
+  Input,
+  message,
+  Modal,
+  Tabs,
+  Row,
+  Select,
+  Space,
+  Table,
+  Tag,
+  Tooltip,
+  Typography,
+  Upload,
+} from 'antd'
+import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+
+import {
+  autoBindSkuMastersExecute,
+  autoBindSkuMastersPreview,
+  bindSkuMastersByBundleTemplate,
+  bindSkuMastersByBundleTemplateBulk,
+  bindSkuMastersByModel,
+  bindSkuMastersByModelBulk,
+  previewBindSkuMastersByBundleTemplate,
+  previewBindSkuMastersByModel,
+  unbindSkuMasters,
+  generateSkuMasterPreparseAndSnapshots,
+  fetchPublishedStandardModels,
+  fetchBundleTemplates,
+  fetchShopSpecCodeSummary,
+  fetchSkuMaster,
+  fetchSkuMasterDetail,
+  importSkuMasterXlsx,
+  listAutoRecognizeRuns,
+  recomputeSkuDataQuality,
+  resolveSkuMasterSpecMismatch,
+  runAutoRecognizeOnce,
+} from '@/services/planner'
+import type { AutoRecognizeRunListItem } from '@/services/planner'
+import type {
+  PublishedStandardModelCandidate,
+  SkuMaster,
+  SkuMasterAutoBindPreviewItem,
+  SkuMasterBindPreviewItem,
+  SkuMasterBindPreviewResponse,
+} from '@/types/planner'
+import { formatBeijingTime } from '@/utils/beijingTime'
+// 通用绑定目标选择器（弹窗浏览模式：Tabs 标准模型/套装模板 + Tree 一级展开二级）。
+// 用它替换原"种类下拉 + 模型/套装下拉 + preset 下拉"三连，但对外 4 个 state
+// (targetKind/selectedModelId/selectedBundleTemplateId/selectedBundlePresetSelector) 全部保留——
+// 只在 onChange 时同步过去，所有提交/校验/一键跑完逻辑零改动。
+import {
+  TargetPickerBrowserButton,
+  renderTargetSelectionTags,
+} from '@/components/common/TargetPicker'
+import type { TargetSelection } from '@/components/common/TargetPicker'
+import { ShopSpecCodeCell, ShopSpecCodeSummaryStrip } from '@/components/common/ShopSpecCodeCell'
+import FieldUpdateWorkbenchTab from '@/components/sku-master/FieldUpdateWorkbenchTab'
+
+const { Title, Text } = Typography
+
+const DEFAULT_PAGE_SIZE = 50
+const PAGE_SIZE_STORAGE_KEY = 'costing_sku_master_page_size_v1'
+
+type ChipPalette = { bg: string; border: string; text: string }
+const MODEL_CHIP_PALETTES: ChipPalette[] = [
+  { bg: '#eff6ff', border: '#60a5fa', text: '#1d4ed8' }, // blue
+  { bg: '#ecfeff', border: '#22d3ee', text: '#0e7490' }, // cyan
+  { bg: '#ecfdf5', border: '#34d399', text: '#047857' }, // green
+  { bg: '#fff7ed', border: '#fb923c', text: '#c2410c' }, // orange
+  { bg: '#f5f3ff', border: '#a78bfa', text: '#6d28d9' }, // purple
+  { bg: '#fdf2f8', border: '#f472b6', text: '#be185d' }, // pink
+]
+
+const hashCode = (s: string): number => {
+  let h = 0
+  for (let i = 0; i < s.length; i += 1) h = (h * 31 + s.charCodeAt(i)) | 0
+  return Math.abs(h)
+}
+
+const renderModelChip = (modelCode?: string | null, modelName?: string | null) => {
+  const code = safeString(modelCode).trim()
+  const name = safeString(modelName).trim()
+  if (!code && !name) return null
+  const key = code || name
+  const p = MODEL_CHIP_PALETTES[hashCode(key) % MODEL_CHIP_PALETTES.length]
+  return (
+    <Tag
+      style={{
+        marginInlineEnd: 0,
+        borderRadius: 999,
+        padding: '0 8px',
+        lineHeight: '20px',
+        fontSize: 12,
+        background: p.bg,
+        borderColor: p.border,
+        color: p.text,
+      }}
+    >
+      {[code, name].filter(Boolean).join(' ')}
+    </Tag>
+  )
+}
+
+/**
+ * 已绑定变体显示：优先显示后端拼好的 bound_variant_label（"麻感冰丝(KB8-001)"），
+ * 没有 label 但有 code 时只显示编码。颜色按编码 hash 取色，与 model chip 同一调色盘里
+ * 区分一档（用 lime / cyan 系），让运营一眼知道"这是变体"而非"这是模型"。
+ */
+const renderVariantChip = (
+  variantCode?: string | null,
+  variantLabel?: string | null,
+) => {
+  const code = safeString(variantCode).trim()
+  const label = safeString(variantLabel).trim()
+  if (!code && !label) return null
+  const text = label || code
+  return (
+    <Tag
+      color="cyan"
+      style={{
+        marginInlineEnd: 0,
+        borderRadius: 999,
+        padding: '0 8px',
+        lineHeight: '20px',
+        fontSize: 12,
+      }}
+    >
+      {text}
+    </Tag>
+  )
+}
+
+const formatTime = (v?: string | null) => {
+  return formatBeijingTime(v, 'YYYY-MM-DD HH:mm:ss')
+}
+
+const safeString = (v: unknown): string => {
+  if (v === null || v === undefined) return ''
+  return String(v)
+}
+
+const isFilled = (v?: string | null) => !!(v && String(v).trim())
+
+const jsonPretty = (obj: unknown) => {
+  try {
+    return JSON.stringify(obj ?? {}, null, 2)
+  } catch {
+    return String(obj ?? '')
+  }
+}
+
+const SkuMasterWorkspacePage = () => {
+  const queryClient = useQueryClient()
+
+  const initialUrl = useMemo(() => {
+    try {
+      if (typeof window === 'undefined') return { search: '', tab: '' }
+      const p = new URLSearchParams(window.location.search)
+      return {
+        search: String(p.get('search') ?? '').trim(),
+        tab: String(p.get('tab') ?? '').trim(),
+        workbenchTab: String(p.get('workbenchTab') ?? '').trim(),
+      }
+    } catch {
+      return { search: '', tab: '', workbenchTab: '' }
+    }
+  }, [])
+
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(() => {
+    try {
+      const raw = localStorage.getItem(PAGE_SIZE_STORAGE_KEY)
+      const n = raw ? Number(raw) : NaN
+      if (!Number.isFinite(n) || n <= 0) return DEFAULT_PAGE_SIZE
+      return Math.min(Math.max(Math.floor(n), 10), 500)
+    } catch {
+      return DEFAULT_PAGE_SIZE
+    }
+  })
+  const [search, setSearch] = useState<string>(initialUrl.search || '')
+  // 顶部"按编码搜索"框的本地输入值：避免每输入一个字符就触发后端请求（按 Enter / 点放大镜才提交）。
+  // 同时在 search 被外部清空 / 更新时（如下面 Card 里的实时筛选框），同步回这里，保证两个入口始终一致。
+  const [codeSearchInput, setCodeSearchInput] = useState<string>(initialUrl.search || '')
+  useEffect(() => {
+    setCodeSearchInput(search)
+  }, [search])
+  const [includeTerms, setIncludeTerms] = useState<string>('')
+  const [excludeTerms, setExcludeTerms] = useState<string>('')
+  const [matchScope, setMatchScope] = useState<'spec' | 'name'>('spec')
+  const [channel, setChannel] = useState<string | undefined>(undefined)
+  const [matchStatus, setMatchStatus] = useState<string | undefined>(undefined)
+  const [listTab, setListTab] = useState<'all' | 'unbound' | 'bound'>(
+    initialUrl.tab === 'all' || initialUrl.tab === 'unbound' || initialUrl.tab === 'bound'
+      ? (initialUrl.tab as any)
+      : 'all',
+  )
+  // 商家编码分类筛选：胸条 4 类一对一映射到后端 list_sku_master 的 shop_spec_code_kind 参数。
+  // 胸条上 platform + malformed 已合并为 nonstructured（运营关心"需不需要去吉客云改"，单一动作）。
+  const [shopSpecKind, setShopSpecKind] = useState<
+    'all' | 'structured' | 'nonstructured' | 'empty'
+  >('all')
+  // SPU 属性冲突筛选 — undefined 表示不限。data_quality_service 写入。
+  const [dataQualityFilter, setDataQualityFilter] = useState<
+    'all' | 'spu_attribute_conflict'
+  >('all')
+  const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([])
+
+  const [uploading, setUploading] = useState(false)
+  const [uploadFile, setUploadFile] = useState<File | null>(null)
+  const [requestedBy, setRequestedBy] = useState<string>('') // 操作人/审核人（可选）
+  const [importDrawerOpen, setImportDrawerOpen] = useState(false)
+
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [activeId, setActiveId] = useState<string | null>(null)
+
+  // left workbench（映射工作台）
+  const [workbenchTab, setWorkbenchTab] = useState<'auto' | 'manual' | 'field_update'>(
+    (initialUrl.workbenchTab === 'auto' || initialUrl.workbenchTab === 'field_update')
+      ? (initialUrl.workbenchTab as 'auto' | 'field_update')
+      : 'manual',
+  )
+  const [selectedModelId, setSelectedModelId] = useState<string | undefined>(undefined)
+  const [targetKind, setTargetKind] = useState<'model' | 'bundle'>('model')
+  const [selectedBundleTemplateId, setSelectedBundleTemplateId] = useState<string | undefined>(undefined)
+  const [selectedBundlePresetSelector, setSelectedBundlePresetSelector] = useState<string | undefined>(undefined)
+  // 新版选择器的"完整选择对象"，仅用于 UI 回显与作 confirm 弹窗 fallback。
+  // 真正的提交参数仍走上面 4 个 state（model_id / template_id / preset_selector）。
+  const [targetSelection, setTargetSelection] = useState<TargetSelection | null>(null)
+  const handleTargetSelectionChange = (sel: TargetSelection | null) => {
+    setTargetSelection(sel)
+    if (!sel) {
+      setSelectedModelId(undefined)
+      setSelectedBundleTemplateId(undefined)
+      setSelectedBundlePresetSelector(undefined)
+      return
+    }
+    if (sel.kind === 'model') {
+      setTargetKind('model')
+      setSelectedModelId(sel.model_id)
+      setSelectedBundleTemplateId(undefined)
+      setSelectedBundlePresetSelector(undefined)
+      // sel.variant_code（如 KB8-001）会在 bind 调用里随 payload.variant_code 一并传给后端，
+      // 落库到 sku_master.metadata_json.bound_variant_code，列表 / 详情读路径直接用，
+      // 拼出 "麻感冰丝(KB8-001)" 给运营看。选"不指定变体"时为 undefined → 后端按 model 级绑定。
+    } else {
+      setTargetKind('bundle')
+      setSelectedBundleTemplateId(sel.bundle_id)
+      setSelectedBundlePresetSelector(sel.preset_selector ?? undefined)
+      setSelectedModelId(undefined)
+    }
+  }
+  const [autoPreviewText, setAutoPreviewText] = useState<string>('')
+  const [autoPreviewCandidates, setAutoPreviewCandidates] = useState<SkuMasterAutoBindPreviewItem[]>([])
+  const [autoCandidatesOnly, setAutoCandidatesOnly] = useState(false)
+  const [allowRebind, setAllowRebind] = useState(false)
+  const [clearBinding, setClearBinding] = useState(false)
+  const [autoRunAllRunning, setAutoRunAllRunning] = useState(false)
+  const autoRunAllStopRef = useRef(false)
+  const [autoRunAllStatus, setAutoRunAllStatus] = useState<{
+    round: number
+    last_bound: number
+    total_bound: number
+    remaining: number
+    last_update: string
+    note?: string
+  } | null>(null)
+
+  // manual run-all (人工审核：对勾选项分批循环绑定，避免一次性超时)
+  const [manualRunAllRunning, setManualRunAllRunning] = useState(false)
+  const manualRunAllStopRef = useRef(false)
+  const [manualBulkMode, setManualBulkMode] = useState(false) // 默认：当页勾选模式；可切到“所有页勾选（跨页）”
+  const [manualExcludedIds, setManualExcludedIds] = useState<string[]>([]) // 取消勾选=加入排除
+  const [manualRunAllStatus, setManualRunAllStatus] = useState<{
+    round: number
+    last_bound: number
+    total_bound: number
+    processed: number
+    total: number
+    errors: number
+    last_update: string
+    note?: string
+  } | null>(null)
+
+  const [bindPreviewOpen, setBindPreviewOpen] = useState(false)
+  const [bindPreviewLoading, setBindPreviewLoading] = useState(false)
+  const [bindPreview, setBindPreview] = useState<SkuMasterBindPreviewResponse | null>(null)
+
+  // NOTE: URL 预填（search/tab）已在 useState 初始化阶段完成，避免“先显示→几秒后清空”的闪烁体验。
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(PAGE_SIZE_STORAGE_KEY, String(pageSize))
+    } catch {
+      // ignore
+    }
+  }, [pageSize])
+
+  // Tab 切换：重置分页，避免“第一页空白”的错觉
+  useEffect(() => {
+    setPage(1)
+  }, [listTab])
+
+  const listQuery = useQuery({
+    queryKey: [
+      'sku-master',
+      'list',
+      listTab,
+      page,
+      pageSize,
+      search,
+      channel,
+      matchStatus,
+      includeTerms,
+      excludeTerms,
+      matchScope,
+      shopSpecKind,
+      dataQualityFilter,
+    ],
+    queryFn: () =>
+      fetchSkuMaster({
+        page,
+        page_size: pageSize,
+        search: search || undefined,
+        channel,
+        match_status: matchStatus,
+        include_terms: includeTerms || undefined,
+        exclude_terms: excludeTerms || undefined,
+        match_scope: matchScope,
+        shop_spec_code_kind: shopSpecKind === 'all' ? undefined : shopSpecKind,
+        data_quality_status:
+          dataQualityFilter === 'spu_attribute_conflict' ? 'spu_attribute_conflict' : undefined,
+        // 口径：
+        // - 已绑定：模型绑定 或 套装绑定 任一存在即可
+        // - 未绑定：模型未绑 且 套装未绑
+        target_kind: listTab === 'bound' ? 'any' : undefined,
+        bound_state: listTab === 'bound' ? 'all' : listTab === 'unbound' ? 'unbound' : undefined,
+        bundle_bound_state: listTab === 'unbound' ? 'unbound' : undefined,
+      }),
+    placeholderData: keepPreviousData,
+    enabled: !autoCandidatesOnly, // 命中候选视图时不依赖服务端分页列表
+    retry: 0,
+  })
+
+  // 商家编码分类聚合（独立轻量接口，按当前 channel + listTab 上下文计算覆盖率）。
+  // 不跟分页、search、shopSpecKind 联动 —— 胸条始终展示「全量上下文」的统计，方便运营判断真实覆盖率。
+  const shopSpecSummaryQuery = useQuery({
+    queryKey: ['sku-master', 'shop-spec-summary', listTab, channel],
+    queryFn: () =>
+      fetchShopSpecCodeSummary({
+        channel,
+        bound_state:
+          listTab === 'bound' ? 'all' : listTab === 'unbound' ? 'unbound' : undefined,
+      }),
+    placeholderData: keepPreviousData,
+    staleTime: 30_000,
+    retry: 0,
+  })
+
+  const listQueryErrorText = useMemo(() => {
+    const e: any = listQuery.error
+    const detail = e?.response?.data?.detail
+    const msg = e?.message
+    return String(detail ?? msg ?? '').trim()
+  }, [listQuery.error])
+
+  // listEmptyHint 需要在 filteredItems/total 计算之后定义（避免 TDZ）
+
+  const items = autoCandidatesOnly
+    ? autoPreviewCandidates.map((x) => ({
+        id: x.sku_master_id,
+        erp_sku_barcode: x.erp_sku_barcode,
+        channel: x.channel ?? null,
+        spec_text: x.spec_text ?? null,
+        // 预览候选本身就是未绑定
+        active_model_version_id: null,
+        // 用于表格展示“匹配模型（预览）”
+      })) as any[]
+    : listQuery.data?.items ?? []
+  const _splitTerms = (s: string) =>
+    (s || '')
+      .split(/\s+/g)
+      .map((x) => x.trim())
+      .filter(Boolean)
+  const _normText = (s: any) => String(s ?? '').replace(/\s+/g, '').toUpperCase()
+
+  const filteredItems = useMemo(() => {
+    let rows = items
+
+    // 普通列表：全部交给后端（避免分页“空页”）
+    if (!autoCandidatesOnly) return rows
+
+    // 候选视图：做本地快速筛选（输入即生效）
+    const qRaw = (search || '').trim()
+    const q = _normText(qRaw)
+    if (q) {
+      rows = rows.filter((x) => {
+        const barcode = _normText(x.erp_sku_barcode)
+        const spec = _normText(x.spec_text)
+        const ch = _normText(x.channel)
+        return barcode.includes(q) || spec.includes(q) || ch.includes(q)
+      })
+    }
+
+    const inc = _splitTerms(includeTerms)
+    if (inc.length) {
+      rows = rows.filter((x) => {
+        const spec = _normText(x.spec_text)
+        return inc.every((t) => spec.includes(_normText(t)))
+      })
+    }
+
+    const exc = _splitTerms(excludeTerms)
+    if (exc.length) {
+      rows = rows.filter((x) => {
+        const spec = _normText(x.spec_text)
+        return exc.every((t) => !spec.includes(_normText(t)))
+      })
+    }
+
+    return rows
+  }, [autoCandidatesOnly, items, search, includeTerms, excludeTerms])
+
+  const total = autoCandidatesOnly ? filteredItems.length : listQuery.data?.total ?? 0
+
+  const listEmptyHint = useMemo(() => {
+    if (autoCandidatesOnly) {
+      return filteredItems.length === 0 ? '命中候选视图为空：请先点左侧“候选预览（命中）”，或退出候选视图查看完整列表。' : ''
+    }
+    if (listQuery.isFetching) return ''
+    return filteredItems.length === 0
+      ? '当前筛选结果为空：请清空“候选筛选/包含关键词/排除关键词”，并确认 Tab（全部/未绑定/已绑定）选择是否符合预期。'
+      : ''
+  }, [autoCandidatesOnly, filteredItems.length, listQuery.isFetching])
+
+  const channelOptions = useMemo(() => {
+    const set = new Set<string>()
+    for (const it of items) {
+      const c = safeString(it.channel).trim()
+      if (c) set.add(c)
+    }
+    return Array.from(set)
+      .sort()
+      .map((c) => ({ label: c, value: c }))
+  }, [items])
+
+  const matchStatusOptions = useMemo(() => {
+    const set = new Set<string>()
+    for (const it of items) {
+      const s = safeString(it.match_status).trim()
+      if (s) set.add(s)
+    }
+    return Array.from(set)
+      .sort()
+      .map((s) => ({ label: s, value: s }))
+  }, [items])
+
+  const pageStats = useMemo(() => {
+    const rows = filteredItems
+    const totalRows = rows.length
+    const erpMatched = rows.filter((x) => isFilled(x.match_status)).length
+    const linked = rows.filter((x: any) => {
+      const hasModel = isFilled(x.active_model_version_id as any)
+      const hasBundle = isFilled((x as any)?.bundle_template_code ?? (x as any)?.metadata_json?.bundle_template_code)
+      return hasModel || hasBundle
+    }).length
+    const complete = rows.filter((x) => {
+      // MVP: “字段齐全” = 条码 + 渠道 + 名称 + 编码 + 规格 + 商家编码 + 平台商品Id + 平台规格Id
+      return (
+        isFilled(x.erp_sku_barcode) &&
+        isFilled(x.channel) &&
+        isFilled(x.product_name) &&
+        isFilled(x.product_code) &&
+        isFilled(x.spec_text) &&
+        isFilled(x.shop_spec_code) &&
+        isFilled(x.platform_product_id) &&
+        isFilled(x.platform_sku_id)
+      )
+    }).length
+    const rate = (n: number) => (totalRows ? `${Math.round((n / totalRows) * 1000) / 10}%` : '-')
+    return {
+      totalRows,
+      erpMatched,
+      linked,
+      complete,
+      erpMatchedRate: rate(erpMatched),
+      linkedRate: rate(linked),
+      completeRate: rate(complete),
+    }
+  }, [filteredItems])
+
+  const detailQuery = useQuery({
+    queryKey: ['sku-master', 'detail', activeId],
+    queryFn: () => fetchSkuMasterDetail(activeId as string),
+    enabled: !!activeId && drawerOpen,
+  })
+
+  const columns: ColumnsType<SkuMaster> = [
+    {
+      title: '货品条码（系统）',
+      dataIndex: 'erp_sku_barcode',
+      width: 140,
+      ellipsis: true,
+      render: (v) => safeString(v) || '-',
+    },
+    {
+      title: (
+        <Tooltip
+          title={
+            <span>
+              <strong>主渠道（最近一次同步）</strong> · 取自 sku_master.channel 单值字段。
+              <br />
+              ⚠ 一个 ERP 货品可能在多个店铺发货, 此列只显示最近一次发货 / ERP 导入覆盖的渠道,
+              <br />
+              不代表该商品的所有销售渠道。完整店铺映射见 shop_sku_mappings 表 / 商品详情抽屉。
+            </span>
+          }
+          placement="top"
+        >
+          <span>
+            主渠道{' '}
+            <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+              ⓘ
+            </Typography.Text>
+          </span>
+        </Tooltip>
+      ),
+      dataIndex: 'channel',
+      width: 110,
+      ellipsis: true,
+      render: (v) => safeString(v) || <Typography.Text type="secondary">—</Typography.Text>,
+    },
+    {
+      title: '商家编码',
+      dataIndex: 'shop_spec_code',
+      width: 220,
+      render: (v, record) => {
+        const meta = (record.metadata_json as any) || {}
+        const code = (v ?? meta.shop_spec_code) as string | null | undefined
+        const rawErp = meta.shop_spec_code_raw as string | null | undefined
+        return <ShopSpecCodeCell value={code ?? null} rawValue={rawErp ?? null} />
+      },
+    },
+    {
+      title: '商品规格（网店）',
+      dataIndex: 'spec_text',
+      width: 560,
+      ellipsis: false,
+      render: (v) => {
+        const s = safeString(v) || '-'
+        return <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{s}</span>
+      },
+    },
+    // “模型提示”对业务侧噪声较大：已移到详情抽屉；列表仅展示“已绑定模型(名称)”或“预览匹配模型”
+    ...(autoCandidatesOnly
+      ? [
+    {
+            title: '匹配模型（预览）',
+            dataIndex: 'id',
+            width: 240,
+            render: (_: any, record: any) => {
+              const hit = autoPreviewCandidates.find((x) => x.sku_master_id === record.id)
+              if (!hit) return '-'
+              const methodLabel =
+                hit.match_method === 'shop_spec_code'
+                  ? '商家编码'
+                  : hit.match_method === 'model_code_hint'
+                    ? '代码提示'
+                    : hit.match_method === 'model_keyword'
+                      ? '关键字'
+                      : hit.match_method
+              const methodColor = hit.match_method === 'shop_spec_code' ? 'green' : undefined
+              return (
+                <Space size={6} wrap>
+                  {renderModelChip(hit.model_code, hit.model_name)}
+                  {methodLabel ? <Tag color={methodColor}>{methodLabel}</Tag> : null}
+                  {hit.variant_code_hint ? <Tag color="purple">变体：{hit.variant_code_hint}</Tag> : null}
+                  {hit.matched_keyword ? <Tag color="purple">{hit.matched_keyword}</Tag> : null}
+                </Space>
+              )
+            },
+          } as any,
+        ]
+      : []),
+    {
+      title: '对接状态（本系统）',
+      dataIndex: 'active_model_version_id',
+      width: 320,
+      render: (v, record) => {
+        const modelBound = isFilled(v as any)
+        const source = safeString((record.metadata_json as any)?.source)
+        const srcTag = source === 'shipment_autobackfill' ? <Tag color="gold">发货回写</Tag> : null
+        const bundleCode = safeString((record as any)?.bundle_template_code ?? (record.metadata_json as any)?.bundle_template_code).trim()
+        const preset = safeString(
+          (record as any)?.bundle_preset_selector ?? (record.metadata_json as any)?.bundle_preset_selector,
+        ).trim()
+        const bundleDisplay = (() => {
+          const code = bundleCode
+          const sel = preset
+          if (!code) return ''
+          const tpl =
+            (bundleTemplates as any[]).find(
+              (t: any) =>
+                String(t?.id ?? '') ===
+                String((record as any)?.bundle_template_id ?? (record.metadata_json as any)?.bundle_template_id ?? ''),
+            ) ?? (bundleTemplates as any[]).find((t: any) => String(t?.code ?? '').trim() === code)
+          const meta = (tpl as any)?.metadata ?? (tpl as any)?.metadata_json ?? tpl ?? {}
+          const presets = Array.isArray((meta as any)?.phrase_presets) ? ((meta as any).phrase_presets as any[]) : []
+          const p = presets.find((x: any) => String(x?.selector ?? '').trim().toUpperCase() === String(sel || '').trim().toUpperCase())
+          const mode = String((p as any)?.mode ?? '').trim()
+          const prefix = mode === 'force' ? 'Z' : 'B'
+          return sel ? `${prefix}-${code}${String(sel).trim().toUpperCase()}` : `${prefix}-${code}`
+        })()
+        const bundleTag = bundleCode ? (
+          <Tag color="purple">
+            套装 {bundleDisplay || bundleCode}
+          </Tag>
+        ) : null
+        const anyBound = modelBound || !!bundleCode
+        // 变体优先：如果绑定时落了 bound_variant_code（人工 / 自动都会落），就显示
+        // "麻感冰丝(KB8-001)" 这种二级标签 —— 比 model 级 "KB8 转印包边垫类" 更精确，
+        // 运营一眼能看出"这条 SKU 实际跑的是哪套变体清单"。模型 chip 仍保留作为兜底。
+        const variantTag = renderVariantChip(
+          record.bound_variant_code,
+          record.bound_variant_label,
+        )
+        // SPU 属性冲突 = 该 SKU 历史发货跨多个不相关品类（如装饰画/枕套/桌布共用一码），
+        // 由 nightly data_quality_service 写入。任何自动绑定都不可信，运营需手动清理。
+        const dqStatus = (record as any).data_quality_status as string | undefined
+        const dqEvidence = (record as any).data_quality_evidence as
+          | { rules_hit?: string[]; distinct_specs?: number; keyword_matched_models?: string[] }
+          | undefined
+        const dqTag =
+          dqStatus === 'spu_attribute_conflict' ? (
+            <Tooltip
+              title={
+                <div style={{ maxWidth: 320 }}>
+                  <b>SPU 属性冲突</b>
+                  <div style={{ marginTop: 4, lineHeight: 1.6 }}>
+                    该 SKU 历史发货跨多个不相关品类，绑定不可信。
+                    <br />
+                    命中规则: {(dqEvidence?.rules_hit || []).join(' + ') || '-'}
+                    <br />
+                    不同规格数: {dqEvidence?.distinct_specs ?? '-'}
+                    {dqEvidence?.keyword_matched_models?.length
+                      ? ` · 涉及模型: ${dqEvidence.keyword_matched_models.join('/')}`
+                      : ''}
+                  </div>
+                  <div style={{ marginTop: 6, color: '#999', fontSize: 12 }}>
+                    建议：去 ERP（吉客云）端清理该条码的商品复用问题。点详情看证据。
+                  </div>
+                </div>
+              }
+            >
+              <Tag color="red">SPU 错配</Tag>
+            </Tooltip>
+          ) : null
+        return (
+          <Space size={6}>
+            {anyBound ? <Tag color="green">已关联</Tag> : <Tag color="red">未关联</Tag>}
+            {dqTag}
+            {record.spec_mismatch ? <Tag color="orange">规格差异</Tag> : null}
+            {variantTag ?? renderModelChip(record.bound_model_code, record.bound_model_name)}
+            {bundleTag}
+            {srcTag}
+          </Space>
+        )
+      },
+    },
+    {
+      title: '原始最后更新时间（ERP）',
+      dataIndex: 'source_updated_at',
+      width: 170,
+      render: (v) => formatTime(v),
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 90,
+      render: (_, record) => (
+        <Button
+          size="small"
+          onClick={() => {
+            setActiveId(record.id)
+            setDrawerOpen(true)
+          }}
+        >
+          查看
+        </Button>
+      ),
+    },
+  ]
+
+  const handlePaginationChange = (pagination: TablePaginationConfig) => {
+    setPage(pagination.current ?? 1)
+    setPageSize(pagination.pageSize ?? DEFAULT_PAGE_SIZE)
+  }
+
+  const handleImport = async () => {
+    if (!uploadFile) {
+      message.warning('请先选择要导入的 xlsx 文件')
+      return
+    }
+    setUploading(true)
+    try {
+      const result = await importSkuMasterXlsx({ file: uploadFile, requested_by: requestedBy || undefined })
+      message.success(
+        `导入完成：total=${result.total} inserted=${result.inserted} updated=${result.updated} skipped=${result.skipped}`,
+      )
+      setUploadFile(null)
+      await queryClient.invalidateQueries({ queryKey: ['sku-master', 'list'] })
+    } catch (e: any) {
+      message.error(e?.message || '导入失败')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  const candidatesQuery = useQuery({
+    // 仅用于 confirm 弹窗的 label fallback；真正的搜索体验在 TargetPickerBrowserButton 内部。
+    queryKey: ['sku-master', 'published-standard-models', 'fallback-labels'],
+    queryFn: () => fetchPublishedStandardModels({ limit: 200 }),
+    placeholderData: keepPreviousData,
+  })
+
+  const bundleTemplatesQuery = useQuery({
+    // 仅用于 confirm 弹窗的 label fallback + 旧 useEffect 默认 preset 兜底；
+    // 真正的搜索/preset 选择体验在 TargetPickerBrowserButton 内部。
+    queryKey: ['bundle-templates', 'list', 'fallback-labels'],
+    queryFn: () => fetchBundleTemplates({ page: 1, page_size: 200 }),
+    placeholderData: keepPreviousData,
+  })
+
+  const bundleTemplates = useMemo(() => {
+    const items = (bundleTemplatesQuery.data as any)?.items
+    return Array.isArray(items) ? (items as any[]) : []
+  }, [bundleTemplatesQuery.data])
+
+  const modelOptions = useMemo(() => {
+    const items = (candidatesQuery.data as any)?.items ?? []
+    return (items as PublishedStandardModelCandidate[]).map((m) => ({
+      // 绑定时总是落到“已发布标准版本”，这里不必展示版本号，降低噪声
+      label: `${m.model_code} ${m.model_name}`,
+      value: m.model_id,
+    }))
+  }, [candidatesQuery.data])
+
+  const modelLabelById = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const it of modelOptions) m.set(String(it.value), String(it.label))
+    return m
+  }, [modelOptions])
+
+  const bundleTemplateOptions = useMemo(() => {
+    return (bundleTemplates as any[]).map((t) => ({
+      label: `${safeString(t.code)} ${safeString(t.name)}`.trim(),
+      value: String(t.id),
+    }))
+  }, [bundleTemplates])
+
+  const bundleTemplateLabelById = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const it of bundleTemplateOptions) m.set(String(it.value), String(it.label))
+    return m
+  }, [bundleTemplateOptions])
+
+  const bundlePresetsForSelectedTemplate = useMemo(() => {
+    if (!selectedBundleTemplateId) return []
+    const hit = (bundleTemplates as any[]).find((x) => String(x?.id) === String(selectedBundleTemplateId))
+    const meta = (hit?.metadata ?? hit?.metadata_json ?? {}) as any
+    const pp = Array.isArray(meta?.phrase_presets) ? meta.phrase_presets : []
+    // BundleTemplatesPage has a migration: if top-level components exist but no preset components, map to preset A.
+    if (!pp.length) {
+      return [{ selector: 'AA', phrase: '默认', mode: 'parse', enabled: true }]
+    }
+    return pp
+      .map((p: any) => ({
+        selector: String(p?.selector ?? '').trim().toUpperCase(),
+        phrase: String(p?.phrase ?? '').trim(),
+        mode: String(p?.mode ?? 'parse').trim(),
+        enabled: p?.enabled !== false,
+      }))
+      .filter((p: any) => !!p.selector)
+  }, [bundleTemplates, selectedBundleTemplateId])
+
+  useEffect(() => {
+    if (targetKind !== 'bundle') return
+    if (!selectedBundleTemplateId) {
+      setSelectedBundlePresetSelector(undefined)
+      return
+    }
+    // 已选了 preset 就不动它（避免覆盖用户在 TargetPickerBrowserButton 里手选的 preset；
+    // 旧 UI 路径下也是更友好的行为：换模板才默认选首项，再次同模板的副作用不该篡改用户选择）。
+    if (selectedBundlePresetSelector) return
+    const first = (bundlePresetsForSelectedTemplate as any[]).find((x) => x?.enabled !== false) ?? bundlePresetsForSelectedTemplate?.[0]
+    const sel = String((first as any)?.selector ?? '').trim().toUpperCase()
+    setSelectedBundlePresetSelector(sel || undefined)
+  }, [targetKind, selectedBundleTemplateId, selectedBundlePresetSelector, bundlePresetsForSelectedTemplate])
+
+  const bindMutation = useMutation({
+    mutationFn: async () => {
+      const chunk = <T,>(arr: T[], size: number) => {
+        const out: T[][] = []
+        for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
+        return out
+      }
+
+      if (targetKind === 'bundle') {
+        if (!selectedBundleTemplateId) throw new Error('请选择套装模板')
+        if (!selectedBundlePresetSelector) throw new Error('请选择套装二级（preset）')
+        // 说明：plannerClient 默认 20s；勾选量大时容易前端超时。
+        // 这里按 200/批自动分批，避免单次请求过大。
+        const ids = [...selectedRowKeys]
+        const batches = chunk(ids, 200)
+        let totalSelected = 0
+        let bound = 0
+        let skipped = 0
+        const errors: any[] = []
+        for (const batch of batches) {
+          const res = await bindSkuMastersByBundleTemplate(
+            {
+              template_id: selectedBundleTemplateId,
+              preset_selector: selectedBundlePresetSelector,
+              sku_master_ids: batch,
+              requested_by: requestedBy || undefined,
+              allow_rebind: allowRebind,
+            },
+            { timeoutMs: 60_000 },
+          )
+          totalSelected += Number(res?.total_selected || 0)
+          bound += Number(res?.bound_count || 0)
+          skipped += Number(res?.skipped_already_bound || 0)
+          errors.push(...((res?.errors ?? []) as any[]))
+        }
+        return { total_selected: totalSelected, bound_count: bound, skipped_already_bound: skipped, errors }
+      }
+      if (!selectedModelId) throw new Error('请选择模型')
+      {
+        const ids = [...selectedRowKeys]
+        const batches = chunk(ids, 200)
+        let totalSelected = 0
+        let bound = 0
+        let skipped = 0
+        const errors: any[] = []
+        for (const batch of batches) {
+          const res = await bindSkuMastersByModel(
+            {
+              model_id: selectedModelId,
+              sku_master_ids: batch,
+              requested_by: requestedBy || undefined,
+              allow_rebind: allowRebind,
+              // 用户在 TargetPickerBrowserButton 显式选定的"最终绑定变体编码"（如 KB8-001）
+              // 一并落库到 sku_master.metadata_json.bound_variant_code，列表展示直接用。
+              variant_code:
+                targetSelection?.kind === 'model' ? targetSelection.variant_code ?? null : null,
+            },
+            { timeoutMs: 60_000 },
+          )
+          totalSelected += Number(res?.total_selected || 0)
+          bound += Number(res?.bound_count || 0)
+          skipped += Number(res?.skipped_already_bound || 0)
+          errors.push(...((res?.errors ?? []) as any[]))
+        }
+        return { total_selected: totalSelected, bound_count: bound, skipped_already_bound: skipped, errors }
+      }
+    },
+    onSuccess: async (res: any) => {
+      message.success(
+        `绑定完成：bound=${res.bound_count} skipped(bound)=${res.skipped_already_bound} errors=${(res.errors ?? []).length}`,
+      )
+      setSelectedRowKeys([])
+      await queryClient.invalidateQueries({ queryKey: ['sku-master', 'list'] })
+    },
+    onError: (e: any) => {
+      const status = Number(e?.response?.status ?? 0)
+      const msg = String(e?.message ?? '')
+      const detail = String(e?.response?.data?.detail ?? '').trim()
+      const isTimeout = msg.toLowerCase().includes('timeout') || String(e?.code ?? '').toUpperCase() === 'ECONNABORTED'
+      if (isTimeout) {
+        message.error('绑定请求超时：后端可能仍在执行，请稍后点“刷新”确认是否已绑定（大批量建议用“一键跑完”）')
+        return
+      }
+      if (status === 405) {
+        message.error('绑定失败（405）：线上后端尚未部署“套装绑定”接口，请先发布后端再重试')
+        return
+      }
+      if (status === 400 && detail.includes('尚未发布版本')) {
+        message.error('绑定失败：该套装模板尚未发布版本，请先去“套装模板”页面点“发布为新版本”再绑定')
+        return
+      }
+      message.error(detail || e?.message || '绑定失败')
+    },
+  })
+
+  const unbindMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedRowKeys.length) throw new Error('请先勾选要清空的条目')
+      // 200/批，避免请求过大
+      const chunk = <T,>(arr: T[], size: number) => {
+        const out: T[][] = []
+        for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
+        return out
+      }
+      const ids = [...selectedRowKeys]
+      const batches = chunk(ids, 200)
+      let totalSelected = 0
+      let unbound = 0
+      const errors: any[] = []
+      for (const batch of batches) {
+        const res = await unbindSkuMasters(
+          { sku_master_ids: batch, requested_by: requestedBy || undefined },
+          { timeoutMs: 60_000 },
+        )
+        totalSelected += Number(res?.total_selected || 0)
+        unbound += Number(res?.unbound_count || 0)
+        errors.push(...((res?.errors ?? []) as any[]))
+      }
+      return { total_selected: totalSelected, unbound_count: unbound, errors }
+    },
+    onSuccess: async (res: any) => {
+      message.success(`清空完成：unbound=${res.unbound_count} errors=${(res.errors ?? []).length}`)
+      setSelectedRowKeys([])
+      await queryClient.invalidateQueries({ queryKey: ['sku-master', 'list'] })
+    },
+    onError: (e: any) => {
+      const detail = String(e?.response?.data?.detail ?? '').trim()
+      message.error(detail || e?.message || '清空失败')
+    },
+  })
+
+  const genParseAndSnapshotsMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedRowKeys.length) throw new Error('请先勾选条目')
+      return generateSkuMasterPreparseAndSnapshots(
+        {
+          sku_master_ids: selectedRowKeys,
+          operator_id: requestedBy.trim() || undefined,
+          limit_per_sku: 50,
+          overwrite: false,
+        },
+        { timeoutMs: 60_000 },
+      )
+    },
+    onSuccess: async (res: any) => {
+      message.success(
+        `完成：预解析${res?.parsed_count ?? 0}；快照 created=${res?.created_snapshots ?? 0} recomputed=${res?.recomputed_snapshots ?? 0} skipped=${res?.skipped_snapshots ?? 0} failed=${res?.failed_snapshots ?? 0}`,
+      )
+      await queryClient.invalidateQueries({ queryKey: ['sku-master', 'list'] })
+    },
+    onError: (e: any) => {
+      message.error(`执行失败：${e?.response?.data?.detail ?? e?.message ?? 'unknown error'}`)
+    },
+  })
+
+  const previewBindSelected = async () => {
+    if (!selectedRowKeys.length) {
+      message.warning('请先勾选要绑定的条目')
+      return
+    }
+    setBindPreview(null)
+    setBindPreviewOpen(true)
+    setBindPreviewLoading(true)
+    try {
+      const chunk = <T,>(arr: T[], size: number) => {
+        const out: T[][] = []
+        for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
+        return out
+      }
+      const ids = [...selectedRowKeys]
+      const batches = chunk(ids, 200)
+      let totalSelected = 0
+      let canBind = 0
+      let skipAlready = 0
+      let skipMissing = 0
+      let hardErrors = 0
+      const items: SkuMasterBindPreviewItem[] = []
+
+      if (targetKind === 'bundle') {
+        if (!selectedBundleTemplateId) throw new Error('请选择套装模板')
+        if (!selectedBundlePresetSelector) throw new Error('请选择套装二级（preset）')
+        for (const batch of batches) {
+          const res = await previewBindSkuMastersByBundleTemplate(
+            {
+              template_id: selectedBundleTemplateId,
+              preset_selector: selectedBundlePresetSelector,
+              sku_master_ids: batch,
+              requested_by: requestedBy || undefined,
+              allow_rebind: allowRebind,
+            },
+            { timeoutMs: 60_000 },
+          )
+          totalSelected += Number(res?.total_selected || 0)
+          canBind += Number(res?.can_bind || 0)
+          skipAlready += Number(res?.skip_already_bound || 0)
+          skipMissing += Number(res?.skip_missing_barcode || 0)
+          hardErrors += Number(res?.hard_errors || 0)
+          items.push(...((res?.items ?? []) as any))
+        }
+      } else {
+        if (!selectedModelId) throw new Error('请选择模型')
+        for (const batch of batches) {
+          const res = await previewBindSkuMastersByModel(
+            {
+              model_id: selectedModelId,
+              sku_master_ids: batch,
+              requested_by: requestedBy || undefined,
+              allow_rebind: allowRebind,
+            },
+            { timeoutMs: 60_000 },
+          )
+          totalSelected += Number(res?.total_selected || 0)
+          canBind += Number(res?.can_bind || 0)
+          skipAlready += Number(res?.skip_already_bound || 0)
+          skipMissing += Number(res?.skip_missing_barcode || 0)
+          hardErrors += Number(res?.hard_errors || 0)
+          items.push(...((res?.items ?? []) as any))
+        }
+      }
+
+      setBindPreview({
+        total_selected: totalSelected,
+        can_bind: canBind,
+        skip_already_bound: skipAlready,
+        skip_missing_barcode: skipMissing,
+        hard_errors: hardErrors,
+        items,
+      })
+    } catch (e: any) {
+      const detail = String(e?.response?.data?.detail ?? '').trim()
+      message.error(detail || e?.message || '预检失败')
+      setBindPreviewOpen(false)
+    } finally {
+      setBindPreviewLoading(false)
+    }
+  }
+
+  // 人工审核：按筛选条件“隐式全选”（跨页）
+  // - 默认勾选本页全部
+  // - 用户在本页取消勾选 -> 加入排除列表（manualExcludedIds）
+  useEffect(() => {
+    if (workbenchTab !== 'manual') return
+    if (!manualBulkMode) return
+    if (autoCandidatesOnly) return
+    if (listTab !== 'unbound') return
+    const pageIds = (filteredItems as any[]).map((x) => String(x?.id)).filter(Boolean)
+    if (!pageIds.length) return
+    const excluded = new Set(manualExcludedIds.map((x) => String(x)))
+    const nextSelected = pageIds.filter((id) => !excluded.has(id))
+    setSelectedRowKeys(nextSelected)
+  }, [workbenchTab, manualBulkMode, autoCandidatesOnly, listTab, filteredItems, manualExcludedIds])
+
+  const handleRowSelectionChange = (keys: any[]) => {
+    const nextSelected = (keys ?? []).map((x) => String(x))
+    if (workbenchTab !== 'manual' || !manualBulkMode || autoCandidatesOnly || listTab !== 'unbound') {
+      setSelectedRowKeys(nextSelected)
+      return
+    }
+    const pageIds = (filteredItems as any[]).map((x) => String(x?.id)).filter(Boolean)
+    const excluded = new Set(manualExcludedIds.map((x) => String(x)))
+    for (const id of pageIds) {
+      if (nextSelected.includes(id)) excluded.delete(id)
+      else excluded.add(id)
+    }
+    setManualExcludedIds(Array.from(excluded))
+    setSelectedRowKeys(nextSelected)
+  }
+
+  const handleManualRunAll = () => {
+    if (manualRunAllRunning) return
+    if (autoCandidatesOnly) {
+      message.warning('当前为"命中候选视图"，请先退出候选视图再使用人工审核的一键跑完')
+      return
+    }
+
+    // 清空（解绑）路径：不要求选目标模型/套装。
+    // 当页清空：直接复用上面"清空模型/套装（仅勾选）"按钮逻辑。
+    // 跨页清空：往下走，由 manualBulkMode 分支统一处理（带二次确认）。
+    if (clearBinding && !manualBulkMode) {
+      if (!selectedRowKeys.length) {
+        message.warning('请先在右侧列表勾选要清空的记录')
+        return
+      }
+      Modal.confirm({
+        title: `确认清空模型/套装（当页勾选 ${selectedRowKeys.length} 条）？`,
+        content:
+          '将对当前勾选条目执行解绑：清除当前模型/套装关联（历史发货快照不会自动删除；如要修正历史利润，请去发货作业中心重建快照/计价）。',
+        okText: '确认清空',
+        okButtonProps: { danger: true },
+        cancelText: '取消',
+        onOk: async () => unbindMutation.mutateAsync(),
+      })
+      return
+    }
+
+    // 绑定路径：必须先选好目标模型/套装
+    if (!clearBinding) {
+      if (targetKind === 'bundle') {
+        if (!selectedBundleTemplateId) {
+          message.warning('请先选择套装模板')
+          return
+        }
+        if (!selectedBundlePresetSelector) {
+          message.warning('请先选择套装二级（preset）')
+          return
+        }
+      } else if (!selectedModelId) {
+        message.warning('请先选择目标模型（已发布）')
+        return
+      }
+    }
+    // 模式A：当页勾选模式（仅处理当前勾选）
+    if (!manualBulkMode) {
+      if (!selectedRowKeys.length) {
+        message.warning('请先在右侧列表勾选要绑定的记录')
+        return
+      }
+      const total = selectedRowKeys.length
+      // 优先用新 selection 提供的可读 label（含中文 phrase / variant_label），
+      // 退回到旧的 fetched 字典（兼容老路径）。
+      const selectionLabel = (() => {
+        if (!targetSelection) return ''
+        if (targetSelection.kind === 'bundle') {
+          return `${targetSelection.bundle_code}${targetSelection.bundle_name ? ' ' + targetSelection.bundle_name : ''}${targetSelection.preset_label ? `｜${targetSelection.preset_label}` : ''}`
+        }
+        return `${targetSelection.model_code}${targetSelection.model_name ? ' ' + targetSelection.model_name : ''}${targetSelection.variant_label ? `｜${targetSelection.variant_label}` : ''}`
+      })()
+      const targetLabel = selectionLabel
+        || (targetKind === 'bundle'
+          ? bundleTemplateLabelById.get(String(selectedBundleTemplateId)) || '（未选套装模板）'
+          : modelLabelById.get(String(selectedModelId)) || '（未选模型）')
+      Modal.confirm({
+        title: '确认一键跑完（当页勾选）？',
+        content: `将对当前勾选的 ${total} 条记录按 200 条/轮循环绑定到：${targetLabel}（${allowRebind ? '会覆盖已有绑定' : '不会覆盖已有绑定'}）。`,
+        okText: '开始执行',
+        cancelText: '取消',
+        onOk: () => {
+          // 关键：不要 await（否则 confirm 弹窗会一直“转圈”不关闭）
+          // 点“开始执行”后立即关闭弹窗，后台继续跑；进度/停止在页面里看
+          const modelId = selectedModelId
+          const templateId = selectedBundleTemplateId
+          const presetSelector = selectedBundlePresetSelector
+          const idsAll = [...selectedRowKeys]
+          const reqBy = requestedBy || undefined
+
+          setManualRunAllRunning(true)
+          manualRunAllStopRef.current = false
+          setManualRunAllStatus(null)
+
+          void (async () => {
+            const BATCH_SIZE = 200
+            let cursor = 0
+            let totalBound = 0
+            let totalErrors = 0
+
+            try {
+              for (let round = 1; round <= 999; round += 1) {
+                if (manualRunAllStopRef.current) break
+                const batch = idsAll.slice(cursor, cursor + BATCH_SIZE)
+                if (!batch.length) break
+
+                const ac = new AbortController()
+                const timer = window.setTimeout(() => ac.abort(), 90_000)
+                let res: any
+                try {
+                  if (targetKind === 'bundle') {
+                    res = await bindSkuMastersByBundleTemplate(
+                      {
+                        template_id: templateId as string,
+                        preset_selector: presetSelector as string,
+                        sku_master_ids: batch,
+                        requested_by: reqBy,
+                        allow_rebind: allowRebind,
+                      },
+                      { timeoutMs: 90_000, signal: ac.signal },
+                    )
+                  } else {
+                    res = await bindSkuMastersByModel(
+                      {
+                        model_id: modelId as string,
+                        sku_master_ids: batch,
+                        requested_by: reqBy,
+                        allow_rebind: allowRebind,
+                        variant_code:
+                          targetSelection?.kind === 'model'
+                            ? targetSelection.variant_code ?? null
+                            : null,
+                      },
+                      { timeoutMs: 90_000, signal: ac.signal },
+                    )
+                  }
+                } finally {
+                  window.clearTimeout(timer)
+                }
+
+                const bound = Number(res?.bound_count || 0)
+                const errors = (res?.errors ?? []).length
+                totalBound += bound
+                totalErrors += errors
+                cursor += batch.length
+
+                const now = new Date()
+                const stamp = `${now.getHours().toString().padStart(2, '0')}:${now
+                  .getMinutes()
+                  .toString()
+                  .padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`
+                setManualRunAllStatus({
+                  round,
+                  last_bound: bound,
+                  total_bound: totalBound,
+                  processed: cursor,
+                  total,
+                  errors: totalErrors,
+                  last_update: stamp,
+                  note: '当页勾选模式：每轮最多 200 条；如需暂停可点“停止”。',
+                })
+
+                if (bound === 0) {
+                  message.warning('本轮未产生绑定进展（bound=0），已自动停止；可能都已绑定或存在异常')
+                  break
+                }
+              }
+
+              message.success(`人工审核自动绑定完成：累计bound=${totalBound} errors=${totalErrors}`)
+              setSelectedRowKeys([])
+              if (targetKind === 'model') {
+                setListTab('bound')
+              }
+              setPage(1)
+              setPageSize(DEFAULT_PAGE_SIZE)
+              await queryClient.invalidateQueries({ queryKey: ['sku-master', 'list'] })
+            } catch (e: any) {
+              if (String(e?.name || '').toLowerCase().includes('abort')) {
+                message.error('单次请求超时（90s）已中止：请稍后重试（或减少勾选量）')
+              } else {
+                message.error(e?.message || '人工审核自动执行失败')
+              }
+            } finally {
+              setManualRunAllRunning(false)
+              manualRunAllStopRef.current = false
+            }
+          })()
+        },
+      })
+      return
+    }
+
+    // 模式B：所有页勾选模式（按筛选条件隐式全选，跨页）
+    // 分两路：
+    //   B1）clearBinding=true → 一键跨页"清空（解绑）"：要求 listTab in ('bound','all')，二次确认输入"清空"
+    //   B2）clearBinding=false → 一键跨页"绑定"：要求 listTab='unbound'，二次确认输入目标模型名
+    if (clearBinding) {
+      if (listTab === 'unbound') {
+        message.warning('清空（解绑）跨页：请切到"已绑定"或"全部"列表（"未绑定"列表本就无可清空）')
+        return
+      }
+      const excludedCount = new Set(manualExcludedIds.map((x) => String(x))).size
+      const filterSummary = [
+        `关键词：${search ? `"${search}"` : '（空）'}`,
+        `包含词：${includeTerms ? `"${includeTerms}"` : '（空）'}`,
+        `排除词：${excludeTerms ? `"${excludeTerms}"` : '（空）'}`,
+        `范围：${matchScope}`,
+        `渠道：${channel || '（全部）'}`,
+        `ERP匹配：${matchStatus || '（全部）'}`,
+        `当前 Tab：${listTab === 'bound' ? '已绑定' : '全部'}`,
+        excludedCount ? `排除：${excludedCount} 条（取消勾选）` : null,
+      ]
+        .filter(Boolean)
+        .join('；')
+
+      let typedClear = ''
+      Modal.confirm({
+        title: '确认一键清空（所有页/跨页解绑）？',
+        okText: '开始解绑',
+        okButtonProps: { danger: true },
+        cancelText: '取消',
+        content: (
+          <div>
+            <div style={{ marginBottom: 8, color: '#cf1322' }}>
+              ⚠ 高危操作：将按当前筛选条件，对所有匹配且<b>已绑定模型/套装</b>的 SKU 主档执行<b>批量解绑</b>。
+            </div>
+            <div style={{ marginBottom: 8, color: '#666' }}>{filterSummary}</div>
+            <div style={{ marginBottom: 8 }}>
+              为防误操作，请输入 <b>清空</b> 二字以确认：
+            </div>
+            <Input
+              placeholder='请输入"清空"以确认'
+              onChange={(e) => (typedClear = String(e.target.value || '').trim())}
+            />
+            <div style={{ marginTop: 8, color: '#999' }}>
+              解绑只清除模型/套装关联，<b>不会自动删除历史发货快照</b>（如要修正历史利润，请去发货作业中心重建快照/计价）。
+              <br />
+              建议先使用"按编码搜索 / 渠道 / 关键词"等条件缩小范围；如要"清空一段时间内绑错的 SKU"，可结合"渠道+包含词"精确锁定。
+            </div>
+          </div>
+        ),
+        onOk: () => {
+          if (typedClear !== '清空') {
+            message.error('确认输入不一致（必须为"清空"二字），已取消执行')
+            return Promise.reject(new Error('confirm mismatch'))
+          }
+
+          const reqBy = requestedBy || undefined
+          const fSearch = search || undefined
+          const fChannel = channel
+          const fMatchStatus = matchStatus
+          const fIncludeTerms = includeTerms || undefined
+          const fExcludeTerms = excludeTerms || undefined
+          const fMatchScope = matchScope
+          const fListTab = listTab
+          const excluded = [...manualExcludedIds]
+
+          setManualRunAllRunning(true)
+          manualRunAllStopRef.current = false
+          setManualRunAllStatus(null)
+
+          void (async () => {
+            const PAGE_SIZE = 200
+            let totalUnbound = 0
+            let totalErrors = 0
+            let totalProcessed = 0
+
+            try {
+              for (let round = 1; round <= 999; round += 1) {
+                if (manualRunAllStopRef.current) break
+
+                // 拉一批"已绑定"候选（按当前筛选条件）。
+                // 解绑后这些 SKU 会从"已绑定"列表消失，所以始终拉第一页（避免分页漂移）。
+                const acFetch = new AbortController()
+                const tFetch = window.setTimeout(() => acFetch.abort(), 90_000)
+                let pageRes: any
+                try {
+                  pageRes = await fetchSkuMaster(
+                    {
+                      page: 1,
+                      page_size: PAGE_SIZE,
+                      search: fSearch,
+                      channel: fChannel,
+                      match_status: fMatchStatus,
+                      include_terms: fIncludeTerms,
+                      exclude_terms: fExcludeTerms,
+                      match_scope: fMatchScope,
+                      target_kind: 'any',
+                      bound_state: fListTab === 'bound' ? 'bound' : 'bound',
+                      excluded_sku_master_ids: excluded,
+                      include_parsed_fields: false,
+                      include_bindings: false,
+                    },
+                    { timeoutMs: 90_000, signal: acFetch.signal },
+                  )
+                } finally {
+                  window.clearTimeout(tFetch)
+                }
+
+                const items = (pageRes?.items as any[]) || []
+                if (!items.length) break
+                const ids = items.map((x: any) => x.id).filter(Boolean)
+                if (!ids.length) break
+
+                const acUnb = new AbortController()
+                const tUnb = window.setTimeout(() => acUnb.abort(), 90_000)
+                let unbRes: any
+                try {
+                  unbRes = await unbindSkuMasters(
+                    { sku_master_ids: ids, requested_by: reqBy },
+                    { timeoutMs: 90_000, signal: acUnb.signal },
+                  )
+                } finally {
+                  window.clearTimeout(tUnb)
+                }
+
+                const unbCount = Number(
+                  unbRes?.unbound_count ?? unbRes?.bound_count ?? unbRes?.cleared_count ?? ids.length,
+                )
+                const errors = (unbRes?.errors ?? []).length
+                totalUnbound += unbCount
+                totalErrors += errors
+                totalProcessed += ids.length
+
+                const now = new Date()
+                const stamp = `${now.getHours().toString().padStart(2, '0')}:${now
+                  .getMinutes()
+                  .toString()
+                  .padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`
+                setManualRunAllStatus({
+                  round,
+                  last_bound: unbCount,
+                  total_bound: totalUnbound,
+                  processed: totalProcessed,
+                  total: -1,
+                  errors: totalErrors,
+                  last_update: stamp,
+                  note: `跨页清空：本轮解绑 ${unbCount} / 累计解绑 ${totalUnbound}（解绑后这些 SKU 已从"已绑定"列表消失）`,
+                })
+
+                if (unbCount === 0) {
+                  message.warning('本轮未产生解绑进展（unbound=0），已自动停止；可能候选都已被排除/解绑')
+                  break
+                }
+              }
+
+              message.success(`一键跨页清空完成：累计解绑=${totalUnbound} errors=${totalErrors}`)
+              setSelectedRowKeys([])
+              setManualExcludedIds([])
+              setPage(1)
+              setPageSize(DEFAULT_PAGE_SIZE)
+              await queryClient.invalidateQueries({ queryKey: ['sku-master', 'list'] })
+            } catch (e: any) {
+              if (String(e?.name || '').toLowerCase().includes('abort')) {
+                message.error('单次请求超时（90s）已中止：请稍后重试（或缩小筛选范围/分批执行）')
+              } else {
+                message.error(e?.message || '一键跨页清空执行失败')
+              }
+            } finally {
+              setManualRunAllRunning(false)
+              manualRunAllStopRef.current = false
+            }
+          })()
+        },
+      })
+      return
+    }
+
+    // B2：跨页绑定
+    // 注：之前这里有 `if (listTab !== 'unbound') return` 护栏, 实际是 false-positive —
+    // 后端 bind-by-model/bulk 按筛选条件(search/include_terms/...)取数, 与前端 listTab
+    // 完全无关 (listTab 只切换 UI 列表显示的范围). 用户报"按钮变运行中后没反应"的一类原因
+    // 就是这个护栏静默拦了一下却没足够明显提示. 已去掉.
+    if (listTab !== 'unbound') {
+      // 仍给个温和提示, 但不阻止执行
+      message.info(`当前列表显示"${listTab}"，跨页绑定按筛选条件执行，与列表显示无关`)
+    }
+
+    const _normConfirm = (s: string) => String(s || '').replace(/\s+/g, ' ').trim()
+    // 优先用新选择器的 selection 信息（可读 phrase + variant_label）；缺时回退旧字典。
+    const selectionLabelRaw = (() => {
+      if (!targetSelection) return ''
+      if (targetSelection.kind === 'bundle') {
+        return `${targetSelection.bundle_code}${targetSelection.bundle_name ? ' ' + targetSelection.bundle_name : ''}${targetSelection.preset_label ? `｜${targetSelection.preset_label}` : ''}`
+      }
+      return `${targetSelection.model_code}${targetSelection.model_name ? ' ' + targetSelection.model_name : ''}${targetSelection.variant_label ? `｜${targetSelection.variant_label}` : ''}`
+    })()
+    const targetLabelRaw = selectionLabelRaw
+      || (targetKind === 'bundle'
+        ? bundleTemplateLabelById.get(String(selectedBundleTemplateId)) || ''
+        : modelLabelById.get(String(selectedModelId)) || '')
+    const targetLabel = _normConfirm(targetLabelRaw)
+    const targetNameOnly = _normConfirm(targetLabel.replace(/^\S+\s+/, ''))
+    const expected = targetNameOnly || targetLabel || '确认'
+    const excludedCount = new Set(manualExcludedIds.map((x) => String(x))).size
+    const filterSummary = [
+      `关键词：${search ? `“${search}”` : '（空）'}`,
+      `包含词：${includeTerms ? `“${includeTerms}”` : '（空）'}`,
+      `排除词：${excludeTerms ? `“${excludeTerms}”` : '（空）'}`,
+      `范围：${matchScope}`,
+      `渠道：${channel || '（全部）'}`,
+      `ERP匹配：${matchStatus || '（全部）'}`,
+      excludedCount ? `排除：${excludedCount} 条（取消勾选）` : null,
+    ]
+      .filter(Boolean)
+      .join('；')
+
+    let typed = ''
+    Modal.confirm({
+      title: '确认一键跑完（所有页勾选/跨页）？',
+      content: (
+        <div>
+          <div style={{ marginBottom: 8 }}>
+            你当前筛选条件将直接匹配绑定到：<b>{targetLabel || '（未选目标）'}</b>
+          </div>
+          <div style={{ marginBottom: 8, color: '#666' }}>{filterSummary}</div>
+          <div style={{ marginBottom: 8 }}>
+            为防误操作，请输入目标名称确认：<b>{expected}</b>
+          </div>
+          <Input placeholder="请输入上面的目标名称以确认" onChange={(e) => (typed = String(e.target.value || '').trim())} />
+          <div style={{ marginTop: 8, color: '#999' }}>
+            所有页勾选模式：视为“全选筛选结果（跨页）”，你在本页取消勾选的条目会加入“排除列表”，不会写入绑定。
+          </div>
+        </div>
+      ),
+      okText: '开始执行',
+      cancelText: '取消',
+      onOk: () => {
+        const typed2 = _normConfirm(typed)
+        const ok =
+          typed2 === _normConfirm(expected) || typed2 === _normConfirm(targetLabel) || typed2 === _normConfirm(targetNameOnly)
+        if (!ok) {
+          message.error('确认输入不一致，已取消执行')
+          return Promise.reject(new Error('confirm mismatch'))
+        }
+
+        // 关键：不要 await（否则 confirm 弹窗会一直“转圈”不关闭）
+        // 点“开始执行”后立即关闭弹窗，后台继续跑；进度/停止在页面里看
+        const modelId = selectedModelId
+        const templateId = selectedBundleTemplateId
+        const presetSelector = selectedBundlePresetSelector
+        const reqBy = requestedBy || undefined
+        const fSearch = search || undefined
+        const fChannel = channel
+        const fMatchStatus = matchStatus
+        const fIncludeTerms = includeTerms || undefined
+        const fExcludeTerms = excludeTerms || undefined
+        const fMatchScope = matchScope
+        const excluded = [...manualExcludedIds]
+
+        setManualRunAllRunning(true)
+        manualRunAllStopRef.current = false
+        // 体验改进: 立刻显示一张"准备中"进度卡, 让用户知道按钮已经接收 ——
+        // 之前是 setManualRunAllStatus(null) 然后等第一轮请求回来才有数字,
+        // 用户感觉"按钮按了没反应". 现在直接拿列表查询里的 total (当前筛选 +
+        // bound_state=unbound 的服务端总数) 给个预估, 配合 50/轮 算大致轮数.
+        const _BATCH_SIZE = 50
+        const _estTotal = Number(listQuery.data?.total ?? 0)
+        const _estRounds = _estTotal > 0 ? Math.ceil(_estTotal / _BATCH_SIZE) : 0
+        const _t0 = new Date()
+        const _stamp0 = `${_t0.getHours().toString().padStart(2, '0')}:${_t0
+          .getMinutes()
+          .toString()
+          .padStart(2, '0')}:${_t0.getSeconds().toString().padStart(2, '0')}`
+        setManualRunAllStatus({
+          round: 0,
+          last_bound: 0,
+          total_bound: 0,
+          processed: 0,
+          total: _estTotal,
+          errors: 0,
+          last_update: _stamp0,
+          note: _estTotal > 0
+            ? `预估候选 ≈ ${_estTotal} 条，按 ${_BATCH_SIZE}/轮 约 ${_estRounds} 轮（第 1 轮正在处理…）`
+            : '正在准备第 1 轮…（如果你刚改了筛选，可先点列表"刷新"刷新候选总数）',
+        })
+
+        void (async () => {
+          let totalBound = 0
+          let totalErrors = 0
+          let totalProcessed = 0
+
+          try {
+            for (let round = 1; round <= 999; round += 1) {
+              if (manualRunAllStopRef.current) break
+
+              const ac = new AbortController()
+              const timer = window.setTimeout(() => ac.abort(), 90_000)
+              let res: any
+              try {
+                // PERF: 临时把单轮 limit 从 200 降到 50 — 后端 bind_by_model_bulk
+                // 200/轮 在 90s 内跑不完 (bound=0 case). 50 条预期 < 30s 稳定返回.
+                // 单轮量小 → 多跑几轮即可, has_more 会自动驱动循环.
+                if (targetKind === 'bundle') {
+                  res = await bindSkuMastersByBundleTemplateBulk(
+                    {
+                      template_id: templateId as string,
+                      preset_selector: presetSelector as string,
+                      requested_by: reqBy,
+                      limit: 50,
+                      allow_rebind: allowRebind,
+                      search: fSearch,
+                      channel: fChannel,
+                      match_status: fMatchStatus,
+                      include_terms: fIncludeTerms,
+                      exclude_terms: fExcludeTerms,
+                      match_scope: fMatchScope as any,
+                      excluded_sku_master_ids: excluded,
+                    },
+                    { timeoutMs: 90_000, signal: ac.signal },
+                  )
+                } else {
+                  res = await bindSkuMastersByModelBulk(
+                    {
+                      model_id: modelId as string,
+                      requested_by: reqBy,
+                      limit: 50,
+                      allow_rebind: allowRebind,
+                      search: fSearch,
+                      channel: fChannel,
+                      match_status: fMatchStatus,
+                      include_terms: fIncludeTerms,
+                      exclude_terms: fExcludeTerms,
+                      match_scope: fMatchScope,
+                      excluded_sku_master_ids: excluded,
+                      // 整批 SKU 共享同一变体：选了 KB8-001 就整批落库 KB8-001
+                      variant_code:
+                        targetSelection?.kind === 'model'
+                          ? targetSelection.variant_code ?? null
+                          : null,
+                    },
+                    { timeoutMs: 90_000, signal: ac.signal },
+                  )
+                }
+              } finally {
+                window.clearTimeout(timer)
+              }
+
+              const bound = Number(res?.bound_count || 0)
+              const errors = (res?.errors ?? []).length
+              const processedThisRound = Number(res?.batch_candidates || 0)
+              const hasMore = Boolean(res?.has_more)
+              totalBound += bound
+              totalErrors += errors
+              totalProcessed += processedThisRound
+
+              const now = new Date()
+              const stamp = `${now.getHours().toString().padStart(2, '0')}:${now
+                .getMinutes()
+                .toString()
+                .padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`
+              const _progressNote = (() => {
+                const tail = hasMore ? '仍有更多候选（跨页）' : '已无更多候选'
+                if (_estTotal > 0) {
+                  const pct = Math.min(100, Math.round((totalProcessed / _estTotal) * 100))
+                  return `进度 ${pct}%（已处理 ${totalProcessed}/${_estTotal}）｜${tail}`
+                }
+                return tail
+              })()
+              setManualRunAllStatus({
+                round,
+                last_bound: bound,
+                total_bound: totalBound,
+                processed: totalProcessed,
+                total: _estTotal,
+                errors: totalErrors,
+                last_update: stamp,
+                note: _progressNote,
+              })
+
+              if (processedThisRound <= 0) break
+              if (!hasMore) break
+              if (bound === 0) {
+                message.warning('本轮未产生绑定进展（bound=0），已自动停止；可能存在缺条码/条件过宽/排除过多')
+                break
+              }
+            }
+
+            message.success(`人工审核自动绑定完成：累计bound=${totalBound} errors=${totalErrors}`)
+            setSelectedRowKeys([])
+            setManualExcludedIds([])
+            if (targetKind === 'model') {
+              setListTab('bound')
+            }
+            setPage(1)
+            setPageSize(DEFAULT_PAGE_SIZE)
+            await queryClient.invalidateQueries({ queryKey: ['sku-master', 'list'] })
+          } catch (e: any) {
+            // 关键：把详细错误打到 devtools, 之前 message.error 一闪而过用户看不见
+            // eslint-disable-next-line no-console
+            console.error('[manual-run-all] failed:', e, {
+              name: e?.name,
+              code: e?.code,
+              message: e?.message,
+              response: e?.response?.data,
+              status: e?.response?.status,
+              targetKind,
+              modelId,
+              templateId,
+              presetSelector,
+            })
+            const errName = String(e?.name || '').toLowerCase()
+            const errCode = String(e?.code || '').toLowerCase()
+            const errMsg = String(e?.message || '').toLowerCase()
+            if (
+              errName.includes('abort') ||
+              errName.includes('canceled') ||
+              errCode === 'err_canceled' ||
+              errMsg.includes('canceled')
+            ) {
+              // 单轮超时不是"错误", 是后端处理慢于 90s.
+              // 用 info 弹窗 + 累计进度, 让用户知道"已完成的不会丢, 再点一次继续"
+              Modal.info({
+                title: '单轮超时, 已暂停（这是正常的）',
+                content: (
+                  <div>
+                    <div style={{ marginBottom: 8 }}>
+                      <b>已完成累计：bound={totalBound} / 已处理≈{totalProcessed} / errors={totalErrors}</b>
+                    </div>
+                    <div style={{ marginBottom: 8 }}>
+                      单轮请求超过 90s 被中止（候选量大时这是正常的）。<b>已绑定的不会丢失</b>。
+                    </div>
+                    <div style={{ color: '#666' }}>
+                      再次点「一键跑完」会从当前未绑定继续；多按几次直到提示「无更多候选」即可全部完成。
+                    </div>
+                  </div>
+                ),
+                okText: '知道了',
+              })
+            } else {
+              // 用 Modal.error 替代 message.error, 一定能让用户看到
+              Modal.error({
+                title: '人工审核一键跑完失败',
+                content: (
+                  <div>
+                    <div style={{ marginBottom: 8 }}>
+                      {e?.response?.data?.detail || e?.message || '未知错误'}
+                    </div>
+                    <div style={{ color: '#999', fontSize: 12 }}>
+                      详细错误已打印到浏览器控制台 (F12 → Console)，可截图反馈。
+                    </div>
+                  </div>
+                ),
+              })
+            }
+          } finally {
+            setManualRunAllRunning(false)
+            manualRunAllStopRef.current = false
+          }
+        })()
+      },
+    })
+  }
+
+  const autoPreviewMutation = useMutation({
+    mutationFn: () => autoBindSkuMastersPreview({ limit: 200, scan_limit: 50000 }),
+    onSuccess: (res: any) => {
+      setAutoPreviewText(`未绑定≈${res.total_unbound} 可自动=${res.candidates}（展示${(res.items ?? []).length}）`)
+      const cand = (res.items ?? []) as SkuMasterAutoBindPreviewItem[]
+      setAutoPreviewCandidates(cand)
+      const idSet = new Set(cand.map((x) => x.sku_master_id))
+      setAutoCandidatesOnly(true)
+      setListTab('unbound')
+      // 让右侧尽量展示“命中候选”（200条）
+      setPage(1)
+      setPageSize(100)
+      setSelectedRowKeys(Array.from(idSet))
+      message.success('已生成预览')
+    },
+    onError: (e: any) => message.error(e?.message || '预览失败'),
+  })
+
+  const autoExecuteMutation = useMutation({
+    mutationFn: () => {
+      if (!selectedRowKeys.length) throw new Error('请先在右侧列表勾选要绑定的记录（可先点预览自动全选）')
+      // 仅绑定“预览命中候选”中被勾选的
+      const allow = new Set(autoPreviewCandidates.map((x) => x.sku_master_id))
+      const ids = selectedRowKeys.filter((id) => allow.has(id))
+      if (!ids.length) throw new Error('当前勾选项不在“自动命中候选”中，不会执行绑定')
+      return autoBindSkuMastersExecute({ limit: 200, requested_by: requestedBy || undefined, sku_master_ids: ids })
+    },
+    onSuccess: async (res: any) => {
+      message.success(
+        `自动绑定完成：bound=${res.bound_count} skipped(bound)=${res.skipped_already_bound} errors=${(res.errors ?? []).length}`,
+      )
+      setAutoPreviewText(
+        `未绑定≈${res.preview?.total_unbound} 可自动=${res.preview?.candidates}（展示${(res.preview?.items ?? []).length}）`,
+      )
+      const cand = (res.preview?.items ?? []) as SkuMasterAutoBindPreviewItem[]
+      setAutoPreviewCandidates(cand)
+      // 执行完后：跳到“已绑定”列表（便于看到刚绑定的记录），并重置分页避免出现空白第一页
+      setAutoCandidatesOnly(false)
+      setSelectedRowKeys([])
+      setListTab('bound')
+      setPage(1)
+      setPageSize(DEFAULT_PAGE_SIZE)
+      await queryClient.invalidateQueries({ queryKey: ['sku-master', 'list'] })
+    },
+    onError: (e: any) => message.error(e?.message || '执行失败'),
+  })
+
+  const handleAutoExecuteAll = () => {
+    if (!autoPreviewCandidates.length) {
+      message.warning('请先点一次“候选预览（命中）”生成候选列表')
+      return
+    }
+    const allow = new Set(autoPreviewCandidates.map((x) => x.sku_master_id))
+    const ids = selectedRowKeys.filter((id) => allow.has(id))
+    if (!ids.length) {
+      message.warning('当前未选中候选（可先预览自动全选，或手动勾选右侧候选）')
+      return
+    }
+    Modal.confirm({
+      title: '确认执行自动绑定？',
+      content: `将对“命中候选视图”中当前选中的 ${ids.length} 条记录执行绑定（不会覆盖已有绑定）。`,
+      okText: '确认执行',
+      cancelText: '取消',
+      onOk: () => autoExecuteMutation.mutate(),
+    })
+  }
+
+  const handleAutoRunAll = () => {
+    if (autoRunAllRunning) return
+    Modal.confirm({
+      title: '一键跑完：自动绑定所有可命中候选？',
+      content:
+        '将自动循环执行：预览→绑定→再预览… 直到没有候选为止（不会覆盖已有绑定）。建议在无人操作时执行。',
+      okText: '开始执行',
+      cancelText: '取消',
+      onOk: () => {
+        // 关键：不要 await（否则 confirm 弹窗会一直“转圈”不关闭）
+        // 点“开始执行”后立即关闭弹窗，后台继续跑；进度/停止在页面里看
+        const reqBy = requestedBy || undefined
+        setAutoRunAllRunning(true)
+        autoRunAllStopRef.current = false
+        void (async () => {
+          let totalBound = 0
+          let totalSkipped = 0
+          let totalErrors = 0
+          try {
+            // 口径：后端 execute 默认 scan_limit=50000（路由层固定）；为避免单次绑定过大导致超时，
+            // 这里每轮只执行小批量（200），循环多轮跑完。
+            for (let round = 1; round <= 999; round += 1) {
+              if (autoRunAllStopRef.current) break
+              // 单轮"硬超时"保护: 把 AbortController 真接到 axios signal 上, 90s 还没返回就强中止.
+              // 之前这里的 ac 完全没传给 service, 是死代码, 同时 plannerClient 默认 timeout=20s
+              // 在 200 行批量绑定上不够用 (实测 ~25s), 用户看到的"canceled"是 axios 默认 20s timeout
+              // 触发的 AbortController 自动中止. 修复: service 默认 90s + 这里通过 signal 强制 90s 上限.
+              const ac = new AbortController()
+              const timer = window.setTimeout(() => ac.abort(), 90_000)
+              let res: any
+              try {
+                res = await autoBindSkuMastersExecute(
+                  {
+                    limit: 200,
+                    requested_by: reqBy,
+                    // 不传 sku_master_ids：由后端按 preview 的 items 批量绑定
+                  } as any,
+                  { signal: ac.signal, timeoutMs: 90_000 },
+                )
+              } finally {
+                window.clearTimeout(timer)
+              }
+              const bound = Number(res?.bound_count || 0)
+              const skipped = Number(res?.skipped_already_bound || 0)
+              const errors = (res?.errors ?? []).length
+              totalBound += bound
+              totalSkipped += skipped
+              totalErrors += errors
+
+              const nextItems = (res?.preview?.items ?? []) as any[]
+              const now = new Date()
+              const stamp = `${now.getHours().toString().padStart(2, '0')}:${now
+                .getMinutes()
+                .toString()
+                .padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`
+              setAutoRunAllStatus({
+                round,
+                last_bound: bound,
+                total_bound: totalBound,
+                remaining: nextItems.length,
+                last_update: stamp,
+                note: `每轮最多 200 条；如卡住可点“停止”后再点“一键跑完”继续。`,
+              })
+              setAutoPreviewText(
+                `自动执行中：第${round}轮，本轮绑定=${bound}，累计=${totalBound}，剩余候选≈${nextItems.length}`,
+              )
+
+              // 没有候选了，或本轮没有任何绑定进展 -> 结束（避免死循环）
+              if (!nextItems.length) break
+              if (bound === 0) {
+                message.warning('本轮未产生绑定进展（bound=0），已自动停止；可稍后再点“一键跑完”继续')
+                break
+              }
+            }
+
+            message.success(`自动执行完成：累计bound=${totalBound} skipped=${totalSkipped} errors=${totalErrors}`)
+            // 执行完后：回到“已绑定”列表，并刷新
+            setAutoCandidatesOnly(false)
+            setSelectedRowKeys([])
+            setListTab('bound')
+            setPage(1)
+            setPageSize(DEFAULT_PAGE_SIZE)
+            await queryClient.invalidateQueries({ queryKey: ['sku-master', 'list'] })
+          } catch (e: any) {
+            const errName = String(e?.name || '').toLowerCase()
+            const errCode = String(e?.code || '').toLowerCase()
+            const errMsg = String(e?.message || '').toLowerCase()
+            if (
+              errName.includes('abort') ||
+              errName.includes('canceled') ||
+              errCode === 'err_canceled' ||
+              errMsg.includes('canceled')
+            ) {
+              message.error('单次请求超时（90s）已中止：请稍后再点"一键跑完"继续（数据量大时这是正常的, 已绑定结果不会丢失）')
+            } else {
+              message.error(e?.message || '自动执行失败')
+            }
+          } finally {
+            setAutoRunAllRunning(false)
+            autoRunAllStopRef.current = false
+          }
+        })()
+      },
+    })
+  }
+
+  return (
+    <div>
+      <Modal
+        open={bindPreviewOpen}
+        title="绑定前预检（按最近发货交易规格样本试算）"
+        onCancel={() => {
+          if (bindPreviewLoading || bindMutation.isPending) return
+          setBindPreviewOpen(false)
+        }}
+        onOk={async () => {
+          if (!bindPreview) return
+          if (bindPreviewLoading || bindMutation.isPending) return
+          if (Number(bindPreview.hard_errors || 0) > 0) return
+          await bindMutation.mutateAsync()
+          setBindPreviewOpen(false)
+        }}
+        okText="确认绑定"
+        cancelText="取消"
+        okButtonProps={{
+          disabled: !bindPreview || Number(bindPreview.hard_errors || 0) > 0,
+          loading: bindMutation.isPending,
+        }}
+        width={980}
+      >
+        {bindPreviewLoading ? (
+          <div>正在预检…</div>
+        ) : !bindPreview ? null : (
+          <>
+            <div style={{ marginBottom: 8 }}>
+              <Text>
+                本次选择：{bindPreview.total_selected}，可绑定：{bindPreview.can_bind}，跳过（已绑定）：
+                {bindPreview.skip_already_bound}，跳过（缺条码）：{bindPreview.skip_missing_barcode}，硬错误：
+                {bindPreview.hard_errors}
+              </Text>
+              {bindPreview.hard_errors > 0 ? (
+                <div style={{ marginTop: 6 }}>
+                  <Alert type="error" showIcon message="存在硬错误：已按规则禁止绑定，请先修正后再试" />
+                </div>
+              ) : null}
+            </div>
+            <Table
+              size="small"
+              rowKey="sku_master_id"
+              pagination={{ pageSize: 10 }}
+              dataSource={bindPreview.items as any}
+              columns={[
+                { title: '货品条码', dataIndex: 'sku_code', width: 150, ellipsis: true },
+                {
+                  title: '状态',
+                  dataIndex: 'status',
+                  width: 140,
+                  render: (v: any) => {
+                    const s = String(v || '')
+                    if (s === 'can_bind') return <Tag color="green">可绑定</Tag>
+                    if (s === 'skip_already_bound') return <Tag>跳过-已绑定</Tag>
+                    if (s === 'skip_missing_barcode') return <Tag>跳过-缺条码</Tag>
+                    return <Tag color="red">硬错误</Tag>
+                  },
+                },
+                {
+                  title: '硬错误/提示',
+                  key: 'msg',
+                  width: 360,
+                  render: (_: any, r: any) => {
+                    const he = Array.isArray(r?.hard_errors) ? r.hard_errors.join('；') : ''
+                    const ws = Array.isArray(r?.warnings) ? r.warnings.join('；') : ''
+                    return (
+                      <div style={{ maxWidth: 360 }}>
+                        {he ? <Text type="danger">{he}</Text> : null}
+                        {he && ws ? <br /> : null}
+                        {ws ? <Text type="secondary">{ws}</Text> : null}
+                      </div>
+                    )
+                  },
+                },
+                { title: '样本交易规格（norm）', dataIndex: 'sample_spec_text_norm', ellipsis: true },
+              ]}
+            />
+          </>
+        )}
+      </Modal>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'flex-end',
+          justifyContent: 'space-between',
+          gap: 12,
+          flexWrap: 'wrap',
+        }}
+      >
+        <div>
+          <Title level={3} style={{ marginBottom: 4 }}>
+            商品关联（SKU 主档）
+          </Title>
+          <Text type="secondary">
+            左侧用于绑定与规则配置，右侧用于筛选与列表查看（统计以当前页为准）。
+          </Text>
+          <div style={{ marginTop: 4 }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              <b>自动匹配优先级：</b>① 商家编码（仅 <code>KB8</code> / <code>KB8-001</code>{' '}
+              这类结构化格式才参与 P0 锁定；纯数字平台 ID 会被忽略以避免误判）→{' '}
+              ② 规格文本编码 → ③ 模型识别关键词。
+              {' '}吉客云新品在 <code>tradeGoodsno</code> 设置规范商家编码后，下次发货同步即可自动绑定；
+              老品商家编码错/缺时手工绑一次，已绑 SKU 不会被自动覆盖。
+            </Text>
+          </div>
+          <div style={{ marginTop: 8 }}>
+            <Space size={8} align="center" wrap>
+              <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+                商家编码覆盖率（点击筛选）：
+              </Text>
+              <ShopSpecCodeSummaryStrip
+                summary={shopSpecSummaryQuery.data ?? {}}
+                total={shopSpecSummaryQuery.data?.total ?? 0}
+                activeKind={shopSpecKind}
+                onSelect={(k) => {
+                  setShopSpecKind(k)
+                  setPage(1)
+                }}
+              />
+              {shopSpecSummaryQuery.isFetching ? (
+                <Text type="secondary" style={{ fontSize: 12 }}>计算中…</Text>
+              ) : null}
+            </Space>
+          </div>
+          <div style={{ marginTop: 8 }}>
+            <Space size={8} align="center" wrap>
+              <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+                数据质量：
+              </Text>
+              <Tag.CheckableTag
+                checked={dataQualityFilter === 'all'}
+                onChange={() => {
+                  setDataQualityFilter('all')
+                  setPage(1)
+                }}
+              >
+                全部
+              </Tag.CheckableTag>
+              <Tooltip title="同一货品条码在历史发货里跨多个不相关品类（如装饰画/枕套/桌布共用一码），自动绑定不可信，需要去 ERP 端清理。每晚定时刷新。">
+                <Tag.CheckableTag
+                  checked={dataQualityFilter === 'spu_attribute_conflict'}
+                  onChange={() => {
+                    setDataQualityFilter('spu_attribute_conflict')
+                    setPage(1)
+                  }}
+                  style={{
+                    background:
+                      dataQualityFilter === 'spu_attribute_conflict'
+                        ? undefined
+                        : 'transparent',
+                  }}
+                >
+                  ⚠ 仅看 SPU 错配
+                </Tag.CheckableTag>
+              </Tooltip>
+            </Space>
+          </div>
+        </div>
+        <Space size={8} wrap>
+          <Tooltip
+            title={
+              <div style={{ lineHeight: 1.7 }}>
+                直接粘贴本系统已有的任意编码即可定位（模糊匹配，按 Enter 或点放大镜执行）：
+                <br />· 货品条码（erp_sku_barcode）
+                <br />· 平台货品 ID（platform_product_id）
+                <br />· 平台 SKU ID（platform_sku_id）
+                <br />· 商家编码 / 网店规格编码（shop_spec_code）
+                <br />· 货品编号（product_code）
+                <br />· 商品名称（product_name）
+                <br />· <b>已绑定变体编码</b>（如 OZU-001 / KB8-001，bound_variant_code）
+                <br />· <b>已绑定标准模型编码 / 模型中文名</b>（对接状态列里的「OZU …」「KB8 …」等，走 sku→模型映射）
+                <br />清空后回到全量列表。
+              </div>
+            }
+          >
+            <Input.Search
+              allowClear
+              enterButton
+              size="middle"
+              style={{ width: 420 }}
+              placeholder="按编码搜索：条码 / 平台SKU / 商家编码 / 已绑模型码如 OZU …"
+              value={codeSearchInput}
+              onChange={(e) => setCodeSearchInput(e.target.value)}
+              onSearch={(v) => {
+                const next = (v ?? '').trim()
+                setSearch(next)
+                setPage(1)
+                if (autoCandidatesOnly) {
+                  // 候选视图是本地筛选，按编码搜索通常意图是回到全量列表
+                  setAutoCandidatesOnly(false)
+                }
+              }}
+            />
+          </Tooltip>
+          <Button onClick={() => listQuery.refetch()}>刷新</Button>
+        </Space>
+      </div>
+
+      <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+        {/* 左侧：绑定工作台 (收窄到 5/24 ~ 21%, 让右侧表格更宽) */}
+        <Col xs={24} lg={5}>
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <NightlyAutoRecognizeCard />
+            <Card size="small" title="映射工作台（SKU→标准模型/套装模块）">
+              <Tabs
+                activeKey={workbenchTab}
+                onChange={(k) => setWorkbenchTab(k as any)}
+                items={[
+                  {
+                    key: 'manual',
+                    label: '人工审核',
+                    children: (
+                      <Space direction="vertical" style={{ width: '100%' }}>
+                        <Text type="secondary">
+                          点下方按钮选择"标准模型"或"套装模板"。标准模型会自动落到该模型唯一在线发布版本；套装会写入模板+preset 绑定。
+                        </Text>
+                        <div style={{ width: '100%' }}>
+                          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                            <TargetPickerBrowserButton
+                              value={targetSelection}
+                              onChange={handleTargetSelectionChange}
+                              buttonProps={{ type: 'primary', block: true }}
+                              modalTitle="选择绑定目标（标准模型 / 套装模板）"
+                              placeholder="选择绑定目标（标准模型 / 套装模板）"
+                            />
+                            <div>{renderTargetSelectionTags(targetSelection)}</div>
+                          </Space>
+                        </div>
+                        <Input
+                          value={requestedBy}
+                          onChange={(e) => setRequestedBy(e.target.value)}
+                          placeholder="操作人/审核人（可选）"
+                        />
+                        <Checkbox checked={allowRebind} onChange={(e) => setAllowRebind(e.target.checked)}>
+                          覆盖关联（允许重新绑定）
+                        </Checkbox>
+                        <Checkbox checked={clearBinding} onChange={(e) => setClearBinding(e.target.checked)}>
+                          清空模型/套装
+                        </Checkbox>
+                        <Space wrap align="center">
+                          <Tag color={manualBulkMode ? 'green' : 'default'}>
+                            {manualBulkMode ? '所有页勾选模式（跨页）' : '当页勾选模式'}
+                          </Tag>
+                          {manualBulkMode && manualExcludedIds.length ? (
+                            <Tag color="orange">已排除 {manualExcludedIds.length}</Tag>
+                          ) : null}
+                          <Button
+                            size="small"
+                            onClick={() => {
+                              setManualBulkMode((v) => !v)
+                              setManualExcludedIds([])
+                              message.info(manualBulkMode ? '已切换为：当页勾选模式（并清空排除）' : '已切换为：所有页勾选模式（跨页）')
+                            }}
+                          >
+                            切换模式
+                          </Button>
+                          {manualBulkMode && manualExcludedIds.length ? (
+                            <Button
+                              size="small"
+                              onClick={() => {
+                                setManualExcludedIds([])
+                                message.success('已清空排除列表（本页将重新默认全选）')
+                              }}
+                            >
+                              清空排除
+                            </Button>
+                          ) : null}
+                        </Space>
+                        <Button
+                          block
+                          type="primary"
+                          disabled={
+                            (clearBinding
+                              ? selectedRowKeys.length === 0
+                              : (targetKind === 'bundle'
+                                  ? !selectedBundleTemplateId || !selectedBundlePresetSelector
+                                  : !selectedModelId) || selectedRowKeys.length === 0)
+                          }
+                          loading={bindMutation.isPending || unbindMutation.isPending}
+                          onClick={() => {
+                            if (!clearBinding) {
+                              previewBindSelected()
+                              return
+                            }
+                            Modal.confirm({
+                              title: '确认清空模型/套装？',
+                              content:
+                                '将对勾选条目执行“解绑”：清除当前模型/套装关联（历史发货快照不会自动删除；如要修正历史利润，请去发货作业中心重建快照/计价）。',
+                              okText: '确认清空',
+                              okButtonProps: { danger: true },
+                              cancelText: '取消',
+                              onOk: async () => unbindMutation.mutateAsync(),
+                            })
+                          }}
+                        >
+                          {clearBinding ? '清空模型/套装（仅勾选）' : '执行绑定（仅勾选）'}
+                          {selectedRowKeys.length ? `（${selectedRowKeys.length}）` : ''}
+                        </Button>
+                        <Button
+                          block
+                          type="primary"
+                          danger
+                          disabled={
+                            (clearBinding
+                              ? // 清空模式不需要选目标，但当页模式下要先勾选
+                                !manualBulkMode && selectedRowKeys.length === 0
+                              : (targetKind === 'bundle'
+                                  ? !selectedBundleTemplateId || !selectedBundlePresetSelector
+                                  : !selectedModelId)) ||
+                            manualRunAllRunning ||
+                            bindMutation.isPending ||
+                            unbindMutation.isPending
+                          }
+                          loading={manualRunAllRunning}
+                          onClick={handleManualRunAll}
+                        >
+                          {clearBinding ? '一键清空' : '一键跑完'}（{manualBulkMode ? '所有页' : '当页'}）
+                        </Button>
+                        <Button
+                          block
+                          disabled={!selectedRowKeys.length || genParseAndSnapshotsMutation.isPending}
+                          loading={genParseAndSnapshotsMutation.isPending}
+                          onClick={() => {
+                            Modal.confirm({
+                              title: `生成解析和快照？（${selectedRowKeys.length}条）`,
+                              content:
+                                '仅适用于“已重新绑定后补齐缺失”。将为勾选条码：1）从最近发货样本生成预解析（尺寸/TOKEN）落库；2）对相关“待处理/异常”的发货行执行“只补齐缺失”的快照生成（默认不覆盖历史快照）。若条码当前未绑定（例如你刚清空绑定），会跳过快照生成；此类“清空绑定但已有快照/需重建范围”的，请到发货作业中心“待生成”里按范围执行覆盖重算。',
+                              okText: '确认执行',
+                              cancelText: '取消',
+                              onOk: async () => genParseAndSnapshotsMutation.mutateAsync(),
+                            })
+                          }}
+                        >
+                          生成解析和快照（仅勾选）
+                        </Button>
+                        {manualRunAllRunning ? (
+                          <Button
+                            block
+                            onClick={() => {
+                              manualRunAllStopRef.current = true
+                              message.info('已请求停止：将在本轮执行结束后停止')
+                            }}
+                          >
+                            停止自动执行
+                          </Button>
+                        ) : null}
+                        {manualRunAllStatus ? (
+                          <Alert
+                            type={manualRunAllRunning ? 'info' : 'success'}
+                            showIcon
+                            message={
+                              manualRunAllStatus.round === 0
+                                ? '准备中…（第 1 轮正在拉取并处理候选）'
+                                : `第${manualRunAllStatus.round}轮｜本轮绑定 ${manualRunAllStatus.last_bound}｜累计绑定 ${manualRunAllStatus.total_bound}｜已处理 ${manualRunAllStatus.processed}${manualRunAllStatus.total > 0 ? `/${manualRunAllStatus.total}` : ''}｜错误 ${manualRunAllStatus.errors}`
+                            }
+                            description={`最后更新：${manualRunAllStatus.last_update}${manualRunAllStatus.note ? `；${manualRunAllStatus.note}` : ''}`}
+                          />
+                        ) : null}
+                        <Text type="secondary">
+                          提示：当页模式=完全手动勾选；所有页模式=按筛选条件跨页全选，取消勾选会加入排除（执行前需模型名二次确认）。
+                        </Text>
+                      </Space>
+                    ),
+                  },
+                  {
+                    key: 'auto',
+                    label: '自动识别',
+                    children: (
+                      <Space direction="vertical" style={{ width: '100%' }}>
+                        <Text type="secondary">
+                          默认规则：仅对可确定命中“已发布标准模型”的未绑定 SKU 自动写入映射。
+                        </Text>
+                        <Input
+                          value={requestedBy}
+                          onChange={(e) => setRequestedBy(e.target.value)}
+                          placeholder="操作人/审核人（可选）"
+                        />
+                        <Button
+                          block
+                          loading={autoPreviewMutation.isPending}
+                          onClick={() => autoPreviewMutation.mutate()}
+                        >
+                          候选预览（命中）
+                        </Button>
+                        <Button
+                          block
+                          type="primary"
+                          loading={autoExecuteMutation.isPending}
+                          onClick={handleAutoExecuteAll}
+                        >
+                          执行绑定（仅选中候选）
+                        </Button>
+                        <Button
+                          block
+                          type="primary"
+                          danger
+                          disabled={autoRunAllRunning || autoExecuteMutation.isPending || autoPreviewMutation.isPending}
+                          loading={autoRunAllRunning}
+                          onClick={handleAutoRunAll}
+                        >
+                          一键跑完（自动循环执行）
+                        </Button>
+                        {autoRunAllRunning ? (
+                          <Button
+                            block
+                            onClick={() => {
+                              autoRunAllStopRef.current = true
+                              message.info('已请求停止：将在本轮执行结束后停止')
+                            }}
+                          >
+                            停止自动执行
+                          </Button>
+                        ) : null}
+                        {autoRunAllStatus ? (
+                          <Alert
+                            type={autoRunAllRunning ? 'info' : 'success'}
+                            showIcon
+                            message={`进度：第${autoRunAllStatus.round}轮 / 本轮绑定${autoRunAllStatus.last_bound} / 累计绑定${autoRunAllStatus.total_bound} / 剩余候选≈${autoRunAllStatus.remaining}`}
+                            description={`最后更新：${autoRunAllStatus.last_update}${autoRunAllStatus.note ? `；${autoRunAllStatus.note}` : ''}`}
+                          />
+                        ) : null}
+                        {autoPreviewText ? <Alert type="info" showIcon message={autoPreviewText} /> : null}
+                        {autoCandidatesOnly ? (
+                          <Button
+                            block
+                            onClick={() => {
+                              setAutoCandidatesOnly(false)
+                              setAutoPreviewCandidates([])
+                              setSelectedRowKeys([])
+                              // 恢复用户偏好分页（已持久化）
+                              setPage(1)
+                              message.info('已退出“命中候选”视图')
+                            }}
+                          >
+                            退出命中候选视图
+                          </Button>
+                        ) : null}
+                      </Space>
+                    ),
+                  },
+                  {
+                    key: 'field_update',
+                    label: '字段维护',
+                    children: <FieldUpdateWorkbenchTab />,
+                  },
+                ]}
+              />
+            </Card>
+            {/* 「导入/同步（入口）」卡片已下线 (页面瘦身)。
+                如需恢复入口, 加个按钮 onClick={() => setImportDrawerOpen(true)} 即可 ——
+                state 和抽屉本体仍保留 (见本文件 importDrawerOpen). */}
+          </Space>
+        </Col>
+
+        {/* 右侧：筛选 + 列表（加宽到 19/24 ~ 79%） */}
+        <Col xs={24} lg={19}>
+            <Card
+            title="候选列表"
+            extra={
+              <Space wrap>
+                {autoCandidatesOnly ? (
+                  <Tag color="purple">命中候选视图：{autoPreviewCandidates.length} 条</Tag>
+                ) : null}
+                <Text type="secondary">
+                  状态：
+                  {listQuery.isFetching ? '加载中' : listQuery.isError ? '失败' : '就绪'}｜结果 {filteredItems.length}/{total}
+                </Text>
+                <Tooltip
+                  title={
+                    autoCandidatesOnly
+                      ? '候选视图本地筛选：匹配 条码 / 规格 / 渠道（输入即生效）'
+                      : '实时筛选（输入即生效）：匹配 货品条码 / 平台SKU / 商家编码 / 商品名 / 货品编号 / 已绑变体码 / 已绑模型编码或中文名；如需严格一次性提交可使用顶部「按编码搜索」框（Enter）。'
+                  }
+                >
+                  <Input
+                    allowClear
+                    style={{ width: 280 }}
+                    placeholder={
+                      autoCandidatesOnly ? '候选筛选（本地）：条码/规格/渠道' : '实时筛选：条码/平台SKU/商家编码/已绑变体码'
+                    }
+                    value={search}
+                    onChange={(e) => {
+                      setSearch(e.target.value)
+                      setPage(1)
+                    }}
+                  />
+                </Tooltip>
+                <Input
+                  style={{ width: 220 }}
+                  placeholder="包含关键词（AND，多词空格分隔）"
+                  value={includeTerms}
+                  onChange={(e) => {
+                    setIncludeTerms(e.target.value)
+                    setPage(1)
+                  }}
+                />
+                <Input
+                  style={{ width: 200 }}
+                  placeholder="排除关键词（AND NOT）"
+                  value={excludeTerms}
+                  onChange={(e) => {
+                    setExcludeTerms(e.target.value)
+                    setPage(1)
+                  }}
+                />
+                <Select
+                  style={{ width: 170 }}
+                  value={matchScope}
+                  onChange={(v) => setMatchScope(v)}
+                  options={[
+                    { label: '商品规格', value: 'spec' },
+                    { label: '商品名称', value: 'name' },
+                  ]}
+                  disabled={autoCandidatesOnly}
+                />
+                <Select
+                  allowClear
+                  style={{ width: 160 }}
+                  placeholder="渠道"
+                  options={channelOptions}
+                  value={channel}
+                  onChange={(v) => {
+                    setChannel(v)
+                    setPage(1)
+                  }}
+                  disabled={autoCandidatesOnly}
+                />
+                <Select
+                  allowClear
+                  style={{ width: 190 }}
+                  placeholder="ERP匹配状态（网店↔ERP）"
+                  options={matchStatusOptions}
+                  value={matchStatus}
+                  onChange={(v) => {
+                    setMatchStatus(v)
+                    setPage(1)
+                  }}
+                  disabled={autoCandidatesOnly}
+                />
+                <Tag color="blue">总数：{total}</Tag>
+                <Tag>
+                  本页：{pageStats.totalRows} ERP匹配填充率：{pageStats.erpMatchedRate} 对接就绪率：
+                  {pageStats.linkedRate} 字段齐全率：{pageStats.completeRate}
+                </Tag>
+                {/* exit button moved to tabs (after 已绑定) */}
+              </Space>
+            }
+          >
+            {autoCandidatesOnly ? (
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginBottom: 8 }}
+                message="当前为“命中候选视图”：仅展示自动预览命中的候选记录；要看全部/未绑定/已绑定，请点击右上角“退出候选视图”。"
+              />
+            ) : null}
+            {!autoCandidatesOnly && listQuery.isError ? (
+              <Alert
+                type="error"
+                showIcon
+                style={{ marginBottom: 8 }}
+                message="列表加载失败"
+                description={listQueryErrorText || '未知错误（请打开控制台查看网络请求）'}
+              />
+            ) : null}
+            {listEmptyHint ? (
+              <Alert type="info" showIcon style={{ marginBottom: 8 }} message="提示" description={listEmptyHint} />
+            ) : null}
+            <Tabs
+              activeKey={listTab}
+              onChange={(k) => setListTab(k as any)}
+              items={[
+                { key: 'all', label: '全部', children: null },
+                { key: 'unbound', label: '未绑定', children: null },
+                { key: 'bound', label: '已绑定', children: null },
+              ]}
+              tabBarExtraContent={
+                autoCandidatesOnly ? (
+                  <Button
+                    size="small"
+                    type="link"
+                    onClick={() => {
+                      setAutoCandidatesOnly(false)
+                      setAutoPreviewCandidates([])
+                      setSelectedRowKeys([])
+                      setPage(1)
+                      message.info('已退出“命中候选视图”')
+                    }}
+                  >
+                    退出命中候选视图
+                  </Button>
+                ) : null
+              }
+            />
+            <Table
+              rowKey="id"
+              size="small"
+              loading={listQuery.isFetching}
+              columns={columns}
+              dataSource={filteredItems}
+              rowSelection={{
+                selectedRowKeys,
+                onChange: (keys) => handleRowSelectionChange(keys as any[]),
+              }}
+              pagination={{
+                current: page,
+                pageSize,
+                total,
+                showSizeChanger: true,
+                pageSizeOptions: ['50', '100', '200'],
+              }}
+              onChange={handlePaginationChange}
+              scroll={{ x: 1350 }}
+            />
+          </Card>
+        </Col>
+      </Row>
+
+      <Drawer
+        title="SKU 主档详情（只读）"
+        open={drawerOpen}
+        width={980}
+        onClose={() => {
+          setDrawerOpen(false)
+          setActiveId(null)
+        }}
+      >
+        {detailQuery.data ? (
+          <>
+            {/* SPU 属性冲突 Banner — 这种 SKU 的成本/绑定都不可信，运营必须看到 */}
+            {(() => {
+              const dq = detailQuery.data as any
+              if (dq.data_quality_status !== 'spu_attribute_conflict') return null
+              const ev = (dq.data_quality_evidence || {}) as {
+                rules_hit?: string[]
+                total_lines?: number
+                distinct_specs?: number
+                unmatched_specs?: number
+                keyword_matched_models?: string[]
+                model_share?: Array<{ model_code: string; lines: number; ratio: number }>
+                top_variants?: Array<{ spec: string; qty: number; top_model_code: string | null }>
+              }
+              const rules = ev.rules_hit || []
+              return (
+                <Alert
+                  type="error"
+                  showIcon
+                  style={{ marginBottom: 12 }}
+                  message={
+                    <Space wrap size={6}>
+                      <b>⚠ SPU 属性冲突</b>
+                      <Tag color="red">{rules.includes('R1') ? 'R1 关键词冲突' : null}</Tag>
+                      {rules.includes('R2') ? <Tag color="red">R2 高变异规格</Tag> : null}
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        共 {ev.total_lines ?? '?'} 条发货 / {ev.distinct_specs ?? '?'} 种不同规格
+                        {ev.unmatched_specs ? ` / ${ev.unmatched_specs} 种未识别品类` : ''}
+                        {ev.keyword_matched_models?.length
+                          ? ` · 涉及模型: ${ev.keyword_matched_models.join(' / ')}`
+                          : ''}
+                      </Text>
+                      <Button
+                        size="small"
+                        onClick={async () => {
+                          const id = detailQuery.data?.id
+                          if (!id) return
+                          try {
+                            await recomputeSkuDataQuality(String(id), { lookback_days: 90 })
+                            message.success('已重新评估')
+                            detailQuery.refetch()
+                            listQuery.refetch()
+                          } catch (e: any) {
+                            message.error(`评估失败：${e?.response?.data?.detail || e?.message || e}`)
+                          }
+                        }}
+                      >
+                        重新评估
+                      </Button>
+                    </Space>
+                  }
+                  description={
+                    <div style={{ lineHeight: 1.8 }}>
+                      <p style={{ margin: '4px 0' }}>
+                        该货品条码在 ERP/吉客云端被复用到了多个不相关商品上，
+                        历史发货跨越多个品类，<b>任何自动绑定都不可信</b>。
+                        建议去 ERP 后台清理「商品 ↔ 货品条码」的复用关系。
+                      </p>
+                      {(ev.top_variants || []).length ? (
+                        <div style={{ marginTop: 6 }}>
+                          <Text type="secondary" style={{ fontSize: 12 }}>
+                            历史发货 TOP 规格（最多 6 条）：
+                          </Text>
+                          <ul style={{ margin: '4px 0 0 0', paddingLeft: 18, fontSize: 12 }}>
+                            {(ev.top_variants || []).map((v, idx) => (
+                              <li key={idx}>
+                                <Tag color={v.top_model_code ? 'blue' : 'default'}>
+                                  {v.top_model_code || '未识别'}
+                                </Tag>
+                                <span style={{ marginRight: 6 }}>×{v.qty}</span>
+                                <Text type="secondary">{v.spec || '(空)'}</Text>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null}
+                    </div>
+                  }
+                />
+              )
+            })()}
+            <Row gutter={[16, 16]}>
+            <Col span={14}>
+              <Descriptions bordered size="small" column={2}>
+                <Descriptions.Item label="erp_sku_barcode">
+                  {detailQuery.data.erp_sku_barcode}
+                </Descriptions.Item>
+                <Descriptions.Item label="channel">{detailQuery.data.channel ?? '-'}</Descriptions.Item>
+                <Descriptions.Item label="商品名称（网店）" span={2}>
+                  {detailQuery.data.product_name ?? '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="商品编码（网店）">
+                  {detailQuery.data.product_code ?? '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="平台商品Id（网店）">
+                  {detailQuery.data.platform_product_id ?? '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="平台规格Id（网店）">
+                  {detailQuery.data.platform_sku_id ?? '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="规格编码（网店）/商家编码">
+                  <ShopSpecCodeCell
+                    value={((detailQuery.data as any).shop_spec_code ?? (detailQuery.data.metadata_json as any)?.shop_spec_code) ?? null}
+                    rawValue={(detailQuery.data.metadata_json as any)?.shop_spec_code_raw ?? null}
+                  />
+                </Descriptions.Item>
+                <Descriptions.Item label="套装模板绑定">
+                  {(() => {
+                    const code =
+                      (detailQuery.data as any).bundle_template_code ??
+                      (detailQuery.data.metadata_json as any)?.bundle_template_code ??
+                      ''
+                    const sel =
+                      (detailQuery.data as any).bundle_preset_selector ??
+                      (detailQuery.data.metadata_json as any)?.bundle_preset_selector ??
+                      ''
+                    const bundleCode = String(code || '').trim()
+                    const preset = String(sel || '').trim().toUpperCase()
+                    if (!bundleCode) return '-'
+                    const tid = String(
+                      (detailQuery.data as any).bundle_template_id ??
+                        (detailQuery.data.metadata_json as any)?.bundle_template_id ??
+                        '',
+                    ).trim()
+                    const tpl =
+                      (bundleTemplates as any[]).find((t: any) => String(t?.id ?? '') === tid) ??
+                      (bundleTemplates as any[]).find((t: any) => String(t?.code ?? '').trim() === bundleCode)
+                    const meta = (tpl as any)?.metadata ?? (tpl as any)?.metadata_json ?? tpl ?? {}
+                    const presets = Array.isArray((meta as any)?.phrase_presets) ? ((meta as any).phrase_presets as any[]) : []
+                    const p = presets.find(
+                      (x: any) => String(x?.selector ?? '').trim().toUpperCase() === String(preset || '').trim().toUpperCase(),
+                    )
+                    const mode = String((p as any)?.mode ?? '').trim()
+                    const prefix = mode === 'force' ? 'Z' : 'B'
+                    return preset ? `${prefix}-${bundleCode}${preset}` : `${prefix}-${bundleCode}`
+                  })()}
+                </Descriptions.Item>
+                <Descriptions.Item label="ERP匹配状态（网店↔ERP）">
+                  {detailQuery.data.match_status ?? '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="spec_text" span={2}>
+                  {detailQuery.data.spec_text ?? '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="model_code_hint">
+                  {detailQuery.data.model_code_hint ?? '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="erp_spec_hash">
+                  {detailQuery.data.erp_spec_hash ?? '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="对接状态（本系统）">
+                  {detailQuery.data.active_model_version_id ? (
+                    <Tag color="green">已绑定</Tag>
+                  ) : (
+                    <Tag color="red">未绑定</Tag>
+                  )}
+                </Descriptions.Item>
+                <Descriptions.Item label="active_model_version_id">
+                  {detailQuery.data.active_model_version_id ?? '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="已绑定模型">
+                  {detailQuery.data.bound_model_code ? (
+                    <Space size={6}>
+                      <Tag color="blue">{detailQuery.data.bound_model_code}</Tag>
+                      <span>{detailQuery.data.bound_model_name || ''}</span>
+                    </Space>
+                  ) : (
+                    '-'
+                  )}
+                </Descriptions.Item>
+                <Descriptions.Item label="已绑定变体">
+                  {detailQuery.data.bound_variant_code ? (
+                    <Space size={6}>
+                      <Tag color="cyan">
+                        {detailQuery.data.bound_variant_label || detailQuery.data.bound_variant_code}
+                      </Tag>
+                    </Space>
+                  ) : (
+                    <span style={{ color: '#999' }}>未指定（按模型级兜底）</span>
+                  )}
+                </Descriptions.Item>
+                <Descriptions.Item label="已绑定版本">
+                  {detailQuery.data.bound_version_label || detailQuery.data.bound_version_kind ? (
+                    <Space size={6}>
+                      {detailQuery.data.bound_version_kind ? <Tag>{detailQuery.data.bound_version_kind}</Tag> : null}
+                      {detailQuery.data.bound_version_status ? (
+                        <Tag>{detailQuery.data.bound_version_status}</Tag>
+                      ) : null}
+                      <span>{detailQuery.data.bound_version_label || '-'}</span>
+                    </Space>
+                  ) : (
+                    '-'
+                  )}
+                </Descriptions.Item>
+                <Descriptions.Item label="规格差异（ERP vs 最近发货）">
+                  {detailQuery.data.spec_mismatch ? (
+                    <Space size={6} direction="vertical" style={{ width: '100%' }}>
+                      <Space size={6} wrap>
+                        <Tag color="orange">有差异</Tag>
+                        {(() => {
+                          const reason = (detailQuery.data.metadata_json as any)?.spec_mismatch_reason
+                          if (reason === 'dimension_mismatch') return <Tag color="red">尺寸不一致</Tag>
+                          if (reason === 'keyword_conflict') return <Tag color="volcano">关键词冲突</Tag>
+                          if (reason === 'legacy_text_diff')
+                            return <Tag>历史标记（待重新评估）</Tag>
+                          return null
+                        })()}
+                        <Button
+                          size="small"
+                          onClick={async () => {
+                            const id = detailQuery.data?.id
+                            if (!id) return
+                            Modal.confirm({
+                              title: '忽略此规格差异？',
+                              content: (
+                                <div style={{ lineHeight: 1.7 }}>
+                                  <p>
+                                    确认这个差异是无害的（颜色前缀变化 / 字符顺序差异 / 末尾冗余 token 等），
+                                    点击后该 SKU 不再显示「规格差异」标记。
+                                  </p>
+                                  <p style={{ color: '#999' }}>
+                                    若以后发货出现真的<b>尺寸差异</b>，系统会自动撤销此忽略并重新打标。
+                                  </p>
+                                </div>
+                              ),
+                              okText: '确认忽略',
+                              cancelText: '取消',
+                              onOk: async () => {
+                                try {
+                                  await resolveSkuMasterSpecMismatch(String(id), {
+                                    requested_by: requestedBy || undefined,
+                                  })
+                                  message.success('已忽略此规格差异')
+                                  detailQuery.refetch()
+                                  listQuery.refetch()
+                                } catch (e: any) {
+                                  message.error(`忽略失败：${e?.response?.data?.detail || e?.message || e}`)
+                                }
+                              },
+                            })
+                          }}
+                        >
+                          忽略此差异
+                        </Button>
+                      </Space>
+                      {(detailQuery.data.metadata_json as any)?.spec_mismatch_detail ? (
+                        <Text type="secondary" style={{ fontSize: 12 }}>
+                          {(detailQuery.data.metadata_json as any)?.spec_mismatch_detail}
+                        </Text>
+                      ) : null}
+                    </Space>
+                  ) : (detailQuery.data.metadata_json as any)?.spec_mismatch_resolved ? (
+                    <Space size={6}>
+                      <Tag color="default">已忽略</Tag>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        运营已确认无害；如出现真的尺寸差异会自动重新打标
+                      </Text>
+                    </Space>
+                  ) : (
+                    <Tag>无</Tag>
+                  )}
+                </Descriptions.Item>
+                <Descriptions.Item label="last_shipment_spec_hash">
+                  {detailQuery.data.last_shipment_spec_hash ?? '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="source_updated_at">
+                  {formatTime(detailQuery.data.source_updated_at ?? null)}
+                </Descriptions.Item>
+                <Descriptions.Item label="created_at">
+                  {formatTime(detailQuery.data.created_at)}
+                </Descriptions.Item>
+                <Descriptions.Item label="updated_at">
+                  {formatTime(detailQuery.data.updated_at)}
+                </Descriptions.Item>
+              </Descriptions>
+            </Col>
+            <Col span={10}>
+              <Card size="small" title="图片预览（如有）">
+                <Space direction="vertical" style={{ width: '100%' }}>
+                  {safeString((detailQuery.data.images_json as any)?.product_image) ? (
+                    <Image
+                      width={260}
+                      src={
+                        detailQuery.data?.id
+                          ? `/api/planner/sku-master/${encodeURIComponent(String(detailQuery.data.id))}/images/product`
+                          : safeString((detailQuery.data.images_json as any)?.product_image)
+                      }
+                    />
+                  ) : (
+                    <Text type="secondary">无商品图片</Text>
+                  )}
+                  {safeString((detailQuery.data.images_json as any)?.spec_image) ? (
+                    <Image
+                      width={260}
+                      src={
+                        detailQuery.data?.id
+                          ? `/api/planner/sku-master/${encodeURIComponent(String(detailQuery.data.id))}/images/spec`
+                          : safeString((detailQuery.data.images_json as any)?.spec_image)
+                      }
+                    />
+                  ) : (
+                    <Text type="secondary">无规格图片</Text>
+                  )}
+                </Space>
+              </Card>
+              <Card size="small" title="解析摘要（MVP）" style={{ marginTop: 12 }}>
+                <Descriptions bordered size="small" column={1}>
+                  <Descriptions.Item label="ERP 解析版本">
+                    {detailQuery.data.erp_parser_version ?? '-'}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="ERP 尺寸">
+                    {safeString((detailQuery.data.erp_dimensions as any)?.width_cm) ||
+                    safeString((detailQuery.data.erp_dimensions as any)?.height_cm) ? (
+                      <span>
+                        {safeString((detailQuery.data.erp_dimensions as any)?.width_cm) || '?'} ×{' '}
+                        {safeString((detailQuery.data.erp_dimensions as any)?.height_cm) || '?'} cm
+                      </span>
+                    ) : (
+                      '-'
+                    )}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="ERP tokens（前10）">
+                    {(detailQuery.data.erp_tokens ?? []).slice(0, 10).join('；') || '-'}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="最近发货规格（如有）">
+                    {detailQuery.data.last_shipment_spec_text ?? '-'}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="规格差异时间">
+                    {detailQuery.data.spec_mismatch_at ? formatTime(detailQuery.data.spec_mismatch_at) : '-'}
+                  </Descriptions.Item>
+                </Descriptions>
+              </Card>
+              <Card size="small" title="metadata_json" style={{ marginTop: 12 }}>
+                <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+                  {jsonPretty(detailQuery.data.metadata_json)}
+                </pre>
+              </Card>
+            </Col>
+          </Row>
+          </>
+        ) : detailQuery.isFetching ? (
+          <Text>加载中...</Text>
+        ) : (
+          <Alert type="info" showIcon message="未选择记录" />
+        )}
+      </Drawer>
+
+      <Drawer
+        title="上传/导入 SKU 主档（xlsx）"
+        open={importDrawerOpen}
+        width={760}
+        onClose={() => setImportDrawerOpen(false)}
+      >
+        <Space direction="vertical" style={{ width: '100%' }} size={12}>
+          <Alert
+            type="info"
+            showIcon
+            message="提示"
+            description="后续这些主档数据可能会走 API 同步；在此之前可先用 xlsx 做一次性/补量导入。"
+          />
+          <Space wrap>
+            <Upload
+              accept=".xlsx"
+              beforeUpload={(file) => {
+                setUploadFile(file as File)
+                return false
+              }}
+              fileList={uploadFile ? ([{ uid: '1', name: uploadFile.name }] as any) : []}
+              onRemove={() => setUploadFile(null)}
+              maxCount={1}
+            >
+              <Button disabled={uploading}>选择xlsx</Button>
+            </Upload>
+            <Input
+              style={{ width: 220 }}
+              placeholder="requested_by（可空）"
+              value={requestedBy}
+              onChange={(e) => setRequestedBy(e.target.value)}
+            />
+            <Button type="primary" loading={uploading} onClick={handleImport}>
+              导入
+            </Button>
+          </Space>
+        </Space>
+      </Drawer>
+    </div>
+  )
+}
+
+export default SkuMasterWorkspacePage
+
+
+// ===========================================================================
+// NightlyAutoRecognizeCard — 「夜间自动识别」状态卡 + 立刻跑一次按钮
+// 与 ops/systemd/user/auto-recognize-nightly.timer (03:30) 走同一个后端服务,
+// 给运营即时看到最近一次的绑了多少 / 解析了多少 + 一键手动触发当夜流程
+// ===========================================================================
+
+function NightlyAutoRecognizeCard() {
+  const recentQuery = useQuery({
+    queryKey: ['auto-recognize-recent-runs'],
+    queryFn: () => listAutoRecognizeRuns(5),
+    refetchInterval: 60_000, // 每分钟刷一次, 让跑过的结果及时显现
+    placeholderData: keepPreviousData,
+  })
+
+  const runMutation = useMutation({
+    mutationFn: () =>
+      runAutoRecognizeOnce({
+        requested_by: 'sku-master-page',
+        max_bind: 2000,
+        max_preparse: 2000,
+      }),
+    onSuccess: (res) => {
+      const bound = res.bind?.bound_count || 0
+      const saved = res.preparse?.saved || 0
+      const skipHash = res.preparse?.skipped_same_hash || 0
+      const elapsed = res.elapsed_ms ? `${Math.round(res.elapsed_ms / 1000)}s` : '?'
+      Modal[res.status === 'success' ? 'success' : 'info']({
+        title: res.status === 'success' ? '自动识别完成' : `识别结果: ${res.status}`,
+        width: 520,
+        content: (
+          <div style={{ fontSize: 12, lineHeight: 1.8 }}>
+            <div>
+              <Tag color="blue">绑模型 {bound}</Tag>
+              <Tag color="green">解析规格 {saved}</Tag>
+              <Tag>跳过(同 hash) {skipHash}</Tag>
+              <Tag>耗时 {elapsed}</Tag>
+            </div>
+            {(res.bind?.errors?.length || 0) + (res.preparse?.errors?.length || 0) > 0 ? (
+              <Alert
+                type="warning"
+                showIcon
+                style={{ marginTop: 8 }}
+                message={`绑定错误 ${res.bind?.errors?.length || 0} · 解析错误 ${res.preparse?.errors?.length || 0}`}
+                description="详情可在 journalctl 看, 或下一次自动重试"
+              />
+            ) : null}
+            <Text type="secondary" style={{ display: 'block', marginTop: 8 }}>
+              注: 单次最多绑 2000 + 解析 2000. 待识别的剩余 SKU 明天 03:30 systemd timer 会继续跑.
+            </Text>
+          </div>
+        ),
+      })
+      recentQuery.refetch()
+    },
+    onError: (e: any) => {
+      Modal.error({
+        title: '运行失败',
+        content: e?.response?.data?.detail || e?.message || '未知错误',
+      })
+    },
+  })
+
+  const items: AutoRecognizeRunListItem[] = recentQuery.data?.items || []
+  const last = items[0]
+
+  return (
+    <Card
+      size="small"
+      title={
+        <Space size={6}>
+          <span>夜间自动识别</span>
+          <Tooltip title="systemd timer 每晚 03:30 自动跑: 把发货同步落地的新 SKU 自动绑模型 + 自动预解析规格. 你也可以点「立刻跑一次」手动触发当夜流程.">
+            <Tag style={{ fontSize: 10 }}>03:30 cron</Tag>
+          </Tooltip>
+        </Space>
+      }
+      extra={
+        <Button
+          size="small"
+          type="primary"
+          loading={runMutation.isPending}
+          onClick={() => runMutation.mutate()}
+        >
+          立刻跑一次
+        </Button>
+      }
+    >
+      <Space direction="vertical" size={8} style={{ width: '100%' }}>
+        {last ? (
+          <div style={{ fontSize: 12, lineHeight: 1.8 }}>
+            <div>
+              <Tag color={last.status === 'success' ? 'green' : last.status === 'failed' ? 'red' : 'orange'}>
+                {last.status || '?'}
+              </Tag>
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                {last.triggered_by || 'cron'} ·{' '}
+                {last.started_at ? formatBeijingTime(last.started_at) : '?'}
+              </Text>
+            </div>
+            <div>
+              <Tag color="blue">绑 {last.bound_count}</Tag>
+              <Tag color="green">解析 {last.preparse_saved}</Tag>
+              {last.preparse_skipped_same_hash ? (
+                <Tag>跳过 {last.preparse_skipped_same_hash}</Tag>
+              ) : null}
+              {(last.bind_errors || last.preparse_errors) ? (
+                <Tag color="orange">错误 {last.bind_errors + last.preparse_errors}</Tag>
+              ) : null}
+              {last.elapsed_ms ? (
+                <Text type="secondary" style={{ fontSize: 11 }}>
+                  {Math.round((last.elapsed_ms || 0) / 1000)}s
+                </Text>
+              ) : null}
+            </div>
+            {items.length > 1 ? (
+              <Tooltip
+                title={
+                  <div style={{ fontSize: 11, lineHeight: 1.6, maxWidth: 320 }}>
+                    {items.slice(0, 5).map((r) => (
+                      <div key={r.id}>
+                        {r.started_at ? formatBeijingTime(r.started_at).slice(5) : '?'} ·{' '}
+                        <Tag color={r.status === 'success' ? 'green' : 'red'} style={{ fontSize: 10 }}>
+                          {r.status}
+                        </Tag>{' '}
+                        绑 {r.bound_count} · 解析 {r.preparse_saved}
+                        {r.triggered_by !== 'cron' ? ` · ${r.triggered_by}` : ''}
+                      </div>
+                    ))}
+                  </div>
+                }
+              >
+                <Text type="secondary" style={{ fontSize: 11, cursor: 'help' }}>
+                  最近 {items.length} 次 ⓘ
+                </Text>
+              </Tooltip>
+            ) : null}
+          </div>
+        ) : (
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            尚无运行记录. 等待 03:30 systemd timer 首次触发, 或点「立刻跑一次」.
+          </Text>
+        )}
+      </Space>
+    </Card>
+  )
+}
+
+

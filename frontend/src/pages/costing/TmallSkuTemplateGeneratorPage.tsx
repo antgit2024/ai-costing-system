@@ -1,0 +1,2933 @@
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Alert, Button, Card, Checkbox, Divider, Drawer, Input, message, Radio, Select, Space, Switch, Table, Tag, Typography, Upload } from 'antd'
+import {
+  CheckCircleFilled,
+  CloseCircleFilled,
+  DeleteOutlined,
+  DownloadOutlined,
+  EyeOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+  SaveOutlined,
+  SettingOutlined,
+  UploadOutlined,
+} from '@ant-design/icons'
+import * as XLSX from 'xlsx'
+import { useParams } from 'react-router-dom'
+
+import {
+  exportTmallSkuTemplateXlsx,
+  fetchBundleTemplates,
+  fetchPublishedStandardModels,
+  fetchTmallSkuGeneratorTemplate,
+  previewTmallSkuTemplate,
+  upsertTmallSkuGeneratorTemplate,
+  type TmallColorOption,
+  type TmallSizeOption,
+  type TmallSkuCell,
+  type TmallSkuRow,
+} from '@/services/planner'
+import { formatBeijingTime } from '@/utils/beijingTime'
+
+import {
+  computeMatrixCountFromConfig,
+  loadTemplateConfig,
+  type SpecModuleType,
+} from './tmallSkuGeneratorTemplates'
+
+// 通用绑定目标选择器（弹窗浏览模式 — 标签页 标准模型/套装模板 + Tree 二级展开）。
+// 本页 4 处"绑定来源(模型/套版)"下拉用 <TmallSourceCodePicker /> 包装它，
+// 内部用 token helper 在 string 形式 source_code（如 "KB8" / "B-3U3PAA" / "Z-DB9EAD"）
+// 与 TargetSelection 之间做转换 —— specEdits / colors / sizes / customSalesAttributes
+// 字段类型 (`source_code: string`) 完全不变，bundleTokenMetaByValue 元数据查找路径不变。
+import { useQuery } from '@tanstack/react-query'
+import {
+  TargetPickerBrowserButton,
+  targetSelectionToTmallSourceCode,
+  tmallSourceCodeToTargetSelection,
+} from '@/components/common/TargetPicker'
+import type { TargetSelection } from '@/components/common/TargetPicker'
+import { fetchBindingTargets } from '@/services/planner'
+
+const { Text } = Typography
+
+const uid = () => Math.random().toString(36).slice(2, 10)
+
+/**
+ * 把"商家编码锚点 token 字符串"形式的 source_code 接入 TargetPickerBrowserButton。
+ *
+ * Why a wrapper?
+ *   - 4 处下拉/4 个数据源（colors / sizes / customSalesAttributes / specEdits）都用 string token，
+ *     直接接 BrowserButton 需要外部维护 selection state；用包装组件后调用方仍只看 string，0 改动。
+ *   - 业务下游 bundleTokenMetaByValue 仍按 token 字符串查 components，不需要扩接口暴露 components。
+ *
+ * 注意：
+ *   - value=''/undefined → 视为"未绑定（清空）"
+ *   - 标准模型回显由于 token 不含 model_id，用户已选的话只能恢复 model_code；重新打开 Modal 时
+ *     在标准模型 Tab 下输入 code 搜索可以快速定位高亮（按 model_code 大写匹配）。
+ */
+type TmallSourceCodePickerProps = {
+  value?: string | null
+  onChange: (token: string) => void
+  size?: 'small' | 'middle' | 'large'
+  width?: number | string
+  placeholder?: string
+  disabled?: boolean
+}
+
+const TmallSourceCodePicker = ({
+  value,
+  onChange,
+  size = 'middle',
+  width,
+  placeholder = '绑定来源(模型/套版)',
+  disabled,
+}: TmallSourceCodePickerProps) => {
+  // 拉一次"全量绑定目标"用作回显查表 —— React Query 共享 cache，本页所有按钮实例只发一次请求。
+  // limit 给到 500 足以覆盖当前规模（~100 model + ~5 bundle template）。
+  // **关键**：把 source_code 字符串映回 TargetSelection 时优先精确查表（命中 standard_model_code
+  // 就走 model 路径，否则按 `B-XXXXAB` / `Z-XXXXAB` 拆出 bundle + selector），
+  // 不再单纯靠正则猜，避免 `B-DB9EAE`（同时是 model code、又长得像 bundle token）回显错位。
+  const candidatesQuery = useQuery({
+    queryKey: ['binding-targets', 'tmall-source-candidates'],
+    queryFn: () => fetchBindingTargets({ limit: 500 }),
+    staleTime: 60_000,
+  })
+  const allItems = candidatesQuery.data?.items ?? []
+  const candidates = useMemo(
+    () => ({
+      models: allItems.filter((x) => x.kind === 'model'),
+      bundles: allItems.filter((x) => x.kind === 'bundle'),
+    }),
+    [allItems],
+  )
+  const selection = useMemo<TargetSelection | null>(
+    () => tmallSourceCodeToTargetSelection(value || '', candidates),
+    [value, candidates],
+  )
+  return (
+    <TargetPickerBrowserButton
+      value={selection}
+      onChange={(next) => onChange(targetSelectionToTmallSourceCode(next))}
+      buttonProps={{ size, style: width !== undefined ? { width } : undefined, disabled }}
+      placeholder={placeholder}
+    />
+  )
+}
+
+const downloadBlob = (blob: Blob, filename: string) => {
+  const url = window.URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  window.URL.revokeObjectURL(url)
+}
+
+type ColorRow = TmallColorOption & {
+  enabledSizes: Record<string, boolean>
+  // 绑定“模型/套版”的来源编码（用于生成商家编码）；颜色分类层级优先级最高（覆盖尺寸绑定）
+  // 例：PI5 / Z-3U3PAA / B-3U3PAA
+  source_code?: string
+}
+
+type SizeRow = TmallSizeOption & {
+  // 绑定“模型/套版”的来源编码（用于生成商家编码；对客展示仍使用 label）
+  // 例：PI5 / YS2 / Z-3U3PAA / B-3U3PAA
+  source_code?: string
+}
+
+type SourceOptionGroup = { label: string; options: Array<{ label: string; value: string }> }
+
+type BundleTokenMeta = {
+  mode: 'B' | 'Z'
+  phrase?: string
+  name?: string
+  // phrase_preset.components 优先；否则回退模板顶层 components（best-effort）
+  components?: Array<{
+    model_version_id?: string
+    width_mm?: number
+    height_mm?: number
+    quantity?: number
+    spec_text?: string
+    label?: string
+  }>
+}
+
+const readFileAsArrayBuffer = (file: File): Promise<ArrayBuffer> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as ArrayBuffer)
+    reader.onerror = () => reject(reader.error ?? new Error('读取文件失败'))
+    reader.readAsArrayBuffer(file)
+  })
+
+const normalizeCellText = (v: unknown) => String(v ?? '').replace(/\s+/g, ' ').trim()
+
+const safeUpper = (v: unknown) => String(v ?? '').trim().toUpperCase()
+
+const buildMerchantSku = (args: {
+  merchantSkuPrefix: string
+  merchantSkuSuffix: string
+  sourceCode?: string | null
+}) => {
+  const prefix = String(args.merchantSkuPrefix ?? '')
+  const suffix = String(args.merchantSkuSuffix ?? '')
+  const source = String(args.sourceCode ?? '').trim()
+
+  // IMPORTANT: 商家编码里不要拼尺寸（例如 -4545 / 45x45 之类），只保留稳定的绑定锚点。
+  if (source) {
+    return `${source}${suffix}`.trim()
+  }
+  return `${prefix}${suffix}`.trim()
+}
+
+const normalizeAttrValue = (v: unknown) => {
+  // Normalize for stability when matching:
+  // - collapse whitespace
+  // - trim
+  // - do NOT change punctuation/case (keep user intent)
+  return String(v ?? '').replace(/\s+/g, ' ').trim()
+}
+
+const fmtNum = (v: unknown): string => {
+  if (v === null || v === undefined) return ''
+  const n = Number(v)
+  if (!Number.isFinite(n)) return ''
+  return n.toFixed(2).replace(/\.?0+$/, '')
+}
+
+const mmToCmText = (mm: unknown): string => {
+  const n = Number(mm)
+  if (!Number.isFinite(n) || n <= 0) return ''
+  return fmtNum(n / 10)
+}
+
+const parseExpectedDimsFromFormula = (formulaRaw: string): Array<{ w: string; h: string }> => {
+  const text = String(formulaRaw ?? '')
+  if (!text.trim()) return []
+
+  const normalizeToCmText = (value: number, unitRaw?: string | null) => {
+    const u = String(unitRaw ?? 'cm').trim().toLowerCase()
+    let cm = value
+    if (u === 'mm' || u === '毫米') cm = value / 10
+    else if (u === 'm' || u === '米') cm = value * 100
+    return fmtNum(cm)
+  }
+
+  // best-effort: find all "W*H" occurrences (ignore qty); keep order
+  const re =
+    /(约|大约|约等)?(?<w>\d{1,4}(?:\.\d+)?)\s*(?:[xX×\*＊]\s*(?<h>\d{1,4}(?:\.\d+)?))\s*(?<unit>cm|厘米|mm|毫米|m|米)?/gi
+  const out: Array<{ w: string; h: string }> = []
+  let m: RegExpExecArray | null
+  while ((m = re.exec(text))) {
+    const w = Number((m.groups as any)?.w ?? '')
+    const h = Number((m.groups as any)?.h ?? '')
+    const unit = ((m.groups as any)?.unit as any) ?? null
+    if (!Number.isFinite(w) || !Number.isFinite(h)) continue
+    // 0*0*0 视为占位（由“商品规格（网店）”解析尺寸为准）
+    if (w <= 0 || h <= 0) continue
+    const ww = normalizeToCmText(w, unit)
+    const hh = normalizeToCmText(h, unit)
+    if (!ww || !hh) continue
+    out.push({ w: ww, h: hh })
+  }
+  // uniq by "w×h"
+  const seen = new Set<string>()
+  const uniq: Array<{ w: string; h: string }> = []
+  for (const x of out) {
+    const k = `${x.w}×${x.h}`
+    if (seen.has(k)) continue
+    seen.add(k)
+    uniq.push(x)
+  }
+  return uniq
+}
+
+// 说明（前置校验台）：
+// - 本页用于在“同步 ERP/发货扣库”之前，把“商品规格（网店）spec_text + 商家编码 + 尺寸(B/Z口径)”提前跑通并暴露问题
+// - 解析口径尽量与后端一致，避免“前端看着对、后端扣库失败”
+// - 相关后端口径：
+//   - spec 解析：backend/src/planner/services/spec_parser_service.py::parse_spec
+//   - B/Z 尺寸策略：backend/src/planner/services/bom_generation_service.py（generate-by-spec 的 B / Z dimension strategy）
+//
+// 与后端 spec_parser_service.parse_spec 尽量一致：用于“商品规格（网店）”解析宽高（B 解析型命中/扣库口径）
+const parseDimsFromSpecText = (
+  specTextRaw: string,
+): { width_cm?: string; height_cm?: string; diameter_cm?: string; dimension_qty?: number } => {
+  const text = String(specTextRaw ?? '').trim()
+  if (!text) return {}
+
+  const normalizeToCm = (value: number, unitRaw?: string | null) => {
+    const u = String(unitRaw ?? 'cm').trim().toLowerCase()
+    if (u === 'mm' || u === '毫米') return value / 10
+    if (u === 'm' || u === '米') return value * 100
+    return value
+  }
+
+  let widthCm: number | null = null
+  let heightCm: number | null = null
+  let diameterCm: number | null = null
+  let dimensionQty: number | null = null
+
+  const isHeightLabel = (lbl: string) => ['竖', '高'].includes(String(lbl || '').trim())
+  const isWidthLabel = (lbl: string) => ['横', '宽', '长'].includes(String(lbl || '').trim())
+
+  // e.g. "竖120CM*横150CM" / "横150*竖120" / "宽120×高150"
+  const labeledRe =
+    /(竖|横|宽|高|长)\s*(\d{1,4}(?:\.\d+)?)\s*(cm|厘米|mm|毫米|m|米)?\s*(?:[xX×\*＊]\s*(竖|横|宽|高|长)\s*(\d{1,4}(?:\.\d+)?)\s*(cm|厘米|mm|毫米|m|米)?)/i
+  const labeled = labeledRe.exec(text)
+  if (labeled) {
+    const l1 = String(labeled[1] ?? '').trim()
+    const v1 = Number(labeled[2])
+    const u1 = labeled[3]
+    const l2 = String(labeled[4] ?? '').trim()
+    const v2 = Number(labeled[5])
+    const u2 = labeled[6]
+    const v1cm = Number.isFinite(v1) ? normalizeToCm(v1, u1) : null
+    const v2cm = Number.isFinite(v2) ? normalizeToCm(v2, u2) : null
+
+    if (v1cm !== null && isHeightLabel(l1)) heightCm = v1cm
+    if (v1cm !== null && isWidthLabel(l1)) widthCm = v1cm
+    if (v2cm !== null && isHeightLabel(l2)) heightCm = v2cm
+    if (v2cm !== null && isWidthLabel(l2)) widthCm = v2cm
+
+    if (widthCm === null && v1cm !== null) widthCm = v1cm
+    if (heightCm === null && v2cm !== null) heightCm = v2cm
+  }
+
+  // e.g. "45*45" / "45×45" / "45X45"
+  const dimRe =
+    /(约|大约|约等)?(\d{1,4}(?:\.\d+)?)\s*(?:[xX×\*＊]\s*(\d{1,4}(?:\.\d+)?))\s*(cm|厘米|mm|毫米|m|米)?/i
+  const dim = dimRe.exec(text)
+  if (dim) {
+    const w = Number(dim[2])
+    const h = Number(dim[3])
+    const unit = dim[4]
+    if (widthCm === null && Number.isFinite(w)) widthCm = normalizeToCm(w, unit)
+    if (heightCm === null && Number.isFinite(h)) heightCm = normalizeToCm(h, unit)
+  }
+
+  // Optional quantity parsing: "W*H*Q" (qty defaults to 1 when dims exist)
+  const dimQtyRe =
+    /(约|大约|约等)?(\d{1,4}(?:\.\d+)?)\s*(?:[xX×\*＊]\s*(\d{1,4}(?:\.\d+)?))\s*(cm|厘米|mm|毫米|m|米)?(?:\s*[xX×\*＊]\s*(\d{1,4}))?/i
+  const dimQty = dimQtyRe.exec(text)
+  if (dimQty) {
+    try {
+      const raw = String(dimQty[5] ?? '').trim()
+      if (raw) {
+        const q = Number(raw)
+        if (Number.isFinite(q) && q > 0) dimensionQty = Math.floor(q)
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // e.g. "直径50" / "φ50" / "圆形(50)"
+  const diaRe = /(直径|φ|Φ|D|圆形|圆)\s*[（(]?\s*(\d{1,4}(?:\.\d+)?)\s*(cm|厘米|mm|毫米|m|米)?\s*[）)]?/i
+  const dia = diaRe.exec(text)
+  if (dia) {
+    const v = Number(dia[2])
+    const unit = dia[3]
+    if (Number.isFinite(v)) {
+      diameterCm = normalizeToCm(v, unit)
+      if (widthCm === null && heightCm === null) {
+        widthCm = diameterCm
+        heightCm = diameterCm
+      }
+    }
+  }
+
+  const out: { width_cm?: string; height_cm?: string; diameter_cm?: string } = {}
+  if (widthCm !== null && widthCm > 0) out.width_cm = fmtNum(widthCm)
+  if (heightCm !== null && heightCm > 0) out.height_cm = fmtNum(heightCm)
+  if (diameterCm !== null && diameterCm > 0) out.diameter_cm = fmtNum(diameterCm)
+  // When dims exist but qty missing, default=1 (same as backend)
+  if (dimensionQty === null && out.width_cm && out.height_cm) dimensionQty = 1
+  if (dimensionQty !== null && dimensionQty > 0) (out as any).dimension_qty = dimensionQty
+  return out
+}
+
+const normalizeHeaderLabel = (v: unknown) => {
+  // Make header matching robust across common template variants:
+  // - collapse whitespace
+  // - convert full-width parentheses
+  // - strip any trailing "(必填)/(选填)/..." notes
+  const s = String(v ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/（/g, '(')
+    .replace(/）/g, ')')
+  // Remove any parenthesized suffix notes, e.g. "颜色分类(必填)" -> "颜色分类"
+  return s.replace(/\([^)]*\)\s*$/g, '').trim()
+}
+
+type HeaderIndex = {
+  headerRowIndex: number
+  colorCol: number
+  sizeCol: number
+  merchantSkuCol: number
+  statusCol: number
+  attrCols: Record<string, number>
+}
+
+const findHeaderIndex = (ws: XLSX.WorkSheet, attributeNames: string[] = ['颜色分类', '成品尺寸']): HeaderIndex | null => {
+  const ref = ws['!ref']
+  if (!ref) return null
+  const normalizedAttributeNames = attributeNames.map(normalizeHeaderLabel).filter(Boolean)
+  const range = XLSX.utils.decode_range(ref)
+  for (let r = range.s.r; r <= Math.min(range.e.r, range.s.r + 50); r++) {
+    const rowValues: string[] = []
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const addr = XLSX.utils.encode_cell({ r, c })
+      rowValues.push(normalizeHeaderLabel((ws as any)[addr]?.v))
+    }
+    const idxIncludesAny = (candidates: string[]) =>
+      rowValues.findIndex((x) => candidates.some((k) => x === k || x.includes(k)))
+
+    const colorCol = idxIncludesAny(['颜色分类'])
+    const sizeCol = idxIncludesAny(['成品尺寸', '尺寸'])
+    const merchantSkuCol = idxIncludesAny(['商家编码'])
+    const statusCol = idxIncludesAny(['是否上架', '上架状态'])
+    if ([colorCol, sizeCol, merchantSkuCol, statusCol].every((x) => x >= 0)) {
+      const attrCols: Record<string, number> = {}
+      for (const name of normalizedAttributeNames) {
+        const idx = rowValues.findIndex((x) => x === name || x.includes(name))
+        if (idx >= 0) attrCols[name] = range.s.c + idx
+      }
+      if (colorCol >= 0) attrCols['颜色分类'] = range.s.c + colorCol
+      if (sizeCol >= 0) {
+        attrCols['成品尺寸'] = range.s.c + sizeCol
+        attrCols['尺寸'] = range.s.c + sizeCol
+      }
+      return {
+        headerRowIndex: r,
+        colorCol: range.s.c + colorCol,
+        sizeCol: range.s.c + sizeCol,
+        merchantSkuCol: range.s.c + merchantSkuCol,
+        statusCol: range.s.c + statusCol,
+        attrCols,
+      }
+    }
+  }
+  return null
+}
+
+type MainPatternOption = { key: string; label: string }
+type CustomSalesAttributeValue = {
+  key: string
+  label: string
+  sku_code?: string
+  source_code?: string
+  remark?: string
+  metadata_json?: Record<string, any>
+}
+type CustomSalesAttribute = {
+  key: string
+  name: string
+  values: CustomSalesAttributeValue[]
+  enabled?: boolean
+  enableImages?: boolean
+  enableRemarks?: boolean
+}
+
+type PersistedConfigV1 = {
+  merchantSkuPrefix: string
+  merchantSkuSuffix: string
+  listingChannel?: 'tmall' | 'jd' | 'xhs' | 'douyin'
+  sizes: SizeRow[]
+  colors: Array<TmallColorOption & { enabledSizes?: Record<string, boolean>; source_code?: string }>
+  mainPatternTypes: Array<MainPatternOption & { remark?: string }>
+  customSalesAttributes?: CustomSalesAttribute[]
+  profiles?: Record<string, PersistedConfigV1>
+  ui?: {
+    enableColorImages?: boolean
+    enableSizeImages?: boolean
+    enableColorRemarks?: boolean
+    enableSizeRemarks?: boolean
+    enablePatternRemarks?: boolean
+    includeMainPatternType?: boolean
+  }
+}
+
+const downloadText = (text: string, filename: string) => {
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
+  downloadBlob(blob, filename)
+}
+
+const copyText = async (text: string) => {
+  try {
+    await navigator.clipboard.writeText(text)
+    message.success('已复制')
+  } catch {
+    // Fallback for environments without clipboard permission
+    const el = document.createElement('textarea')
+    el.value = text
+    el.style.position = 'fixed'
+    el.style.left = '-9999px'
+    document.body.appendChild(el)
+    el.focus()
+    el.select()
+    document.execCommand('copy')
+    el.remove()
+    message.success('已复制')
+  }
+}
+
+type DisplayMode = 'table' | 'matrix'
+
+type ListingChannel = 'tmall' | 'jd' | 'xhs' | 'douyin'
+
+type SpecRow = {
+  row_key: string
+  color_key: string
+  size_key: string
+  color_label: string
+  size_label: string
+  attribute_values?: Record<string, string>
+  merchant_sku: string
+  merchant_source?: string
+  display_source?: string
+  binding_level?: 'row' | 'custom' | 'size' | 'color' | 'none'
+  is_z_source?: boolean
+  attribute_spec?: string
+  token_formula?: string
+  spec_text?: string
+  sku_status: 0 | 1
+  main_pattern_type?: string | null
+  length_cm?: string
+  thickness_cm?: string
+  width_cm?: string
+  height_cm?: string
+}
+
+type SpecEdits = Record<
+  string,
+  {
+    price?: string
+    quantity?: string
+    sku_category?: '单品' | '套装'
+    barcode?: string
+    reserved_qty?: string
+    selling_point?: string
+    model_source_code?: string
+    token_formula?: string
+  }
+>
+
+// 默认值（每个 builder 返回独立引用，避免不同模板共享 mutable 数组/对象）
+const DEFAULT_MERCHANT_SKU_PREFIX = 'BZPB008XXXXX-'
+const DEFAULT_MERCHANT_SKU_SUFFIX = ''
+const DEFAULT_LISTING_CHANNEL: ListingChannel = 'tmall'
+
+const buildDefaultSizes = (): SizeRow[] => [
+  { key: 'size_1', label: '枕芯+枕套', size_code: 'C1', source_code: '' },
+  { key: 'size_2', label: '枕套', size_code: 'C2', source_code: '' },
+]
+
+const buildDefaultColors = (): ColorRow[] => [
+  {
+    key: 'c1',
+    label: 'Q25122501A黄金绒背面纯色（红色毛球） 45X45',
+    width_cm: 45,
+    height_cm: 45,
+    enabledSizes: { size_1: true, size_2: true },
+    source_code: '',
+  },
+]
+
+const buildDefaultMainPatternTypes = (): MainPatternOption[] => [
+  { key: 'p1', label: '无' },
+]
+
+const buildDefaultCustomSalesAttributes = (): CustomSalesAttribute[] => []
+
+const normalizeCustomSalesAttributes = (raw: unknown): CustomSalesAttribute[] => {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .map((attr: any) => {
+      const key = String(attr?.key ?? `attr_${uid()}`)
+      const name = String(attr?.name ?? '').trim()
+      const valuesRaw = Array.isArray(attr?.values) ? attr.values : []
+      const values = valuesRaw
+        .map((v: any) => ({
+          key: String(v?.key ?? `v_${uid()}`),
+          label: String(v?.label ?? '').trim(),
+          sku_code: String(v?.sku_code ?? '').trim(),
+          source_code: String(v?.source_code ?? '').trim(),
+          remark: String(v?.remark ?? '').trim(),
+          metadata_json: v?.metadata_json && typeof v.metadata_json === 'object' ? v.metadata_json : {},
+        }))
+        .filter((v: CustomSalesAttributeValue) => v.label)
+      return {
+        key,
+        name,
+        values,
+        enabled: attr?.enabled !== false,
+        enableImages: attr?.enableImages === true,
+        enableRemarks: attr?.enableRemarks === true,
+      }
+    })
+    .filter((attr: CustomSalesAttribute) => attr.name && attr.values.length)
+}
+
+const buildCustomAttributeCombos = (attrs: CustomSalesAttribute[]) => {
+  const active = normalizeCustomSalesAttributes(attrs).filter((attr) => attr.enabled !== false)
+  if (!active.length) return [{ keySuffix: '', labels: [] as string[], values: {} as Record<string, string>, skuCodeSuffix: '', sourceCodes: [] as string[] }]
+  return active.reduce<Array<{ keySuffix: string; labels: string[]; values: Record<string, string>; skuCodeSuffix: string; sourceCodes: string[] }>>(
+    (acc, attr) => {
+      const next: Array<{ keySuffix: string; labels: string[]; values: Record<string, string>; skuCodeSuffix: string; sourceCodes: string[] }> = []
+      for (const base of acc) {
+        for (const value of attr.values) {
+          const label = normalizeAttrValue(value.label)
+          if (!label) continue
+          next.push({
+            keySuffix: `${base.keySuffix}||${attr.key}:${value.key}`,
+            labels: [...base.labels, label],
+            values: { ...base.values, [attr.name]: label },
+            skuCodeSuffix: `${base.skuCodeSuffix}${String(value.sku_code ?? '').trim()}`,
+            sourceCodes: [...base.sourceCodes, String(value.source_code ?? '').trim()].filter(Boolean),
+          })
+        }
+      }
+      return next.length ? next : acc
+    },
+    [{ keySuffix: '', labels: [], values: {}, skuCodeSuffix: '', sourceCodes: [] }],
+  )
+}
+
+// 外层包一层，按 templateId 强制重挂载内部组件，杜绝模板切换时 state 残留导致的“列表里每个进入都一样”问题
+export default function TmallSkuTemplateGeneratorPage() {
+  const params = useParams()
+  const templateId = String((params as any)?.templateId ?? 'mvp').trim() || 'mvp'
+  return <TmallSkuTemplateGeneratorPageInner key={templateId} templateId={templateId} />
+}
+
+function TmallSkuTemplateGeneratorPageInner({ templateId }: { templateId: string }) {
+  const [templateName, setTemplateName] = useState<string>('')
+  const [templateType, setTemplateType] = useState<SpecModuleType>('家居布艺')
+
+  // 同步加载当前 templateId 对应的 config（仅 mvp 时尝试 legacy 迁移），保证不同模板初始 state 互不串扰
+  const initialConfig = useMemo<PersistedConfigV1 | null>(() => {
+    try {
+      const parsed = loadTemplateConfig(templateId) as PersistedConfigV1 | null
+      if (parsed) return parsed
+      if (templateId === 'mvp') {
+        const legacyRaw = localStorage.getItem('tmall_sku_generator_config_v1')
+        if (legacyRaw) {
+          try {
+            const legacyParsed = JSON.parse(legacyRaw) as PersistedConfigV1
+            if (legacyParsed) {
+              return legacyParsed
+            }
+          } catch {
+            // ignore corrupted legacy
+          }
+        }
+      }
+      return null
+    } catch {
+      return null
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const [merchantSkuPrefix, setMerchantSkuPrefix] = useState<string>(
+    () => String(initialConfig?.merchantSkuPrefix ?? DEFAULT_MERCHANT_SKU_PREFIX),
+  )
+  const [merchantSkuSuffix, setMerchantSkuSuffix] = useState<string>(
+    () => String(initialConfig?.merchantSkuSuffix ?? DEFAULT_MERCHANT_SKU_SUFFIX),
+  )
+  const [listingChannel, setListingChannel] = useState<ListingChannel>(
+    () => ((initialConfig as any)?.listingChannel as ListingChannel) ?? DEFAULT_LISTING_CHANNEL,
+  )
+
+  const [sizes, setSizes] = useState<SizeRow[]>(() => {
+    // 区分「无 config（首次进入 mvp 等）」与「有 config 但字段为空（用户主动清空 / 新建空白模板）」：
+    // - 无 config → 用内置默认示例
+    // - 有 config（哪怕字段为空数组）→ 完全尊重已保存的内容，避免“新建空白模板还显示默认示例”
+    if (!initialConfig) return buildDefaultSizes()
+    return Array.isArray(initialConfig.sizes) ? (initialConfig.sizes as SizeRow[]) : []
+  })
+
+  const [colors, setColors] = useState<ColorRow[]>(() => {
+    if (!initialConfig) return buildDefaultColors()
+    const raw = Array.isArray(initialConfig.colors) ? (initialConfig.colors as any[]) : []
+    return raw.map((c) => ({
+      key: c.key,
+      label: c.label,
+      width_cm: c.width_cm,
+      height_cm: c.height_cm,
+      thickness_cm: c.thickness_cm,
+      length_cm: c.length_cm,
+      main_pattern_type: c.main_pattern_type,
+      source_code: c?.source_code ?? '',
+      enabledSizes: c?.enabledSizes ?? {},
+    }))
+  })
+
+  const [previewRows, setPreviewRows] = useState<TmallSkuRow[]>([])
+  const [previewTotal, setPreviewTotal] = useState(0)
+  const [loadingPreview, setLoadingPreview] = useState(false)
+  const [loadingExport, setLoadingExport] = useState(false)
+  const [templateFile, setTemplateFile] = useState<File | null>(null)
+  const [templateSheetNames, setTemplateSheetNames] = useState<string[]>([])
+  const [templateSheetName, setTemplateSheetName] = useState<string>('')
+  const [loadingFill, setLoadingFill] = useState(false)
+  const [overwriteExisting, setOverwriteExisting] = useState(true)
+  const [mainPatternTypes, setMainPatternTypes] = useState<MainPatternOption[]>(() => {
+    if (!initialConfig) return buildDefaultMainPatternTypes()
+    return Array.isArray(initialConfig.mainPatternTypes) ? (initialConfig.mainPatternTypes as MainPatternOption[]) : []
+  })
+  const [customSalesAttributes, setCustomSalesAttributes] = useState<CustomSalesAttribute[]>(() => {
+    if (!initialConfig) return buildDefaultCustomSalesAttributes()
+    return normalizeCustomSalesAttributes((initialConfig as any).customSalesAttributes)
+  })
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [includeMainPatternType, setIncludeMainPatternType] = useState<boolean>(
+    () => (typeof initialConfig?.ui?.includeMainPatternType === 'boolean' ? initialConfig!.ui!.includeMainPatternType! : true),
+  )
+  const [enableColorImages, setEnableColorImages] = useState<boolean>(
+    () => (typeof initialConfig?.ui?.enableColorImages === 'boolean' ? initialConfig!.ui!.enableColorImages! : true),
+  )
+  const [enableSizeImages, setEnableSizeImages] = useState<boolean>(
+    () => (typeof initialConfig?.ui?.enableSizeImages === 'boolean' ? initialConfig!.ui!.enableSizeImages! : false),
+  )
+  const [enableColorRemarks, setEnableColorRemarks] = useState<boolean>(
+    () => (typeof initialConfig?.ui?.enableColorRemarks === 'boolean' ? initialConfig!.ui!.enableColorRemarks! : true),
+  )
+  const [enableSizeRemarks, setEnableSizeRemarks] = useState<boolean>(
+    () => (typeof initialConfig?.ui?.enableSizeRemarks === 'boolean' ? initialConfig!.ui!.enableSizeRemarks! : true),
+  )
+  const [enablePatternRemarks, setEnablePatternRemarks] = useState<boolean>(
+    () => (typeof initialConfig?.ui?.enablePatternRemarks === 'boolean' ? initialConfig!.ui!.enablePatternRemarks! : false),
+  )
+  const [displayMode, setDisplayMode] = useState<DisplayMode>('table')
+  const [specEdits, setSpecEdits] = useState<SpecEdits>({})
+  type RowValidationDetail = {
+    ok: boolean
+    issues: string[]
+    okTokens: string[]
+    multiTokens: string[]
+    missingGroupIndexes: number[]
+    sizeMatched?: boolean
+  }
+  const [rowValidation, setRowValidation] = useState<Record<string, RowValidationDetail>>({})
+  // Model dropdown sources (for colors & sizes)
+  const [sourceGroups, setSourceGroups] = useState<SourceOptionGroup[]>([])
+  const [loadingSourceGroups, setLoadingSourceGroups] = useState(false)
+  const [sourceRefreshKey, setSourceRefreshKey] = useState(0)
+  const [bundleTokenMetaByValue, setBundleTokenMetaByValue] = useState<Record<string, BundleTokenMeta>>({})
+
+  // Explicit save/load profiles: persisted inside the backend template config.
+  const [profileName, setProfileName] = useState('')
+  const [profileNames, setProfileNames] = useState<string[]>([])
+  const [selectedProfileName, setSelectedProfileName] = useState<string>('')
+  const [savedProfiles, setSavedProfiles] = useState<Record<string, PersistedConfigV1>>(() => {
+    const raw = (initialConfig as any)?.profiles
+    return raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, PersistedConfigV1>) : {}
+  })
+  const [templateLoaded, setTemplateLoaded] = useState(false)
+  const [savingTemplate, setSavingTemplate] = useState(false)
+  const [lastSavedAt, setLastSavedAt] = useState<string>('')
+  const suppressSaveRef = useRef(true)
+
+  // Load shared template meta/config from backend DB. localStorage is only a legacy initial fallback.
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      suppressSaveRef.current = true
+      setTemplateLoaded(false)
+      try {
+        const tpl = await fetchTmallSkuGeneratorTemplate(templateId)
+        if (cancelled) return
+        const cfg = tpl.config as any as PersistedConfigV1
+        setTemplateName(String(tpl.name ?? '').trim() || '未命名模板')
+        setTemplateType(((tpl.type as any) || '家居布艺') as SpecModuleType)
+        setMerchantSkuPrefix(String(cfg?.merchantSkuPrefix ?? DEFAULT_MERCHANT_SKU_PREFIX))
+        setMerchantSkuSuffix(String(cfg?.merchantSkuSuffix ?? DEFAULT_MERCHANT_SKU_SUFFIX))
+        setListingChannel(((cfg as any)?.listingChannel as ListingChannel) ?? DEFAULT_LISTING_CHANNEL)
+        setSizes(Array.isArray(cfg?.sizes) ? (cfg.sizes as any) : [])
+        setColors(
+          Array.isArray(cfg?.colors)
+            ? (cfg.colors as any[]).map((c) => ({
+                key: c.key,
+                label: c.label,
+                width_cm: c.width_cm,
+                height_cm: c.height_cm,
+                thickness_cm: c.thickness_cm,
+                length_cm: c.length_cm,
+                main_pattern_type: c.main_pattern_type,
+                source_code: c?.source_code ?? '',
+                enabledSizes: c?.enabledSizes ?? {},
+              }))
+            : [],
+        )
+        setMainPatternTypes(Array.isArray(cfg?.mainPatternTypes) ? (cfg.mainPatternTypes as any) : [])
+        setCustomSalesAttributes(normalizeCustomSalesAttributes((cfg as any)?.customSalesAttributes))
+        const profiles = (cfg as any)?.profiles
+        const normalizedProfiles =
+          profiles && typeof profiles === 'object' && !Array.isArray(profiles) ? (profiles as Record<string, PersistedConfigV1>) : {}
+        setSavedProfiles(normalizedProfiles)
+        setProfileNames(Object.keys(normalizedProfiles).filter(Boolean).sort((a, b) => a.localeCompare(b)))
+        const ui = cfg?.ui ?? {}
+        setEnableColorImages(typeof ui.enableColorImages === 'boolean' ? ui.enableColorImages : true)
+        setEnableSizeImages(typeof ui.enableSizeImages === 'boolean' ? ui.enableSizeImages : false)
+        setEnableColorRemarks(typeof ui.enableColorRemarks === 'boolean' ? ui.enableColorRemarks : true)
+        setEnableSizeRemarks(typeof ui.enableSizeRemarks === 'boolean' ? ui.enableSizeRemarks : true)
+        setEnablePatternRemarks(typeof ui.enablePatternRemarks === 'boolean' ? ui.enablePatternRemarks : false)
+        setIncludeMainPatternType(typeof ui.includeMainPatternType === 'boolean' ? ui.includeMainPatternType : true)
+        setTemplateLoaded(true)
+        window.setTimeout(() => {
+          suppressSaveRef.current = false
+        }, 0)
+      } catch (e: any) {
+        if (!cancelled) {
+          message.error(`加载模板失败：${String(e?.message ?? e)}`)
+          setTemplateLoaded(true)
+          window.setTimeout(() => {
+            suppressSaveRef.current = false
+          }, 0)
+        }
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [templateId])
+
+  // 注：localStorage 只作为旧数据读取 fallback；多人共享与长期保存以 backend DB 为准。
+
+  useEffect(() => {
+    setProfileNames(Object.keys(savedProfiles ?? {}).filter(Boolean).sort((a, b) => a.localeCompare(b)))
+  }, [savedProfiles])
+
+  const buildPersistedConfig = (): PersistedConfigV1 => ({
+    merchantSkuPrefix,
+    merchantSkuSuffix,
+    listingChannel,
+    sizes,
+    colors,
+    mainPatternTypes,
+    customSalesAttributes,
+    profiles: savedProfiles,
+    ui: {
+      enableColorImages,
+      enableSizeImages,
+      enableColorRemarks,
+      enableSizeRemarks,
+      enablePatternRemarks,
+      includeMainPatternType,
+    },
+  })
+
+  const saveTemplateNow = async (opts: { silent?: boolean; closeSettings?: boolean } = {}) => {
+    if (!templateLoaded) {
+      if (!opts.silent) message.warning('模板还在加载，请稍后再保存')
+      return
+    }
+    const data = buildPersistedConfig()
+    const now = new Date().toISOString()
+    const name = String(templateName ?? '').trim() || (templateId === 'mvp' ? '天猫布艺 SKU规格生成器（MVP）' : '未命名模板')
+    if (!opts.silent) setSavingTemplate(true)
+    try {
+      await upsertTmallSkuGeneratorTemplate(templateId, {
+        id: templateId,
+        name,
+        type: templateType,
+        published_at: now,
+        matrix_count: computeMatrixCountFromConfig(data as any),
+        archived: false,
+        config: data as any,
+      })
+      setLastSavedAt(now)
+      if (opts.closeSettings) setSettingsOpen(false)
+      if (!opts.silent) message.success('已保存到服务器')
+    } catch (e: any) {
+      message.error(`${opts.silent ? '自动保存' : '保存'}模板失败：${String(e?.message ?? e)}`)
+    } finally {
+      if (!opts.silent) setSavingTemplate(false)
+    }
+  }
+
+  useEffect(() => {
+    // fetch options (refreshable)
+    let cancelled = false
+    void (async () => {
+      setLoadingSourceGroups(true)
+      try {
+        // cache-bust: new models/bundles might not show up immediately if upstream caches GET
+        const ts = Date.now()
+
+        // 1) Published standard models (increase limit to avoid pagination hiding new items)
+        const modelsResp = await fetchPublishedStandardModels({ limit: 1000, _ts: ts } as any)
+
+        const modelItems = Array.isArray((modelsResp as any)?.items) ? ((modelsResp as any).items as any[]) : Array.isArray(modelsResp as any) ? (modelsResp as any) : []
+        const modelOptions = modelItems
+          .map((it: any) => {
+            const code = safeUpper((it as any)?.code ?? (it as any)?.model_code ?? (it as any)?.model ?? '')
+            const name = String((it as any)?.name ?? (it as any)?.model_name ?? '').trim()
+            if (!code) return null
+            return { value: code, label: name ? `${code}（${name}）` : code }
+          })
+          .filter(Boolean) as Array<{ value: string; label: string }>
+
+        // 2) Bundle templates: page through to avoid new items being outside first page
+        const bundleItems: any[] = []
+        const pageSize = 200
+        const maxPages = 20 // hard cap: 4000 templates max (should be enough for now)
+        for (let page = 1; page <= maxPages; page++) {
+          const resp = await fetchBundleTemplates({ page, page_size: pageSize, include_archived: true, _ts: ts } as any)
+          const items = Array.isArray((resp as any)?.items) ? ((resp as any).items as any[]) : []
+          bundleItems.push(...items)
+          if (items.length < pageSize) break
+        }
+        const bundleOptions: Array<{ value: string; label: string }> = []
+        const bundleMeta: Record<string, BundleTokenMeta> = {}
+        for (const t of bundleItems) {
+          const code = safeUpper((t as any)?.code)
+          if (!code) continue
+          const name = String((t as any)?.name ?? '').trim()
+          const pp = Array.isArray((t as any)?.metadata?.phrase_presets) ? ((t as any).metadata.phrase_presets as any[]) : []
+          for (const p of pp) {
+            const sel = safeUpper((p as any)?.selector)
+            if (!sel) continue
+            const mode = String((p as any)?.mode ?? '').trim() === 'force' ? 'Z' : 'B'
+            const token = `${mode}-${code}${sel}`
+            const phrase = String((p as any)?.phrase ?? '').trim()
+            // phrase_preset.components 优先：selector 模式下更稳定；否则回退模板顶层 components（best-effort）
+            const presetComps = Array.isArray((p as any)?.components) ? ((p as any).components as any[]) : []
+            const tplComps = Array.isArray((t as any)?.components) ? ((t as any).components as any[]) : []
+            const compsRaw = presetComps.length ? presetComps : tplComps
+            const comps =
+              compsRaw
+                .map((c: any) => ({
+                  model_version_id: String(c?.model_version_id ?? '').trim() || undefined,
+                  width_mm: typeof c?.width_mm === 'number' ? c.width_mm : Number(c?.width_mm ?? 0),
+                  height_mm: typeof c?.height_mm === 'number' ? c.height_mm : Number(c?.height_mm ?? 0),
+                  quantity: typeof c?.quantity === 'number' ? c.quantity : Number(c?.quantity ?? 0),
+                  spec_text: String(c?.spec_text ?? '').trim() || undefined,
+                  label: String(c?.label ?? '').trim() || undefined,
+                }))
+                .filter((c: any) => Number.isFinite(c.width_mm) || Number.isFinite(c.height_mm) || Number.isFinite(c.quantity))
+            bundleOptions.push({
+              value: token,
+              label: `${token}${name ? `（${name}）` : ''}${phrase ? `：${phrase}` : ''}`,
+            })
+            bundleMeta[token] = { mode: mode as any, phrase: phrase || undefined, name: name || undefined, components: comps }
+          }
+        }
+
+        // stable sort
+        modelOptions.sort((a, b) => a.value.localeCompare(b.value))
+        bundleOptions.sort((a, b) => a.value.localeCompare(b.value))
+
+        const groups: SourceOptionGroup[] = [
+          { label: '标准模型（已发布）', options: modelOptions },
+          { label: '套装模板（B/Z + AA/AB...）', options: bundleOptions },
+        ].filter((g) => g.options.length)
+        if (!cancelled) setSourceGroups(groups)
+        if (!cancelled) setBundleTokenMetaByValue(bundleMeta)
+      } catch (e: any) {
+        if (!cancelled) message.warning(`加载“模型/套版”下拉失败：${String(e?.message ?? e)}`)
+      } finally {
+        if (!cancelled) setLoadingSourceGroups(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [sourceRefreshKey])
+
+  // 自动保存到后端 DB：多人跨电脑共享，不再只写浏览器 localStorage。
+  useEffect(() => {
+    if (!templateLoaded || suppressSaveRef.current) {
+      return
+    }
+    const handle = window.setTimeout(() => {
+      void saveTemplateNow({ silent: true })
+    }, 500)
+    return () => window.clearTimeout(handle)
+  }, [
+    templateId,
+    templateLoaded,
+    templateName,
+    templateType,
+    merchantSkuPrefix,
+    merchantSkuSuffix,
+    listingChannel,
+    sizes,
+    colors,
+    mainPatternTypes,
+    customSalesAttributes,
+    savedProfiles,
+    enableColorImages,
+    enableSizeImages,
+    enableColorRemarks,
+    enableSizeRemarks,
+    enablePatternRemarks,
+    includeMainPatternType,
+  ])
+
+  const cells: TmallSkuCell[] = useMemo(() => {
+    const out: TmallSkuCell[] = []
+    for (const c of colors) {
+      for (const s of sizes) {
+        out.push({
+          color_key: c.key,
+          size_key: s.key,
+          enabled: c.enabledSizes?.[s.key] !== false,
+        })
+      }
+    }
+    return out
+  }, [colors, sizes])
+
+  const payload = useMemo(
+    () => ({
+      sizes,
+      colors: colors.map(({ enabledSizes, ...rest }) => rest),
+      cells,
+      merchant_sku_prefix: merchantSkuPrefix,
+      merchant_sku_suffix: merchantSkuSuffix,
+    }),
+    [sizes, colors, cells, merchantSkuPrefix, merchantSkuSuffix],
+  )
+
+  const activeAttributeNames = useMemo(
+    () => [
+      '颜色分类',
+      '成品尺寸',
+      ...normalizeCustomSalesAttributes(customSalesAttributes)
+        .filter((attr) => attr.enabled !== false)
+        .map((attr) => attr.name),
+    ],
+    [customSalesAttributes],
+  )
+
+  const hasCustomSalesAttributes = activeAttributeNames.length > 2
+
+  const sourceLabelByValue = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const g of sourceGroups ?? []) {
+      for (const opt of g.options ?? []) {
+        const v = String((opt as any)?.value ?? '').trim()
+        const label = String((opt as any)?.label ?? '').trim()
+        if (!v) continue
+        if (!m.has(v)) m.set(v, label || v)
+      }
+    }
+    return m
+  }, [sourceGroups])
+
+  const specRows: SpecRow[] = useMemo(() => {
+    const rows: SpecRow[] = []
+    const customCombos = buildCustomAttributeCombos(customSalesAttributes)
+    for (const c of colors) {
+      for (const s of sizes) {
+        for (const combo of customCombos) {
+        const row_key = `${c.key}||${s.key}${combo.keySuffix}`
+        const enabled = c.enabledSizes?.[s.key] !== false
+        const sku_status: 0 | 1 = enabled ? 1 : 0
+
+        const rowOverride = String(specEdits?.[row_key]?.model_source_code ?? '').trim()
+        const colorSource = String((c as any)?.source_code ?? '').trim()
+        const sizeSource = String((s as any)?.source_code ?? '').trim()
+        const customSource = [...(combo.sourceCodes ?? [])].reverse().find(Boolean) ?? ''
+
+        // Priority (商家编码锚点)：
+        // - row override（行级覆盖） > custom attr binding > size binding > color binding.
+        const bindingLevel: SpecRow['binding_level'] = rowOverride
+          ? 'row'
+          : customSource
+            ? 'custom'
+            : sizeSource
+              ? 'size'
+              : colorSource
+                ? 'color'
+                : 'none'
+        const merchantSource = rowOverride || customSource || sizeSource || colorSource
+        const displaySource = rowOverride || customSource || sizeSource
+        const isZSource = !!displaySource && displaySource.toUpperCase().startsWith('Z-')
+
+        const merchant_sku = buildMerchantSku({
+          merchantSkuPrefix,
+          merchantSkuSuffix: `${merchantSkuSuffix}${combo.skuCodeSuffix}`,
+          sourceCode: merchantSource || undefined,
+        })
+
+        const attribute_spec = displaySource ? sourceLabelByValue.get(displaySource) || displaySource : ''
+        const bm = displaySource ? bundleTokenMetaByValue[displaySource] : undefined
+        const token_formula =
+          String(specEdits?.[row_key]?.token_formula ?? '').trim() ||
+          (bm && bm.mode === 'B' ? String(bm.phrase ?? '').trim() : '')
+        const spec_text = [String(c.label ?? '').trim(), String(s.label ?? '').trim(), ...combo.labels].filter(Boolean).join(' ').trim()
+        rows.push({
+          row_key,
+          color_key: c.key,
+          size_key: s.key,
+          color_label: c.label,
+          size_label: s.label,
+          attribute_values: combo.values,
+          merchant_sku,
+          merchant_source: merchantSource || undefined,
+          binding_level: bindingLevel,
+          display_source: displaySource || undefined,
+          is_z_source: isZSource || undefined,
+          attribute_spec,
+          token_formula,
+          spec_text,
+          sku_status,
+          main_pattern_type: includeMainPatternType ? (c.main_pattern_type ?? null) : null,
+          length_cm: fmtNum(c.length_cm),
+          thickness_cm: fmtNum(c.thickness_cm),
+          width_cm: fmtNum(c.width_cm),
+          height_cm: fmtNum((c as any).height_cm),
+        })
+        }
+      }
+    }
+    return rows
+  }, [colors, sizes, customSalesAttributes, merchantSkuPrefix, merchantSkuSuffix, includeMainPatternType, sourceLabelByValue, bundleTokenMetaByValue, specEdits])
+
+  const getSpecTextForRow = (r: SpecRow): string => String(r.spec_text ?? '').trim()
+
+  const parsedDimsByRowKey = useMemo(() => {
+    const out: Record<string, { width_cm?: string; height_cm?: string; diameter_cm?: string }> = {}
+    for (const r of specRows) {
+      out[r.row_key] = parseDimsFromSpecText(getSpecTextForRow(r))
+    }
+    return out
+  }, [specRows])
+
+  const parseFormulaTokenGroups = (formulaRaw: string): Array<{ tokens: string[]; allowEmpty: boolean }> => {
+    const formula = String(formulaRaw ?? '')
+    const groups: Array<{ tokens: string[]; allowEmpty: boolean }> = []
+    const bracketRe = /\[([^\]]+)\]/g
+    let m: RegExpExecArray | null
+    while ((m = bracketRe.exec(formula))) {
+      const seg = String(m[1] ?? '')
+      const tokenRe = /\{([^}]*)\}/g
+      let mm: RegExpExecArray | null
+      const tokens: string[] = []
+      let allowEmpty = false
+      while ((mm = tokenRe.exec(seg))) {
+        const t = String(mm[1] ?? '').trim()
+        if (!t) {
+          allowEmpty = true
+          continue
+        }
+        tokens.push(t)
+      }
+      const uniq = Array.from(new Set(tokens))
+      if (uniq.length || allowEmpty) groups.push({ tokens: uniq, allowEmpty })
+    }
+    return groups
+  }
+
+  const highlightTextByTokens = (
+    textRaw: string,
+    rules: { red: string[]; green?: string[]; orange?: string[] } = { red: [] },
+  ) => {
+    const text = String(textRaw ?? '')
+    const red = Array.from(new Set((rules.red ?? []).map((x) => String(x ?? '').trim()).filter(Boolean)))
+    const orange = Array.from(new Set((rules.orange ?? []).map((x) => String(x ?? '').trim()).filter(Boolean)))
+
+    // Prefer longer tokens to avoid partial overlaps.
+    const all = Array.from(new Set([...red, ...orange])).sort((a, b) => b.length - a.length)
+    if (!text || !all.length) return <>{text}</>
+
+    const pickStyle = (tk: string) => {
+      if (orange.includes(tk)) return { color: 'var(--ant-color-warning)', fontWeight: 700 } // ambiguous
+      if (red.includes(tk)) return { color: 'var(--ant-color-error)', fontWeight: 700 } // matched
+      return undefined
+    }
+
+    const out: React.ReactNode[] = []
+    let i = 0
+    while (i < text.length) {
+      let matched: string | null = null
+      for (const tk of all) {
+        if (!tk) continue
+        if (text.startsWith(tk, i)) {
+          matched = tk
+          break
+        }
+      }
+      if (!matched) {
+        out.push(text[i])
+        i += 1
+        continue
+      }
+      out.push(
+        <span key={`hl-${i}-${matched}`} style={pickStyle(matched)}>
+          {matched}
+        </span>,
+      )
+      i += matched.length
+    }
+    return <>{out}</>
+  }
+
+  const renderFormulaWithValidation = (formulaRaw: string, v?: RowValidationDetail | null) => {
+    const formula = String(formulaRaw ?? '')
+    if (!formula.trim()) return <Text type="secondary">-</Text>
+
+    const okSet = new Set((v?.okTokens ?? []).map((x) => String(x)))
+    const multiSet = new Set((v?.multiTokens ?? []).map((x) => String(x)))
+    const missingGroups = new Set(v?.missingGroupIndexes ?? [])
+
+    // Render by scanning groups: `[ ... {token} ... ]`
+    const nodes: React.ReactNode[] = []
+    let groupIdx = 0
+    for (let i = 0; i < formula.length; i++) {
+      const ch = formula[i]
+      if (ch !== '[') {
+        nodes.push(ch)
+        continue
+      }
+      const j = formula.indexOf(']', i + 1)
+      if (j < 0) {
+        nodes.push(formula.slice(i))
+        break
+      }
+      const inner = formula.slice(i + 1, j)
+      const parts: React.ReactNode[] = ['[']
+      const re = /\{([^}]*)\}/g
+      let last = 0
+      let mm: RegExpExecArray | null
+      while ((mm = re.exec(inner))) {
+        const start = mm.index
+        const end = re.lastIndex
+        if (start > last) parts.push(inner.slice(last, start))
+        const token = String(mm[1] ?? '').trim()
+        const isMissingGroup = missingGroups.has(groupIdx)
+        const style =
+          token && okSet.has(token)
+            ? { color: 'var(--ant-color-success)', fontWeight: 700 }
+            : token && multiSet.has(token)
+              ? { color: 'var(--ant-color-warning)', fontWeight: 700 }
+              : token && isMissingGroup
+                ? { color: 'var(--ant-color-error)', fontWeight: 700 }
+                : undefined
+        parts.push(
+          <span key={`f-${groupIdx}-${start}`} style={style}>
+            {'{'}
+            {token || ''}
+            {'}'}
+          </span>,
+        )
+        last = end
+      }
+      if (last < inner.length) parts.push(inner.slice(last))
+      parts.push(']')
+      nodes.push(<span key={`g-${groupIdx}-${i}`}>{parts}</span>)
+      groupIdx += 1
+      i = j
+    }
+    return <div style={{ whiteSpace: 'normal', lineHeight: 1.2 }}>{nodes}</div>
+  }
+
+  const validateAllSpecRows = () => {
+    const out: Record<string, RowValidationDetail> = {}
+    let okCount = 0
+    let badCount = 0
+    for (const r of specRows) {
+      const specText = getSpecTextForRow(r)
+      const formula = String(r.token_formula ?? '').trim()
+      const issues: string[] = []
+
+      // 商家编码：用于“系统命中”的稳定锚点；这里做基础校验，提示运营是否需要补绑定/修正
+      const merchantSku = String(r.merchant_sku ?? '').trim()
+      const merchantSource = String((r as any)?.merchant_source ?? '').trim()
+      if (!merchantSku) {
+        issues.push('商家编码为空')
+      }
+      if (!merchantSource) {
+        issues.push('商家编码未绑定模型/套版（请在颜色/尺寸/行级覆盖里选择来源编码）')
+      } else if (merchantSku && !merchantSku.startsWith(merchantSource)) {
+        issues.push(`商家编码未命中来源编码：期望以 ${merchantSource} 开头`)
+      }
+
+      // 尺寸策略（与后端 generate-by-spec 的 B/Z 口径对齐）
+      const displaySource = String((r as any)?.display_source ?? '').trim()
+      const bm = displaySource ? bundleTokenMetaByValue?.[displaySource] : undefined
+      const dims = parsedDimsByRowKey?.[r.row_key] || {}
+      const hasParsedWH = !!(dims.width_cm && dims.height_cm)
+      if (displaySource.toUpperCase().startsWith('Z-')) {
+        const comps = Array.isArray(bm?.components) ? (bm?.components as any[]) : []
+        if (!comps.length) {
+          issues.push('指定型(Z-)：未获取到套版组件尺寸（请刷新“模型/套版”下拉）')
+        } else {
+          for (let i = 0; i < comps.length; i += 1) {
+            const c = comps[i] ?? {}
+            const w = Number((c as any)?.width_mm ?? 0)
+            const h = Number((c as any)?.height_mm ?? 0)
+            const q = Number((c as any)?.quantity ?? 0)
+            if (!(Number.isFinite(w) && w > 0 && Number.isFinite(h) && h > 0)) {
+              issues.push(`指定型(Z-)：组件${i + 1} 缺少尺寸（width_mm/height_mm 必须 >0）`)
+              break
+            }
+            if (!(Number.isFinite(q) && q > 0)) {
+              issues.push(`指定型(Z-)：组件${i + 1} 缺少数量（quantity 必须 >0）`)
+              break
+            }
+          }
+        }
+      }
+      if (displaySource.toUpperCase().startsWith('B-')) {
+        const comps = Array.isArray(bm?.components) ? (bm?.components as any[]) : []
+        const anyMissing = comps.some((c) => Number((c as any)?.width_mm ?? 0) <= 0 || Number((c as any)?.height_mm ?? 0) <= 0)
+        if (anyMissing && !hasParsedWH) {
+          issues.push('解析型(B-)：套版组件未填尺寸，且“商品规格（网店）”未解析到宽高（后端将直接失败进异常队列）')
+        } else if (!hasParsedWH) {
+          issues.push('解析型(B-)：商品规格（网店）未解析到宽高（建议包含如 45X45 / 45*45 / 45×45）')
+        }
+      }
+
+      // 标准模型/未绑定：若 spec_text 明显包含“尺寸段”，但解析失败，提示运营修正（避免后端尺寸条件/扣库口径走不通）
+      if (!displaySource.toUpperCase().startsWith('B-') && !displaySource.toUpperCase().startsWith('Z-')) {
+        const looksLikeHasDims =
+          /(\d{1,4}(?:\.\d+)?)\s*[xX×\*＊]\s*(\d{1,4}(?:\.\d+)?)/.test(specText) ||
+          /(直径|φ|Φ|圆形|圆)\s*[（(]?\s*\d{1,4}/.test(specText)
+        if (looksLikeHasDims && !(dims.width_cm && dims.height_cm)) {
+          issues.push('尺寸：商品规格（网店）包含尺寸段但未解析到宽高（建议写成 45X45 / 45*45 / 45×45 或 宽120×高150）')
+        }
+      }
+
+      // Z-：不依赖公式解析；且避免任何红/绿高亮（不生成 tokens/missing）
+      if (r.is_z_source) {
+        const ok = issues.length === 0
+        out[r.row_key] = { ok, issues, okTokens: [], multiTokens: [], missingGroupIndexes: [], sizeMatched: false }
+        if (ok) okCount++
+        else badCount++
+        continue
+      }
+      if (!formula) {
+        const ok = issues.length === 0
+        out[r.row_key] = { ok, issues, okTokens: [], multiTokens: [], missingGroupIndexes: [], sizeMatched: false }
+        if (ok) okCount++
+        else badCount++
+        continue
+      }
+
+      // 尺寸配对（B 解析型）：TOKEN/公式里通常包含尺寸段（例如 45*45*1），这里用解析尺寸去配对
+      let sizeMatched = false
+      if (displaySource.toUpperCase().startsWith('B-')) {
+        const expected = parseExpectedDimsFromFormula(formula)
+        const pw = String(dims.width_cm ?? '').trim()
+        const ph = String(dims.height_cm ?? '').trim()
+        // 若公式里只有 0*0*0 这类占位尺寸，则以“能解析出尺寸”为主：只要有尺寸就通过
+        const hasPlaceholder000 = /(?:^|[^0-9])0\s*[xX×\*＊]\s*0\s*[xX×\*＊]\s*0(?:$|[^0-9])/.test(formula)
+        if (hasPlaceholder000) {
+          sizeMatched = !!(pw && ph)
+        } else if (expected.length && pw && ph) {
+          sizeMatched = expected.some((x) => x.w === pw && x.h === ph) || expected.some((x) => x.w === ph && x.h === pw)
+          if (!sizeMatched) {
+            issues.push(`尺寸未命中 TOKEN/公式：期望 ${expected.map((x) => `${x.w}×${x.h}cm`).join(' / ')}`)
+          }
+        }
+      }
+
+      const groups = parseFormulaTokenGroups(formula)
+      const okTokens: string[] = []
+      const multiTokens: string[] = []
+      const missingGroupIndexes: number[] = []
+      for (let gi = 0; gi < groups.length; gi++) {
+        const g = groups[gi]
+        if (!g.tokens.length) continue
+        const hits = g.tokens.filter((tk) => tk && specText.includes(tk))
+        if (hits.length === 0) {
+          if (!g.allowEmpty) {
+            issues.push(`缺失互斥组：${g.tokens.join(' / ')}`)
+            missingGroupIndexes.push(gi)
+          }
+          continue
+        }
+        if (hits.length === 1) {
+          okTokens.push(hits[0])
+          continue
+        }
+        multiTokens.push(...hits)
+        issues.push(`互斥组多命中：${hits.join(' / ')}`)
+      }
+      const ok = issues.length === 0
+      out[r.row_key] = {
+        ok,
+        issues,
+        okTokens: Array.from(new Set(okTokens)),
+        multiTokens: Array.from(new Set(multiTokens)),
+        missingGroupIndexes: Array.from(new Set(missingGroupIndexes)),
+        sizeMatched,
+      }
+      if (ok) okCount++
+      else badCount++
+    }
+    setRowValidation(out)
+    if (badCount) message.warning(`检验完成：通过 ${okCount} 条；未通过 ${badCount} 条（请检查“商品规格（网店）”是否包含需要的 TOKEN）`)
+    else message.success(`检验完成：全部通过（${okCount} 条）`)
+  }
+
+  const setSkuEnabled = (colorKey: string, sizeKey: string, enabled: boolean) => {
+    setColors((prev) =>
+      prev.map((c) => (c.key === colorKey ? { ...c, enabledSizes: { ...(c.enabledSizes ?? {}), [sizeKey]: enabled } } : c)),
+    )
+  }
+
+  const doPreview = async () => {
+    setLoadingPreview(true)
+    try {
+      if (hasCustomSalesAttributes) {
+        setPreviewRows(specRows as any)
+        setPreviewTotal(specRows.length)
+        message.success(`已生成预览：${specRows.length} 行`)
+        return
+      }
+      const resp = await previewTmallSkuTemplate(payload)
+      setPreviewRows(resp.rows ?? [])
+      setPreviewTotal(resp.total_rows ?? 0)
+      message.success(`已生成预览：${resp.total_rows ?? 0} 行`)
+    } catch (e: any) {
+      message.error(String(e?.message ?? e))
+    } finally {
+      setLoadingPreview(false)
+    }
+  }
+
+  const doExport = async () => {
+    setLoadingExport(true)
+    try {
+      if (hasCustomSalesAttributes) {
+        const wb = XLSX.utils.book_new()
+        const headers = [...activeAttributeNames, '商品规格（网店）', '商家编码', '是否上架']
+        const rows = specRows.map((r) => {
+          const out: Record<string, any> = {
+            颜色分类: r.color_label,
+            成品尺寸: r.size_label,
+            '商品规格（网店）': r.spec_text,
+            商家编码: r.merchant_sku,
+            是否上架: r.sku_status,
+          }
+          for (const [name, value] of Object.entries(r.attribute_values ?? {})) out[name] = value
+          return out
+        })
+        const ws = XLSX.utils.json_to_sheet(rows, { header: headers })
+        XLSX.utils.book_append_sheet(wb, ws, 'sku')
+        const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
+        downloadBlob(new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), 'tmall_sku_template_custom.xlsx')
+        message.success('已导出自定义属性 SKU xlsx')
+        return
+      }
+      const blob = await exportTmallSkuTemplateXlsx(payload)
+      downloadBlob(blob, 'tmall_buyi_sku_template.xlsx')
+      message.success('已导出 xlsx')
+    } catch (e: any) {
+      message.error(String(e?.message ?? e))
+    } finally {
+      setLoadingExport(false)
+    }
+  }
+
+  const doExportTemplateXlsxByChannel = async () => {
+    // 预留：后续按渠道导出不同字段/表头/映射
+    if (listingChannel !== 'tmall') {
+      message.info('暂仅支持导出“天猫”模板（其他渠道后续按字段差异补齐）')
+      return
+    }
+    await doExport()
+  }
+
+  const doFillTemplateAndDownload = async () => {
+    if (!templateFile) {
+      message.warning('请先上传天猫官方模板（xls/xlsx）')
+      return
+    }
+    setLoadingFill(true)
+    try {
+      const [buf, resp] = await Promise.all([
+        readFileAsArrayBuffer(templateFile),
+        hasCustomSalesAttributes ? Promise.resolve({ rows: specRows, total_rows: specRows.length }) : previewTmallSkuTemplate(payload),
+      ])
+
+      // Build lookup: sales attribute tuple -> row
+      const lookup = new Map<string, TmallSkuRow | SpecRow>()
+      for (const r of resp.rows ?? []) {
+        const values: string[] = [normalizeCellText((r as any).color_label), normalizeCellText((r as any).size_label)]
+        for (const name of activeAttributeNames.slice(2)) {
+          values.push(normalizeCellText((r as any).attribute_values?.[name]))
+        }
+        const k = values.join('||')
+        lookup.set(k, r)
+      }
+
+      const wb = XLSX.read(buf, { type: 'array', cellStyles: true })
+      const sheetName = templateSheetName && wb.SheetNames.includes(templateSheetName) ? templateSheetName : wb.SheetNames?.[0]
+      if (!sheetName) throw new Error('模板无工作表（Sheet）')
+      const ws = wb.Sheets[sheetName]
+      if (!ws) throw new Error('模板工作表读取失败')
+
+      const header = findHeaderIndex(ws, activeAttributeNames)
+      if (!header) {
+        throw new Error('未在模板中找到表头列：颜色分类/成品尺寸（或尺寸）/商家编码/是否上架（请确认上传的是天猫官方SKU模板）')
+      }
+      const missingAttrs = activeAttributeNames.filter((name) => header.attrCols[normalizeHeaderLabel(name)] === undefined)
+      if (missingAttrs.length) {
+        throw new Error(`模板中缺少销售属性列：${missingAttrs.join('、')}`)
+      }
+
+      const range = XLSX.utils.decode_range(ws['!ref'] as string)
+      let filled = 0
+      let skipped = 0
+      let unmatched = 0
+
+      for (let r = header.headerRowIndex + 1; r <= range.e.r; r++) {
+        const attrValues = activeAttributeNames.map((name) => {
+          const col = header.attrCols[normalizeHeaderLabel(name)]
+          const addr = XLSX.utils.encode_cell({ r, c: col })
+          return normalizeCellText((ws as any)[addr]?.v)
+        })
+        // stop early on trailing empty rows
+        if (!attrValues.some(Boolean)) continue
+
+        const k = attrValues.join('||')
+        const target = lookup.get(k)
+        if (!target) {
+          unmatched++
+          continue
+        }
+
+        const merchantAddr = XLSX.utils.encode_cell({ r, c: header.merchantSkuCol })
+        const statusAddr = XLSX.utils.encode_cell({ r, c: header.statusCol })
+
+        const existingMerchant = normalizeCellText((ws as any)[merchantAddr]?.v)
+        const existingStatus = normalizeCellText((ws as any)[statusAddr]?.v)
+        if (!overwriteExisting && (existingMerchant || existingStatus)) {
+          skipped++
+          continue
+        }
+
+        const merchantSku = String(target.merchant_sku ?? '').trim()
+        const skuStatus = Number(target.sku_status ?? 0)
+
+        if (merchantSku) {
+          const cell: any = (ws as any)[merchantAddr] ?? {}
+          cell.t = 's'
+          cell.v = merchantSku
+          ;(ws as any)[merchantAddr] = cell
+        }
+        {
+          const cell: any = (ws as any)[statusAddr] ?? {}
+          cell.t = 'n'
+          cell.v = skuStatus
+          ;(ws as any)[statusAddr] = cell
+        }
+        filled++
+      }
+
+      const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
+      const blob = new Blob([out], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      })
+      const base = templateFile.name.replace(/\.(xlsx|xls)$/i, '')
+      downloadBlob(blob, `${base}_filled.xlsx`)
+      message.success(`已填充并导出：填充 ${filled} 行；未匹配 ${unmatched} 行；跳过 ${skipped} 行`)
+    } catch (e: any) {
+      message.error(String(e?.message ?? e))
+    } finally {
+      setLoadingFill(false)
+    }
+  }
+
+  const exportAttributeBuildListXlsx = () => {
+    const wb = XLSX.utils.book_new()
+    const rows: Array<{ attribute: string; value: string }> = []
+    for (const c of colors) rows.push({ attribute: '颜色分类', value: normalizeAttrValue(c.label) })
+    for (const s of sizes) rows.push({ attribute: '成品尺寸', value: normalizeAttrValue(s.label) })
+    for (const p of mainPatternTypes) rows.push({ attribute: '主图案类型', value: normalizeAttrValue(p.label) })
+    for (const attr of normalizeCustomSalesAttributes(customSalesAttributes)) {
+      for (const value of attr.values) rows.push({ attribute: attr.name, value: normalizeAttrValue(value.label) })
+    }
+
+    const ws = XLSX.utils.json_to_sheet(rows, { header: ['attribute', 'value'] })
+    // Friendly headers
+    XLSX.utils.sheet_add_aoa(ws, [['属性名', '属性值']], { origin: 'A1' })
+    XLSX.utils.book_append_sheet(wb, ws, 'build_attributes')
+
+    const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
+    downloadBlob(new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), 'tmall_build_attributes.xlsx')
+  }
+
+  const exportConfigJson = () => {
+    const data: PersistedConfigV1 = {
+      merchantSkuPrefix,
+      merchantSkuSuffix,
+      sizes,
+      colors,
+      mainPatternTypes,
+      customSalesAttributes,
+      ui: {
+        enableColorImages,
+        enableSizeImages,
+        enableColorRemarks,
+        enableSizeRemarks,
+        enablePatternRemarks,
+        includeMainPatternType,
+      },
+    }
+    downloadText(JSON.stringify(data, null, 2), 'tmall_sku_generator_config.json')
+  }
+
+  const importConfigJson = async (file: File) => {
+    try {
+      const buf = await file.text()
+      const parsed = JSON.parse(buf) as Partial<PersistedConfigV1>
+      if (parsed.merchantSkuPrefix !== undefined) setMerchantSkuPrefix(String(parsed.merchantSkuPrefix))
+      if (parsed.merchantSkuSuffix !== undefined) setMerchantSkuSuffix(String(parsed.merchantSkuSuffix))
+      if (Array.isArray(parsed.sizes)) setSizes(parsed.sizes as any)
+      if (Array.isArray(parsed.colors)) {
+        setColors(
+          (parsed.colors as any[]).map((c) => ({
+            key: String(c.key ?? `c_${uid()}`),
+            label: String(c.label ?? '').trim(),
+            width_cm: c.width_cm ?? null,
+            height_cm: c.height_cm ?? null,
+            thickness_cm: c.thickness_cm ?? null,
+            length_cm: c.length_cm ?? null,
+            main_pattern_type: c.main_pattern_type ?? null,
+            source_code: String((c as any)?.source_code ?? '').trim(),
+            enabledSizes: (c.enabledSizes && typeof c.enabledSizes === 'object' ? c.enabledSizes : {}) as Record<string, boolean>,
+          })),
+        )
+      }
+      if (Array.isArray(parsed.mainPatternTypes)) {
+        setMainPatternTypes(
+          (parsed.mainPatternTypes as any[]).map((p) => ({
+            key: String(p.key ?? `p_${uid()}`),
+            label: String(p.label ?? '').trim(),
+          })),
+        )
+      }
+      if (Array.isArray((parsed as any).customSalesAttributes)) {
+        setCustomSalesAttributes(normalizeCustomSalesAttributes((parsed as any).customSalesAttributes))
+      }
+      if (parsed.ui) {
+        if (typeof parsed.ui.enableColorImages === 'boolean') setEnableColorImages(parsed.ui.enableColorImages)
+        if (typeof parsed.ui.enableSizeImages === 'boolean') setEnableSizeImages(parsed.ui.enableSizeImages)
+        if (typeof parsed.ui.enableColorRemarks === 'boolean') setEnableColorRemarks(parsed.ui.enableColorRemarks)
+        if (typeof parsed.ui.enableSizeRemarks === 'boolean') setEnableSizeRemarks(parsed.ui.enableSizeRemarks)
+        if (typeof parsed.ui.enablePatternRemarks === 'boolean') setEnablePatternRemarks(parsed.ui.enablePatternRemarks)
+        if (typeof parsed.ui.includeMainPatternType === 'boolean') setIncludeMainPatternType(parsed.ui.includeMainPatternType)
+      }
+      message.success('已导入配置')
+    } catch (e: any) {
+      message.error(String(e?.message ?? e ?? '导入失败'))
+    }
+  }
+
+  const readFileAsDataUrl = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result ?? ''))
+      reader.onerror = () => reject(reader.error ?? new Error('读取图片失败'))
+      reader.readAsDataURL(file)
+    })
+
+  const attributeText = useMemo(() => {
+    const lines: string[] = []
+    lines.push('【颜色分类】')
+    for (const c of colors) lines.push(`- ${normalizeAttrValue(c.label)}`)
+    lines.push('')
+    lines.push('【成品尺寸】')
+    for (const s of sizes) lines.push(`- ${normalizeAttrValue(s.label)}`)
+    lines.push('')
+    lines.push('【主图案类型】')
+    for (const p of mainPatternTypes) lines.push(`- ${normalizeAttrValue(p.label)}`)
+    lines.push('')
+    for (const attr of normalizeCustomSalesAttributes(customSalesAttributes)) {
+      lines.push(`【${attr.name}】`)
+      for (const value of attr.values) lines.push(`- ${normalizeAttrValue(value.label)}`)
+      lines.push('')
+    }
+    return lines.join('\n')
+  }, [colors, sizes, mainPatternTypes, customSalesAttributes])
+
+  const renderBindingStatusTag = (
+    sourceCode: unknown,
+    level: 'row' | 'custom' | 'size' | 'color',
+    opts?: { disabled?: boolean },
+  ) => {
+    if (opts?.disabled) return <Tag>已关闭</Tag>
+    const hasSource = !!String(sourceCode ?? '').trim()
+    if (!hasSource) return <Tag>未绑定</Tag>
+    if (level === 'row') return <Tag color="red">行级覆盖</Tag>
+    if (level === 'custom') return <Tag color="gold">覆盖尺寸/颜色</Tag>
+    if (level === 'size') return <Tag color="green">覆盖颜色</Tag>
+    return <Tag color="blue">兜底</Tag>
+  }
+
+  const renderRowBindingStatusTag = (row: SpecRow) => {
+    if (!row.merchant_source) return <Tag>未绑定</Tag>
+    if (row.binding_level === 'row') return <Tag color="red">行级覆盖</Tag>
+    if (row.binding_level === 'custom') return <Tag color="gold">自定属性覆盖</Tag>
+    if (row.binding_level === 'size') return <Tag color="green">成品尺寸覆盖</Tag>
+    if (row.binding_level === 'color') return <Tag color="blue">颜色兜底</Tag>
+    return <Tag>未绑定</Tag>
+  }
+
+  return (
+    <div style={{ padding: 16 }}>
+      <Space direction="vertical" style={{ width: '100%' }} size={12}>
+        <Card
+          title={
+            <Space wrap size={10} style={{ width: '100%', justifyContent: 'space-between' }}>
+              <Space wrap size={8}>
+                <Text type="secondary">模板名称</Text>
+                <Input
+                  style={{ width: 360 }}
+                  value={templateName}
+                  onChange={(e) => setTemplateName(e.target.value)}
+                  placeholder="未命名模板"
+                />
+                <Select
+                  style={{ width: 140 }}
+                  value={templateType}
+                  onChange={(v) => setTemplateType(v as SpecModuleType)}
+                  options={[
+                    { label: '家居布艺', value: '家居布艺' },
+                    { label: '家居饰品', value: '家居饰品' },
+                  ]}
+                />
+              </Space>
+              <Space wrap size={8}>
+                {lastSavedAt ? (
+                  <Text type="secondary">上次保存：{formatBeijingTime(lastSavedAt, 'HH:mm:ss')}</Text>
+                ) : (
+                  <Text type="secondary">保存到服务器后，多人可共享</Text>
+                )}
+                <Button
+                  type="primary"
+                  icon={<SaveOutlined />}
+                  loading={savingTemplate}
+                  disabled={!templateLoaded}
+                  onClick={() => void saveTemplateNow()}
+                >
+                  保存模板
+                </Button>
+                <Tag color="gold">颜色分类=图案/工艺款式；成品尺寸可按款式禁用</Tag>
+              </Space>
+            </Space>
+          }
+        >
+          <Space direction="vertical" style={{ width: '100%' }} size={10}>
+            <Space wrap size={8}>
+              <Text type="secondary">商家编码前缀</Text>
+              <Input style={{ width: 260 }} value={merchantSkuPrefix} onChange={(e) => setMerchantSkuPrefix(e.target.value)} />
+              <Text type="secondary">后缀</Text>
+              <Input style={{ width: 160 }} value={merchantSkuSuffix} onChange={(e) => setMerchantSkuSuffix(e.target.value)} />
+              <Divider type="vertical" />
+              <Button icon={<SettingOutlined />} onClick={() => setSettingsOpen(true)}>
+                设置
+              </Button>
+              <Divider type="vertical" />
+              <Text type="secondary">SKU规格展示</Text>
+              <Radio.Group
+                value={displayMode}
+                onChange={(e) => setDisplayMode(e.target.value as DisplayMode)}
+                optionType="button"
+                buttonStyle="solid"
+                options={[
+                  { label: '表格', value: 'table' },
+                  { label: '矩阵', value: 'matrix' },
+                ]}
+              />
+            </Space>
+
+            <Divider style={{ margin: '8px 0' }} />
+
+            <Space wrap size={8} style={{ width: '100%', justifyContent: 'space-between' }}>
+              <Space wrap size={8}>
+                <Button icon={<EyeOutlined />} loading={loadingPreview} onClick={doPreview}>
+                  生成预览
+                </Button>
+                <Button icon={<DownloadOutlined />} type="primary" loading={loadingExport} onClick={doExport}>
+                  导出 xlsx
+                </Button>
+                <Text type="secondary">（导出包含 sheet1 数据 + sheet2 字段映射）</Text>
+              </Space>
+              <Text type="secondary">预览行数：{previewTotal}</Text>
+            </Space>
+
+            <Divider style={{ margin: '8px 0' }} />
+
+            <Alert
+              type="info"
+              showIcon
+              message="天猫模板填充（推荐流程）"
+              description={
+                <div>
+                  <div>销售属性（颜色分类/成品尺寸）需要先在天猫后台建立，模板里不可编辑。</div>
+                  <div>本工具用于把你配置好的“商家编码 / 是否上架(0/1)”批量回填到天猫官方模板，再下载回传。</div>
+                </div>
+              }
+            />
+
+            <Space wrap size={8} style={{ marginTop: 8 }}>
+              <Upload
+                accept=".xlsx,.xls"
+                maxCount={1}
+                showUploadList={false}
+                beforeUpload={(file) => {
+                  setTemplateFile(file)
+                  setTemplateSheetNames([])
+                  setTemplateSheetName('')
+                  void (async () => {
+                    try {
+                      const buf = await readFileAsArrayBuffer(file)
+                      const wb = XLSX.read(buf, { type: 'array' })
+                      const names = (wb.SheetNames ?? []).filter(Boolean)
+                      setTemplateSheetNames(names)
+                      if (names[0]) setTemplateSheetName(names[0])
+                    } catch (e: any) {
+                      message.warning(`读取模板工作表失败：${String(e?.message ?? e)}`)
+                    }
+                  })()
+                  message.success(`已选择模板：${file.name}`)
+                  return false
+                }}
+              >
+                <Button icon={<UploadOutlined />}>上传天猫官方模板</Button>
+              </Upload>
+              <Text type="secondary">{templateFile ? templateFile.name : '未选择文件'}</Text>
+              <Divider type="vertical" />
+              <Text type="secondary">工作表</Text>
+              <Select
+                style={{ width: 220 }}
+                disabled={!templateFile || templateSheetNames.length <= 1}
+                placeholder="自动识别"
+                value={templateSheetName || undefined}
+                options={templateSheetNames.map((n) => ({ label: n, value: n }))}
+                onChange={(v) => setTemplateSheetName(v)}
+              />
+              <Divider type="vertical" />
+              <Text type="secondary">覆盖已有值</Text>
+              <Switch checked={overwriteExisting} onChange={setOverwriteExisting} />
+              <Button type="primary" loading={loadingFill} disabled={!templateFile} onClick={doFillTemplateAndDownload}>
+                一键填充并下载
+              </Button>
+            </Space>
+          </Space>
+        </Card>
+
+        {displayMode === 'table' ? (
+          <Card
+            title="SKU规格（表格样式）"
+            extra={
+              <Space wrap size={10}>
+                <Text type="secondary">行数：{specRows.length}</Text>
+                <Button size="small" onClick={validateAllSpecRows}>
+                  检验
+                </Button>
+                <Text type="secondary">上架渠道</Text>
+                <Select
+                  size="small"
+                  style={{ width: 160 }}
+                  value={listingChannel}
+                  options={[
+                    { label: '天猫', value: 'tmall' },
+                    { label: '京东', value: 'jd' },
+                    { label: '小红书', value: 'xhs' },
+                    { label: '抖音', value: 'douyin' },
+                  ]}
+                  onChange={(v) => setListingChannel(v as ListingChannel)}
+                />
+                <Button
+                  size="small"
+                  icon={<DownloadOutlined />}
+                  loading={loadingExport}
+                  onClick={doExportTemplateXlsxByChannel}
+                >
+                  导出模板xlsx
+                </Button>
+              </Space>
+            }
+          >
+            <Table
+              size="small"
+              pagination={false}
+              rowKey="row_key"
+              dataSource={specRows}
+              scroll={{ x: 1600 }}
+              onRow={(r) => ({
+                style: r.sku_status === 0 ? { opacity: 0.45 } : undefined,
+              })}
+              columns={[
+                {
+                  title: '商品规格（网店）',
+                  fixed: 'left',
+                  width: 420,
+                  render: (_: any, r: SpecRow) => {
+                    const v = rowValidation?.[r.row_key]
+                    const specText = String(r.spec_text ?? '').trim()
+                    return (
+                      <div style={{ whiteSpace: 'normal', lineHeight: 1.2 }}>
+                        {v && !r.is_z_source
+                          ? highlightTextByTokens(specText, { red: v.okTokens ?? [], orange: v.multiTokens ?? [] })
+                          : specText || '-'}
+                      </div>
+                    )
+                  },
+                },
+                {
+                  title: 'SKU分类',
+                  width: 120,
+                  render: (_: any, r: SpecRow) => (
+                    <Select
+                      value={specEdits[r.row_key]?.sku_category ?? '单品'}
+                      style={{ width: '100%' }}
+                      options={[
+                        { label: '单品', value: '单品' },
+                        { label: '套装', value: '套装' },
+                      ]}
+                      onChange={(v) =>
+                        setSpecEdits((prev) => ({
+                          ...prev,
+                          [r.row_key]: { ...(prev[r.row_key] ?? {}), sku_category: v },
+                        }))
+                      }
+                    />
+                  ),
+                },
+                ...activeAttributeNames.slice(2).map((name) => ({
+                  title: name,
+                  width: 140,
+                  render: (_: any, r: SpecRow) => String(r.attribute_values?.[name] ?? '') || '-',
+                })),
+                {
+                  title: '模型属性',
+                  width: 210,
+                  render: (_: any, r: SpecRow) => (
+                    <TmallSourceCodePicker
+                      value={specEdits[r.row_key]?.model_source_code}
+                      size="small"
+                      width={200}
+                      placeholder="行级覆盖：选模型/套版"
+                      onChange={(token) =>
+                        setSpecEdits((prev) => ({
+                          ...prev,
+                          [r.row_key]: { ...(prev[r.row_key] ?? {}), model_source_code: token },
+                        }))
+                      }
+                    />
+                  ),
+                },
+                {
+                  title: '绑定状态',
+                  width: 130,
+                  render: (_: any, r: SpecRow) => renderRowBindingStatusTag(r),
+                },
+                {
+                  title: '解析尺寸',
+                  width: 280,
+                  render: (_: any, r: SpecRow) => {
+                    const v = rowValidation?.[r.row_key]
+                    const pill = (textRaw: string, opts?: { highlight?: boolean }) => (
+                      <span
+                        style={{
+                          display: 'inline-block',
+                          padding: '1px 8px',
+                          borderRadius: 999,
+                          background: 'var(--ant-color-fill-tertiary)',
+                          color: opts?.highlight ? 'var(--ant-color-error)' : 'var(--ant-color-text-secondary)',
+                          fontWeight: opts?.highlight ? 700 : 400,
+                          fontSize: 12,
+                          lineHeight: '18px',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {textRaw}
+                      </span>
+                    )
+
+                    const displaySource = String((r as any)?.display_source ?? '').trim()
+                    const bm = displaySource ? bundleTokenMetaByValue?.[displaySource] : undefined
+
+                    const dims = parsedDimsByRowKey?.[r.row_key] || {}
+                    const pw = String(dims.width_cm ?? '').trim()
+                    const ph = String(dims.height_cm ?? '').trim()
+                    const pq = Number((dims as any)?.dimension_qty ?? 0)
+                    const qtyText = Number.isFinite(pq) && pq > 0 ? String(Math.floor(pq)) : '1'
+
+                    const pills: React.ReactNode[] = []
+
+                    const pushZComponents = () => {
+                      const comps = Array.isArray(bm?.components) ? (bm?.components as any[]) : []
+                      if (!comps.length) {
+                        pills.push(pill('无尺寸'))
+                        return
+                      }
+                      for (let i = 0; i < comps.length; i += 1) {
+                        const c = comps[i] ?? {}
+                        const w = mmToCmText((c as any)?.width_mm)
+                        const h = mmToCmText((c as any)?.height_mm)
+                        const qn = Number((c as any)?.quantity ?? 0)
+                        const q = Number.isFinite(qn) && qn > 0 ? String(Math.floor(qn) === qn ? qn : fmtNum(qn)) : ''
+                        if (!w || !h) continue
+                        pills.push(pill(`${w}×${h}cm${q ? `*${q}` : '*1'}`))
+                      }
+                    }
+
+                    // Z：指定型，尺寸来自套版组件（不依赖网店规格解析）
+                    if (String(r.is_z_source ?? '').trim()) {
+                      pushZComponents()
+                      return pills.length ? <Space wrap size={6}>{pills}</Space> : <Text type="secondary">-</Text>
+                    }
+
+                    // B/模型码/未绑定：只展示解析尺寸；当“检验”尺寸配对命中时，将尺寸字标红
+                    if (pw && ph) pills.push(pill(`${pw}×${ph}cm*${qtyText}`, { highlight: !!v?.sizeMatched }))
+                    else if (pw) pills.push(pill(`宽${pw}cm*${qtyText}`, { highlight: !!v?.sizeMatched }))
+                    return pills.length ? <Space wrap size={6}>{pills}</Space> : <Text type="secondary">-</Text>
+                  },
+                },
+                {
+                  title: '商家编码',
+                  dataIndex: 'merchant_sku',
+                  width: 150,
+                  render: (v: any) => <Text code>{String(v ?? '').trim() || '-'}</Text>,
+                },
+                {
+                  title: 'TOKEN/公式',
+                  dataIndex: 'token_formula',
+                  width: 360,
+                  render: (_: any, r: SpecRow) => {
+                    const formula = String(r.token_formula ?? '').trim()
+                    if (formula && !r.is_z_source) {
+                      return renderFormulaWithValidation(formula, rowValidation?.[r.row_key])
+                    }
+                    const spec = String(r.attribute_spec ?? '').trim()
+                    if (!spec) return <Text type="secondary">-</Text>
+                    return (
+                      <span
+                        style={{
+                          display: 'inline-block',
+                          padding: '1px 8px',
+                          borderRadius: 999,
+                          background: 'var(--ant-color-fill-tertiary)',
+                          // 与“TOKEN/公式”列整体风格一致（不做红绿高亮，且适配黑底主题）
+                          color: 'var(--ant-color-text-secondary)',
+                          fontSize: 12,
+                          lineHeight: '18px',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {spec}
+                      </span>
+                    )
+                  },
+                },
+                {
+                  title: '是否上架',
+                  width: 110,
+                  fixed: 'right',
+                  render: (_: any, r: SpecRow) => {
+                    const v = rowValidation?.[r.row_key]
+                    return (
+                      <Space size={6}>
+                        {v ? (
+                          v.ok ? (
+                            <CheckCircleFilled style={{ color: 'var(--ant-color-success)' }} />
+                          ) : (
+                            <CloseCircleFilled style={{ color: 'var(--ant-color-error)' }} />
+                          )
+                        ) : null}
+                        <Switch checked={r.sku_status === 1} onChange={(x) => setSkuEnabled(r.color_key, r.size_key, x)} />
+                      </Space>
+                    )
+                  },
+                },
+                {
+                  title: '操作',
+                  width: 110,
+                  fixed: 'right',
+                  render: (_: any, r: SpecRow) =>
+                    r.sku_status === 1 ? (
+                      <Button type="link" danger onClick={() => setSkuEnabled(r.color_key, r.size_key, false)}>
+                        删除
+                      </Button>
+                    ) : (
+                      <Button type="link" onClick={() => setSkuEnabled(r.color_key, r.size_key, true)}>
+                        重新启用
+                      </Button>
+                    ),
+                },
+              ]}
+            />
+          </Card>
+        ) : null}
+
+        {displayMode === 'matrix' ? (
+        <Card
+          title="颜色分类（图案/工艺款式）+ 是否上架矩阵"
+          extra={
+            <Button
+              icon={<PlusOutlined />}
+              onClick={() =>
+                setColors((prev) => [
+                  ...prev,
+                  {
+                    key: `c_${uid()}`,
+                    label: '新款式',
+                    width_cm: 45,
+                    height_cm: 45,
+                    enabledSizes: Object.fromEntries(sizes.map((s) => [s.key, true])),
+                  },
+                ])
+              }
+            >
+              添加款式
+            </Button>
+          }
+        >
+          <Table
+            size="small"
+            pagination={false}
+            rowKey="key"
+            dataSource={colors}
+            columns={[
+              {
+                title: '颜色分类（图案/工艺）',
+                dataIndex: 'label',
+                render: (_: any, r: ColorRow, idx: number) => (
+                  <Input
+                    value={r.label}
+                    onChange={(e) =>
+                      setColors((prev) => prev.map((x, i) => (i === idx ? { ...x, label: e.target.value } : x)))
+                    }
+                  />
+                ),
+              },
+              {
+                title: '主图案类型（可选）',
+                width: 200,
+                render: (_: any, r: ColorRow, idx: number) => (
+                  <Select
+                    allowClear
+                    disabled={!includeMainPatternType}
+                    placeholder="可选"
+                    style={{ width: '100%' }}
+                    value={r.main_pattern_type ?? undefined}
+                    options={mainPatternTypes.map((p) => ({ label: p.label, value: p.label }))}
+                    onChange={(v) =>
+                      setColors((prev) =>
+                        prev.map((x, i) => (i === idx ? { ...x, main_pattern_type: v ?? null } : x)),
+                      )
+                    }
+                  />
+                ),
+              },
+              {
+                title: '宽*高(cm)',
+                width: 140,
+                render: (_: any, r: ColorRow, idx: number) => (
+                  <Space size={6}>
+                    <Input
+                      style={{ width: 54 }}
+                      value={String(r.width_cm ?? '')}
+                      onChange={(e) =>
+                        setColors((prev) =>
+                          prev.map((x, i) => (i === idx ? { ...x, width_cm: Number(e.target.value || 0) } : x)),
+                        )
+                      }
+                    />
+                    <Text type="secondary">*</Text>
+                    <Input
+                      style={{ width: 54 }}
+                      value={String(r.height_cm ?? '')}
+                      onChange={(e) =>
+                        setColors((prev) =>
+                          prev.map((x, i) => (i === idx ? { ...x, height_cm: Number(e.target.value || 0) } : x)),
+                        )
+                      }
+                    />
+                  </Space>
+                ),
+              },
+              ...sizes.map((s) => ({
+                title: s.label,
+                width: 110,
+                align: 'center' as const,
+                render: (_: any, r: ColorRow, idx: number) => (
+                  <Switch
+                    checked={r.enabledSizes?.[s.key] !== false}
+                    onChange={(v) =>
+                      setColors((prev) =>
+                        prev.map((x, i) =>
+                          i === idx ? { ...x, enabledSizes: { ...(x.enabledSizes ?? {}), [s.key]: v } } : x,
+                        ),
+                      )
+                    }
+                  />
+                ),
+              })),
+            ]}
+          />
+          <div style={{ marginTop: 8 }}>
+            <Text type="secondary">说明：每个开关对应导出表格里的“是否上架”（开=1，关=0，平台显示为灰色不可选但可重新启用）。</Text>
+          </div>
+        </Card>
+        ) : null}
+
+        <Card title="预览（前 50 行）" extra={<Text type="secondary">共 {previewTotal} 行</Text>}>
+          <Table
+            size="small"
+            pagination={false}
+            rowKey={(_, i) => `r-${i}`}
+            dataSource={(previewRows ?? []).slice(0, 50)}
+            columns={[
+              { title: '颜色分类', dataIndex: 'color_label' },
+              { title: '成品尺寸', dataIndex: 'size_label', width: 160 },
+              ...activeAttributeNames.slice(2).map((name) => ({
+                title: name,
+                width: 140,
+                render: (_: any, r: any) => String(r?.attribute_values?.[name] ?? ''),
+              })),
+              { title: '商家编码', dataIndex: 'merchant_sku', width: 220 },
+              { title: '是否上架', dataIndex: 'sku_status', width: 90 },
+            ]}
+          />
+        </Card>
+
+        <Drawer
+          title="设置（SKU 模式 / 销售属性）"
+          open={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
+          extra={
+            <Space>
+              <Button
+                type="primary"
+                icon={<SaveOutlined />}
+                loading={savingTemplate}
+                disabled={!templateLoaded}
+                onClick={() => void saveTemplateNow({ closeSettings: true })}
+              >
+                保存设置
+              </Button>
+            </Space>
+          }
+          width="min(96vw, 1290px)"
+        >
+          <Space direction="vertical" style={{ width: '100%' }} size={12}>
+            <Alert
+              type="warning"
+              showIcon
+              message="模型/套版绑定规则（避免冲突）"
+              description={
+                <div>
+                  <div>SKU 行数按启用的销售属性做笛卡尔积：颜色分类 × 成品尺寸 × 已启用的自定属性。</div>
+                  <div>商家编码只取一个“模型/套版”作为锚点，不会把多个属性的绑定拼在一起。</div>
+                  <div>优先级：行级覆盖 &gt; 自定属性值绑定 &gt; 成品尺寸绑定 &gt; 颜色分类绑定。</div>
+                  <div>使用建议：只在“真正决定模型/套版”的那一层绑定；其它属性用于展示就留空。个别 SKU 特例再到表格里的“模型属性”做行级覆盖。</div>
+                </div>
+              }
+            />
+
+            <Card
+              size="small"
+              title="属性选择"
+              extra={
+                <Space wrap size={8}>
+                  <Text type="secondary">颜色分类/成品尺寸为必选；主图案类型可选</Text>
+                  <Button
+                    size="small"
+                    icon={<ReloadOutlined />}
+                    loading={loadingSourceGroups}
+                    onClick={() => setSourceRefreshKey((x) => x + 1)}
+                  >
+                    刷新模型/套版
+                  </Button>
+                </Space>
+              }
+            >
+              <Space wrap size={16}>
+                <Checkbox checked disabled>
+                  颜色分类
+                </Checkbox>
+                <Checkbox checked disabled>
+                  成品尺寸
+                </Checkbox>
+                <Checkbox checked={includeMainPatternType} onChange={(e) => setIncludeMainPatternType(e.target.checked)}>
+                  主图案类型
+                </Checkbox>
+              </Space>
+            </Card>
+
+            <Card
+              size="small"
+              title={`颜色分类（${colors.length}）`}
+              extra={
+                <Space wrap size={8}>
+                  <Checkbox checked={enableColorImages} onChange={(e) => setEnableColorImages(e.target.checked)}>
+                    添加图片
+                  </Checkbox>
+                  <Checkbox checked={enableColorRemarks} onChange={(e) => setEnableColorRemarks(e.target.checked)}>
+                    备注
+                  </Checkbox>
+                  <Button
+                    icon={<PlusOutlined />}
+                    onClick={() =>
+                      setColors((prev) => [
+                        ...prev,
+                        {
+                          key: `c_${uid()}`,
+                          label: '',
+                          width_cm: 45,
+                          height_cm: 45,
+                          enabledSizes: Object.fromEntries(sizes.map((s) => [s.key, true])),
+                          source_code: '',
+                        },
+                      ])
+                    }
+                  >
+                    添加
+                  </Button>
+                </Space>
+              }
+            >
+              <Space direction="vertical" style={{ width: '100%' }} size={10}>
+                {colors.map((c, idx) => (
+                  <Space key={c.key} wrap size={8} style={{ width: '100%', alignItems: 'flex-start' }}>
+                    {enableColorImages ? (
+                      <Upload
+                        accept="image/*"
+                        showUploadList={false}
+                        beforeUpload={async (file) => {
+                          try {
+                            const dataUrl = await readFileAsDataUrl(file)
+                            setColors((prev) => prev.map((x, i) => (i === idx ? { ...x, metadata_json: { ...(x as any).metadata_json, image_data_url: dataUrl } as any } : x)))
+                          } catch (e: any) {
+                            message.error(String(e?.message ?? e))
+                          }
+                          return false
+                        }}
+                      >
+                        <div
+                          style={{
+                            width: 40,
+                            height: 40,
+                            border: '1px solid var(--app-border)',
+                            borderRadius: 6,
+                            overflow: 'hidden',
+                            background: 'var(--app-surface)',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            marginTop: 2,
+                          }}
+                        >
+                          {(c as any)?.metadata_json?.image_data_url ? (
+                            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+                            <img src={(c as any).metadata_json.image_data_url as string} alt="img" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                          ) : (
+                            <Text type="secondary" style={{ fontSize: 12 }}>
+                              图
+                            </Text>
+                          )}
+                        </div>
+                      </Upload>
+                    ) : null}
+
+                    <Input
+                      style={{ width: 420 }}
+                      placeholder="颜色分类（天猫展示值）"
+                      value={c.label}
+                      onChange={(e) => setColors((prev) => prev.map((x, i) => (i === idx ? { ...x, label: e.target.value } : x)))}
+                    />
+
+                    <TmallSourceCodePicker
+                      value={(c as any)?.source_code}
+                      width={520}
+                      placeholder="绑定来源(模型/套版)（可选，优先级最高）"
+                      onChange={(token) =>
+                        setColors((prev) => prev.map((x, i) => (i === idx ? ({ ...x, source_code: token } as any) : x)))
+                      }
+                    />
+                    {renderBindingStatusTag((c as any)?.source_code, 'color')}
+
+                    {enableColorRemarks ? (
+                      <Input
+                        style={{ width: 220 }}
+                        placeholder="备注(可选)"
+                        value={String((c as any)?.metadata_json?.remark ?? '')}
+                        onChange={(e) =>
+                          setColors((prev) =>
+                            prev.map((x, i) =>
+                              i === idx ? { ...x, metadata_json: { ...(x as any).metadata_json, remark: e.target.value } as any } : x,
+                            ),
+                          )
+                        }
+                      />
+                    ) : null}
+
+                    <Button
+                      icon={<DeleteOutlined />}
+                      danger
+                      onClick={() => setColors((prev) => prev.filter((_, i) => i !== idx))}
+                    />
+                  </Space>
+                ))}
+              </Space>
+            </Card>
+
+            <Card
+              size="small"
+              title={`成品尺寸（${sizes.length}）`}
+              extra={
+                <Space wrap size={8}>
+                  <Checkbox checked={enableSizeImages} onChange={(e) => setEnableSizeImages(e.target.checked)}>
+                    添加图片
+                  </Checkbox>
+                  <Checkbox checked={enableSizeRemarks} onChange={(e) => setEnableSizeRemarks(e.target.checked)}>
+                    备注
+                  </Checkbox>
+                  <Button
+                    icon={<PlusOutlined />}
+                    onClick={() => setSizes((prev) => [...prev, { key: `size_${uid()}`, label: '', size_code: '', source_code: '' }])}
+                  >
+                    添加
+                  </Button>
+                </Space>
+              }
+            >
+              <Space direction="vertical" style={{ width: '100%' }} size={10}>
+                {sizes.map((s, idx) => (
+                  <Space key={s.key} wrap size={8} style={{ width: '100%', alignItems: 'flex-start' }}>
+                    {enableSizeImages ? (
+                      <Upload
+                        accept="image/*"
+                        showUploadList={false}
+                        beforeUpload={async (file) => {
+                          try {
+                            const dataUrl = await readFileAsDataUrl(file)
+                            setSizes((prev) => prev.map((x, i) => (i === idx ? ({ ...x, metadata_json: { ...(x as any).metadata_json, image_data_url: dataUrl } } as any) : x)))
+                          } catch (e: any) {
+                            message.error(String(e?.message ?? e))
+                          }
+                          return false
+                        }}
+                      >
+                        <div
+                          style={{
+                            width: 40,
+                            height: 40,
+                            border: '1px solid var(--app-border)',
+                            borderRadius: 6,
+                            overflow: 'hidden',
+                            background: 'var(--app-surface)',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            marginTop: 2,
+                          }}
+                        >
+                          {(s as any)?.metadata_json?.image_data_url ? (
+                            <img src={(s as any).metadata_json.image_data_url as string} alt="img" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                          ) : (
+                            <Text type="secondary" style={{ fontSize: 12 }}>
+                              图
+                            </Text>
+                          )}
+                        </div>
+                      </Upload>
+                    ) : null}
+
+                    <Input
+                      style={{ width: 420 }}
+                      placeholder="成品尺寸（天猫展示值）"
+                      value={s.label}
+                      onChange={(e) => setSizes((prev) => prev.map((x, i) => (i === idx ? { ...x, label: e.target.value } : x)))}
+                    />
+                    <TmallSourceCodePicker
+                      value={(s as any)?.source_code}
+                      width={520}
+                      placeholder="绑定来源(模型/套版)（可选，优先级低于颜色绑定）"
+                      onChange={(token) =>
+                        setSizes((prev) => prev.map((x, i) => (i === idx ? ({ ...x, source_code: token } as any) : x)))
+                      }
+                    />
+                    {renderBindingStatusTag((s as any)?.source_code, 'size')}
+
+                    {enableSizeRemarks ? (
+                      <Input
+                        style={{ width: 220 }}
+                        placeholder="备注(可选)"
+                        value={String((s as any)?.metadata_json?.remark ?? '')}
+                        onChange={(e) =>
+                          setSizes((prev) =>
+                            prev.map((x, i) =>
+                              i === idx ? ({ ...x, metadata_json: { ...(x as any).metadata_json, remark: e.target.value } } as any) : x,
+                            ),
+                          )
+                        }
+                      />
+                    ) : null}
+
+                    <Button icon={<DeleteOutlined />} danger onClick={() => setSizes((prev) => prev.filter((_, i) => i !== idx))} />
+                  </Space>
+                ))}
+              </Space>
+            </Card>
+
+            {includeMainPatternType ? (
+              <Card
+                size="small"
+                title={`主图案类型（${mainPatternTypes.length}）`}
+                extra={
+                  <Space wrap size={8}>
+                    <Checkbox checked={enablePatternRemarks} onChange={(e) => setEnablePatternRemarks(e.target.checked)}>
+                      备注
+                    </Checkbox>
+                    <Button onClick={() => setMainPatternTypes((prev) => [...prev, { key: `p_${uid()}`, label: '' }])} icon={<PlusOutlined />}>
+                      添加
+                    </Button>
+                  </Space>
+                }
+              >
+                <Space direction="vertical" style={{ width: '100%' }} size={10}>
+                  {mainPatternTypes.map((p, idx) => (
+                    <Space key={p.key} wrap size={8} style={{ width: '100%', alignItems: 'flex-start' }}>
+                      <Input
+                        style={{ width: 420 }}
+                        placeholder="主图案类型（天猫展示值）"
+                        value={p.label}
+                        onChange={(e) =>
+                          setMainPatternTypes((prev) => prev.map((x, i) => (i === idx ? { ...x, label: e.target.value } : x)))
+                        }
+                      />
+                      {enablePatternRemarks ? (
+                        <Input
+                          style={{ width: 220 }}
+                          placeholder="备注(可选)"
+                          value={String((p as any)?.remark ?? '')}
+                          onChange={(e) =>
+                            setMainPatternTypes((prev) =>
+                              prev.map((x, i) => (i === idx ? ({ ...x, remark: e.target.value } as any) : x)),
+                            )
+                          }
+                        />
+                      ) : null}
+                      <Button icon={<DeleteOutlined />} danger onClick={() => setMainPatternTypes((prev) => prev.filter((_, i) => i !== idx))} />
+                    </Space>
+                  ))}
+                </Space>
+              </Card>
+            ) : null}
+
+            <Card
+              size="small"
+              title={`自定属性（${customSalesAttributes.length}）`}
+              extra={
+                <Button
+                  icon={<PlusOutlined />}
+                  onClick={() =>
+                    setCustomSalesAttributes((prev) => [
+                      ...prev,
+                      {
+                        key: `attr_${uid()}`,
+                        name: '',
+                        enabled: true,
+                        enableImages: false,
+                        enableRemarks: true,
+                        values: [{ key: `v_${uid()}`, label: '', sku_code: '', source_code: '', metadata_json: {} }],
+                      },
+                    ])
+                  }
+                >
+                  添加属性
+                </Button>
+              }
+            >
+              <Space direction="vertical" style={{ width: '100%' }} size={12}>
+                <Text type="secondary">
+                  这里的属性打开后会参与 SKU 笛卡尔积，例如“颜色分类 × 成品尺寸 × 材质 × 款式”。属性值可像颜色/成品尺寸一样绑定模型或套版；关闭时仅保存配置，不参与生成。
+                </Text>
+                {customSalesAttributes.map((attr, attrIdx) => (
+                  <Card
+                    key={attr.key}
+                    size="small"
+                    title={
+                      <Space wrap>
+                        <Switch
+                          checked={attr.enabled !== false}
+                          onChange={(checked) =>
+                            setCustomSalesAttributes((prev) => prev.map((x, i) => (i === attrIdx ? { ...x, enabled: checked } : x)))
+                          }
+                        />
+                        <Input
+                          style={{ width: 420 }}
+                          placeholder="属性名，例如：材质 / 款式 / 规格"
+                          value={attr.name}
+                          onChange={(e) =>
+                            setCustomSalesAttributes((prev) => prev.map((x, i) => (i === attrIdx ? { ...x, name: e.target.value } : x)))
+                          }
+                        />
+                        <Tag color={attr.enabled !== false ? 'green' : undefined}>
+                          {attr.enabled !== false ? '参与生成' : '不参与生成'}
+                        </Tag>
+                      </Space>
+                    }
+                    extra={
+                      <Space>
+                        <Checkbox
+                          checked={attr.enableImages === true}
+                          onChange={(e) =>
+                            setCustomSalesAttributes((prev) =>
+                              prev.map((x, i) => (i === attrIdx ? { ...x, enableImages: e.target.checked } : x)),
+                            )
+                          }
+                        >
+                          添加图片
+                        </Checkbox>
+                        <Checkbox
+                          checked={attr.enableRemarks === true}
+                          onChange={(e) =>
+                            setCustomSalesAttributes((prev) =>
+                              prev.map((x, i) => (i === attrIdx ? { ...x, enableRemarks: e.target.checked } : x)),
+                            )
+                          }
+                        >
+                          备注
+                        </Checkbox>
+                        <Button
+                          size="small"
+                          icon={<PlusOutlined />}
+                          onClick={() =>
+                            setCustomSalesAttributes((prev) =>
+                              prev.map((x, i) =>
+                                i === attrIdx
+                                  ? { ...x, values: [...(x.values ?? []), { key: `v_${uid()}`, label: '', sku_code: '', source_code: '', metadata_json: {} }] }
+                                  : x,
+                              ),
+                            )
+                          }
+                        >
+                          添加属性值
+                        </Button>
+                        <Button
+                          size="small"
+                          danger
+                          icon={<DeleteOutlined />}
+                          onClick={() => setCustomSalesAttributes((prev) => prev.filter((_, i) => i !== attrIdx))}
+                        />
+                      </Space>
+                    }
+                  >
+                    <Space direction="vertical" style={{ width: '100%' }} size={8}>
+                      {(attr.values ?? []).map((value, valueIdx) => (
+                        <Space key={value.key} wrap size={8} style={{ width: '100%', alignItems: 'flex-start' }}>
+                          {attr.enableImages === true ? (
+                            <Upload
+                              accept="image/*"
+                              showUploadList={false}
+                              beforeUpload={async (file) => {
+                                try {
+                                  const dataUrl = await readFileAsDataUrl(file)
+                                  setCustomSalesAttributes((prev) =>
+                                    prev.map((x, i) =>
+                                      i === attrIdx
+                                        ? {
+                                            ...x,
+                                            values: (x.values ?? []).map((v, j) =>
+                                              j === valueIdx
+                                                ? { ...v, metadata_json: { ...(v as any).metadata_json, image_data_url: dataUrl } }
+                                                : v,
+                                            ),
+                                          }
+                                        : x,
+                                    ),
+                                  )
+                                } catch (e: any) {
+                                  message.error(String(e?.message ?? e))
+                                }
+                                return false
+                              }}
+                            >
+                              <div
+                                style={{
+                                  width: 40,
+                                  height: 40,
+                                  border: '1px solid var(--app-border)',
+                                  borderRadius: 6,
+                                  overflow: 'hidden',
+                                  background: 'var(--app-surface)',
+                                  cursor: 'pointer',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  marginTop: 2,
+                                }}
+                              >
+                                {(value as any)?.metadata_json?.image_data_url ? (
+                                  <img src={(value as any).metadata_json.image_data_url as string} alt="img" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                ) : (
+                                  <Text type="secondary" style={{ fontSize: 12 }}>
+                                    图
+                                  </Text>
+                                )}
+                              </div>
+                            </Upload>
+                          ) : null}
+                          <Input
+                            style={{ width: 420 }}
+                            placeholder="属性值，例如：棉麻 / 莫兰迪 / 加厚"
+                            value={value.label}
+                            onChange={(e) =>
+                              setCustomSalesAttributes((prev) =>
+                                prev.map((x, i) =>
+                                  i === attrIdx
+                                    ? {
+                                        ...x,
+                                        values: (x.values ?? []).map((v, j) => (j === valueIdx ? { ...v, label: e.target.value } : v)),
+                                      }
+                                    : x,
+                                ),
+                              )
+                            }
+                          />
+                          <TmallSourceCodePicker
+                            value={(value as any)?.source_code}
+                            width={520}
+                            placeholder="绑定来源(模型/套版)（可选）"
+                            disabled={attr.enabled === false}
+                            onChange={(token) =>
+                              setCustomSalesAttributes((prev) =>
+                                prev.map((x, i) =>
+                                  i === attrIdx
+                                    ? {
+                                        ...x,
+                                        values: (x.values ?? []).map((val, j) =>
+                                          j === valueIdx ? { ...val, source_code: token } : val,
+                                        ),
+                                      }
+                                    : x,
+                                ),
+                              )
+                            }
+                          />
+                          {renderBindingStatusTag((value as any)?.source_code, 'custom', { disabled: attr.enabled === false })}
+                          {attr.enableRemarks === true ? (
+                            <Input
+                              style={{ width: 220 }}
+                              placeholder="备注(可选)"
+                              value={String((value as any)?.metadata_json?.remark ?? value.remark ?? '')}
+                              onChange={(e) =>
+                                setCustomSalesAttributes((prev) =>
+                                  prev.map((x, i) =>
+                                    i === attrIdx
+                                      ? {
+                                          ...x,
+                                          values: (x.values ?? []).map((val, j) =>
+                                            j === valueIdx
+                                              ? {
+                                                  ...val,
+                                                  remark: e.target.value,
+                                                  metadata_json: { ...(val as any).metadata_json, remark: e.target.value },
+                                                }
+                                              : val,
+                                          ),
+                                        }
+                                      : x,
+                                  ),
+                                )
+                              }
+                            />
+                          ) : null}
+                          <Button
+                            icon={<DeleteOutlined />}
+                            danger
+                            onClick={() =>
+                              setCustomSalesAttributes((prev) =>
+                                prev.map((x, i) =>
+                                  i === attrIdx ? { ...x, values: (x.values ?? []).filter((_, j) => j !== valueIdx) } : x,
+                                ),
+                              )
+                            }
+                          />
+                        </Space>
+                      ))}
+                    </Space>
+                  </Card>
+                ))}
+              </Space>
+            </Card>
+
+            <Card
+              size="small"
+              title="输出（复制/导出）"
+              extra={
+                <Space wrap size={8}>
+                  <Upload
+                    accept=".json"
+                    maxCount={1}
+                    showUploadList={false}
+                    beforeUpload={(file) => {
+                      void importConfigJson(file)
+                      return false
+                    }}
+                  >
+                    <Button>导入配置(JSON)</Button>
+                  </Upload>
+                  <Button onClick={exportConfigJson}>导出配置(JSON)</Button>
+                  <Button onClick={() => void copyText(attributeText)}>一键复制建属性清单</Button>
+                  <Button icon={<DownloadOutlined />} onClick={exportAttributeBuildListXlsx}>
+                    导出建属性清单(xlsx)
+                  </Button>
+                </Space>
+              }
+            >
+              <div style={{ marginBottom: 12 }}>
+                <Text type="secondary">保存方案（显式）</Text>
+                <div style={{ marginTop: 8 }}>
+                  <Space wrap size={8}>
+                    <Input
+                      style={{ width: 240 }}
+                      placeholder="方案名（例如：抱枕-枕套/枕芯套装）"
+                      value={profileName}
+                      onChange={(e) => setProfileName(e.target.value)}
+                    />
+                    <Button
+                      onClick={() => {
+                        const name = String(profileName ?? '').trim()
+                        if (!name) {
+                          message.warning('请输入方案名')
+                          return
+                        }
+                        const next = {
+                          ...(savedProfiles ?? {}),
+                          [name]: {
+                            merchantSkuPrefix,
+                            merchantSkuSuffix,
+                            listingChannel,
+                            sizes,
+                            colors,
+                            mainPatternTypes,
+                            customSalesAttributes,
+                            ui: {
+                              enableColorImages,
+                              enableSizeImages,
+                              enableColorRemarks,
+                              enableSizeRemarks,
+                              enablePatternRemarks,
+                              includeMainPatternType,
+                            },
+                          },
+                        }
+                        setSavedProfiles(next)
+                        setSelectedProfileName(name)
+                        message.success('已保存方案（后端长期保存）')
+                      }}
+                    >
+                      保存
+                    </Button>
+                    <Select
+                      style={{ width: 260 }}
+                      placeholder="选择已保存方案"
+                      value={selectedProfileName || undefined}
+                      options={profileNames.map((n) => ({ label: n, value: n }))}
+                      onChange={(v) => setSelectedProfileName(String(v ?? ''))}
+                    />
+                    <Button
+                      disabled={!selectedProfileName}
+                      onClick={() => {
+                        const name = String(selectedProfileName ?? '').trim()
+                        if (!name) return
+                        try {
+                          const cfg = savedProfiles?.[name]
+                          if (!cfg) {
+                            message.warning('未找到该方案')
+                            return
+                          }
+                          setMerchantSkuPrefix(String(cfg.merchantSkuPrefix ?? ''))
+                          setMerchantSkuSuffix(String(cfg.merchantSkuSuffix ?? ''))
+                          setSizes(Array.isArray(cfg.sizes) ? (cfg.sizes as any) : [])
+                          if (Array.isArray(cfg.colors)) {
+                            setColors(
+                              (cfg.colors as any[]).map((c) => ({
+                                key: String(c.key ?? `c_${uid()}`),
+                                label: String(c.label ?? '').trim(),
+                                width_cm: c.width_cm ?? null,
+                                height_cm: c.height_cm ?? null,
+                                thickness_cm: c.thickness_cm ?? null,
+                                length_cm: c.length_cm ?? null,
+                                main_pattern_type: c.main_pattern_type ?? null,
+                                source_code: String((c as any)?.source_code ?? '').trim(),
+                                enabledSizes: (c.enabledSizes && typeof c.enabledSizes === 'object' ? c.enabledSizes : {}) as Record<string, boolean>,
+                              })),
+                            )
+                          } else {
+                            setColors([])
+                          }
+                          if (Array.isArray(cfg.mainPatternTypes)) {
+                            setMainPatternTypes(
+                              (cfg.mainPatternTypes as any[]).map((p) => ({
+                                key: String(p.key ?? `p_${uid()}`),
+                                label: String(p.label ?? '').trim(),
+                              })),
+                            )
+                          }
+                          setCustomSalesAttributes(normalizeCustomSalesAttributes((cfg as any).customSalesAttributes))
+                          const ui = (cfg as any)?.ui ?? {}
+                          if (typeof ui.enableColorImages === 'boolean') setEnableColorImages(ui.enableColorImages)
+                          if (typeof ui.enableSizeImages === 'boolean') setEnableSizeImages(ui.enableSizeImages)
+                          if (typeof ui.enableColorRemarks === 'boolean') setEnableColorRemarks(ui.enableColorRemarks)
+                          if (typeof ui.enableSizeRemarks === 'boolean') setEnableSizeRemarks(ui.enableSizeRemarks)
+                          if (typeof ui.enablePatternRemarks === 'boolean') setEnablePatternRemarks(ui.enablePatternRemarks)
+                          if (typeof ui.includeMainPatternType === 'boolean') setIncludeMainPatternType(ui.includeMainPatternType)
+                          message.success('已加载方案')
+                        } catch (e: any) {
+                          message.error(`加载失败：${String(e?.message ?? e)}`)
+                        }
+                      }}
+                    >
+                      加载
+                    </Button>
+                    <Button
+                      danger
+                      disabled={!selectedProfileName}
+                      onClick={() => {
+                        const name = String(selectedProfileName ?? '').trim()
+                        if (!name) return
+                        try {
+                          const all = { ...(savedProfiles ?? {}) }
+                          if (!all[name]) {
+                            message.warning('未找到该方案')
+                            return
+                          }
+                          delete all[name]
+                          setSavedProfiles(all)
+                          setSelectedProfileName('')
+                          message.success('已删除方案（后端长期保存）')
+                        } catch (e: any) {
+                          message.error(`删除失败：${String(e?.message ?? e)}`)
+                        }
+                      }}
+                    >
+                      删除
+                    </Button>
+                  </Space>
+                </div>
+              </div>
+              <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' }}>
+                {attributeText}
+              </pre>
+            </Card>
+          </Space>
+        </Drawer>
+      </Space>
+    </div>
+  )
+}
+

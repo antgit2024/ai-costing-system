@@ -1,0 +1,21 @@
+[Unit]
+Description=AI-Costing nightly insights snapshot refresh — pre-warm /reports/insights/* caches so 模型分析/sales/after-sales 页面的「夜间缓存」徽章能立即返回
+Documentation=file:///home/admin/ai-costing-system/ops/nightly_refresh_reports.sh
+# 必须等后端起来；refresh 是 HTTP POST，没后端就 ConnRefused。
+After=planner-costing.service network.target
+Requires=planner-costing.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/admin/ai-costing-system
+# 注入 PLANNER_ADMIN_KEY；脚本里有 fallback，dev 环境 .env 没配也能跑。
+EnvironmentFile=-/home/admin/ai-costing-system/.env
+ExecStart=/usr/bin/env bash /home/admin/ai-costing-system/ops/nightly_refresh_reports.sh
+StandardOutput=journal
+StandardError=journal
+# 13 个 curl × 默认 30s timeout = 最多 ~6.5 分钟；留 15 分钟天花板。
+# 如果超时通常是某个 analytics_service 死循环，让下一晚重试比卡住强。
+TimeoutStartSec=900
+
+[Install]
+WantedBy=default.target

@@ -1225,39 +1225,66 @@ def list_sku_master(
         # - 已绑模型 model_code / model_name ：通过 sku_model_version_mapping 子查询命中（用于按模型短码/中文名找已绑 SKU，如 OZU 直喷切割垫类）
         shop_spec_expr = func.coalesce(models.SkuMaster.metadata_json["shop_spec_code"].as_string(), "")
         bound_variant_expr = func.coalesce(models.SkuMaster.metadata_json["bound_variant_code"].as_string(), "")
-        bound_model_subq = (
-            db.query(models.SkuModelVersionMapping.id)
-            .join(
-                models.ProductModelVersion,
-                models.ProductModelVersion.id == models.SkuModelVersionMapping.model_version_id,
-            )
-            .join(
-                models.ProductModel,
-                models.ProductModel.id == models.ProductModelVersion.model_id,
-            )
-            .filter(
-                models.SkuModelVersionMapping.sku_code == models.SkuMaster.erp_sku_barcode,
-                models.SkuModelVersionMapping.is_active.is_(True),
-                models.SkuModelVersionMapping.is_archived.is_(False),
-                models.ProductModelVersion.is_archived.is_(False),
-                models.ProductModel.is_archived.is_(False),
-                or_(
-                    models.ProductModel.model_code.ilike(s),
-                    models.ProductModel.model_name.ilike(s),
-                ),
-            )
-            .exists()
+        # —— 性能优化：短编码搜索快速路径 ——
+        # 40 万 SKU 表里全 8 列 ILIKE '%xxx%' 走全表扫 + EXISTS 子查 4 表 join,
+        # 实测 search=OZU 跑 23s 直接超 axios 20s timeout (用户报"列表加载失败").
+        #
+        # 用户场景:
+        # - 短编码搜索 (OZU / KB8 / OZU-001 / J26050707C / 6080543577755): 95% 场景, 用户只想找编码命中
+        # - 自由文本搜索 (中文/长字符串): 偶发, 大多走 product_name 模糊
+        #
+        # 短编码模式特征: 长度 1-16, 全 ASCII 英数 + 允许 [- _ . /], 不含中文/空格.
+        # 该模式下跳过 product_name (长中文 text 列) 和 EXISTS 子查 (4 表 join), 只扫
+        # 已加索引的高基数英数列, 让 LIMIT 50 能在 OR 短路里早收手.
+        s_raw = search.strip()
+        is_short_code = (
+            1 <= len(s_raw) <= 16
+            and s_raw.isascii()
+            and all(c.isalnum() or c in "-_./" for c in s_raw)
         )
-        q = q.filter(
-            (models.SkuMaster.erp_sku_barcode.ilike(s))
-            | (models.SkuMaster.platform_product_id.ilike(s))
-            | (models.SkuMaster.platform_sku_id.ilike(s))
-            | (models.SkuMaster.product_name.ilike(s))
-            | (models.SkuMaster.product_code.ilike(s))
-            | (shop_spec_expr.ilike(s))
-            | (bound_variant_expr.ilike(s))
-            | bound_model_subq
-        )
+        if is_short_code:
+            q = q.filter(
+                (models.SkuMaster.erp_sku_barcode.ilike(s))
+                | (models.SkuMaster.platform_product_id.ilike(s))
+                | (models.SkuMaster.platform_sku_id.ilike(s))
+                | (models.SkuMaster.product_code.ilike(s))
+                | (shop_spec_expr.ilike(s))
+                | (bound_variant_expr.ilike(s))
+            )
+        else:
+            bound_model_subq = (
+                db.query(models.SkuModelVersionMapping.id)
+                .join(
+                    models.ProductModelVersion,
+                    models.ProductModelVersion.id == models.SkuModelVersionMapping.model_version_id,
+                )
+                .join(
+                    models.ProductModel,
+                    models.ProductModel.id == models.ProductModelVersion.model_id,
+                )
+                .filter(
+                    models.SkuModelVersionMapping.sku_code == models.SkuMaster.erp_sku_barcode,
+                    models.SkuModelVersionMapping.is_active.is_(True),
+                    models.SkuModelVersionMapping.is_archived.is_(False),
+                    models.ProductModelVersion.is_archived.is_(False),
+                    models.ProductModel.is_archived.is_(False),
+                    or_(
+                        models.ProductModel.model_code.ilike(s),
+                        models.ProductModel.model_name.ilike(s),
+                    ),
+                )
+                .exists()
+            )
+            q = q.filter(
+                (models.SkuMaster.erp_sku_barcode.ilike(s))
+                | (models.SkuMaster.platform_product_id.ilike(s))
+                | (models.SkuMaster.platform_sku_id.ilike(s))
+                | (models.SkuMaster.product_name.ilike(s))
+                | (models.SkuMaster.product_code.ilike(s))
+                | (shop_spec_expr.ilike(s))
+                | (bound_variant_expr.ilike(s))
+                | bound_model_subq
+            )
     if channel:
         q = q.filter(models.SkuMaster.channel == channel)
     if match_status:

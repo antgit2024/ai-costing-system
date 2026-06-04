@@ -2829,6 +2829,8 @@ export const fetchAfterSalesLines = async (
     product_link_id?: string
     reason?: string
     model_code?: string
+    /** 例 "OZU-001"：与 after-sales 看板 Top 模型表二级行同源（SkuMaster.shop_spec_code 抽出） */
+    variant_code?: string
     time_basis?: 'applied' | 'shipment_completed'
     page?: number
     page_size?: number
@@ -2921,7 +2923,10 @@ export const fetchSkuMaster = async (
 ): Promise<SkuMasterListResponse> => {
   const response = await plannerClient.get('/sku-master', {
     params: sanitizeParams(params),
-    timeout: opts.timeoutMs,
+    // 默认 60s. 40 万 SKU 表里 search=短码 (如 "OZU") 会触发 8 列 OR 全表扫,
+    // 实测 22~25s, 早期默认 20s 直接 timeout 报"列表加载失败".
+    // 短码搜索后端已加快速路径 (跳过 product_name + EXISTS), 但中文搜索仍可能慢.
+    timeout: opts.timeoutMs ?? 60_000,
     signal: opts.signal,
   })
   return response.data
@@ -2956,6 +2961,7 @@ export const fetchShopSpecCodeSummary = async (
 ): Promise<ShopSpecCodeSummary> => {
   const response = await plannerClient.get('/sku-master/shop-spec-code-summary', {
     params: sanitizeParams(params),
+    timeout: 60_000,
   })
   return response.data
 }
@@ -2978,6 +2984,7 @@ export const fetchTripleTagOverview = async (
 ): Promise<TripleTagOverview> => {
   const response = await plannerClient.get('/sku-master/triple-tag-overview', {
     params: sanitizeParams(params),
+    timeout: 60_000,
   })
   return response.data
 }
